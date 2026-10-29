@@ -101,6 +101,8 @@ const initial = {
   hookTrace: [] as HookTraceEntry[],
   toasts: [] as Toast[],
 
+  /** The card catalog (the whole library) is open over the chat. */
+  catalogOpen: false,
   /** Card drawer (opened by any card chip): card ref (library-qualified) + optional use node. */
   drawer: null as { cardId: string; useNodeId?: string } | null,
   /** Timeline scroll/highlight request (Context panel → injection point). */

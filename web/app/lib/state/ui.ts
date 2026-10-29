@@ -1,4 +1,5 @@
-// Transient UI state: toasts, the card drawer, and timeline focus requests.
+// Transient UI state: toasts, the card catalog and drawer, and timeline focus
+// requests.
 
 import type { ToastKind } from '../types'
 import { state, type Toast } from './state'
@@ -16,7 +17,15 @@ export function dismissToast(id: number): void {
   if (i >= 0) state.toasts.splice(i, 1)
 }
 
-// ---- card drawer + timeline focus (shared UI state) ----
+// ---- card catalog + drawer + timeline focus (shared UI state) ----
+
+export function openCatalog(): void {
+  state.catalogOpen = true
+}
+
+export function closeCatalog(): void {
+  state.catalogOpen = false
+}
 
 export function openDrawer(cardId: string, useNodeId?: string): void {
   state.drawer = { cardId, useNodeId }

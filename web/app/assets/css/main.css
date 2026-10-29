@@ -11,7 +11,13 @@
  * cleared: only the names below exist (bg-surface, text-ink-2, text-meta,
  * rounded-card, shadow-soft …), which keeps one-off values out of components.
  *
- * Motifs: paper on a grainy desk, the coral dot (rumu's
+ * Type: Nunito for the conversation and the UI (its round terminals match
+ * the wordmark's stroke); Literata, a reading serif, only on cards — what
+ * rumu remembers is set like a printed catalog card; JetBrains Mono for
+ * code, paths and tool I/O.
+ *
+ * Motifs: paper on a grainy desk, the index card (.index-card: a coral
+ * header rule over ruled lines — rumu's memory), the coral dot (rumu's
  * presence: wordmark, a running turn's head, streaming caret, live states)
  * and the thread (the root → head path drawn as a pinned rail beside the
  * timeline — the conversation's minimap, in TimelineRail). The motion
@@ -52,6 +58,8 @@
   /* semantic set: value + soft tint */
   --memory: #7a5cc7;
   --memory-soft: #efeafa;
+  /* a card's ruled lines: memory, faint */
+  --rule: #ebe3f6;
   --tool: #4f6f8f;
   --tool-soft: #e8eef4;
   --danger: #be3144;
@@ -98,6 +106,7 @@
 
     --memory: #a88bf0;
     --memory-soft: #2b2340;
+    --rule: #3a3348;
     --tool: #8eaacb;
     --tool-soft: #1f2732;
     --danger: #ef6f7a;
@@ -123,15 +132,14 @@
   --radius-*: initial;
   --shadow-*: initial;
 
-  /* fonts: Nunito for UI + messages, Outfit for the wordmark and headings,
-   * JetBrains Mono for code & tool I/O only. CJK falls through to the
-   * system han faces. */
+  /* fonts: Nunito for UI + messages, Literata for cards (titles and card
+   * text), JetBrains Mono for code & tool I/O only. CJK falls through to
+   * the system han faces — song (serif) ones under Literata. */
   --font-sans:
     'Nunito Variable', 'PingFang SC', 'HarmonyOS Sans SC', 'Source Han Sans SC', 'Noto Sans CJK SC',
     'Microsoft YaHei', system-ui, sans-serif;
-  --font-display:
-    'Outfit Variable', 'PingFang SC', 'HarmonyOS Sans SC', 'Source Han Sans SC', 'Noto Sans CJK SC',
-    'Microsoft YaHei', system-ui, sans-serif;
+  --font-card:
+    'Literata Variable', 'Source Han Serif SC', 'Noto Serif CJK SC', 'Songti SC', 'SimSun', Georgia, serif;
   --font-mono: 'JetBrains Mono Variable', ui-monospace, 'SF Mono', monospace;
 
   /* type scale: micro / meta / secondary (UI default) / message / title / display */
@@ -180,6 +188,7 @@
   --color-pine-soft: var(--pine-soft);
   --color-memory: var(--memory);
   --color-memory-soft: var(--memory-soft);
+  --color-rule: var(--rule);
   --color-tool: var(--tool);
   --color-tool-soft: var(--tool-soft);
   --color-danger: var(--danger);
@@ -408,13 +417,99 @@
     background: color-mix(in srgb, var(--tone, var(--ink-2)) 16%, transparent);
   }
 
+  /* An index card: paper with nearly square corners, a coral header rule
+   * under the title and pale blue ruled lines below it. --card-head is the
+   * title band's height, --card-lh the ruled line pitch (set the text's
+   * line-height to it and each line sits on a rule). */
+  .index-card {
+    --card-head: 30px;
+    --card-lh: 20px;
+    position: relative;
+    border-radius: 3px;
+    background-color: var(--surface);
+    background-image:
+      linear-gradient(var(--brand), var(--brand)),
+      repeating-linear-gradient(
+        to bottom,
+        transparent 0 calc(var(--card-lh) - 1px),
+        var(--rule) calc(var(--card-lh) - 1px) var(--card-lh)
+      );
+    background-repeat: no-repeat;
+    background-size:
+      100% 1.5px,
+      100% 100%;
+    background-position:
+      0 var(--card-head),
+      0 calc(var(--card-head) + 1.5px);
+    box-shadow:
+      0 0 0 1px var(--line-soft),
+      var(--shadow-soft-v);
+  }
+
+  button.index-card:hover {
+    box-shadow:
+      0 0 0 1px var(--line),
+      var(--shadow-card-v);
+  }
+
+  /* a card's title, set like a catalog heading */
+  .card-title {
+    font-family: var(--font-card);
+    font-weight: 560;
+    font-variation-settings: 'opsz' 14;
+    letter-spacing: -0.005em;
+    color: var(--ink);
+  }
+
+  /* A card stub inline in the timeline: a tiny card standing in a row, its
+   * coral rule along the top edge. */
+  .card-tab {
+    display: inline-flex;
+    align-items: center;
+    max-width: 100%;
+    min-width: 0;
+    padding: 1px 8px 2px;
+    border-top: 2px solid var(--brand);
+    border-radius: 2px 2px 3px 3px;
+    background: var(--surface);
+    box-shadow:
+      0 0 0 1px var(--line),
+      var(--shadow-soft-v);
+    font-family: var(--font-card);
+    font-size: var(--text-meta);
+    font-weight: 520;
+    color: var(--ink);
+    white-space: nowrap;
+    transition:
+      box-shadow 0.15s,
+      translate 0.15s var(--ease-soft);
+  }
+
+  button.card-tab:hover {
+    translate: 0 -1px;
+    box-shadow:
+      0 0 0 1px color-mix(in srgb, var(--ink) 18%, var(--line)),
+      var(--shadow-card-v);
+  }
+
+  /* a card's text (CardDrawer): the card face, a touch more leading for the
+   * serif; code inside stays mono */
+  .md.card-face {
+    font-family: var(--font-card);
+    font-size: 14px;
+    line-height: 1.7;
+  }
+
+  .md.card-face :is(h1, h2, h3, h4) {
+    font-weight: 600;
+  }
+
   /* sentence-case section headings in side panels */
   .section-title {
     padding-inline: 12px;
-    font-family: var(--font-display);
-    font-size: var(--text-secondary);
-    font-weight: 600;
-    color: var(--ink-2);
+    font-size: var(--text-meta);
+    font-weight: 700;
+    color: var(--ink-3);
   }
 
   .empty {
@@ -772,8 +867,7 @@
   .md h3,
   .md h4 {
     margin: 0.9em 0 0.4em;
-    font-family: var(--font-display);
-    font-weight: 600;
+    font-weight: 700;
     line-height: 1.3;
   }
 

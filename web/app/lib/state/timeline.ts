@@ -18,9 +18,21 @@ function isCatalogNote(n: Node): boolean {
   return n.body.type === 'note' && n.body.content.data?.tag === CATALOG_TAG
 }
 
-/** An empty-text note (a marker): the root is noise; others are context. */
-function isRootMarker(n: Node): boolean {
-  return n.body.type === 'note' && n.body.content.text === '' && n.body.content.data?.tag === 'root'
+/** A card memory recalled for the prompt: rumu's doing, so it belongs to the
+ *  assistant turn (after the mascot), not under the user's message. */
+function isRecallNote(n: Node): boolean {
+  return n.body.type === 'note' && n.body.source === 'memory' && n.body.content.data?.tag === 'memory.import'
+}
+
+/** A bookkeeping marker with nothing to show: the root marker, and the
+ * `card_use` record a card read/write leaves after its tool result (the
+ * Context data reads it from the path; the tool row already shows the card).
+ * Kept out of the timeline entirely — as an empty context item it would
+ * split the activity run around it in two. */
+function isSilentMarker(n: Node): boolean {
+  if (n.body.type !== 'note' || n.body.content.text !== '') return false
+  const tag = n.body.content.data?.tag
+  return tag === 'root' || tag === 'card_use'
 }
 
 export interface ToolRowInfo {
@@ -46,7 +58,13 @@ export interface ActivityTools {
   kind: 'tools'
   rows: ToolRowInfo[]
 }
-export type ActivityStep = ActivityThought | ActivityTools
+/** The card catalog handed to the model before a step: it reads as part of
+ * the work, so it folds into the run with that step's reasoning. */
+export interface ActivityCatalog {
+  kind: 'catalog'
+  node: Node
+}
+export type ActivityStep = ActivityThought | ActivityTools | ActivityCatalog
 export interface GroupActivityItem {
   kind: 'activity'
   steps: ActivityStep[]
@@ -68,6 +86,15 @@ function pushActivity(g: TimelineGroup, step: ActivityStep): void {
   const last = g.items[g.items.length - 1]
   if (last && last.kind === 'activity') last.steps.push(step)
   else g.items.push({ kind: 'activity', steps: [step] })
+}
+
+/** Move the notes collected for a turn into its group: the plain ones (a
+ * recalled card, …) as a context line of their own, then each card catalog
+ * as an activity step, so the reasoning that follows joins its fold. */
+function moveNotes(g: TimelineGroup, notes: Node[]): void {
+  const plain = notes.filter((n) => !isCatalogNote(n))
+  if (plain.length) g.items.push({ kind: 'context', nodes: plain })
+  for (const n of notes) if (isCatalogNote(n)) pushActivity(g, { kind: 'catalog', node: n })
 }
 
 export interface TimelineGroup {
@@ -115,7 +142,7 @@ export const timeline = computed<TimelineEntry[]>(() => {
       // Notes collected for this turn (e.g. the card catalog injected at
       // `llm.pre`) sit inside the group, after the mascot head.
       if (ctx.length) {
-        group.items.push({ kind: 'context', nodes: ctx })
+        moveNotes(group, ctx)
         ctx = []
       }
     }
@@ -130,14 +157,14 @@ export const timeline = computed<TimelineEntry[]>(() => {
       userEntry = { kind: 'user', node: n, contextNodes: [] }
       out.push(userEntry)
     } else if (b.type === 'note') {
-      if (isRootMarker(n)) continue // the root marker is noise
-      if (isCatalogNote(n)) ctx.push(n)
+      if (isSilentMarker(n)) continue
+      if (isCatalogNote(n) || isRecallNote(n)) ctx.push(n)
       else if (userEntry) userEntry.contextNodes.push(n)
       else ctx.push(n)
     } else if (b.type === 'assistant') {
       const g = ensureGroup()
       if (ctx.length) {
-        g.items.push({ kind: 'context', nodes: ctx })
+        moveNotes(g, ctx)
         ctx = []
       }
       if (b.reasoning_reset) g.items.push({ kind: 'reset', node: n })
@@ -151,7 +178,7 @@ export const timeline = computed<TimelineEntry[]>(() => {
     } else if (b.type === 'tool_result') {
       const g = ensureGroup()
       if (ctx.length) {
-        g.items.push({ kind: 'context', nodes: ctx })
+        moveNotes(g, ctx)
         ctx = []
       }
       const paired = calls.get(b.call_id) ?? null
@@ -185,7 +212,7 @@ export const timeline = computed<TimelineEntry[]>(() => {
   // a standalone context row.
   if (ctx.length) {
     if (live) {
-      live.items.push({ kind: 'context', nodes: ctx })
+      moveNotes(live, ctx)
       ctx = []
     } else {
       flushCtx()

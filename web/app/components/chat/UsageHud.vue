@@ -252,10 +252,7 @@ const tipStyle = computed<CSSProperties>(() => ({
         >
           <!-- record header: the request's model and timestamp -->
           <div class="border-b border-line-soft bg-surface-2/60 px-3.5 py-2.5">
-            <div
-              class="truncate font-display text-secondary font-semibold text-ink"
-              :title="stats.body.model"
-            >
+            <div class="truncate text-secondary font-bold text-ink" :title="stats.body.model">
               {{ stats.body.model }}
             </div>
             <div class="mt-0.5 font-mono text-micro text-ink-3">{{ whenText }}</div>

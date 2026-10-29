@@ -32,6 +32,7 @@ export type { BranchTreeNode } from './state/derived'
 
 export { timeline } from './state/timeline'
 export type {
+  ActivityCatalog,
   ActivityStep,
   ActivityThought,
   ActivityTools,
@@ -46,7 +47,7 @@ export type {
   ToolRowInfo,
 } from './state/timeline'
 
-export { closeDrawer, dismissToast, focusNode, openDrawer } from './state/ui'
+export { closeCatalog, closeDrawer, dismissToast, focusNode, openCatalog, openDrawer } from './state/ui'
 
 export { findAgentChild, forkFrom, regenerateFrom, selectBranch } from './state/tree'
 export type { OpenHistory } from './state/sessions'

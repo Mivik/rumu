@@ -2,7 +2,8 @@
 // A step's reasoning inside an opened activity run: a quiet disclosure
 // ("Thought for 4s") and, opened, the text under a hairline. The live one
 // (`node` null) reads "Thinking" and shows its stream while the model
-// thinks, folding once the answer starts unless toggled by hand.
+// thinks, folding once the answer starts unless toggled by hand. `flat` shows
+// just the text, for a run (ActivityRun) whose own line is the disclosure.
 import { computed, ref } from 'vue'
 import { t } from '../../i18n'
 import { type Node, reasoningText } from '../../lib/types'
@@ -10,7 +11,7 @@ import { activeDelta } from '../../lib/store'
 import { fmtThought } from '../../lib/util'
 import Icon from '../ui/Icon.vue'
 
-const props = defineProps<{ node: Node | null }>()
+const props = withDefaults(defineProps<{ node: Node | null; flat?: boolean }>(), { flat: false })
 
 const reasoning = computed(() => {
   if (!props.node) return activeDelta.value?.reasoning ?? ''
@@ -41,7 +42,13 @@ const label = computed(() => {
 </script>
 
 <template>
-  <div class="reason">
+  <!-- flat: inside a run whose line already names the thinking -->
+  <div
+    v-if="flat"
+    class="max-h-[300px] overflow-y-auto text-meta leading-[1.625] whitespace-pre-wrap text-ink-2"
+    v-text="reasoning"
+  />
+  <div v-else class="reason">
     <button
       type="button"
       class="reason-toggle"

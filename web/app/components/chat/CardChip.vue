@@ -1,7 +1,8 @@
 <script setup lang="ts">
-// A knowledge card, everywhere: same icon, same memory tone, click → drawer.
+// A knowledge card on a tool row: the same little card stub as a recalled
+// card in the timeline (.card-tab), set small enough to sit inside the row's
+// line. Click → drawer.
 import type { Card } from '../../lib/types'
-import Chip from '../ui/Chip.vue'
 import { openDrawer } from '../../lib/store'
 
 const props = withDefaults(defineProps<{ card: Card; useNodeId?: string; title?: string }>(), {
@@ -19,12 +20,12 @@ function tooltip(): string {
 </script>
 
 <template>
-  <Chip
-    icon="memory"
-    tone="memory"
-    :label="card.title || card.id"
+  <button
+    type="button"
+    class="card-tab max-w-[180px] border-t-[1.5px] px-1.5 pt-[2px] pb-[3px] text-micro leading-none"
     :title="title ?? tooltip()"
-    clickable
-    @click="onClick"
-  />
+    @click.stop="onClick"
+  >
+    <span class="truncate">{{ card.title || card.id }}</span>
+  </button>
 </template>

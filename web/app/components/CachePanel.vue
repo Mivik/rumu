@@ -60,7 +60,7 @@ const turns = computed(() => [...cacheTurns.value].reverse())
 <template>
   <div>
     <div class="rounded-card bg-surface px-3 py-3 shadow-soft">
-      <div class="font-display text-display font-semibold tabular-nums text-ink">{{ shownPct }}%</div>
+      <div class="text-display font-bold tabular-nums text-ink">{{ shownPct }}%</div>
       <div class="text-micro text-ink-3">{{ t('panels.cache.hitRate') }}</div>
       <div class="mt-0.5 font-mono text-micro text-ink-3">{{ totalSub }}</div>
     </div>

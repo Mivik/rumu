@@ -5,10 +5,8 @@
     "write": "written"
   },
   "pills": {
-    "imported": "imported",
+    "imported": "Recalled",
     "changed": "changed",
-    "catalog": "card catalog",
-    "catalogMore": "card catalog (+{count})",
     "workspace": "default {names}",
     "task": "task {id} · {status}",
     "reverted": "reverted · {text}",
@@ -23,24 +21,23 @@
     "label": "knowledge card",
     "close": "Close (Esc)",
     "closeAria": "Close",
-    "deleted": "Deleted",
-    "notOnPath": "Not on this path",
-    "onPathChanged": "On this path · changed",
-    "onPathCurrent": "On this path · current",
-    "importedBy": "Imported by",
+    "deleted": "This card was deleted; below is the version this conversation saw.",
     "asSeen": "As seen here",
-    "asSeenRev": "As seen here ({rev})",
     "current": "Current",
-    "currentRev": "Current ({rev})",
-    "onPath": "On this path",
-    "rev": "rev {rev}",
-    "showInTimeline": "Show in timeline"
+    "showInTimeline": "Show in conversation",
+    "olderSeen": "This conversation saw an earlier version."
   },
   "library": {
-    "onPath": "On this path",
+    "onPath": "Cards on this path",
     "changed": "Changed",
     "by": "by {name}",
-    "title": "Card library ({count})",
-    "total": "{count} card · {total} total | {count} cards · {total} total"
+    "title": "Card library",
+    "noneOnPath": "No cards used on this path yet.",
+    "browse": "Browse all {count} cards"
+  },
+  "catalog": {
+    "search": "Search cards",
+    "none": "No card matches “{q}”.",
+    "empty": "rumu writes a card when it learns something worth keeping."
   }
 }

@@ -1,16 +1,16 @@
 <script setup lang="ts">
-// Card detail drawer: opens over the right edge when any card chip is
-// clicked. Shows the current card or the snapshot the branch actually saw,
-// with a tab toggle when the two differ, plus the full list of uses on this
-// path (imports, reads, writes) as timeline jump targets.
+// Card detail drawer: opens over the right edge when any card is clicked.
+// The card itself — title on the coral rule, its text below. Only states that
+// change what you read get a line: a deleted card, or a conversation that saw
+// an older version (then tabs switch between that version and the current
+// one). Opened from the library, a card the conversation used can be shown
+// where it was used.
 import { computed, onBeforeUnmount, onMounted, ref, watch } from 'vue'
 import { t } from '../../i18n'
 import type { CardUse } from '../../lib/cards'
-import { cardById, cardUsesOnPath, importedBy, renderCard, useIsCurrent } from '../../lib/cards'
-import { closeDrawer, focusNode, state } from '../../lib/store'
-import { layout } from '../../lib/layout'
+import { cardById, cardUsesOnPath, useIsCurrent } from '../../lib/cards'
+import { closeCatalog, closeDrawer, focusNode, state } from '../../lib/store'
 import Icon from '../ui/Icon.vue'
-import Chip from '../ui/Chip.vue'
 import { renderMarkdown } from '../../lib/markdown'
 
 const card = computed(() => (state.drawer ? (cardById.value.get(state.drawer.cardId) ?? null) : null))
@@ -24,7 +24,6 @@ const selectedUse = computed<CardUse | null>(() => {
   return list.find((u) => u.node.id === state.drawer?.useNodeId) ?? list[list.length - 1]!
 })
 
-const currentRev = computed(() => card.value?.revision ?? null)
 const changed = computed(
   () => !!card.value && !!selectedUse.value && !useIsCurrent(card.value, selectedUse.value),
 )
@@ -41,31 +40,35 @@ watch(
   { immediate: true },
 )
 
+/** A snapshot opens with the card's `# title` line; the header shows that. */
+function withoutTitle(md: string): string {
+  return md.replace(/^#\s+[^\n]*\n?/, '')
+}
+
+const title = computed(
+  () =>
+    card.value?.title ||
+    selectedUse.value?.snapshot.split('\n')[0]?.replace(/^#\s*/, '') ||
+    state.drawer?.cardId ||
+    '',
+)
+
 const shownHtml = computed(() => {
   // cardId makes card-relative links (`./x`, `../x/y.md`) resolve to cards.
   const cardId = state.drawer?.cardId
   if (tab.value === 'snapshot' || !card.value) {
-    return renderMarkdown(selectedUse.value?.snapshot ?? '', { breaks: false, cardId })
+    return renderMarkdown(withoutTitle(selectedUse.value?.snapshot ?? ''), { breaks: false, cardId })
   }
-  return renderMarkdown(renderCard(card.value), { breaks: false, cardId })
+  return renderMarkdown(card.value.body, { breaks: false, cardId })
 })
 
-function useLabel(kind: CardUse['kind']): string {
-  return t(`cards.use.${kind}`)
-}
-
-const importedFrom = computed(() => {
-  const u = selectedUse.value
-  if (!u || u.kind !== 'import') return null
-  const n = u.node
-  if (n.body.type !== 'note') return null
-  return importedBy(n.body.content)
-})
+/** Opened from the library (not from a use): offer the way to where it was used. */
+const canShow = computed(() => !state.drawer?.useNodeId && !!selectedUse.value)
 
 function jump(nodeId: string): void {
   focusNode(nodeId)
   closeDrawer()
-  layout.inspectorOpen = false
+  closeCatalog()
 }
 
 function showInTimeline(): void {
@@ -99,19 +102,22 @@ onBeforeUnmount(() => window.removeEventListener('keydown', onKey))
     >
       <aside
         v-if="state.drawer"
-        class="fixed top-2 right-2 bottom-2 left-2 z-61 flex w-auto flex-col overflow-hidden rounded-card border border-line-soft bg-surface shadow-pop sm:left-auto sm:w-[400px] sm:max-w-[90vw]"
+        class="fixed top-2 right-2 bottom-2 left-2 z-61 flex w-auto flex-col overflow-hidden rounded-control bg-surface shadow-pop sm:left-auto sm:w-[420px] sm:max-w-[90vw]"
         role="dialog"
         :aria-label="t('cards.drawer.label')"
       >
-        <!-- a card is a note card: a memory-colored ribbon across its top edge -->
-        <span aria-hidden="true" class="h-1 flex-none bg-memory/70" />
-        <header class="flex items-center gap-2 border-b border-line-soft px-5 py-3.5">
-          <Icon name="memory" :size="15" class="text-memory" />
-          <span class="min-w-0 flex-1 truncate font-display text-title font-semibold">{{
-            card?.title || selectedUse?.snapshot.split('\n')[0]?.replace(/^#\s*/, '') || state.drawer.cardId
-          }}</span>
+        <!-- a card is an index card: the title above a coral header rule,
+             the card's text below it in the card face -->
+        <header class="flex items-end gap-2 border-b-[1.5px] border-brand px-5 pt-4 pb-2.5">
+          <span class="card-title min-w-0 flex-1 truncate text-title">{{ title }}</span>
+          <span
+            v-if="state.drawer.cardId !== title"
+            class="max-w-[35%] flex-none truncate pb-0.5 font-card text-meta text-ink-3 italic"
+            :title="state.drawer.cardId"
+            >{{ state.drawer.cardId }}</span
+          >
           <button
-            class="icon-btn"
+            class="icon-btn -mr-1.5 flex-none"
             :title="t('cards.drawer.close')"
             :aria-label="t('cards.drawer.closeAria')"
             @click="closeDrawer"
@@ -120,84 +126,31 @@ onBeforeUnmount(() => window.removeEventListener('keydown', onKey))
           </button>
         </header>
 
-        <div class="flex flex-wrap items-center gap-1.5 px-5 pt-3">
-          <span class="font-mono text-meta text-ink-3" :title="state.drawer.cardId"
-            >#{{ state.drawer.cardId }}</span
-          >
-          <Chip v-if="!card" icon="close" tone="neutral" :label="t('cards.drawer.deleted')" />
-          <template v-else-if="!uses.length">
-            <Chip icon="note" tone="neutral" :label="t('cards.drawer.notOnPath')" />
-          </template>
-          <template v-else>
-            <Chip
-              :icon="changed ? 'note' : 'ok'"
-              :tone="changed ? 'danger' : 'memory'"
-              :label="changed ? t('cards.drawer.onPathChanged') : t('cards.drawer.onPathCurrent')"
-            />
-          </template>
-        </div>
-
-        <div v-if="importedFrom" class="flex items-baseline gap-2 px-5 pt-1.5 text-micro">
-          <span class="text-ink-3">{{ t('cards.drawer.importedBy') }}</span>
-          <span class="font-mono text-ink-2">{{ importedFrom }}</span>
-        </div>
-
-        <div v-if="showTabs" class="flex gap-1 px-5 pt-3">
-          <button
-            class="rounded-control px-2 py-1 text-micro font-semibold transition-colors"
-            :class="tab === 'snapshot' ? 'bg-memory-soft text-memory' : 'text-ink-3 hover:bg-surface-2'"
-            @click="tab = 'snapshot'"
-          >
-            {{
-              selectedUse?.rev
-                ? t('cards.drawer.asSeenRev', { rev: selectedUse.rev.slice(0, 4) })
-                : t('cards.drawer.asSeen')
-            }}
-          </button>
-          <button
-            class="rounded-control px-2 py-1 text-micro font-semibold transition-colors"
-            :class="tab === 'current' ? 'bg-memory-soft text-memory' : 'text-ink-3 hover:bg-surface-2'"
-            @click="tab = 'current'"
-          >
-            {{
-              currentRev
-                ? t('cards.drawer.currentRev', { rev: currentRev.slice(0, 4) })
-                : t('cards.drawer.current')
-            }}
-          </button>
-        </div>
-
-        <div
-          class="cascade-md md flex-1 overflow-y-auto px-5 py-4 text-secondary text-ink-2"
-          v-html="shownHtml"
-        />
-
-        <footer v-if="uses.length" class="border-t border-line-soft px-5 py-3">
-          <div class="mb-1.5 text-micro font-semibold text-ink-3">
-            {{ t('cards.drawer.onPath') }}
-          </div>
-          <div class="flex flex-col gap-0.5">
+        <p v-if="!card" class="px-5 pt-3 text-meta text-ink-3">{{ t('cards.drawer.deleted') }}</p>
+        <div v-else-if="showTabs" class="flex flex-wrap items-center gap-x-3 gap-y-2 px-5 pt-3">
+          <span class="text-meta text-ink-3">{{ t('cards.drawer.olderSeen') }}</span>
+          <span class="flex gap-1">
             <button
-              v-for="u in uses"
-              :key="u.node.id"
-              class="flex items-center gap-2 rounded-control px-2 py-1 text-left text-micro text-ink-2 transition-colors hover:bg-surface-2/70"
-              @click="jump(u.node.id)"
+              class="rounded-control px-2 py-1 text-micro font-semibold transition-colors"
+              :class="tab === 'snapshot' ? 'bg-surface-2 text-ink' : 'text-ink-3 hover:bg-surface-2'"
+              @click="tab = 'snapshot'"
             >
-              <Icon name="memory" :size="11" class="flex-none text-memory" />
-              <span class="font-mono">{{ useLabel(u.kind) }}</span>
-              <span v-if="u.rev" class="font-mono text-ink-3">{{
-                t('cards.drawer.rev', { rev: u.rev.slice(0, 8) })
-              }}</span>
-              <span class="ml-auto flex items-center gap-1 text-ink-3">
-                {{ t('common.show') }}
-                <Icon name="external" :size="10" />
-              </span>
+              {{ t('cards.drawer.asSeen') }}
             </button>
-          </div>
-        </footer>
-        <footer v-else-if="selectedUse" class="border-t border-line-soft px-5 py-3">
+            <button
+              class="rounded-control px-2 py-1 text-micro font-semibold transition-colors"
+              :class="tab === 'current' ? 'bg-surface-2 text-ink' : 'text-ink-3 hover:bg-surface-2'"
+              @click="tab = 'current'"
+            >
+              {{ t('cards.drawer.current') }}
+            </button>
+          </span>
+        </div>
+
+        <div class="cascade-md md card-face flex-1 overflow-y-auto px-5 py-4 text-ink-2" v-html="shownHtml" />
+
+        <footer v-if="canShow" class="border-t border-line-soft px-5 py-3">
           <button class="btn w-full" @click="showInTimeline">
-            <Icon name="external" :size="12" />
             {{ t('cards.drawer.showInTimeline') }}
           </button>
         </footer>

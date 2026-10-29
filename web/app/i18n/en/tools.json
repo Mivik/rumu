@@ -13,7 +13,10 @@
     "agent": "started {count} sub-agent | started {count} sub-agents",
     "search": "searched {count} time | searched {count} times",
     "workspaceUse": "switched {count} workspace | switched {count} workspaces",
-    "other": "called {count} tool | called {count} tools"
+    "other": "called {count} tool | called {count} tools",
+    "catalog": "looked through the card catalog",
+    "thoughtFor": "thought for {duration}",
+    "thinking": "thinking"
   },
   "verb": {
     "read": "read",

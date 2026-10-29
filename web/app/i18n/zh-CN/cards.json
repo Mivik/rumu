@@ -5,10 +5,8 @@
     "write": "写入"
   },
   "pills": {
-    "imported": "导入",
+    "imported": "回忆",
     "changed": "已变更",
-    "catalog": "卡片目录",
-    "catalogMore": "卡片目录 (+{count})",
     "workspace": "默认 {names}",
     "task": "任务 {id} · {status}",
     "reverted": "已回退 · {text}",
@@ -23,24 +21,23 @@
     "label": "知识卡片",
     "close": "关闭 (Esc)",
     "closeAria": "关闭",
-    "deleted": "已删除",
-    "notOnPath": "不在此路径上",
-    "onPathChanged": "在此路径上 · 已变更",
-    "onPathCurrent": "在此路径上 · 最新",
-    "importedBy": "导入者",
-    "asSeen": "此处所见",
-    "asSeenRev": "此处所见 ({rev})",
-    "current": "当前",
-    "currentRev": "当前 ({rev})",
-    "onPath": "在此路径上",
-    "rev": "版本 {rev}",
-    "showInTimeline": "在时间线中显示"
+    "deleted": "这张卡片已被删除，下面是这段对话看到的版本。",
+    "asSeen": "对话中的版本",
+    "current": "最新版本",
+    "showInTimeline": "在对话中显示",
+    "olderSeen": "这段对话看到的是旧版本。"
   },
   "library": {
-    "onPath": "在此路径上",
+    "onPath": "此路径上的卡片",
     "changed": "已变更",
     "by": "来自 {name}",
-    "title": "卡片库 ({count})",
-    "total": "{count} 张卡片 · 共 {total} 张"
+    "title": "卡片库",
+    "noneOnPath": "这条路径还没有用到卡片。",
+    "browse": "浏览全部 {count} 张卡片"
+  },
+  "catalog": {
+    "search": "搜索卡片",
+    "none": "没有匹配“{q}”的卡片。",
+    "empty": "rumu 学到值得记住的东西时，会写成一张卡片。"
   }
 }
