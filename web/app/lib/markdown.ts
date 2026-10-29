@@ -2,7 +2,7 @@
 //
 // Link rewriting happens on the HTML string *before* DOMPurify (it strips
 // unknown-scheme hrefs): card links become in-app `data-card-id` anchors,
-// other workspace-qualified paths (`proj:src/a.rs`, `@rumu:/session/…`)
+// other workspace-qualified paths (`proj:src/a.rs`, `@rumu:/sessions/…`)
 // become inert `data-ws-ref` anchors.
 
 import DOMPurify from 'dompurify'
@@ -46,17 +46,17 @@ function resolveRelative(cardId: string, href: string): string | null {
 
 /** Rewrite one href to `{ cardId }` (an in-app card link) or leave it. */
 function cardLinkFor(href: string, currentCard: string | undefined): string | null {
-  // `@rumu:/card/<id>` / `@rumu:card/<id>`, optional `.md`.
+  // `@rumu:/cards/<id>` / `@rumu:cards/<id>`, optional `.md`.
   const prefix = `${INTERNAL_WORKSPACE}:`
   if (href.startsWith(prefix)) {
     const rest = href.slice(prefix.length).replace(/^\/?/, '')
-    const m = /^card\/([^#?]+?)(?:\.md)?(?:[?#].*)?$/.exec(rest)
+    const m = /^cards\/([^#?]+?)(?:\.md)?(?:[?#].*)?$/.exec(rest)
     if (m) return m[1]!
   }
   if (!currentCard) return null
-  // Rendering a card: `/card/<id>` and relative links resolve inside the
+  // Rendering a card: `/cards/<id>` and relative links resolve inside the
   // card library, relative to the current card's directory.
-  let m = /^\/card\/([^#?]+?)(?:\.md)?(?:[?#].*)?$/.exec(href)
+  let m = /^\/cards\/([^#?]+?)(?:\.md)?(?:[?#].*)?$/.exec(href)
   if (m) return m[1]!
   if (
     href.startsWith(prefix) ||
@@ -86,7 +86,7 @@ export function renderMarkdown(
     if (card) {
       return `<a href="#" data-card-id="${card}"${rest}>`
     }
-    // Other workspace-qualified paths (`proj:src/a.rs`, `@rumu:/session/…`)
+    // Other workspace-qualified paths (`proj:src/a.rs`, `@rumu:/sessions/…`)
     // render as inert references.
     const ws = href.startsWith(`${INTERNAL_WORKSPACE}:`)
       ? INTERNAL_WORKSPACE

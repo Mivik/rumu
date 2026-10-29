@@ -80,7 +80,7 @@ async fn run_turn(kernel: &Arc<Kernel>, branch: &rumu_core::BranchId, text: &str
 async fn update_notices_only_follow_actual_reads() {
     let (_dir, home) = card_home();
     // One kernel, two sessions, one script in call order:
-    //   A turn 1: read(@rumu:/card/x) + reply;  B turn 1: reply;  A turn 2: reply;
+    //   A turn 1: read(@rumu:/cards/x) + reply;  B turn 1: reply;  A turn 2: reply;
     //   fork turn: reply.
     let plugins: Vec<Arc<dyn Plugin>> = vec![
         Arc::new(MemoryPlugin::new(&home)),
@@ -89,7 +89,7 @@ async fn update_notices_only_follow_actual_reads() {
     let kernel = Kernel::new(
         Arc::new(Store::in_memory()),
         Arc::new(ScriptedLlm::strict([
-            resp_call("a1", "read", json!({ "path": "@rumu:/card/x" })),
+            resp_call("a1", "read", json!({ "path": "@rumu:/cards/x" })),
             LlmResponse::text("done-a1"),
             LlmResponse::text("done-b1"),
             LlmResponse::text("done-a2"),
@@ -153,7 +153,7 @@ async fn update_notices_only_follow_actual_reads() {
             _ => None,
         })
         .unwrap();
-    assert!(notice_text.contains("`@rumu:/card/x`"), "{notice_text}");
+    assert!(notice_text.contains("`@rumu:/cards/x`"), "{notice_text}");
     assert!(notice_text.contains("Re-read it"), "{notice_text}");
     assert!(
         !notice_text.contains("v2 body"),

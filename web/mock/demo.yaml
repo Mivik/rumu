@@ -14,12 +14,12 @@ turns:
       - call_id: c-read
         name: read
         args:
-          path: '@rumu:/card/gateway'
+          path: '@rumu:/cards/gateway'
       - call_id: c-search
         name: search
         args:
           query: gateway
-          scope: '@rumu:/card'
+          scope: '@rumu:/cards'
       - call_id: c-bash
         name: bash
         args:

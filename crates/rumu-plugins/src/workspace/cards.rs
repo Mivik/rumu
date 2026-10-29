@@ -1,4 +1,4 @@
-//! The `@rumu:/card/<id>` part of the `@rumu` workspace: read/write/edit on
+//! The `@rumu:/cards/<id>` part of the `@rumu` workspace: read/write/edit on
 //! cards' editable views over the home library (`RUMU_HOME/cards`,
 //! [`FsCardStore`]).
 
@@ -11,7 +11,7 @@ use super::WorkspacePlugin;
 use super::tools::{card_load_err, invalid_card_id, no_card_err, prefixed, slice_lines};
 
 impl WorkspacePlugin {
-    /// The home card library behind `@rumu:/card`.
+    /// The home card library behind `@rumu:/cards`.
     pub(super) fn card_store(&self) -> FsCardStore {
         FsCardStore::home(&self.home)
     }
@@ -44,8 +44,8 @@ impl WorkspacePlugin {
         }
     }
 
-    /// The `list @rumu:/card[/<prefix>]` output: one
-    /// `@rumu:/card/<id> — title — summary` line per card.
+    /// The `list @rumu:/cards[/<prefix>]` output: one
+    /// `@rumu:/cards/<id> — title — summary` line per card.
     pub(super) async fn card_list(&self, prefix: &str) -> ToolResult<ToolOutput> {
         let out = rumu_cards::list_text(&self.card_store(), prefix, super::tools::LIST_LIMIT)?;
         Ok(ToolOutput {

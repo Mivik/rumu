@@ -1,11 +1,11 @@
-//! The `@rumu:/session` part of the `@rumu` workspace: read-only views of
+//! The `@rumu:/sessions` part of the `@rumu` workspace: read-only views of
 //! past conversations, rendered from `Cx::history`.
 //!
-//! - `list /session` — every session, most recently updated first;
-//! - `list|read /session/<s>` — the session overview (branches with
-//!   `@rumu:/session/<s>/<first>..<head>` ranges);
-//! - `read /session/<s>/<node>` — one node, fully rendered;
-//! - `read /session/<s>/<a>..<b>` — a path fragment from `a` down to `b`
+//! - `list /sessions` — every session, most recently updated first;
+//! - `list|read /sessions/<s>` — the session overview (branches with
+//!   `@rumu:/sessions/<s>/<first>..<head>` ranges);
+//! - `read /sessions/<s>/<node>` — one node, fully rendered;
+//! - `read /sessions/<s>/<a>..<b>` — a path fragment from `a` down to `b`
 //!   (`a` must be `b` or one of its ancestors), root→head order.
 //!
 //! Nodes render as `<node id="…" kind="…" …attrs>…</node>` elements, so
@@ -55,7 +55,7 @@ const MIN_PREFIX: usize = 4;
 
 impl WorkspacePlugin {
     pub(super) async fn session_list(&self, abs: &Utf8UnixPath, cx: &Cx) -> ToolResult<ToolOutput> {
-        if abs.as_str() == "/session" {
+        if abs.as_str() == "/sessions" {
             return self.session_listing(cx).await;
         }
         // Below a session, `list` reads like `read` (the overview).
@@ -69,11 +69,11 @@ impl WorkspacePlugin {
         limit: Option<u64>,
         cx: &Cx,
     ) -> ToolResult<ToolOutput> {
-        if abs.as_str() == "/session" {
+        if abs.as_str() == "/sessions" {
             return self.session_listing(cx).await;
         }
         let rest = abs
-            .strip_prefix("/session")
+            .strip_prefix("/sessions")
             .ok()
             .map(Utf8UnixPath::as_str)
             .filter(|rest| !rest.is_empty());
@@ -104,7 +104,7 @@ impl WorkspacePlugin {
                     let Some(parent) = cur.parent.as_ref().and_then(|p| node_by_id(&nodes, &p.0))
                     else {
                         return Err(ToolError::model(format!(
-                            "[{WS}] cannot read `{WS}:/session/{sid}/{node}`: \
+                            "[{WS}] cannot read `{WS}:/sessions/{sid}/{node}`: \
                              `{a}` is not `{b}` or an ancestor of it"
                         )));
                     };
@@ -126,7 +126,7 @@ impl WorkspacePlugin {
         Ok(text.into())
     }
 
-    /// `list /session`: one line per session, most recently updated first.
+    /// `list /sessions`: one line per session, most recently updated first.
     async fn session_listing(&self, cx: &Cx) -> ToolResult<ToolOutput> {
         let mut sessions = cx.history().sessions()?;
         sessions.sort_by_key(|s| Reverse(s.updated_at));
@@ -137,7 +137,7 @@ impl WorkspacePlugin {
             .iter()
             .map(|s| {
                 format!(
-                    "{WS}:/session/{}  {}  \"{}\"",
+                    "{WS}:/sessions/{}  {}  \"{}\"",
                     s.id,
                     iso_local(s.updated_at),
                     s.title
@@ -187,7 +187,7 @@ impl WorkspacePlugin {
                     continue;
                 };
                 candidates.push(Candidate {
-                    addr: format!("{WS}:/session/{}/{}", info.id, view.short(&n.id.0)),
+                    addr: format!("{WS}:/sessions/{}/{}", info.id, view.short(&n.id.0)),
                     at: n.at,
                     title: info.title.clone(),
                     kind,
@@ -373,7 +373,7 @@ impl<'a> SessionView<'a> {
                 }
                 let body = if range && call.is_some_and(folds_session_read) {
                     format!(
-                        "<elided chars=\"{}\" read=\"{WS}:/session/{}/{short}\"/>",
+                        "<elided chars=\"{}\" read=\"{WS}:/sessions/{}/{short}\"/>",
                         content.text.chars().count(),
                         self.sid
                     )
@@ -434,7 +434,7 @@ impl<'a> SessionView<'a> {
         let head: String = text.chars().take(RANGE_HEAD).collect();
         let tail: String = text.chars().skip(total - RANGE_TAIL).collect();
         format!(
-            "{}\n<truncated chars=\"{}\" read=\"{WS}:/session/{}/{short}\"/>\n{}",
+            "{}\n<truncated chars=\"{}\" read=\"{WS}:/sessions/{}/{short}\"/>\n{}",
             escape_body(&head),
             total - RANGE_HEAD - RANGE_TAIL,
             self.sid,
@@ -462,8 +462,8 @@ fn render_call(call: &ToolCall, range: bool) -> String {
 }
 
 /// Whether a tool result is a session read/list/search that a range read can
-/// fold to an `<elided>` pointer. Only absolute `@rumu:/session…` arguments
-/// are recognized; relative or default-workspace forms (e.g. `session/…`)
+/// fold to an `<elided>` pointer. Only absolute `@rumu:/sessions…` arguments
+/// are recognized; relative or default-workspace forms (e.g. `sessions/…`)
 /// are not detected — accepted.
 fn folds_session_read(call: &ToolCall) -> bool {
     let arg = match call.name.as_str() {
@@ -472,7 +472,7 @@ fn folds_session_read(call: &ToolCall) -> bool {
         _ => return false,
     };
     arg.and_then(Value::as_str)
-        .is_some_and(|s| s.starts_with(&format!("{WS}:/session")))
+        .is_some_and(|s| s.starts_with(&format!("{WS}:/sessions")))
 }
 
 /// Escape `<` where body text could forge our markup. Every other `<` (and
@@ -557,7 +557,7 @@ fn render_overview(info: &SessionInfo, nodes: &[Node], branches: &[Branch]) -> S
             .map(|n| view.short(&n.id.0))
             .unwrap_or_default();
         let mut line = format!(
-            "  {kind:<8} {status:<10} {WS}:/session/{}/{first}..{}",
+            "  {kind:<8} {status:<10} {WS}:/sessions/{}/{first}..{}",
             info.id,
             view.short(&b.head.0)
         );

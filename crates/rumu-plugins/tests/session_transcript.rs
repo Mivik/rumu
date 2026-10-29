@@ -1,5 +1,5 @@
 //! End-to-end: the transcript address an `agent` result carries
-//! (`@rumu:/session/<s>/<first>..<head>`) is readable with the real
+//! (`@rumu:/sessions/<s>/<first>..<head>`) is readable with the real
 //! `WorkspacePlugin` over a real kernel.
 
 use std::sync::Arc;
@@ -102,7 +102,7 @@ async fn agent_transcript_address_is_readable() {
         .unwrap()
         .trim_end_matches(']')
         .to_owned();
-    assert!(addr.starts_with("@rumu:/session/"), "{addr}");
+    assert!(addr.starts_with("@rumu:/sessions/"), "{addr}");
 
     // `read` opens it: the child's own nodes in root→head order — the
     // sub-agent prompt (its first own node), the skipped sibling, the
@@ -169,7 +169,7 @@ async fn agent_transcript_address_is_readable() {
     let out = ws
         .call_tool(
             "read",
-            json!({ "path": format!("@rumu:/session/{sid}") }),
+            json!({ "path": format!("@rumu:/sessions/{sid}") }),
             &cx,
         )
         .await
@@ -177,14 +177,14 @@ async fn agent_transcript_address_is_readable() {
     assert!(
         out.content
             .text
-            .contains(&format!("main     active     @rumu:/session/{sid}/")),
+            .contains(&format!("main     active     @rumu:/sessions/{sid}/")),
         "{}",
         out.content.text
     );
     assert!(
         out.content
             .text
-            .contains(&format!("agent    done       @rumu:/session/{sid}/"))
+            .contains(&format!("agent    done       @rumu:/sessions/{sid}/"))
             && out.content.text.contains("task: find the config file"),
         "{}",
         out.content.text
@@ -194,7 +194,7 @@ async fn agent_transcript_address_is_readable() {
     let out = ws
         .call_tool(
             "search",
-            json!({ "query": "/etc/rumu", "scope": format!("@rumu:/session/{sid}") }),
+            json!({ "query": "/etc/rumu", "scope": format!("@rumu:/sessions/{sid}") }),
             &cx,
         )
         .await

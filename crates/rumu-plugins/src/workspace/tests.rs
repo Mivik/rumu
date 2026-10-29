@@ -1,7 +1,7 @@
 //! Tests for the workspace plugin: `<ws>:<path>` resolution, the file/bash
 //! tools over local backends (absolute paths included), `workspace_use`, the
-//! `@rumu` virtual workspace (`/card` reads/writes with validation and
-//! read-before-write, `/session` views, `/task` reads, unknown roots), AGENTS.md
+//! `@rumu` virtual workspace (`/cards` reads/writes with validation and
+//! read-before-write, `/sessions` views, `/task` reads, unknown roots), AGENTS.md
 //! injection and the config.yaml loader. The ssh backend's command construction
 //! is tested in `backend.rs` (no real ssh).
 
@@ -552,7 +552,7 @@ async fn workspace_use_lists_and_switches() {
         lines[1]
     );
     assert!(
-        lines[2].starts_with("  @rumu rumu's own data: @rumu:/card"),
+        lines[2].starts_with("  @rumu rumu's own data: @rumu:/cards"),
         "{}",
         lines[2]
     );
@@ -725,7 +725,7 @@ async fn agents_updated_on_hash_change_and_once_per_batch() {
     assert_ne!(old.hash, new.hash);
 }
 
-// ---------- the `@rumu` workspace: /card ----------
+// ---------- the `@rumu` workspace: /cards ----------
 fn card_home() -> tempfile::TempDir {
     let dir = tempfile::tempdir().unwrap();
     std::fs::create_dir_all(dir.path().join("cards")).unwrap();
@@ -740,8 +740,8 @@ fn card_plugin_for(home: &Path) -> (WorkspacePlugin, std::sync::Arc<FakeRuntime>
     (plugin, host, cx)
 }
 
-/// `@rumu:/card/x` ≡ `@rumu:/card/x.md`; with `@rumu` as the branch default,
-/// `/card/x` and `card/x` work too.
+/// `@rumu:/cards/x` ≡ `@rumu:/cards/x.md`; with `@rumu` as the branch default,
+/// `/cards/x` and `cards/x` work too.
 #[tokio::test]
 async fn card_paths_are_equivalent_in_every_form() {
     let home = card_home();
@@ -754,11 +754,11 @@ async fn card_paths_are_equivalent_in_every_form() {
 
     let mut effects = Vec::new();
     for path in [
-        "@rumu:/card/m",
-        "@rumu:/card/m.md",
-        "@rumu:card/m",
-        "/card/m",
-        "card/m",
+        "@rumu:/cards/m",
+        "@rumu:/cards/m.md",
+        "@rumu:cards/m",
+        "/cards/m",
+        "cards/m",
     ] {
         let out = plugin
             .call_tool("read", json!({ "path": path }), &cx)
@@ -787,7 +787,7 @@ async fn rumu_workspace_edges() {
 
     // `list @rumu:` shows the roots.
     let out = plugin.call_tool("list", json!({}), &cx).await.unwrap();
-    assert_eq!(out.content.text, "[@rumu] card/\nsession/\ntask/");
+    assert_eq!(out.content.text, "[@rumu] cards/\nsessions/\ntask/");
 
     // Unknown paths name the roots.
     for tool in ["read", "write", "edit", "list"] {
@@ -801,37 +801,37 @@ async fn rumu_workspace_edges() {
         let out = plugin.call_tool(tool, args, &cx).await.unwrap();
         assert!(out.is_error, "{tool}: {}", out.content.text);
         assert!(
-            out.content.text.contains("roots: /card, /session"),
+            out.content.text.contains("roots: /cards, /sessions"),
             "{tool}: {}",
             out.content.text
         );
     }
 
-    // `/session` is a known, read-only root: writes there are refused.
+    // `/sessions` is a known, read-only root: writes there are refused.
     let out = plugin
         .call_tool(
             "write",
-            json!({ "path": "@rumu:/session/x", "content": "x" }),
+            json!({ "path": "@rumu:/sessions/x", "content": "x" }),
             &cx,
         )
         .await
         .unwrap();
     assert!(out.is_error, "{}", out.content.text);
     assert!(
-        out.content.text.contains("`@rumu:/session` is read-only"),
+        out.content.text.contains("`@rumu:/sessions` is read-only"),
         "{}",
         out.content.text
     );
     let out = plugin
         .call_tool(
             "edit",
-            json!({ "path": "/session/s", "old_string": "a", "new_string": "b" }),
+            json!({ "path": "/sessions/s", "old_string": "a", "new_string": "b" }),
             &cx,
         )
         .await
         .unwrap();
     assert!(
-        out.is_error && out.content.text.contains("`@rumu:/session` is read-only"),
+        out.is_error && out.content.text.contains("`@rumu:/sessions` is read-only"),
         "{}",
         out.content.text
     );
@@ -852,11 +852,11 @@ async fn rumu_workspace_edges() {
         );
     }
 
-    // `/session` reads and lists answer with the (here empty) session
+    // `/sessions` reads and lists answer with the (here empty) session
     // listing; only writes are refused outright.
     for tool in ["read", "list"] {
         let out = plugin
-            .call_tool(tool, json!({ "path": "@rumu:/session" }), &cx)
+            .call_tool(tool, json!({ "path": "@rumu:/sessions" }), &cx)
             .await
             .unwrap();
         assert!(
@@ -878,7 +878,7 @@ async fn card_tools_read_write_validate_and_list() {
     let (plugin, _host, cx) = card_plugin_for(home.path());
 
     let out = plugin
-        .call_tool("read", json!({ "path": "@rumu:/card/m" }), &cx)
+        .call_tool("read", json!({ "path": "@rumu:/cards/m" }), &cx)
         .await
         .unwrap();
     assert!(!out.is_error, "{}", out.content.text);
@@ -923,7 +923,7 @@ async fn card_tools_read_write_validate_and_list() {
 
     // Unknown id: near-miss suggestions, no marker.
     let out = plugin
-        .call_tool("read", json!({ "path": "@rumu:/card/x" }), &cx)
+        .call_tool("read", json!({ "path": "@rumu:/cards/x" }), &cx)
         .await
         .unwrap();
     assert!(
@@ -933,7 +933,7 @@ async fn card_tools_read_write_validate_and_list() {
     );
     assert!(out.effects.is_empty());
     let out = plugin
-        .call_tool("read", json!({ "path": "@rumu:/card/mm" }), &cx)
+        .call_tool("read", json!({ "path": "@rumu:/cards/mm" }), &cx)
         .await
         .unwrap();
     assert!(
@@ -955,7 +955,7 @@ async fn card_tools_read_write_validate_and_list() {
     let out = plugin
         .call_tool(
             "write",
-            json!({ "path": "@rumu:/card/c", "content": "---\ntitle: C\n---\nbody v2\n" }),
+            json!({ "path": "@rumu:/cards/c", "content": "---\ntitle: C\n---\nbody v2\n" }),
             &cx,
         )
         .await
@@ -973,14 +973,14 @@ async fn card_tools_read_write_validate_and_list() {
 
     // Read, then the same write passes.
     let out = plugin
-        .call_tool("read", json!({ "path": "@rumu:/card/c" }), &cx)
+        .call_tool("read", json!({ "path": "@rumu:/cards/c" }), &cx)
         .await
         .unwrap();
     flush_output(&host, "call-1", &out);
     let out = plugin
         .call_tool(
             "write",
-            json!({ "path": "@rumu:/card/c", "content": "---\ntitle: C\n---\nbody v2\n" }),
+            json!({ "path": "@rumu:/cards/c", "content": "---\ntitle: C\n---\nbody v2\n" }),
             &cx,
         )
         .await
@@ -1003,7 +1003,7 @@ async fn card_tools_read_write_validate_and_list() {
     let out = plugin
         .call_tool(
             "edit",
-            json!({ "path": "@rumu:/card/c", "old_string": "v2", "new_string": "v3" }),
+            json!({ "path": "@rumu:/cards/c", "old_string": "v2", "new_string": "v3" }),
             &cx,
         )
         .await
@@ -1024,7 +1024,7 @@ async fn card_tools_read_write_validate_and_list() {
     let out = plugin
         .call_tool(
             "edit",
-            json!({ "path": "@rumu:/card/c", "old_string": "v3", "new_string": "v4" }),
+            json!({ "path": "@rumu:/cards/c", "old_string": "v3", "new_string": "v4" }),
             &cx,
         )
         .await
@@ -1045,7 +1045,7 @@ async fn card_tools_read_write_validate_and_list() {
     let out = plugin
         .call_tool(
             "write",
-            json!({ "path": "@rumu:/card/new/card", "content": "fresh body\n" }),
+            json!({ "path": "@rumu:/cards/new/card", "content": "fresh body\n" }),
             &cx,
         )
         .await
@@ -1061,7 +1061,7 @@ async fn card_tools_read_write_validate_and_list() {
     .unwrap();
     let (plugin, host, cx) = card_plugin_for(home.path());
     let out = plugin
-        .call_tool("read", json!({ "path": "@rumu:/card/m" }), &cx)
+        .call_tool("read", json!({ "path": "@rumu:/cards/m" }), &cx)
         .await
         .unwrap();
     flush_output(&host, "call-1", &out);
@@ -1070,7 +1070,7 @@ async fn card_tools_read_write_validate_and_list() {
     let out = plugin
         .call_tool(
             "write",
-            json!({ "path": "@rumu:/card/m", "content": "---\nmatch:\n  event: prompt\nscope: [proj]\n---\nhacked\n" }),
+            json!({ "path": "@rumu:/cards/m", "content": "---\nmatch:\n  event: prompt\nscope: [proj]\n---\nhacked\n" }),
             &cx,
         )
         .await
@@ -1091,7 +1091,7 @@ async fn card_tools_read_write_validate_and_list() {
         let out = plugin
             .call_tool(
                 "write",
-                json!({ "path": "@rumu:/card/m", "content": bad }),
+                json!({ "path": "@rumu:/cards/m", "content": bad }),
                 &cx,
             )
             .await
@@ -1107,7 +1107,7 @@ async fn card_tools_read_write_validate_and_list() {
     let out = plugin
         .call_tool(
             "write",
-            json!({ "path": "@rumu:/card/m", "content": "---\ntitle: New\nmatch:\n  event: prompt\n---\nnew body\n" }),
+            json!({ "path": "@rumu:/cards/m", "content": "---\ntitle: New\nmatch:\n  event: prompt\n---\nnew body\n" }),
             &cx,
         )
         .await
@@ -1129,7 +1129,7 @@ async fn card_tools_read_write_validate_and_list() {
     let out = plugin
         .call_tool(
             "edit",
-            json!({ "path": "@rumu:/card/m", "old_string": "title: New", "new_string": "title: New\ndescription: added" }),
+            json!({ "path": "@rumu:/cards/m", "old_string": "title: New", "new_string": "title: New\ndescription: added" }),
             &cx,
         )
         .await
@@ -1153,7 +1153,7 @@ async fn card_tools_read_write_validate_and_list() {
     let out = plugin
         .call_tool(
             "write",
-            json!({ "path": "@rumu:/card/m", "content": "---\ntitle: New\n---\nplain\n" }),
+            json!({ "path": "@rumu:/cards/m", "content": "---\ntitle: New\n---\nplain\n" }),
             &cx,
         )
         .await
@@ -1173,7 +1173,7 @@ async fn card_tools_read_write_validate_and_list() {
     let (plugin, _host, cx) = card_plugin_for(home.path());
 
     let out = plugin
-        .call_tool("list", json!({ "path": "@rumu:/card" }), &cx)
+        .call_tool("list", json!({ "path": "@rumu:/cards" }), &cx)
         .await
         .unwrap();
     assert!(
@@ -1182,12 +1182,12 @@ async fn card_tools_read_write_validate_and_list() {
         out.content.text
     );
     assert!(
-        out.content.text.contains("@rumu:/card/dev/y — dev/y"),
+        out.content.text.contains("@rumu:/cards/dev/y — dev/y"),
         "{}",
         out.content.text
     );
     assert!(
-        out.content.text.contains("@rumu:/card/x — X — dx"),
+        out.content.text.contains("@rumu:/cards/x — X — dx"),
         "{}",
         out.content.text
     );
@@ -1198,16 +1198,16 @@ async fn card_tools_read_write_validate_and_list() {
     );
 
     let out = plugin
-        .call_tool("list", json!({ "path": "@rumu:/card/dev" }), &cx)
+        .call_tool("list", json!({ "path": "@rumu:/cards/dev" }), &cx)
         .await
         .unwrap();
     assert!(
-        out.content.text.contains("@rumu:/card/dev/y"),
+        out.content.text.contains("@rumu:/cards/dev/y"),
         "{}",
         out.content.text
     );
     assert!(
-        !out.content.text.contains("@rumu:/card/x — X"),
+        !out.content.text.contains("@rumu:/cards/x — X"),
         "{}",
         out.content.text
     );
@@ -1366,7 +1366,7 @@ fn catalog_or_cwd_registers_the_current_directory() {
     assert_eq!(cat.get("proj").unwrap().root, "/p");
 }
 
-// ---------- the `@rumu` workspace: /session ----------
+// ---------- the `@rumu` workspace: /sessions ----------
 
 /// A staged session: root marker R, then user U1 → assistant A1 (with a
 /// `bash` call) → tool_result T1 → note N1 → marker M1 on `main`; an
@@ -1555,7 +1555,7 @@ async fn session_listing_and_overview() {
 
     // The listing line: address, updated timestamp, title.
     let out = plugin
-        .call_tool("list", json!({ "path": "@rumu:/session" }), &cx)
+        .call_tool("list", json!({ "path": "@rumu:/sessions" }), &cx)
         .await
         .unwrap();
     assert!(!out.is_error, "{}", out.content.text);
@@ -1563,7 +1563,7 @@ async fn session_listing_and_overview() {
     let mut fields = line.split("  ");
     assert_eq!(
         fields.next(),
-        Some("[@rumu] @rumu:/session/01STESTSSESSION0000000000000")
+        Some("[@rumu] @rumu:/sessions/01STESTSSESSION0000000000000")
     );
     assert_stamp(fields.next().unwrap(), 8000);
     assert_eq!(fields.next(), Some("\"config hunting\""), "{line}");
@@ -1574,7 +1574,7 @@ async fn session_listing_and_overview() {
         let out = plugin
             .call_tool(
                 tool,
-                json!({ "path": "@rumu:/session/01STESTSSESSION0000000000000" }),
+                json!({ "path": "@rumu:/sessions/01STESTSSESSION0000000000000" }),
                 &cx,
             )
             .await
@@ -1592,20 +1592,20 @@ async fn session_listing_and_overview() {
         let main_line = out.content.text.lines().nth(2).unwrap();
         assert!(
             main_line.starts_with(
-                "  main     active     @rumu:/session/01STESTSSESSION0000000000000/R..M1"
+                "  main     active     @rumu:/sessions/01STESTSSESSION0000000000000/R..M1"
             ),
             "{main_line}"
         );
         let agent_line = out.content.text.lines().nth(3).unwrap();
         assert!(
-            agent_line.starts_with("  agent    done       @rumu:/session/01STESTSSESSION0000000000000/E1..A2  task: find the config file"),
+            agent_line.starts_with("  agent    done       @rumu:/sessions/01STESTSSESSION0000000000000/E1..A2  task: find the config file"),
             "{agent_line}"
         );
     }
 
     // Unknown sessions error clearly.
     let out = plugin
-        .call_tool("read", json!({ "path": "@rumu:/session/nosuch" }), &cx)
+        .call_tool("read", json!({ "path": "@rumu:/sessions/nosuch" }), &cx)
         .await
         .unwrap();
     assert!(
@@ -1621,7 +1621,7 @@ async fn session_node_and_range_reads() {
     let host = session_host(info, nodes, branches);
     let cx = host.cx();
     let plugin = session_plugin();
-    let base = "@rumu:/session/01STESTSSESSION0000000000000";
+    let base = "@rumu:/sessions/01STESTSSESSION0000000000000";
 
     // A single node renders fully: the `<node>` element, text, tool call.
     let out = plugin
@@ -1754,14 +1754,14 @@ async fn session_range_truncation() {
     let host = session_host(info, nodes, branches);
     let cx = host.cx();
     let plugin = session_plugin();
-    let base = "@rumu:/session/01STESTSSESSION0000000000000";
+    let base = "@rumu:/sessions/01STESTSSESSION0000000000000";
 
     let out = plugin
         .call_tool("read", json!({ "path": format!("{base}/U1..T1") }), &cx)
         .await
         .unwrap();
     let pointer =
-        "<truncated chars=\"500\" read=\"@rumu:/session/01STESTSSESSION0000000000000/U1\"/>";
+        "<truncated chars=\"500\" read=\"@rumu:/sessions/01STESTSSESSION0000000000000/U1\"/>";
     assert!(
         out.content.text.contains(pointer),
         "{}…",
@@ -1911,7 +1911,7 @@ async fn session_render_escapes_markup() {
     let out = plugin
         .call_tool(
             "read",
-            json!({ "path": format!("@rumu:/session/{sid}/R..N1") }),
+            json!({ "path": format!("@rumu:/sessions/{sid}/R..N1") }),
             &cx,
         )
         .await
@@ -1974,12 +1974,12 @@ async fn session_range_folds_nested_session_reads() {
                     rumu_core::ToolCall {
                         call_id: "c1".into(),
                         name: "read".into(),
-                        args: json!({ "path": "@rumu:/session/other/abc" }),
+                        args: json!({ "path": "@rumu:/sessions/other/abc" }),
                     },
                     rumu_core::ToolCall {
                         call_id: "c2".into(),
                         name: "search".into(),
-                        args: json!({ "query": "x", "scope": "@rumu:/session/other" }),
+                        args: json!({ "query": "x", "scope": "@rumu:/sessions/other" }),
                     },
                     rumu_core::ToolCall {
                         call_id: "c3".into(),
@@ -2028,7 +2028,7 @@ async fn session_range_folds_nested_session_reads() {
     let host = staged_tree(sid, nodes, "T3");
     let cx = host.cx();
     let plugin = session_plugin();
-    let base = format!("@rumu:/session/{sid}");
+    let base = format!("@rumu:/sessions/{sid}");
 
     let out = plugin
         .call_tool("read", json!({ "path": format!("{base}/U1..T3") }), &cx)
@@ -2119,7 +2119,7 @@ async fn session_call_args_clip_only_in_ranges() {
     let host = staged_tree(sid, nodes, "A1");
     let cx = host.cx();
     let plugin = session_plugin();
-    let base = format!("@rumu:/session/{sid}");
+    let base = format!("@rumu:/sessions/{sid}");
 
     let out = plugin
         .call_tool("read", json!({ "path": format!("{base}/U1..A1") }), &cx)
@@ -2197,7 +2197,7 @@ async fn session_range_truncation_keeps_call_tags_whole() {
     let out = plugin
         .call_tool(
             "read",
-            json!({ "path": format!("@rumu:/session/{sid}/U1..A1") }),
+            json!({ "path": format!("@rumu:/sessions/{sid}/U1..A1") }),
             &cx,
         )
         .await
@@ -2205,7 +2205,7 @@ async fn session_range_truncation_keeps_call_tags_whole() {
     let text = &out.content.text;
     assert!(
         text.contains(&format!(
-            "<truncated chars=\"500\" read=\"@rumu:/session/{sid}/A1\"/>"
+            "<truncated chars=\"500\" read=\"@rumu:/sessions/{sid}/A1\"/>"
         )),
         "{text}"
     );
@@ -2268,7 +2268,7 @@ async fn session_prefix_resolution_and_abbreviations() {
     let host = staged_tree(sid, nodes, reply);
     let cx = host.cx();
     let plugin = session_plugin();
-    let base = format!("@rumu:/session/{sid}");
+    let base = format!("@rumu:/sessions/{sid}");
 
     // A unique 4-char prefix resolves.
     let out = plugin
@@ -2492,19 +2492,19 @@ async fn search_sessions_and_cards_by_scope() {
     .unwrap();
     let plugin = WorkspacePlugin::new(home.path(), WorkspaceCatalog::default());
 
-    // Default scope = cards; hits are `@rumu:/card/<id>` addresses.
+    // Default scope = cards; hits are `@rumu:/cards/<id>` addresses.
     let out = plugin
         .call_tool("search", json!({ "query": "gateway" }), &cx)
         .await
         .unwrap();
     assert!(!out.is_error, "{}", out.content.text);
     assert!(
-        out.content.text.contains("@rumu:/card/gateway"),
+        out.content.text.contains("@rumu:/cards/gateway"),
         "{}",
         out.content.text
     );
     assert!(
-        !out.content.text.contains("@rumu:/session/"),
+        !out.content.text.contains("@rumu:/sessions/"),
         "card scope by default: {}",
         out.content.text
     );
@@ -2515,7 +2515,7 @@ async fn search_sessions_and_cards_by_scope() {
     let out = plugin
         .call_tool(
             "search",
-            json!({ "query": "SSH", "scope": "@rumu:/session" }),
+            json!({ "query": "SSH", "scope": "@rumu:/sessions" }),
             &cx,
         )
         .await
@@ -2524,17 +2524,17 @@ async fn search_sessions_and_cards_by_scope() {
     let lines: Vec<&str> = out.content.text.lines().collect();
     let addrs: Vec<&str> = lines
         .iter()
-        .filter(|l| l.starts_with("@rumu:/session/"))
+        .filter(|l| l.starts_with("@rumu:/sessions/"))
         .map(|l| l.split("  ").next().unwrap())
         .collect();
     assert_eq!(
         addrs,
         vec![
-            format!("@rumu:/session/{s1}/N1").as_str(),
-            format!("@rumu:/session/{s1}/U1").as_str(),
-            format!("@rumu:/session/{s2}/U2").as_str(),
-            format!("@rumu:/session/{s1}/A1").as_str(),
-            format!("@rumu:/session/{s1}/T1").as_str(),
+            format!("@rumu:/sessions/{s1}/N1").as_str(),
+            format!("@rumu:/sessions/{s1}/U1").as_str(),
+            format!("@rumu:/sessions/{s2}/U2").as_str(),
+            format!("@rumu:/sessions/{s1}/A1").as_str(),
+            format!("@rumu:/sessions/{s1}/T1").as_str(),
         ],
         "{}",
         out.content.text
@@ -2550,7 +2550,7 @@ async fn search_sessions_and_cards_by_scope() {
     let out = plugin
         .call_tool(
             "search",
-            json!({ "query": "ssh rotate", "scope": "@rumu:/session" }),
+            json!({ "query": "ssh rotate", "scope": "@rumu:/sessions" }),
             &cx,
         )
         .await
@@ -2559,17 +2559,17 @@ async fn search_sessions_and_cards_by_scope() {
         .content
         .text
         .lines()
-        .filter(|l| l.starts_with("@rumu:/session/"))
+        .filter(|l| l.starts_with("@rumu:/sessions/"))
         .map(|l| l.split("  ").next().unwrap())
         .collect();
     assert_eq!(
         addrs.first().copied(),
-        Some(format!("@rumu:/session/{s1}/U1").as_str()),
+        Some(format!("@rumu:/sessions/{s1}/U1").as_str()),
         "{}",
         out.content.text
     );
     assert!(
-        addrs.contains(&format!("@rumu:/session/{s2}/U2").as_str()),
+        addrs.contains(&format!("@rumu:/sessions/{s2}/U2").as_str()),
         "{}",
         out.content.text
     );
@@ -2577,7 +2577,7 @@ async fn search_sessions_and_cards_by_scope() {
     let out = plugin
         .call_tool(
             "search",
-            json!({ "query": ".ssh/config", "scope": "@rumu:/session" }),
+            json!({ "query": ".ssh/config", "scope": "@rumu:/sessions" }),
             &cx,
         )
         .await
@@ -2585,7 +2585,7 @@ async fn search_sessions_and_cards_by_scope() {
     assert!(
         out.content
             .text
-            .contains(&format!("@rumu:/session/{s1}/A1")),
+            .contains(&format!("@rumu:/sessions/{s1}/A1")),
         "{}",
         out.content.text
     );
@@ -2594,7 +2594,7 @@ async fn search_sessions_and_cards_by_scope() {
     let out = plugin
         .call_tool(
             "search",
-            json!({ "query": "ssh", "scope": format!("@rumu:/session/{s2}") }),
+            json!({ "query": "ssh", "scope": format!("@rumu:/sessions/{s2}") }),
             &cx,
         )
         .await
@@ -2602,8 +2602,8 @@ async fn search_sessions_and_cards_by_scope() {
     assert!(
         out.content
             .text
-            .contains(&format!("@rumu:/session/{s2}/U2"))
-            && !out.content.text.contains(&format!("@rumu:/session/{s1}/")),
+            .contains(&format!("@rumu:/sessions/{s2}/U2"))
+            && !out.content.text.contains(&format!("@rumu:/sessions/{s1}/")),
         "{}",
         out.content.text
     );
@@ -2612,7 +2612,7 @@ async fn search_sessions_and_cards_by_scope() {
     let out = plugin
         .call_tool(
             "search",
-            json!({ "query": "ssh", "scope": "@rumu:/session", "limit": 2 }),
+            json!({ "query": "ssh", "scope": "@rumu:/sessions", "limit": 2 }),
             &cx,
         )
         .await
@@ -2627,7 +2627,7 @@ async fn search_sessions_and_cards_by_scope() {
     let out = plugin
         .call_tool(
             "search",
-            json!({ "query": "no-such-word", "scope": "@rumu:/session" }),
+            json!({ "query": "no-such-word", "scope": "@rumu:/sessions" }),
             &cx,
         )
         .await
@@ -2643,7 +2643,7 @@ async fn search_sessions_and_cards_by_scope() {
     );
 
     // Scopes outside the @rumu workspace are rejected.
-    for scope in ["proj:src", "/etc", "@rumu:/sessionx"] {
+    for scope in ["proj:src", "/etc", "@rumu:/sessionsx"] {
         let out = plugin
             .call_tool("search", json!({ "query": "x", "scope": scope }), &cx)
             .await
@@ -2715,7 +2715,7 @@ async fn search_downweights_tool_results_and_breaks_ties_by_time() {
     let out = plugin
         .call_tool(
             "search",
-            json!({ "query": "widget", "scope": "@rumu:/session" }),
+            json!({ "query": "widget", "scope": "@rumu:/sessions" }),
             &cx,
         )
         .await
@@ -2724,15 +2724,15 @@ async fn search_downweights_tool_results_and_breaks_ties_by_time() {
         .content
         .text
         .lines()
-        .filter(|l| l.starts_with("@rumu:/session/"))
+        .filter(|l| l.starts_with("@rumu:/sessions/"))
         .map(|l| l.split("  ").next().unwrap())
         .collect();
     assert_eq!(
         addrs,
         vec![
-            format!("@rumu:/session/{sid}/UNEW").as_str(),
-            format!("@rumu:/session/{sid}/UOLD").as_str(),
-            format!("@rumu:/session/{sid}/TOOL").as_str(),
+            format!("@rumu:/sessions/{sid}/UNEW").as_str(),
+            format!("@rumu:/sessions/{sid}/UOLD").as_str(),
+            format!("@rumu:/sessions/{sid}/TOOL").as_str(),
         ],
         "{}",
         out.content.text

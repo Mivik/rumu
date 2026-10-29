@@ -357,7 +357,7 @@ mod tests {
             "a@b",
             "a b",
             "a/b@c",
-            "@rumu:/card/x",
+            "@rumu:/cards/x",
             "日本語",
         ] {
             assert!(!valid_card_id(bad), "should reject `{bad}`");

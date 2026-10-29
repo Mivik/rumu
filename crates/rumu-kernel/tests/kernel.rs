@@ -961,7 +961,7 @@ async fn queued_markers_are_visible_within_the_batch() {
         &["append_marker", "probe_state", "write"],
         vec![hook(
             "card-guard",
-            json!({ "event": kind::TOOL_PRE, "tool": "write", "paths": { "glob": "/card/**" } }),
+            json!({ "event": kind::TOOL_PRE, "tool": "write", "paths": { "glob": "/cards/**" } }),
         )],
         block_hook("cards are guarded"),
         noop_tools(),
@@ -979,7 +979,7 @@ async fn queued_markers_are_visible_within_the_batch() {
                 ToolCall::new(
                     "c3",
                     "write",
-                    json!({"path": "@rumu:/card/dev/x", "content": "x"}),
+                    json!({"path": "@rumu:/cards/dev/x", "content": "x"}),
                 ),
             ]),
             LlmResponse::text("done"),
@@ -1093,7 +1093,7 @@ async fn agent_forks_a_child_and_survives_batch_order() {
             "{e1_text}"
         );
         assert!(
-            e1_text.contains("\n\n[transcript: @rumu:/session/"),
+            e1_text.contains("\n\n[transcript: @rumu:/sessions/"),
             "transcript address: {e1_text}"
         );
         assert!(!e1_err);
@@ -1129,7 +1129,7 @@ async fn agent_forks_a_child_and_survives_batch_order() {
         // The transcript address points into this session: `<first>..<head>`
         // names the child's first own node and its final head.
         let addr = e1_text
-            .split("[transcript: @rumu:/session/")
+            .split("[transcript: @rumu:/sessions/")
             .nth(1)
             .unwrap()
             .trim_end_matches(']');
@@ -1212,7 +1212,7 @@ async fn agent_context_none_starts_at_the_root() {
     let (text, err) = result_text(&nodes, "e1");
     assert!(!err, "{text}");
     let addr = text
-        .split("[transcript: @rumu:/session/")
+        .split("[transcript: @rumu:/sessions/")
         .nth(1)
         .unwrap()
         .trim_end_matches(']');

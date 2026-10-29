@@ -2,7 +2,7 @@
 //!
 //! A card is a markdown knowledge file addressed by a path id
 //! (`dev/rumu/kernel`) in the home library under `RUMU_HOME/cards`
-//! (`@rumu:/card/<id>`). This crate owns everything card-shaped:
+//! (`@rumu:/cards/<id>`). This crate owns everything card-shaped:
 //!
 //! - [`card`] — the content model (frontmatter, rendering, revisions, the
 //!   editable view, id validation);
@@ -15,7 +15,7 @@
 //! - [`recall`] — BM25F over `keywords:`, title, description and body: the
 //!   cards whose text best matches a prompt (recall) or a search query;
 //! - [`search_text`] / [`list_text`] — the discovery outputs the workspace
-//!   plugin's `search` / `list` tools render (addresses are `@rumu:/card/<id>`).
+//!   plugin's `search` / `list` tools render (addresses are `@rumu:/cards/<id>`).
 //!
 //! The `search` tool itself, and memory (the catalog, scope cards, update
 //! notices), live in
@@ -43,7 +43,7 @@ pub use store::FsCardStore;
 
 /// Run a card search over the home library and render its output text: hits
 /// are BM25F-ranked like recall (`keywords:`, title, description, body), any
-/// term matches, and each is shown as `@rumu:/card/<id>` plus a short snippet
+/// term matches, and each is shown as `@rumu:/cards/<id>` plus a short snippet
 /// — never the full text.
 pub fn search_text(store: &FsCardStore, query: &str, args: &Value) -> ToolResult<ToolOutput> {
     if query.trim().is_empty() {
@@ -81,13 +81,13 @@ pub fn search_text(store: &FsCardStore, query: &str, args: &Value) -> ToolResult
     Ok(text.into())
 }
 
-/// `@rumu:/card/<id>` — the canonical address of a home card.
+/// `@rumu:/cards/<id>` — the canonical address of a home card.
 pub fn card_uri(id: &str) -> String {
-    format!("{RUMU_WORKSPACE}:/card/{id}")
+    format!("{RUMU_WORKSPACE}:/cards/{id}")
 }
 
-/// Render the `list @rumu:/card[/<prefix>]` output: one
-/// `@rumu:/card/<id> — title — summary` line per card, never full text.
+/// Render the `list @rumu:/cards[/<prefix>]` output: one
+/// `@rumu:/cards/<id> — title — summary` line per card, never full text.
 pub fn list_text(store: &FsCardStore, prefix: &str, limit: usize) -> ToolResult<ToolOutput> {
     let prefix = card::normalize_prefix(prefix);
     let cards = library::cards_under(store, &prefix)?;
@@ -108,7 +108,7 @@ pub fn list_text(store: &FsCardStore, prefix: &str, limit: usize) -> ToolResult<
     Ok(text.into())
 }
 
-/// One list line: `@rumu:/card/<id> — title — summary`.
+/// One list line: `@rumu:/cards/<id> — title — summary`.
 pub fn card_line(id: &str, c: &Card) -> String {
     let title = c.title.clone().unwrap_or_else(|| id.to_owned());
     let mut line = format!("{} — {title}", card_uri(id));
@@ -198,12 +198,12 @@ mod tests {
             .to_owned();
         assert_eq!(
             first.trim(),
-            "@rumu:/card/t",
+            "@rumu:/cards/t",
             "title hit ranks first: {}",
             out.content.text
         );
         assert!(
-            out.content.text.contains("@rumu:/card/x"),
+            out.content.text.contains("@rumu:/cards/x"),
             "{}",
             out.content.text
         );
@@ -217,7 +217,7 @@ mod tests {
         // Terms are ORed: a query with one unknown term still matches.
         let out = search_text(&store, "agent loop missing-word", &serde_json::json!({})).unwrap();
         assert!(
-            out.content.text.contains("@rumu:/card/"),
+            out.content.text.contains("@rumu:/cards/"),
             "{}",
             out.content.text
         );
@@ -237,7 +237,7 @@ mod tests {
         // Prefix scoping and limits.
         let out = list_text(&store, "x", 100).unwrap();
         assert!(
-            out.content.text.contains("@rumu:/card/x — X"),
+            out.content.text.contains("@rumu:/cards/x — X"),
             "{}",
             out.content.text
         );
@@ -251,7 +251,7 @@ mod tests {
             out.content.text
         );
         assert!(
-            !out.content.text.contains("@rumu:/card/y — Why"),
+            !out.content.text.contains("@rumu:/cards/y — Why"),
             "{}",
             out.content.text
         );

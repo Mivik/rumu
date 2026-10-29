@@ -6,7 +6,7 @@ export default defineNuxtPlugin(() => {
   startApp()
 
   // Links inside rendered markdown: card links open the card drawer;
-  // other workspace-qualified paths (`proj:src/a.rs`, `@rumu:/session/…`)
+  // other workspace-qualified paths (`proj:src/a.rs`, `@rumu:/sessions/…`)
   // are inert — the click is only prevented.
   document.addEventListener('click', (e) => {
     const target = e.target as HTMLElement | null

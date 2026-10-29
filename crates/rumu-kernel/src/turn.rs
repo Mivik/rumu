@@ -727,7 +727,7 @@ impl Kernel {
     /// the summary. An abort without one yields a fixed stopper line (plus
     /// the last assistant text, if any). The result also
     /// carries the address of the child's transcript, which `read` can open
-    /// (`@rumu:/session/...`).
+    /// (`@rumu:/sessions/...`).
     ///
     /// With `context: "full"` the fork point is the assistant node containing
     /// `call_id` (found by walking the path, not by assuming it is the head:
@@ -927,7 +927,7 @@ impl Kernel {
         let first = first.unwrap_or_default();
         Ok(AgentRun::Summary {
             text: format!(
-                "{summary}\n\n[transcript: {RUMU_WORKSPACE}:/session/{}/{}..{}]",
+                "{summary}\n\n[transcript: {RUMU_WORKSPACE}:/sessions/{}/{}..{}]",
                 parent.session, first, b.head
             ),
             child: child.id,

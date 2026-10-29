@@ -151,8 +151,8 @@ async fn script_promise_all_agents_fan_out() {
         .unwrap_or_default()
         .to_owned();
     assert!(
-        result.starts_with("alpha-summary\n\n[transcript: @rumu:/session/")
-            && result.contains("beta-summary\n\n[transcript: @rumu:/session/"),
+        result.starts_with("alpha-summary\n\n[transcript: @rumu:/sessions/")
+            && result.contains("beta-summary\n\n[transcript: @rumu:/sessions/"),
         "{text}"
     );
 

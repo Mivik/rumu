@@ -4,9 +4,9 @@
 //   1. Note { content.data = memory.import {id, rev} }              → context pill chip
 //   2. Note { content.data = memory.card_update {id, rev} }         → "updated" pill
 //   3. ToolResult of a card read/write (read/write/edit on
-//      `@rumu:/card/<id>`) + a card_use note → tool row chip
+//      `@rumu:/cards/<id>`) + a card_use note → tool row chip
 //   4. the Context panel (card.list + the uses derived from the path)
-// Cards are identified by their plain path id everywhere (`@rumu:/card/<id>`
+// Cards are identified by their plain path id everywhere (`@rumu:/cards/<id>`
 // is the display form). This module maps all shapes to the same Card record.
 // It mirrors the derivation in crates/rumu-cards/src/usage.rs.
 

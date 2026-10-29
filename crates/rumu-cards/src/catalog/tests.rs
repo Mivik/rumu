@@ -95,7 +95,7 @@ fn small_library_expands_everything() {
     let text = note.markdown();
     assert!(text.starts_with("**Card catalog**"), "{text}");
     assert!(
-        text.contains("[dev/rumu/kernel](@rumu:/card/dev/rumu/kernel)"),
+        text.contains("[dev/rumu/kernel](@rumu:/cards/dev/rumu/kernel)"),
         "{text}"
     );
     assert!(!text.contains("Folded directories"), "{text}");
@@ -140,7 +140,7 @@ fn budget_protects_top_level_and_prefers_frecency() {
 
     let note = root_catalog_note(&cards, &plan);
     let text = note.markdown();
-    assert!(text.contains("[top](@rumu:/card/top)"), "{text}");
+    assert!(text.contains("[top](@rumu:/cards/top)"), "{text}");
     assert!(text.contains("Folded directories"), "{text}");
     assert!(text.contains("`dev/rumu/` (5 more cards: "), "{text}");
 }
@@ -221,10 +221,10 @@ fn touching_a_folded_dir_unfolds_it_once() {
     );
     let text = out[0].catalog.markdown();
     assert!(
-        text.starts_with("**Cards under `@rumu:/card/dev/rumu/`:**"),
+        text.starts_with("**Cards under `@rumu:/cards/dev/rumu/`:**"),
         "{text}"
     );
-    assert!(text.contains("@rumu:/card/dev/rumu/c40"), "{text}");
+    assert!(text.contains("@rumu:/cards/dev/rumu/c40"), "{text}");
 
     // The directory is already unfolded on the path: no repeat.
     let seen = [
@@ -272,8 +272,8 @@ fn workspace_switch_pulls_in_unexpanded_workspace_cards() {
         text.starts_with("**Cards related to workspace `proj`:**"),
         "{text}"
     );
-    assert!(text.contains("@rumu:/card/dev/proj/b"), "{text}");
-    assert!(text.contains("@rumu:/card/proj/a"), "{text}");
+    assert!(text.contains("@rumu:/cards/dev/proj/b"), "{text}");
+    assert!(text.contains("@rumu:/cards/proj/a"), "{text}");
     assert!(!text.contains("zzz/c"), "only matching cards: {text}");
 
     // Already unfolded: no repeat.

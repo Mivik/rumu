@@ -133,15 +133,15 @@ fn known(name: &str, state: &PathState) -> bool {
 }
 
 /// The field form of a `@rumu` workspace path: card ids drop their optional
-/// `.md` (`/card/<id>`); everything else (including `/session/…` and bare
+/// `.md` (`/cards/<id>`); everything else (including `/sessions/…` and bare
 /// prefixes) keeps the normalized path.
 fn rumu_field_path(abs: &Utf8TypedPathBuf) -> String {
     let Utf8TypedPathBuf::Unix(abs) = abs else {
         return abs.to_string();
     };
-    match abs.strip_prefix("/card").ok().map(Utf8UnixPath::as_str) {
+    match abs.strip_prefix("/cards").ok().map(Utf8UnixPath::as_str) {
         Some(id) if !id.is_empty() => match id.strip_suffix(".md") {
-            Some(stripped) if !stripped.is_empty() => format!("/card/{stripped}"),
+            Some(stripped) if !stripped.is_empty() => format!("/cards/{stripped}"),
             _ => abs.to_string(),
         },
         _ => abs.to_string(),
@@ -249,15 +249,15 @@ mod tests {
         // @rumu paths: card ids lose the optional `.md`; sessions keep theirs.
         let payload = json!({
             "name": "read",
-            "args": {"path": "@rumu:/card/dev/x.md", "paths": ["@rumu:card/y", "@rumu:/session/s1/n1"]}
+            "args": {"path": "@rumu:/cards/dev/x.md", "paths": ["@rumu:cards/y", "@rumu:/sessions/s1/n1"]}
         });
         let f = extract_fields("tool.pre", &payload, &st);
         assert_eq!(
             f.paths,
             [
-                "/card/dev/x".to_owned(),
-                "/card/y".to_owned(),
-                "/session/s1/n1".to_owned()
+                "/cards/dev/x".to_owned(),
+                "/cards/y".to_owned(),
+                "/sessions/s1/n1".to_owned()
             ]
         );
         assert_eq!(f.workspace.as_deref(), Some("@rumu"));
@@ -267,10 +267,10 @@ mod tests {
             default_workspace: Some("@rumu".into()),
             ..st
         };
-        let payload = json!({ "name": "list", "args": {"path": "card/dev"} });
+        let payload = json!({ "name": "list", "args": {"path": "cards/dev"} });
         let f = extract_fields("tool.pre", &payload, &st);
         assert_eq!(f.workspace.as_deref(), Some("@rumu"));
-        assert_eq!(f.paths, ["/card/dev".to_owned()]);
+        assert_eq!(f.paths, ["/cards/dev".to_owned()]);
     }
 
     #[test]

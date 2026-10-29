@@ -765,7 +765,7 @@ mod tests {
         let payload = rumu_core::RevertLesson {
             lesson: "hidden payload".into(),
         };
-        let frozen = "frozen text — [Bar](@rumu:/card/foo/bar)";
+        let frozen = "frozen text — [Bar](@rumu:/cards/foo/bar)";
         let nodes = vec![node(NodeBody::Note {
             source: "memory".into(),
             content: rumu_core::Content::text(frozen).with_data(&payload),

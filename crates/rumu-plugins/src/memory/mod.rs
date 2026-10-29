@@ -2,7 +2,7 @@
 //!
 //! Memory is the capability of keeping, finding and using **cards**: markdown
 //! knowledge files addressed by path ids (`dev/rumu/kernel`) in the home
-//! library under `RUMU_HOME/cards` (`@rumu:/card/<id>`). The card library
+//! library under `RUMU_HOME/cards` (`@rumu:/cards/<id>`). The card library
 //! itself — content model, storage, discovery — lives in the `rumu-cards`
 //! crate; this plugin surfaces cards to the model through four built-in
 //! hooks:
@@ -51,13 +51,13 @@ const RECALL_LIMIT: usize = 5;
 const RECALL_BUDGET: usize = 10_000;
 
 const INSTRUCTIONS: &str = "A note lists the card catalog; folded parts of it unfold in later \
-notes as you use them. When a card looks relevant, read it (`read @rumu:/card/<id>`). Cards whose \
+notes as you use them. When a card looks relevant, read it (`read @rumu:/cards/<id>`). Cards whose \
 `scope:` covers a workspace or file you touch arrive as notes automatically, and a prompt may \
 inline the cards whose text matches it. Save durable knowledge as focused cards with path ids; \
 `search` first and update an existing card instead of creating a near-duplicate, and don't save \
 temporary state of the current conversation. Give every card a one-sentence `description` and a \
 `keywords:` list (the terms that should bring it to mind) — they drive that matching. Link cards \
-as `@rumu:/card/<id>`.";
+as `@rumu:/cards/<id>`.";
 
 /// The memory plugin. Card content is read from disk on demand.
 pub struct MemoryPlugin {
@@ -238,7 +238,7 @@ impl MemoryPlugin {
                 Some(c) => (
                     c.revision.clone(),
                     format!(
-                        "Card `{RUMU_WORKSPACE}:/card/{id}` (\"{}\") changed since this branch last read \
+                        "Card `{RUMU_WORKSPACE}:/cards/{id}` (\"{}\") changed since this branch last read \
                          it (rev {} → {}). Re-read it if it is still relevant.",
                         c.title.as_deref().unwrap_or(id),
                         u.rev.as_deref().unwrap_or("?"),
@@ -248,7 +248,7 @@ impl MemoryPlugin {
                 None => (
                     "deleted".to_owned(),
                     format!(
-                        "Card `{RUMU_WORKSPACE}:/card/{id}` was deleted after this branch last read it \
+                        "Card `{RUMU_WORKSPACE}:/cards/{id}` was deleted after this branch last read it \
                          (last seen rev {}); its snapshot in this conversation is unchanged.",
                         u.rev.as_deref().unwrap_or("?"),
                     ),

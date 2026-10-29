@@ -6,16 +6,16 @@
 //! Every file tool takes one `path`, optionally qualified as
 //! `<workspace>:<path>` (rumu-core `addr`); the `@rumu` workspace is a
 //! virtual filesystem holding rumu's own data: knowledge cards
-//! (`@rumu:/card/<id>`, over the home card library) and, read-only, past
-//! conversations (`@rumu:/session/...`).
+//! (`@rumu:/cards/<id>`, over the home card library) and, read-only, past
+//! conversations (`@rumu:/sessions/...`).
 //!
 //! The workspace root of the file tools is an addressing convention, not a
 //! security boundary — absolute paths and `..` are allowed, and `bash` can
 //! reach the whole machine anyway. `read_only` means the file tools refuse
 //! writes and `bash` is disabled, nothing more.
 //!
-//! Layout: [`tools`] (the model-facing tools), [`cards`] (`@rumu:/card`),
-//! [`session`] (`@rumu:/session`), [`agents`] (AGENTS.md injection),
+//! Layout: [`tools`] (the model-facing tools), [`cards`] (`@rumu:/cards`),
+//! [`session`] (`@rumu:/sessions`), [`agents`] (AGENTS.md injection),
 //! [`backend`] (local + ssh primitives).
 
 mod agents;

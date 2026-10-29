@@ -4,7 +4,7 @@
 //!   cards, update notices (the card library itself lives in rumu-cards)
 //! - [`WorkspacePlugin`] — the `read`/`write`/`edit`/`list`/`bash` file tools
 //!   over workspaces (local dirs + ssh), the `@rumu` virtual workspace
-//!   (`@rumu:/card`, `@rumu:/session`) and `workspace_use`
+//!   (`@rumu:/cards`, `@rumu:/sessions`) and `workspace_use`
 //! - [`CodePlugin`] — the `code` tool: model-written JavaScript that composes
 //!   the other tools through `Cx::invoke` (hybrid mode)
 //! - [`StdioPlugin`] — host side of the external plugin protocol

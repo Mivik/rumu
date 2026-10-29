@@ -45,12 +45,12 @@ function nonEmptyLines(text: string): string[] {
   return text.split('\n').filter((line) => line.trim())
 }
 
-/** The card id in `@rumu:/card/<id>` / `@rumu:card/<id>` (optional `.md`). */
+/** The card id in `@rumu:/cards/<id>` / `@rumu:cards/<id>` (optional `.md`). */
 function internalCardId(path: string): string | null {
   const prefix = `${INTERNAL_WORKSPACE}:`
   if (!path.startsWith(prefix)) return null
   const rest = path.slice(prefix.length).replace(/^\/?/, '')
-  return /^card\/(.+?)(?:\.md)?$/.exec(rest)?.[1] ?? null
+  return /^cards\/(.+?)(?:\.md)?$/.exec(rest)?.[1] ?? null
 }
 
 /** Line count that ignores the trailing newline of an otherwise exact file. */
@@ -232,15 +232,15 @@ export function toolRowView(row: ToolRowInfo): ToolRowView {
   const blocked = isError ? blockedReasonOf(output) : null
   const name = row.call?.name ?? 'tool'
   // A card tool's target id, for its row chip: the current read/write/edit
-  // whose path addresses `@rumu:/card/<id>` (qualified always; `/card/<id>`
-  // and `card/<id>` when `@rumu` is the branch default).
+  // whose path addresses `@rumu:/cards/<id>` (qualified always; `/cards/<id>`
+  // and `cards/<id>` when `@rumu` is the branch default).
   const args = argsOf(row.call)
   let toolCardId: string | null = null
   if (args && (name === 'read' || name === 'write' || name === 'edit')) {
     const path = typeof args.path === 'string' ? args.path : null
     if (path) {
       const internal = internalCardId(path)
-      const bare = /^(?:\/)?card\/(.+?)(?:\.md)?$/.exec(path)
+      const bare = /^(?:\/)?cards\/(.+?)(?:\.md)?$/.exec(path)
       if (internal) toolCardId = internal
       else if (bare && state.pathState?.default_workspace === INTERNAL_WORKSPACE) toolCardId = bare[1]!
     }

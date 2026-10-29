@@ -267,7 +267,7 @@ async fn update_notices() {
         assert_eq!(update.id, "x");
         assert_eq!(update.rev, v2);
         assert!(
-            content.text.contains(&format!("Card `@rumu:/card/x` (\"X\") changed since this branch last read it (rev {} → {v2}). Re-read it if it is still relevant.", card.revision)),
+            content.text.contains(&format!("Card `@rumu:/cards/x` (\"X\") changed since this branch last read it (rev {} → {v2}). Re-read it if it is still relevant.", card.revision)),
             "text shows old → new rev: {}",
             content.text
         );
@@ -295,7 +295,7 @@ async fn update_notices() {
         assert_eq!(update.rev, "deleted");
         assert!(content.text.contains("deleted"), "{}", content.text);
         assert!(
-            content.text.contains("@rumu:/card/gone"),
+            content.text.contains("@rumu:/cards/gone"),
             "{}",
             content.text
         );
@@ -333,7 +333,7 @@ async fn catalog_root_note_injected_once() {
             content.text
         );
         assert!(
-            content.text.contains("[X](@rumu:/card/x)"),
+            content.text.contains("[X](@rumu:/cards/x)"),
             "{}",
             content.text
         );

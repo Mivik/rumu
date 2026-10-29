@@ -3,6 +3,6 @@ import type { CardOp } from "./CardOp";
 
 /**
  * Payload of the `card_use` marker (v1), recorded by card reads/writes
- * (`read`/`write`/`edit` on `@rumu:/card/<id>`).
+ * (`read`/`write`/`edit` on `@rumu:/cards/<id>`).
  */
 export type CardUse = { id: string, rev: string, view_rev: string, op: CardOp, call_id?: string | null, };

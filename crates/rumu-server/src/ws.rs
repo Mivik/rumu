@@ -306,7 +306,7 @@ async fn dispatch(state: &AppState, method: &str, p: &Value) -> Result<Value> {
             Ok(json!({ "task": kernel.kill_task(&id).await? }))
         }
 
-        // The home card library (`@rumu:/card`).
+        // The home card library (`@rumu:/cards`).
         "card.list" => {
             let store = rumu_cards::FsCardStore::home(&state.home);
             let out = match rumu_cards::library::card_infos(&store) {

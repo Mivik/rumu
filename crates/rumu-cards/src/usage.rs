@@ -40,7 +40,7 @@ pub enum CardOp {
 }
 
 /// Payload of the `card_use` marker (v1), recorded by card reads/writes
-/// (`read`/`write`/`edit` on `@rumu:/card/<id>`).
+/// (`read`/`write`/`edit` on `@rumu:/cards/<id>`).
 #[derive(Debug, Clone, PartialEq, Eq, serde::Serialize, serde::Deserialize, ts_rs::TS)]
 #[ts(export)]
 pub struct CardUse {

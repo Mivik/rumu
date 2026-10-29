@@ -8,7 +8,7 @@ use std::borrow::Cow;
 use crate::{Error, PathState, Result, Workspace};
 use typed_path::{Utf8TypedPath, Utf8TypedPathBuf, Utf8UnixPath, Utf8UnixPathBuf};
 
-/// The internal workspace holding rumu's own data (`/card`, `/session`).
+/// The internal workspace holding rumu's own data (`/cards`, `/sessions`).
 /// No bash; reads and card writes only. The leading `@` is not valid in a
 /// preset name, so no user workspace can ever collide with it.
 pub const RUMU_WORKSPACE: &str = "@rumu";
@@ -43,7 +43,7 @@ pub fn valid_workspace_name(name: &str) -> bool {
 
 /// A resolved tool-path address: the workspace it lives in and the normalized
 /// absolute path inside it (on the workspace's machine in its path style;
-/// `/card/…` or `/session/…` for `@rumu`).
+/// `/cards/…` or `/sessions/…` for `@rumu`).
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct Addr {
     /// A preset name or `@rumu`.
@@ -140,7 +140,7 @@ fn expand_tilde<'a>(ws: &Workspace, rel: &'a str) -> Result<Cow<'a, str>> {
 }
 
 /// Normalize a path in the `@rumu` workspace (its root is `/`, so
-/// `@rumu:card/x` ≡ `@rumu:/card/x`).
+/// `@rumu:cards/x` ≡ `@rumu:/cards/x`).
 pub fn normalize_rumu(rel: &str) -> Result<Utf8UnixPathBuf> {
     if rel.contains('\0') {
         return Err(Error::InvalidPath);
@@ -149,7 +149,7 @@ pub fn normalize_rumu(rel: &str) -> Result<Utf8UnixPathBuf> {
 }
 
 /// The canonical display form used in tool output, sub-agent footnotes
-/// and search results: `@rumu:/card/<id>` for `@rumu`; real workspaces show
+/// and search results: `@rumu:/cards/<id>` for `@rumu`; real workspaces show
 /// `proj:src/a.rs` under their root (with `/` separators, whatever the
 /// machine's style) and `proj:<absolute path>` outside it.
 pub fn display(ws: &str, root: Utf8TypedPath, abs: Utf8TypedPath) -> String {
@@ -246,12 +246,12 @@ mod tests {
         );
         // `@rumu` is always known, with or without the leading slash.
         assert_eq!(
-            resolve("@rumu:card/x", &cat, None).unwrap().abs.as_str(),
-            "/card/x"
+            resolve("@rumu:cards/x", &cat, None).unwrap().abs.as_str(),
+            "/cards/x"
         );
         assert_eq!(
-            resolve("@rumu:/card/x", &cat, None).unwrap().abs.as_str(),
-            "/card/x"
+            resolve("@rumu:/cards/x", &cat, None).unwrap().abs.as_str(),
+            "/cards/x"
         );
         // The internal workspace never collides: `rumu` is an ordinary preset.
         assert_eq!(
@@ -353,10 +353,10 @@ mod tests {
         );
 
         // The @rumu workspace's root is `/`.
-        assert_eq!(normalize_rumu("card/x").unwrap().as_str(), "/card/x");
+        assert_eq!(normalize_rumu("cards/x").unwrap().as_str(), "/cards/x");
         assert_eq!(
-            normalize_rumu("/session/a/../b").unwrap().as_str(),
-            "/session/b"
+            normalize_rumu("/sessions/a/../b").unwrap().as_str(),
+            "/sessions/b"
         );
     }
 
@@ -368,8 +368,8 @@ mod tests {
         let (p, a) = split_line_anchor("src/a.rs#L10-L20");
         assert_eq!(p, "src/a.rs");
         assert_eq!(a, Some((10, Some(20))));
-        let (p, a) = split_line_anchor("@rumu:/card/x.md#L3");
-        assert_eq!(p, "@rumu:/card/x.md");
+        let (p, a) = split_line_anchor("@rumu:/cards/x.md#L3");
+        assert_eq!(p, "@rumu:/cards/x.md");
         assert_eq!(a, Some((3, None)));
 
         // Not anchors: no `L`, non-digits, or an earlier `#`.
@@ -404,10 +404,10 @@ mod tests {
         assert_eq!(display("proj", unix("/p/r/"), unix("/p/r/x")), "proj:x");
         // The root itself shows absolute.
         assert_eq!(display("proj", unix("/p/r"), unix("/p/r")), "proj:/p/r");
-        // @rumu always keeps the slash: `@rumu:/card/x`.
+        // @rumu always keeps the slash: `@rumu:/cards/x`.
         assert_eq!(
-            display(RUMU_WORKSPACE, unix("/"), unix("/card/x")),
-            "@rumu:/card/x"
+            display(RUMU_WORKSPACE, unix("/"), unix("/cards/x")),
+            "@rumu:/cards/x"
         );
     }
 

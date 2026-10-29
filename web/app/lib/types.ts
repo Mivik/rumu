@@ -76,8 +76,8 @@ export const TASK_TAG = 'kernel.task'
 export const TASK_VERSION = 1
 
 /**
- * The built-in workspace holding rumu's own data (`@rumu:/card`,
- * `@rumu:/session`). Mirrors `RUMU_WORKSPACE` in rumu-core; the leading `@`
+ * The built-in workspace holding rumu's own data (`@rumu:/cards`,
+ * `@rumu:/sessions`). Mirrors `RUMU_WORKSPACE` in rumu-core; the leading `@`
  * means no user preset can collide with it.
  */
 export const INTERNAL_WORKSPACE = '@rumu'

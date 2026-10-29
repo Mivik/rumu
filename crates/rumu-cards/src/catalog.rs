@@ -72,10 +72,10 @@ impl CatalogNote {
         let mut lines = Vec::new();
         match &self.scope {
             CatalogScope::Root => lines.push(format!(
-                "**Card catalog** (read `{RUMU_WORKSPACE}:/card/<id>` when relevant):"
+                "**Card catalog** (read `{RUMU_WORKSPACE}:/cards/<id>` when relevant):"
             )),
             CatalogScope::Directory { prefix } => lines.push(format!(
-                "**Cards under `{RUMU_WORKSPACE}:/card/{prefix}/`:**"
+                "**Cards under `{RUMU_WORKSPACE}:/cards/{prefix}/`:**"
             )),
             CatalogScope::Workspace { name } => {
                 lines.push(format!("**Cards related to workspace `{name}`:**"))
@@ -83,7 +83,7 @@ impl CatalogNote {
         }
         for e in &self.entries {
             let mut line = format!(
-                "- [{}]({RUMU_WORKSPACE}:/card/{})",
+                "- [{}]({RUMU_WORKSPACE}:/cards/{})",
                 escape_link_text(&e.title),
                 e.id
             );
@@ -94,7 +94,7 @@ impl CatalogNote {
         }
         if !self.folded.is_empty() {
             lines.push(format!(
-                "**Folded directories** (use `list {RUMU_WORKSPACE}:/card/<dir>` or `search` \
+                "**Folded directories** (use `list {RUMU_WORKSPACE}:/cards/<dir>` or `search` \
                      to inspect):"
             ));
             for f in &self.folded {

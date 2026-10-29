@@ -119,7 +119,7 @@ impl Pred {
 
     /// Compile with the workspace preset catalog, so `paths` patterns written
     /// as `<workspace>:<path>` expand to machine paths (`proj:web/**` →
-    /// `<proj.root>/web/**`; `@rumu:/card/**` stays rooted at `/`).
+    /// `<proj.root>/web/**`; `@rumu:/cards/**` stays rooted at `/`).
     pub fn compile_with_catalog(
         v: &Value,
         catalog: &WorkspaceCatalog,
@@ -329,7 +329,7 @@ fn home() -> Option<String> {
 /// Expand a `<workspace>:<path>` prefix in a `paths` condition to a
 /// machine-absolute pattern:
 ///
-/// - `@rumu:<rest>` / `@rumu:/<rest>` → `/<rest>` (a `/card/…` path without
+/// - `@rumu:<rest>` / `@rumu:/<rest>` → `/<rest>` (a `/cards/…` path without
 ///   glob characters also loses a trailing `.md`);
 /// - `<preset>:<rest>` → `<preset.root>/<rest>` (or `<rest>` when absolute);
 /// - a valid workspace name that is not a preset is a compile error;
@@ -342,7 +342,7 @@ fn expand_path_pattern(s: &str, catalog: &WorkspaceCatalog) -> Result<String, St
     if name == RUMU_WORKSPACE {
         let path = format!("/{}", rest.trim_start_matches('/'));
         let globbed = path.chars().any(|c| matches!(c, '*' | '?' | '[' | '{'));
-        if !globbed && path.starts_with("/card/") {
+        if !globbed && path.starts_with("/cards/") {
             return Ok(path.strip_suffix(".md").unwrap_or(&path).to_owned());
         }
         return Ok(path);
@@ -433,7 +433,7 @@ mod tests {
         assert!(m(json!({"paths": {"eq": "/home/u/code/proj/Cargo.toml"}})).matches(&f));
         assert!(m(json!({"paths": {"has": "cargo"}})).matches(&f));
         assert!(
-            m(json!({"paths": [{"eq": "/card/x"}, {"glob": "/home/u/code/proj/**"}]})).matches(&f)
+            m(json!({"paths": [{"eq": "/cards/x"}, {"glob": "/home/u/code/proj/**"}]})).matches(&f)
         );
 
         // An empty list never matches.
@@ -519,10 +519,10 @@ mod tests {
 
         // The `@rumu` virtual workspace: all three spellings are equivalent.
         let rumu_paths = Fields {
-            paths: vec!["/card/dev/rumu".into()],
+            paths: vec!["/cards/dev/rumu".into()],
             ..fields()
         };
-        for pattern in ["@rumu:/card/**", "@rumu:card/**", "/card/**"] {
+        for pattern in ["@rumu:/cards/**", "@rumu:cards/**", "/cards/**"] {
             assert!(
                 compile(json!({ "paths": { "glob": pattern } }))
                     .unwrap()
@@ -533,8 +533,8 @@ mod tests {
         // A card path without globs loses a trailing `.md`; `eq` and the bare
         // string form share the expansion.
         for cond in [
-            json!({ "eq": "@rumu:/card/dev/rumu.md" }),
-            json!("@rumu:/card/dev/rumu"),
+            json!({ "eq": "@rumu:/cards/dev/rumu.md" }),
+            json!("@rumu:/cards/dev/rumu"),
         ] {
             assert!(
                 compile(json!({ "paths": cond }))
@@ -551,7 +551,7 @@ mod tests {
         );
 
         // Reserved scheme names and plain machine paths pass through untouched.
-        assert!(compile(json!({"paths": "/card/**"})).is_ok());
+        assert!(compile(json!({"paths": "/cards/**"})).is_ok());
         assert!(compile(json!({"paths": "https://example.com/x"})).is_ok());
     }
 

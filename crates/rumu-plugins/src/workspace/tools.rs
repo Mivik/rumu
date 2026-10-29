@@ -1,7 +1,7 @@
 //! The model-facing tools: schemas, `<ws>:<path>` target resolution and the
 //! implementations over the workspace backends. The `@rumu`
-//! virtual workspace (`/card`, `/session`) is routed from here into
-//! [`cards`] (and, for `/session`, `session`).
+//! virtual workspace (`/cards`, `/sessions`) is routed from here into
+//! [`cards`] (and, for `/sessions`, `session`).
 
 use std::time::Duration;
 
@@ -70,11 +70,11 @@ to its root, or absolute on its machine), or `<workspace>:<path>` for another wo
 `proj:src/main.rs`, `app:/var/log/app.log`. `workspace_use(name)` changes the default; \
 `workspace_use()` lists workspaces. `bash` runs in a workspace root, so relative paths mean the \
 same thing in bash and in the file tools. Read-only workspaces refuse writes and bash.\n\n\
-The `@rumu` workspace holds rumu's own data and has no bash. `@rumu:/card/<id>` are knowledge \
+The `@rumu` workspace holds rumu's own data and has no bash. `@rumu:/cards/<id>` are knowledge \
 cards: `read` returns an editable view (YAML frontmatter, then the body), and writes are refused \
 if the card changed since you last read it — re-read and merge. \
-`@rumu:/session/<session>/<node>` and `@rumu:/session/<session>/<from>..<to>` are past \
-conversation records (read-only); `search(query, scope: \"@rumu:/session\")` searches them. If \
+`@rumu:/sessions/<session>/<node>` and `@rumu:/sessions/<session>/<from>..<to>` are past \
+conversation records (read-only); `search(query, scope: \"@rumu:/sessions\")` searches them. If \
 the user rewinds the conversation, card edits persist.";
 
 // ---------------------------------------------------------------------------
@@ -137,7 +137,7 @@ struct BashArgs {
 struct SearchArgs {
     /// search terms
     query: String,
-    /// `@rumu:/card/<prefix>` or `@rumu:/session[/<session>]`
+    /// `@rumu:/cards/<prefix>` or `@rumu:/sessions[/<session>]`
     scope: Option<String>,
     /// max hits (default 10)
     limit: Option<u64>,
@@ -160,7 +160,7 @@ pub(super) fn manifest() -> Manifest {
                 name: "read".into(),
                 description: "Read a file's raw text content (no line numbers). `path` is a \
 workspace path (relative to the workspace root, absolute on its machine, or \
-`<workspace>:<path>`; `@rumu:/card/<id>` for a card). `offset` is a 1-based start line and \
+`<workspace>:<path>`; `@rumu:/cards/<id>` for a card). `offset` is a 1-based start line and \
 `limit` a line count; a trailing `#L<n>` / `#L<a>-L<b>` anchor sets them when omitted."
                     .into(),
                 schema: tool_schema::<ReadArgs>(),
@@ -207,8 +207,8 @@ stdout+stderr (truncated to ~20k chars) and the exit code. Default timeout 60s (
             ToolSpec {
                 name: "search".into(),
                 description: "Search cards (default) or past conversations by text. Both are \
-relevance-ranked and match any term. `scope` narrows it: `@rumu:/card/<prefix>` for a card \
-directory, `@rumu:/session` for all past conversations, `@rumu:/session/<session>` for one. \
+relevance-ranked and match any term. `scope` narrows it: `@rumu:/cards/<prefix>` for a card \
+directory, `@rumu:/sessions` for all past conversations, `@rumu:/sessions/<session>` for one. \
 Returns addresses with short snippets, never full text — follow up with `read`."
                     .into(),
                 schema: tool_schema::<SearchArgs>(),
@@ -234,7 +234,7 @@ Returns addresses with short snippets, never full text — follow up with `read`
 
 /// Where a tool call lands: a real workspace preset (with the absolute path
 /// on its machine), or the `@rumu` virtual workspace (with its normalized
-/// `/card/…` / `/session/…` path).
+/// `/cards/…` / `/sessions/…` path).
 enum Target {
     Real {
         ws: Workspace,
@@ -305,7 +305,7 @@ pub(super) fn card_load_err(id: &str, source: impl std::fmt::Display) -> ToolErr
 pub(super) fn unknown_rumu_path(abs: &Utf8UnixPath) -> ToolError {
     ToolError::model(prefixed(
         RUMU_WORKSPACE,
-        format!("unknown path `{RUMU_WORKSPACE}:{abs}` (roots: /card, /session, /task)"),
+        format!("unknown path `{RUMU_WORKSPACE}:{abs}` (roots: /cards, /sessions, /task)"),
     ))
 }
 
@@ -313,7 +313,7 @@ pub(super) fn unknown_rumu_path(abs: &Utf8UnixPath) -> ToolError {
 fn bad_scope() -> ToolError {
     ToolError::model(format!(
         "`scope` must address the `{RUMU_WORKSPACE}` workspace: \
-         `{RUMU_WORKSPACE}:/card/<prefix>` or `{RUMU_WORKSPACE}:/session[/<session>]`"
+         `{RUMU_WORKSPACE}:/cards/<prefix>` or `{RUMU_WORKSPACE}:/sessions[/<session>]`"
     ))
 }
 
@@ -760,8 +760,8 @@ impl WorkspacePlugin {
             "  "
         };
         lines.push(format!(
-            "{star}{RUMU_WORKSPACE} rumu's own data: {RUMU_WORKSPACE}:/card (knowledge cards), \
-             {RUMU_WORKSPACE}:/session (past conversations); no bash"
+            "{star}{RUMU_WORKSPACE} rumu's own data: {RUMU_WORKSPACE}:/cards (knowledge cards), \
+             {RUMU_WORKSPACE}:/sessions (past conversations); no bash"
         ));
         lines.join("\n")
     }
@@ -772,9 +772,9 @@ fn display(ws: &Workspace, abs: &Utf8TypedPathBuf) -> String {
     rumu_core::display(&ws.name, ws.root.to_path(), abs.to_path())
 }
 
-/// The card id a `/card/<id>[.md]` path addresses, if it is one.
+/// The card id a `/cards/<id>[.md]` path addresses, if it is one.
 pub(super) fn card_id_of(abs: &Utf8UnixPath) -> Option<&str> {
-    let id = abs.strip_prefix("/card").ok()?.as_str();
+    let id = abs.strip_prefix("/cards").ok()?.as_str();
     (!id.is_empty()).then(|| id.strip_suffix(".md").unwrap_or(id))
 }
 
@@ -795,7 +795,7 @@ impl WorkspacePlugin {
         if let Some(id) = card_id_of(abs) {
             return self.card_read(id, offset, limit, cx).await;
         }
-        if abs.starts_with("/session") {
+        if abs.starts_with("/sessions") {
             return self.session_read(abs, offset, limit, cx).await;
         }
         if abs.starts_with("/task") {
@@ -804,11 +804,11 @@ impl WorkspacePlugin {
         Err(unknown_rumu_path(abs))
     }
 
-    /// The refusal for writes outside `/card/<id>`: `/session` is
+    /// The refusal for writes outside `/cards/<id>`: `/sessions` is
     /// read-only, everything else is unknown.
     fn rumu_write_refused(&self, abs: &Utf8UnixPath) -> ToolError {
-        if abs.starts_with("/session") {
-            ToolError::model("`@rumu:/session` is read-only")
+        if abs.starts_with("/sessions") {
+            ToolError::model("`@rumu:/sessions` is read-only")
         } else {
             unknown_rumu_path(abs)
         }
@@ -817,23 +817,23 @@ impl WorkspacePlugin {
     /// `list` inside the `@rumu` workspace.
     async fn rumu_list(&self, abs: &Utf8UnixPath, cx: &Cx) -> ToolResult<ToolOutput> {
         match abs.as_str() {
-            "/" => Ok(format!("[{RUMU_WORKSPACE}] card/\nsession/\ntask/").into()),
-            "/card" => self.card_list("").await,
-            _ if abs.starts_with("/card") => {
+            "/" => Ok(format!("[{RUMU_WORKSPACE}] cards/\nsessions/\ntask/").into()),
+            "/cards" => self.card_list("").await,
+            _ if abs.starts_with("/cards") => {
                 let prefix = abs
-                    .strip_prefix("/card")
+                    .strip_prefix("/cards")
                     .map(Utf8UnixPath::as_str)
                     .unwrap_or("");
                 self.card_list(prefix).await
             }
-            _ if abs.starts_with("/session") => self.session_list(abs, cx).await,
+            _ if abs.starts_with("/sessions") => self.session_list(abs, cx).await,
             _ if abs.starts_with("/task") => self.task_read(abs, None, None, cx).await,
             _ => Err(unknown_rumu_path(abs)),
         }
     }
 
     /// The `search` tool: cards by default, past conversations with
-    /// `scope: "@rumu:/session[/<session>]"`. Read-only — no `card_use`
+    /// `scope: "@rumu:/sessions[/<session>]"`. Read-only — no `card_use`
     /// markers.
     async fn tool_search(
         &self,
@@ -847,7 +847,7 @@ impl WorkspacePlugin {
         // An omitted scope means the whole card library; a given one is a
         // qualified path prefix that must land in the `@rumu` workspace.
         let abs: Utf8TypedPathBuf = if scope.is_empty() {
-            Utf8TypedPathBuf::from_unix("/card")
+            Utf8TypedPathBuf::from_unix("/cards")
         } else {
             match rumu_core::resolve_state(state, scope) {
                 Ok(addr) if addr.ws == RUMU_WORKSPACE => addr.abs,
@@ -857,16 +857,16 @@ impl WorkspacePlugin {
         let Utf8TypedPathBuf::Unix(abs) = abs else {
             return Err(bad_scope());
         };
-        if abs.starts_with("/session") {
+        if abs.starts_with("/sessions") {
             let sid = abs
-                .strip_prefix("/session")
+                .strip_prefix("/sessions")
                 .map(Utf8UnixPath::as_str)
                 .unwrap_or("");
             return self.session_search(&args.query, sid, limit, cx).await;
         }
-        if abs.starts_with("/card") {
+        if abs.starts_with("/cards") {
             let prefix = abs
-                .strip_prefix("/card")
+                .strip_prefix("/cards")
                 .map(Utf8UnixPath::as_str)
                 .unwrap_or("");
             return rumu_cards::search_text(
