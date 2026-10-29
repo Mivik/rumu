@@ -50,14 +50,25 @@ const RECALL_LIMIT: usize = 5;
 /// Rendered-text budget for the bodies recall inlines in one prompt.
 const RECALL_BUDGET: usize = 10_000;
 
-const INSTRUCTIONS: &str = "A note lists the card catalog; folded parts of it unfold in later \
-notes as you use them. When a card looks relevant, read it (`read @rumu:/cards/<id>`). Cards whose \
-`scope:` covers a workspace or file you touch arrive as notes automatically, and a prompt may \
-inline the cards whose text matches it. Save durable knowledge as focused cards with path ids; \
-`search` first and update an existing card instead of creating a near-duplicate, and don't save \
-temporary state of the current conversation. Give every card a one-sentence `description` and a \
-`keywords:` list (the terms that should bring it to mind) — they drive that matching. Link cards \
-as `@rumu:/cards/<id>`.";
+const INSTRUCTIONS: &str = "Cards are your memory across conversations: markdown notes at \
+`@rumu:/cards/<id>`, where the id is a slash path such as `dev/rumu/kernel`.\n\n\
+Finding cards. A catalog note lists cards by title and description; its folded directories unfold \
+in later notes once you touch a card under them or switch to a related workspace. Some cards \
+arrive on their own, in full, as notes: those whose text matches the user's message, and those \
+whose `scope:` covers a workspace or file you use — don't re-read them. For any other card that \
+looks relevant, `read` it; `search` finds cards the catalog doesn't show. When a note says a card \
+changed, re-read it if it still matters.\n\n\
+Saving cards. Save what will matter in later conversations: the user's preferences and \
+corrections, project facts and conventions, decisions with their reasons, procedures that worked. \
+Don't save the state of the current task or anything easily re-derived from the files. `search` \
+before creating a card, and update an existing one rather than adding a near-duplicate. Keep one \
+topic per card, grouped with related cards under a shared directory.\n\n\
+Every card's frontmatter has a `title`, a one-sentence `description` (shown in the catalog) and \
+`keywords:` — the terms that should bring it to mind, as a YAML list (`keywords: [deploy, \
+production]`); keywords, title, description and body are what message matching scores. Give \
+project-specific cards a `scope:` — a workspace name (`proj`) or a workspace-relative glob \
+(`proj:src/net/**`), one or a list — so they arrive when that workspace or those files are used. \
+Link other cards as `@rumu:/cards/<id>`.";
 
 /// The memory plugin. Card content is read from disk on demand.
 pub struct MemoryPlugin {
