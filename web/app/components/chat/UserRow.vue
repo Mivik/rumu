@@ -22,9 +22,18 @@ const editing = ref(false)
 const saving = ref(false)
 const draft = ref('')
 const editor = ref<HTMLTextAreaElement | null>(null)
+const bubble = ref<HTMLElement | null>(null)
+/** The message's text height when editing began: the editor never opens
+ *  shorter than the message it replaces. */
+const editMinH = ref(0)
 
 async function startEdit(): Promise<void> {
   if (isBusy.value) return
+  const b = bubble.value
+  if (b) {
+    const cs = getComputedStyle(b)
+    editMinH.value = b.clientHeight - parseFloat(cs.paddingTop) - parseFloat(cs.paddingBottom)
+  }
   draft.value = text.value
   editing.value = true
   await nextTick()
@@ -85,8 +94,9 @@ function onFork(): void {
           ref="editor"
           v-model="draft"
           rows="2"
+          :style="{ minHeight: `${editMinH}px` }"
           :aria-label="t('chat.user.edit')"
-          class="max-h-[240px] min-h-[52px] w-full resize-none rounded-none border-0 bg-transparent p-0 text-message leading-normal text-ink focus:shadow-none"
+          class="max-h-[50vh] min-h-[52px] w-full resize-none [field-sizing:content] rounded-none border-0 bg-transparent p-0 text-message leading-normal text-ink focus:shadow-none"
           @keydown="onEditorKeydown"
         />
         <div class="mt-1 flex items-center justify-end gap-3">
@@ -108,6 +118,7 @@ function onFork(): void {
       </div>
       <div
         v-else
+        ref="bubble"
         class="md w-fit max-w-[85%] rounded-sheet rounded-br-xs bg-brand-soft px-4 py-2 text-ink sm:max-w-[70%]"
         :title="new Date(node.at).toLocaleString()"
         v-html="renderMarkdown(text)"
