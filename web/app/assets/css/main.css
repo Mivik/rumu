@@ -78,6 +78,11 @@
   --shadow-soft-v: 0 1px 2px rgb(74 52 32 / 6%), 0 1px 1px rgb(74 52 32 / 4%);
   --shadow-card-v: 0 1px 3px rgb(74 52 32 / 6%), 0 8px 24px -10px rgb(74 52 32 / 14%);
   --shadow-pop-v: 0 2px 6px rgb(74 52 32 / 8%), 0 18px 40px -12px rgb(74 52 32 / 22%);
+
+  /* the conversation column's measure: the writing on the sheet. It grows
+   * with the viewport so a wide display doesn't leave the paper mostly
+   * blank, stopping where a 15px line gets too long to track. */
+  --col-max: clamp(760px, 56vw, 960px);
 }
 
 @media (prefers-color-scheme: dark) {
@@ -640,13 +645,13 @@
    * lives at the sheet's right edge, outside the column: where the column
    * reaches it (a narrow sheet), the right padding grows to --tl-rail-clear
    * so content never runs under the rail; on a wide sheet the space beside
-   * the centered column already clears it. (The column is capped at 760px
-   * inside .tl-scroll, the inline-size container 100cqw measures.) */
+   * the centered column already clears it. (The column is capped at
+   * --col-max inside .tl-scroll, the inline-size container 100cqw measures.) */
   .tl-col {
     --tl-pad: 16px;
     --tl-rail-clear: 30px;
     padding-left: var(--tl-pad);
-    padding-right: max(var(--tl-pad), calc(var(--tl-rail-clear) - max(0px, (100cqw - 760px) / 2)));
+    padding-right: max(var(--tl-pad), calc(var(--tl-rail-clear) - max(0px, (100cqw - var(--col-max)) / 2)));
   }
 
   @media (min-width: 40rem) {

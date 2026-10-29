@@ -113,7 +113,7 @@ const layerEl = shallowRef<HTMLElement | null>(null)
 
 /**
  * Where the composer meets the rail: on a wide sheet the composer card
- * (capped at 760px, centered) leaves the right edge free and the rail runs
+ * (capped at --col-max, centered) leaves the right edge free and the rail runs
  * to the sheet's foot; once the card reaches the strip, the rail stops at
  * the composer's top.
  */

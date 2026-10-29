@@ -2,7 +2,7 @@
 // Center column, the one paper sheet on the canvas: header, the grouped
 // timeline, and the composer card. Entries come from the store's `timeline`
 // computed (user / context pills / assistant group); the content
-// column is capped at 760px, centered.
+// column is capped at --col-max (main.css), centered.
 //
 // A prompt you just sent opens near the top of the sheet, with the rest of
 // the page left blank: the reply grows down into that blank rather than
@@ -378,7 +378,7 @@ function jumpTo(i: number): void {
         key="landing"
         class="flex min-h-0 flex-1 flex-col items-center justify-center overflow-y-auto px-4 pb-10"
       >
-        <div class="w-full max-w-[760px]">
+        <div class="w-full max-w-[var(--col-max)]">
           <Welcome />
           <div class="mt-8">
             <Composer />
@@ -397,7 +397,7 @@ function jumpTo(i: number): void {
             <div
               :key="viewKey"
               ref="innerEl"
-              class="tl-col view-in relative mx-auto flex max-w-[760px] flex-col gap-5"
+              class="tl-col view-in relative mx-auto flex max-w-[var(--col-max)] flex-col gap-5"
             >
               <template v-if="timeline.length">
                 <div
@@ -429,7 +429,10 @@ function jumpTo(i: number): void {
           <!-- running background tasks of this branch + opened task output -->
           <TasksPanel />
           <!-- steering prompts accepted while busy, until they are written -->
-          <div v-if="queuedPrompts.length" class="mx-auto mb-1.5 flex w-full max-w-[760px] flex-col gap-1">
+          <div
+            v-if="queuedPrompts.length"
+            class="mx-auto mb-1.5 flex w-full max-w-[var(--col-max)] flex-col gap-1"
+          >
             <div
               v-for="q in queuedPrompts"
               :key="q.id"

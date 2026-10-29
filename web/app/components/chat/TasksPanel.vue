@@ -32,7 +32,10 @@ function elapsed(t: (typeof branchTasks.value)[number]): string {
 </script>
 
 <template>
-  <div v-if="runningTasks.length || detail" class="mx-auto mb-1.5 flex w-full max-w-[760px] flex-col gap-1.5">
+  <div
+    v-if="runningTasks.length || detail"
+    class="mx-auto mb-1.5 flex w-full max-w-[var(--col-max)] flex-col gap-1.5"
+  >
     <div v-if="runningTasks.length" class="flex flex-wrap items-center gap-1.5">
       <span class="flex items-center gap-1.5 text-micro font-semibold text-ink-3">
         <span class="dot-live size-1.5 rounded-full bg-brand" />

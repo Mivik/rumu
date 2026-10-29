@@ -63,7 +63,7 @@ const model = computed(() => {
 <template>
   <!-- the footer's empty stretch is part of the page: clicking it writes -->
   <div
-    class="composer mx-auto flex w-full max-w-[760px] flex-col rounded-sheet"
+    class="composer mx-auto flex w-full max-w-[var(--col-max)] flex-col rounded-sheet"
     @click.self="textareaEl?.focus()"
   >
     <textarea
