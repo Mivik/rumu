@@ -1,0 +1,45 @@
+[workspace]
+resolver = "3"
+members = ["crates/*"]
+
+[workspace.package]
+edition = "2024"
+rust-version = "1.91"
+version = "0.1.0"
+description = "A small, calm AI agent with a good memory. Built in Rust."
+license = "MIT OR Apache-2.0"
+repository = "https://github.com/Mivik/rumu"
+
+[workspace.dependencies]
+rumu-core = { path = "crates/rumu-core" }
+rumu-cards = { path = "crates/rumu-cards" }
+rumu-kernel = { path = "crates/rumu-kernel" }
+rumu-store = { path = "crates/rumu-store" }
+rumu-llm = { path = "crates/rumu-llm" }
+rumu-plugins = { path = "crates/rumu-plugins" }
+anyhow = "1"
+async-trait = "0.1"
+axum = { version = "0.8", features = ["ws"] }
+futures-util = "0.3"
+genai = "0.7.2"
+globset = "0.4"
+jiff = "0.2"
+json-patch = "4"
+regex = "1"
+rquickjs = "0.14"
+rust-embed = { version = "8", features = ["mime-guess"] }
+schemars = "1"
+serde = { version = "1", features = ["derive"] }
+serde_json = "1"
+serde-saphyr = "2"
+sha2 = "0.11"
+tempfile = "3"
+thiserror = "2"
+tokio = { version = "1", features = ["full"] }
+ts-rs = { version = "12", features = ["serde-json-impl", "no-serde-warnings"] }
+typed-path = "0.11"
+tokio-util = "0.7"
+tokio-tungstenite = { version = "0.30", default-features = false, features = ["connect", "handshake"] }
+tracing = "0.1"
+tracing-subscriber = { version = "0.3", features = ["env-filter"] }
+uuid = { version = "1", features = ["v4"] }

@@ -1,0 +1,6 @@
+# A demo RUMU_HOME for frontend development. The one workspace is a writable
+# scratch directory (read_only would disable bash entirely).
+default: scratch
+workspaces:
+  scratch:
+    root: web/mock/home/scratch

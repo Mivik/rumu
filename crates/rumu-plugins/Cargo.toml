@@ -1,0 +1,30 @@
+[package]
+name = "rumu-plugins"
+edition.workspace = true
+rust-version.workspace = true
+version.workspace = true
+description.workspace = true
+license.workspace = true
+repository.workspace = true
+
+[dependencies]
+rumu-core.workspace = true
+rumu-cards.workspace = true
+rquickjs.workspace = true
+async-trait.workspace = true
+jiff.workspace = true
+schemars.workspace = true
+serde.workspace = true
+# `code` API stubs list tool args in schema order.
+serde_json = { workspace = true, features = ["preserve_order"] }
+serde-saphyr.workspace = true
+sha2.workspace = true
+thiserror.workspace = true
+tokio.workspace = true
+tracing.workspace = true
+ts-rs.workspace = true
+
+[dev-dependencies]
+rumu-kernel.workspace = true
+rumu-store.workspace = true
+tempfile.workspace = true

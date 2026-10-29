@@ -1,0 +1,43 @@
+{
+  "context": {
+    "title": "Context",
+    "virtualRoot": "cards · sessions",
+    "workspaces": "Workspaces ({count})"
+  },
+  "diagnostics": {
+    "title": "Diagnostics",
+    "cache": "Cache {pct}%",
+    "hooks": "{count} hook | {count} hooks"
+  },
+  "cache": {
+    "hitRate": "Session cache hit rate",
+    "sub": "in {prompt} · cached {cached} · write {creation} · out {completion} · {turns} turn | in {prompt} · cached {cached} · write {creation} · out {completion} · {turns} turns",
+    "perTurn": "Per turn",
+    "turn": "Turn {n}",
+    "meterLabel": "turn {n} cache hit rate {pct}%"
+  },
+  "workspaces": {
+    "default": "default workspace",
+    "readOnly": "ro",
+    "virtual": "virtual"
+  },
+  "hooks": {
+    "title": "Hook trace"
+  },
+  "branches": {
+    "title": "Branches",
+    "noContext": " · no context",
+    "scope": " · scope {names}",
+    "status": {
+      "active": "active",
+      "done": "done",
+      "abandoned": "abandoned"
+    },
+    "kind": {
+      "main": "main",
+      "fork": "fork",
+      "agent": "agent",
+      "revert": "revert"
+    }
+  }
+}

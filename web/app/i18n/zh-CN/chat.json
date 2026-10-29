@@ -1,0 +1,52 @@
+{
+  "sidebar": {
+    "home": "首页",
+    "close": "关闭会话列表",
+    "new": "开始会话",
+    "today": "今天",
+    "earlier": "更早"
+  },
+  "welcome": "想做点什么？",
+  "composer": {
+    "steerPlaceholder": "引导 rumu…",
+    "placeholder": "发送消息…",
+    "enterToSend": "发送",
+    "shiftEnter": "换行",
+    "stop": "停止",
+    "steer": "引导",
+    "send": "发送"
+  },
+  "header": {
+    "sessions": "会话",
+    "openSessions": "打开会话列表",
+    "running": "运行中…",
+    "inspector": "检查器",
+    "openInspector": "打开检查器",
+    "closeInspector": "关闭检查器",
+    "queued": "排队中",
+    "branchTitle": "分支 {id} · {status}"
+  },
+  "user": {
+    "edit": "编辑消息",
+    "editTitle": "编辑并重新发送",
+    "copyTitle": "复制消息",
+    "forkTitle": "从这里分叉",
+    "cancel": "取消",
+    "resend": "重新发送",
+    "copied": "已复制消息"
+  },
+  "assistant": {
+    "working": "工作中…",
+    "copy": "复制回复",
+    "regenerate": "重新生成回复",
+    "noPrompt": "没有可重新生成的提问",
+    "fork": "从这一轮分叉",
+    "noSafePoint": "工具调用未完成",
+    "copied": "已复制回复",
+    "reasoningReset": "之前的思考已丢弃"
+  },
+  "timeline": {
+    "label": "对话时间线",
+    "emptyPrompt": "（空提问）"
+  }
+}

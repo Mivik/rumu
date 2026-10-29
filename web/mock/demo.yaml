@@ -1,0 +1,61 @@
+# Scripted model replies for `pnpm mock` (RUMU_LLM=script:...).
+#
+# The server consumes one reply per model call and cycles this list, so the
+# four turns below are one full prompt: the big tool batch, the sub-agent's
+# reply, the final reply, and one reply for the background task's wake-up.
+turns:
+  - reasoning: >-
+      The user wants a tour of what the real kernel can do. I'll read a card,
+      search the library, run a harmless command, compose a script, delegate a
+      summary to a sub-agent, and start a background task.
+    text: >-
+      I'll check the service notes and the scratch workspace first.
+    tool_calls:
+      - call_id: c-read
+        name: read
+        args:
+          path: '@rumu:/card/gateway'
+      - call_id: c-search
+        name: search
+        args:
+          query: gateway
+          scope: '@rumu:/card'
+      - call_id: c-bash
+        name: bash
+        args:
+          command: echo hello from rumu
+          workspace: scratch
+      - call_id: c-code
+        name: code
+        args:
+          code: |
+            const entries = await rumu.list({});
+            const pwd = await rumu.bash({ command: "pwd" });
+            return {
+              entries: entries.trim().split("\n").filter(Boolean).length,
+              pwd: pwd.trim(),
+            };
+      - call_id: c-agent
+        name: agent
+        args:
+          task: Summarize the service notes in one line.
+          inherit:
+            context: none
+      - call_id: c-bg
+        name: bash
+        args:
+          command: sleep 2; echo done
+          workspace: scratch
+          background: true
+  # The sub-agent's single reply ends its branch (a reply without tool calls).
+  - text: >-
+      The service lives on host `service`, with config at
+      /etc/example/config.conf; restart it with `systemctl restart example`.
+  - reasoning: All calls came back cleanly; I'll write the summary now.
+    text: >-
+      Everything worked: the card and card search came back, `echo` and the
+      composed script ran in the scratch workspace, the sub-agent summarized
+      the service notes, and the background command is running. I'll report
+      here when it finishes.
+  # Consumed by the wake turn after the background task completes.
+  - text: 'The background command finished: `done`.'

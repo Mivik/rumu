@@ -1,0 +1,18 @@
+{
+  "aria": "Usage details",
+  "tokens": "{n} tok",
+  "tokPerSecond": "{rate} tok/s",
+  "request": "Request",
+  "turn": "Turn",
+  "input": "Input",
+  "output": "Output",
+  "cacheRead": "Cache read",
+  "cacheWrite": "Cache write",
+  "latency": "Latency",
+  "speed": "Speed",
+  "endToEnd": "End-to-end",
+  "generation": "Generation",
+  "steps": "Steps",
+  "tokensLabel": "Tokens",
+  "inOut": "{input} in · {output} out"
+}

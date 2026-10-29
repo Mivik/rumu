@@ -1,0 +1,112 @@
+// Shared reactive state for the session UI. Pure data — no behavior here, so
+// every mutation has an owner in one of the sibling modules.
+
+import { reactive } from 'vue'
+import type {
+  Decision,
+  Effect,
+  Branch,
+  BranchId,
+  Card,
+  CodeCall,
+  Node,
+  NodeId,
+  PathState,
+  SessionId,
+  SessionInfo,
+  Tagged,
+  TaskId,
+  TaskInfo,
+  Timestamp,
+  ToastKind,
+} from '../types'
+
+export interface HookTraceEntry {
+  seq: number
+  at: Timestamp
+  /** Session this entry was attributed to (the open session, or null if unknown). */
+  session: SessionId | null
+  branch: BranchId
+  event: string
+  plugin: string
+  hook_id: string
+  effects: Effect[]
+  decision: Decision
+  /** Enclosing `code` call id, for internal calls. */
+  parent_call?: string
+}
+
+export interface Toast {
+  id: number
+  kind: ToastKind
+  message: string
+  /** Raw error text, shown under the message. */
+  detail?: string
+}
+
+export interface DeltaBuffer {
+  text: string
+  reasoning: string
+  /** Live thinking clock: when the first reasoning delta landed, and the
+   * measured span once the first text delta arrives (null until then). */
+  reasonStart?: number
+  reasonMs?: number
+}
+
+export interface TurnCache {
+  nodeId: NodeId
+  index: number
+  prompt: number
+  cached: number
+  creation: number
+  completion: number
+}
+
+export const MAX_TRACE = 500
+export const MAX_DELTA_CHARS = 400_000
+
+const initial = {
+  sessions: [] as SessionInfo[],
+  cards: [] as Card[],
+
+  // Open session tree (from session.tree, kept live via pushes).
+  sessionId: null as SessionId | null,
+  session: null as SessionInfo | null,
+  nodes: {} as Record<NodeId, Node>,
+  branches: {} as Record<BranchId, Branch>,
+  /** Internal `code` calls of the open session, grouped by `code` call id. */
+  codeCalls: {} as Record<string, CodeCall[]>,
+  activeBranch: null as BranchId | null,
+  pathState: null as PathState | null,
+
+  /** Streaming buffers keyed by branch; cleared when the Assistant node is appended. */
+  deltas: {} as Record<BranchId, DeltaBuffer>,
+  /** Agent-loop-running flag keyed by branch (turn.started .. turn.done/error). */
+  busy: {} as Record<BranchId, boolean>,
+  /** Prompts accepted while a branch was busy, until their user node lands. */
+  queuedPrompts: {} as Record<BranchId, { id: number; text: string }[]>,
+
+  /** Live foreground tool output, keyed by `${branch}:${call_id}`. */
+  toolProgress: {} as Record<
+    string,
+    { branch: BranchId; call_id: string; text: string; data: Tagged | null }
+  >,
+  /** Kernel tasks of the open session (runtime-only; `task.list` + pushes). */
+  tasks: {} as Record<TaskId, TaskInfo>,
+  /** Live task output buffer (`Progress::Append` text), keyed by task id. */
+  taskOutput: {} as Record<TaskId, string>,
+  /** The task whose buffered output is open in the tasks panel. */
+  taskDetail: null as TaskId | null,
+
+  hookTrace: [] as HookTraceEntry[],
+  toasts: [] as Toast[],
+
+  /** Card drawer (opened by any card chip): card ref (library-qualified) + optional use node. */
+  drawer: null as { cardId: string; useNodeId?: string } | null,
+  /** Timeline scroll/highlight request (Context panel → injection point). */
+  focus: null as { nodeId: string; seq: number } | null,
+}
+
+// Cast off Vue's `UnwrapNestedRefs`: the wire payloads embed a recursive JSON
+// union, which exceeds TS's instantiation limit when deep-unwrapped here.
+export const state = reactive(initial) as typeof initial

@@ -1,0 +1,113 @@
+<script setup lang="ts">
+// Branches: the session's branch tree, drawn as one. Children hang off
+// their parent's status dot through a trunk and a rounded elbow tinted by
+// the child's kind (agent teal, revert amber).
+import { t } from '../i18n'
+import type { BranchTreeNode } from '../lib/store'
+import { selectBranch, state } from '../lib/store'
+import { preview, shortId } from '../lib/util'
+import type { BranchStatus } from '../lib/types'
+import { layout } from '../lib/layout'
+
+// Recursive: child branches render through `nested` instances (no heading).
+withDefaults(defineProps<{ items: BranchTreeNode[]; nested?: boolean }>(), { nested: false })
+
+type Tone = 'neutral' | 'pine' | 'agent' | 'revert'
+
+function toneOf(b: BranchTreeNode['branch']): Tone {
+  switch (b.kind.type) {
+    case 'main':
+      return 'pine'
+    case 'agent':
+      return 'agent'
+    case 'revert':
+      return 'revert'
+    default:
+      return 'neutral'
+  }
+}
+
+// Literal utility strings (Tailwind only emits complete class names).
+const toneClass: Record<Tone, string> = {
+  neutral: 'border-line text-ink-2',
+  pine: 'border-pine/40 text-pine',
+  agent: 'border-agent/40 text-agent',
+  revert: 'border-revert/40 text-revert',
+}
+
+const elbowTone: Record<Tone, string> = {
+  neutral: 'border-ink-3/40',
+  pine: 'border-line',
+  agent: 'border-agent/55',
+  revert: 'border-revert/55',
+}
+
+const statusDot: Record<BranchStatus, string> = {
+  active: 'bg-pine',
+  done: 'bg-brand',
+  abandoned: 'bg-ink-3 opacity-40',
+}
+
+function desc(b: BranchTreeNode['branch']): string {
+  const k = b.kind
+  if (k.type === 'agent') {
+    let out = preview(k.task, 60)
+    if (k.inherit?.context === 'none') out += t('panels.branches.noContext')
+    if (k.inherit?.workspaces?.length)
+      out += t('panels.branches.scope', { names: k.inherit.workspaces.join(', ') })
+    return out
+  }
+  if (k.type === 'revert') return k.lesson ? preview(k.lesson, 60) : ''
+  return ''
+}
+
+function onClick(id: string): void {
+  void selectBranch(id)
+  // A branch switch is a chat action; don't leave an overlay covering it.
+  layout.inspectorOpen = false
+}
+</script>
+
+<template>
+  <div v-if="state.sessionId">
+    <div v-if="!nested" class="section-title mb-1.5">{{ t('panels.branches.title') }}</div>
+    <div class="flex flex-col" :class="{ 'relative ml-4 pl-2': nested }">
+      <!-- the trunk, from the parent's dot down to the first elbow -->
+      <span v-if="nested" aria-hidden="true" class="absolute -top-[11px] left-0 h-[11px] w-px bg-line" />
+      <div v-for="(item, i) in items" :key="item.branch.id" class="relative">
+        <template v-if="nested">
+          <span
+            v-if="i < items.length - 1"
+            aria-hidden="true"
+            class="absolute top-0 bottom-0 -left-2 w-px bg-line"
+          />
+          <span
+            aria-hidden="true"
+            class="absolute top-0 -left-2 h-[15px] w-[18px] rounded-bl-[8px] border-b border-l"
+            :class="elbowTone[toneOf(item.branch)]"
+          />
+        </template>
+        <button
+          class="flex w-full items-center gap-1.5 rounded-card px-3 py-1.5 text-left transition-[background-color,box-shadow] duration-200"
+          :class="item.branch.id === state.activeBranch ? 'bg-surface shadow-soft' : 'hover:bg-surface-2/70'"
+          @click="onClick(item.branch.id)"
+        >
+          <span
+            class="size-2 flex-none rounded-full"
+            :class="statusDot[item.branch.status] ?? 'bg-ink-3'"
+            :title="t(`panels.branches.status.${item.branch.status}`)"
+          />
+          <span
+            class="flex-none rounded-xs border px-1.5 font-mono text-micro"
+            :class="toneClass[toneOf(item.branch)]"
+          >
+            {{ t(`panels.branches.kind.${item.branch.kind.type}`) }}
+          </span>
+          <span class="min-w-0 truncate text-meta text-ink-2">{{ desc(item.branch) }}</span>
+          <span class="ml-auto flex-none font-mono text-micro text-ink-3">{{ shortId(item.branch.id) }}</span>
+        </button>
+        <BranchTree v-if="item.children.length" :items="item.children" nested />
+      </div>
+    </div>
+  </div>
+</template>

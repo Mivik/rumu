@@ -1,0 +1,215 @@
+<script setup lang="ts">
+// One step's tool calls, inside an opened activity run: one outlined box,
+// one terse log line per call, hairlines between:
+//   [status icon] name · short target · short result · [card chip/status]
+// Rows stay abbreviated — a basename, a clipped first line, a count; the
+// full call/result lives in the row's tooltip and its own expansion
+// (args/output). "ok" rows carry no status word (the icon suffices), errors
+// keep theirs, and a call a hook blocked gets a small rubber stamp (stamped
+// on, when it happens live) and starts expanded. `agent` calls get an "open
+// sub-agent" pill that jumps to the child branch and badges for a clean
+// context / a workspace scope.
+import { computed, ref } from 'vue'
+import { t } from '../../i18n'
+import type { Branch } from '../../lib/types'
+import type { ToolRowInfo } from '../../lib/store'
+import { openTaskDetail, selectBranch, state } from '../../lib/store'
+import { cardById } from '../../lib/cards'
+import type { ToolRowView, ToolStatus } from '../../lib/toolrows'
+import { toolRowTitle, toolRowView } from '../../lib/toolrows'
+import { taskStatusWord } from '../../lib/tasks'
+import { shortId } from '../../lib/util'
+import { prettyJson } from '../../lib/markdown'
+import { vEnter } from '../../lib/motion'
+import Icon from '../ui/Icon.vue'
+import Chip from '../ui/Chip.vue'
+import CardChip from './CardChip.vue'
+import CodeCalls from './CodeCalls.vue'
+
+const props = defineProps<{ rows: ToolRowInfo[] }>()
+
+const cardsMap = cardById
+
+const views = computed<ToolRowView[]>(() => props.rows.map(toolRowView))
+
+/** Rows already there when the box opened reveal with it; later ones slide in. */
+const revealed = new Set(props.rows.map((r) => r.result.id))
+
+const expanded = ref<Set<string>>(new Set())
+/** Rows the user collapsed manually (blocked rows start expanded). */
+const collapsed = ref<Set<string>>(new Set())
+
+function isOpen(v: ToolRowView): boolean {
+  const id = v.row.result.id
+  if (collapsed.value.has(id)) return false
+  return v.status === 'blocked' || expanded.value.has(id)
+}
+
+/** The script text of a `code` call, for the expanded row's script block. */
+function callScript(args: unknown): string {
+  return String((args as Record<string, unknown> | null)?.code ?? '')
+}
+
+function toggle(v: ToolRowView): void {
+  const id = v.row.result.id
+  if (v.status === 'blocked' && !expanded.value.has(id)) collapsed.value.add(id)
+  else if (expanded.value.has(id)) expanded.value.delete(id)
+  else expanded.value.add(id)
+}
+
+/** Status icon color: agent rows read agent, failures danger, else tool. */
+const statusIcon: Record<ToolStatus, string> = {
+  ok: 'text-tool',
+  error: 'text-danger',
+  blocked: 'text-danger',
+}
+function iconClass(v: ToolRowView): string {
+  return v.agentChild ? 'text-agent' : statusIcon[v.status]
+}
+
+function nameClass(v: ToolRowView): string {
+  if (v.agentChild) return 'text-agent'
+  return v.status === 'ok' ? 'text-tool' : 'text-danger'
+}
+
+function openAgent(b: Branch): void {
+  void selectBranch(b.id)
+}
+
+function liveTaskOutput(id: string | null): string {
+  return id ? (state.taskOutput[id] ?? '') : ''
+}
+</script>
+
+<template>
+  <div class="flex flex-col divide-y divide-line-soft overflow-hidden rounded-control border border-line">
+    <div
+      v-for="v in views"
+      :key="v.row.result.id"
+      v-enter="revealed.has(v.row.result.id) ? false : 'enter-slide'"
+      :data-path-node="v.row.result.id"
+      class="flex flex-col"
+      :class="{ 'bg-danger-soft/40': v.status !== 'ok' }"
+    >
+      <button
+        class="flex w-full min-w-0 items-center gap-2 px-2.5 py-1 text-left transition-colors hover:bg-surface-2/70"
+        :title="toolRowTitle(v)"
+        :aria-expanded="isOpen(v)"
+        @click="toggle(v)"
+      >
+        <Icon
+          :name="v.status === 'ok' ? 'tool' : v.status === 'blocked' ? 'blocked' : 'error'"
+          :size="12"
+          :class="iconClass(v)"
+        />
+        <span class="max-w-[40%] flex-none truncate font-mono text-meta font-medium" :class="nameClass(v)">{{
+          v.name
+        }}</span>
+        <span v-if="v.callText" class="min-w-0 truncate font-mono text-meta text-ink-2">{{
+          v.callText
+        }}</span>
+        <span
+          v-if="v.agentNoContext"
+          class="flex-none rounded-xs border border-agent/40 px-1 font-mono text-micro text-agent"
+          >{{ t('tools.row.noContext') }}</span
+        >
+        <span
+          v-if="v.agentScope"
+          class="flex-none rounded-xs border border-agent/40 px-1 font-mono text-micro text-agent"
+          >{{ t('tools.row.scope', { names: v.agentScope.join(', ') }) }}</span
+        >
+        <span v-if="v.resultText" class="max-w-[40%] flex-none truncate text-micro text-ink-3">
+          · {{ v.resultText }}
+        </span>
+        <span
+          v-if="v.name === 'agent' && v.taskStatus === 'running'"
+          class="flex-none rounded-xs border border-agent/40 px-1 font-mono text-micro text-agent"
+          >{{ t('tools.row.runningInBackground') }}</span
+        >
+        <span class="ml-auto flex flex-none items-center gap-2">
+          <Chip
+            v-if="v.taskId"
+            tone="tool"
+            mono
+            clickable
+            :title="v.taskLabel ?? v.taskId"
+            @click.stop="openTaskDetail(v.taskId)"
+          >
+            {{
+              t('tools.row.task', {
+                id: v.taskId,
+                status: taskStatusWord(v.taskStatus ?? 'running'),
+              })
+            }}
+          </Chip>
+          <CardChip
+            v-if="v.toolCardId && cardsMap.get(v.toolCardId)"
+            :card="cardsMap.get(v.toolCardId)!"
+            :use-node-id="v.row.result.id"
+          />
+          <span
+            v-if="v.status === 'blocked'"
+            v-enter="'enter-stamp'"
+            class="rotate-[-4deg] rounded-xs border-[1.5px] border-danger/60 px-1.5 text-micro font-bold tracking-wide text-danger"
+            :title="v.statusLabel"
+            >{{ v.statusLabel }}</span
+          >
+          <span
+            v-else-if="v.status === 'error'"
+            class="text-micro font-semibold text-danger"
+            :title="v.statusLabel"
+            >{{ v.statusLabel }}</span
+          >
+          <Icon
+            name="chevron"
+            :size="11"
+            class="text-ink-3/70 transition-transform duration-100"
+            :class="{ 'rotate-90': isOpen(v) }"
+          />
+        </span>
+      </button>
+
+      <Chip
+        v-if="v.agentChild"
+        class="mt-0.5 mb-1.5 ml-[30px] self-start"
+        icon="agent"
+        icon-after="external"
+        tone="agent"
+        clickable
+        :title="t('tools.row.subAgentTitle', { id: shortId(v.agentChild.id) })"
+        @click="openAgent(v.agentChild)"
+      >
+        {{ t('tools.row.openSubAgent') }}
+      </Chip>
+
+      <div v-if="isOpen(v)" class="reveal flex flex-col gap-2 pt-1 pr-2.5 pb-2.5 pl-[30px]">
+        <div v-if="v.row.call && v.name === 'code'">
+          <div class="mb-1 text-micro font-semibold text-ink-3">{{ t('tools.detail.script') }}</div>
+          <pre class="code">{{ callScript(v.row.call.args) }}</pre>
+        </div>
+        <div v-else-if="v.row.call">
+          <div class="mb-1 text-micro font-semibold text-ink-3">{{ t('tools.detail.args') }}</div>
+          <pre class="code">{{ prettyJson(v.row.call.args) }}</pre>
+        </div>
+        <div>
+          <div class="mb-1 text-micro font-semibold text-ink-3">
+            {{ v.status === 'ok' ? t('tools.detail.output') : t('tools.detail.outputError') }}
+          </div>
+          <pre class="code" :class="{ 'border-danger/40 text-danger': v.status !== 'ok' }">{{
+            v.output || t('common.empty')
+          }}</pre>
+        </div>
+        <div v-if="v.taskId && (v.taskStatus === 'running' || liveTaskOutput(v.taskId))">
+          <div class="mb-1 text-micro font-semibold text-ink-3">
+            {{ t('tools.detail.liveOutput') }}
+            <span v-if="v.taskStatus === 'running'" class="text-brand-strong">{{
+              t('tools.detail.runningTag')
+            }}</span>
+          </div>
+          <pre class="code">{{ liveTaskOutput(v.taskId) || t('common.noOutput') }}</pre>
+        </div>
+        <CodeCalls v-if="v.name === 'code' && v.row.call" :parent-call="v.row.call.call_id" />
+      </div>
+    </div>
+  </div>
+</template>

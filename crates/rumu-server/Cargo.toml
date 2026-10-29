@@ -1,0 +1,34 @@
+[package]
+name = "rumu-server"
+edition.workspace = true
+rust-version.workspace = true
+version.workspace = true
+description.workspace = true
+license.workspace = true
+repository.workspace = true
+
+[[bin]]
+name = "rumu"
+path = "src/main.rs"
+
+[dependencies]
+rumu-core.workspace = true
+rumu-cards.workspace = true
+rumu-kernel.workspace = true
+rumu-llm.workspace = true
+rumu-plugins.workspace = true
+rumu-store.workspace = true
+anyhow.workspace = true
+axum.workspace = true
+futures-util.workspace = true
+rust-embed.workspace = true
+serde_json.workspace = true
+thiserror.workspace = true
+tokio.workspace = true
+tracing.workspace = true
+tracing-subscriber.workspace = true
+
+[dev-dependencies]
+async-trait.workspace = true
+tempfile.workspace = true
+tokio-tungstenite.workspace = true

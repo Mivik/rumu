@@ -1,0 +1,46 @@
+{
+  "use": {
+    "import": "imported",
+    "read": "read",
+    "write": "written"
+  },
+  "pills": {
+    "imported": "imported",
+    "changed": "changed",
+    "catalog": "card catalog",
+    "catalogMore": "card catalog (+{count})",
+    "workspace": "default {names}",
+    "task": "task {id} · {status}",
+    "reverted": "reverted · {text}",
+    "moreCards": "{names} ({count})",
+    "catalogTitles": {
+      "root": "Card catalog",
+      "directory": "Cards under {prefix}/",
+      "workspace": "Cards related to workspace {name}"
+    }
+  },
+  "drawer": {
+    "label": "knowledge card",
+    "close": "Close (Esc)",
+    "closeAria": "Close",
+    "deleted": "Deleted",
+    "notOnPath": "Not on this path",
+    "onPathChanged": "On this path · changed",
+    "onPathCurrent": "On this path · current",
+    "importedBy": "Imported by",
+    "asSeen": "As seen here",
+    "asSeenRev": "As seen here ({rev})",
+    "current": "Current",
+    "currentRev": "Current ({rev})",
+    "onPath": "On this path",
+    "rev": "rev {rev}",
+    "showInTimeline": "Show in timeline"
+  },
+  "library": {
+    "onPath": "On this path",
+    "changed": "Changed",
+    "by": "by {name}",
+    "title": "Card library ({count})",
+    "total": "{count} card · {total} total | {count} cards · {total} total"
+  }
+}

@@ -1,0 +1,44 @@
+{
+  "name": "rumu-web",
+  "private": true,
+  "version": "0.1.0",
+  "description": "The rumu web UI — quiet, considered, and out of your way.",
+  "license": "MIT OR Apache-2.0",
+  "repository": {
+    "type": "git",
+    "url": "git+https://github.com/Mivik/rumu.git",
+    "directory": "web"
+  },
+  "packageManager": "pnpm@12.15.0",
+  "type": "module",
+  "scripts": {
+    "dev": "nuxt dev",
+    "build": "nuxt generate",
+    "typecheck": "nuxt typecheck",
+    "format": "prettier --write .",
+    "format:check": "prettier --check .",
+    "preview": "nuxt preview",
+    "postinstall": "nuxt prepare",
+    "mock": "cd .. && RUMU_HOME=web/mock/home RUMU_LLM=script:web/mock/demo.yaml cargo run -p rumu-server"
+  },
+  "dependencies": {
+    "@floating-ui/vue": "^2.0.1",
+    "@fontsource-variable/jetbrains-mono": "^5.3.0",
+    "@fontsource-variable/nunito": "^5.3.0",
+    "@fontsource-variable/outfit": "^5.3.0",
+    "dompurify": "^3.2.4",
+    "marked": "^15.0.6",
+    "nuxt": "^4.6.2",
+    "vue": "^3.5.13",
+    "vue-i18n": "^11.4.16"
+  },
+  "devDependencies": {
+    "@intlify/unplugin-vue-i18n": "^11.2.7",
+    "@tailwindcss/vite": "^4.3.3",
+    "@types/node": "^24.19.2",
+    "prettier": "^3.9.10",
+    "tailwindcss": "^4.3.3",
+    "typescript": "~5.9.3",
+    "vue-tsc": "^3.3.13"
+  }
+}

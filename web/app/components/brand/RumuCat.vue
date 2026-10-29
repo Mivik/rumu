@@ -1,0 +1,170 @@
+<script lang="ts">
+export type { CatPose, CatState } from '../../lib/cat'
+</script>
+
+<script setup lang="ts">
+// The mascot, driven parametrically (lib/cat.ts): each state is a pose, and a
+// state change morphs from whatever is on screen to the new pose. Waiting and
+// working are the loops — waiting looks slowly about before the first token,
+// working glances left and right after it — and they stop when the turn does.
+import { onBeforeUnmount, onMounted, shallowRef, watch } from 'vue'
+import {
+  eyesD,
+  eyeWidth,
+  faceD,
+  featuresTransform,
+  isAnimated,
+  lerpPose,
+  lineD,
+  mouthD,
+  poseAt,
+  type CatPose,
+  type CatState,
+} from '../../lib/cat'
+import { prefersReduced } from '../../lib/motion'
+
+const props = withDefaults(
+  defineProps<{
+    state?: CatState
+    /** Overrides on top of the state's pose, e.g. `{ look: 1 }`. Changes morph too. */
+    pose?: Partial<CatPose>
+    /** Width in px; the drawing is 5:4. */
+    size?: number
+    /** The paper face is for large sizes; line-only below ~64px. */
+    paper?: boolean
+  }>(),
+  { state: 'idle', size: 96, paper: true },
+)
+
+/** The morph between poses; inside the 200–450 ms band, eased like ease-soft. */
+const MORPH = 380
+const easeSoft = (t: number): number => 1 - (1 - t) ** 4
+
+const target = (t: number): CatPose => ({ ...poseAt(props.state, t), ...props.pose })
+
+const shown = shallowRef<CatPose>(target(0))
+
+let reduced = false
+let raf = 0
+let since = 0 // when the current state began
+let from: CatPose | null = null // the pose the morph started at
+let fromAt = 0
+
+function frame(now: number): void {
+  const goal = target(now - since)
+  const p = from ? Math.min((now - fromAt) / MORPH, 1) : 1
+  shown.value = from && p < 1 ? lerpPose(from, goal, easeSoft(p)) : goal
+  if (p >= 1) from = null
+  raf = from || isAnimated(props.state) ? requestAnimationFrame(frame) : 0
+}
+
+function stop(): void {
+  cancelAnimationFrame(raf)
+  raf = 0
+  from = null
+}
+
+function morph(restart: boolean): void {
+  if (reduced) {
+    shown.value = target(0)
+    return
+  }
+  const now = performance.now()
+  if (restart) since = now
+  from = shown.value
+  fromAt = now
+  if (!raf) raf = requestAnimationFrame(frame)
+}
+
+watch(
+  () => props.state,
+  () => morph(true),
+)
+watch(
+  () => props.pose,
+  () => morph(false),
+  { deep: true },
+)
+
+let mq: MediaQueryList | null = null
+const sync = (): void => {
+  reduced = prefersReduced()
+  if (reduced) {
+    stop()
+    shown.value = target(0)
+  } else if (isAnimated(props.state) && !raf) {
+    since = performance.now()
+    raf = requestAnimationFrame(frame)
+  }
+}
+onMounted(() => {
+  mq = window.matchMedia('(prefers-reduced-motion: reduce)')
+  sync()
+  mq.addEventListener('change', sync)
+})
+onBeforeUnmount(() => {
+  stop()
+  mq?.removeEventListener('change', sync)
+})
+
+const ROUND = { fill: 'none', 'stroke-linecap': 'round', 'stroke-linejoin': 'round' } as const
+</script>
+
+<template>
+  <svg
+    :width="size"
+    :height="size * 0.8"
+    viewBox="10 14 80 64"
+    aria-hidden="true"
+    class="block overflow-visible"
+  >
+    <path v-if="paper" class="cat-face" :d="faceD(shown)" fill="var(--surface)" />
+
+    <path v-bind="ROUND" :d="lineD(shown)" stroke="var(--ink)" stroke-width="5.5" />
+
+    <g :transform="featuresTransform(shown)">
+      <path v-bind="ROUND" :d="eyesD(shown)" stroke="var(--ink)" :stroke-width="eyeWidth(shown)" />
+      <path
+        v-bind="ROUND"
+        :d="mouthD(shown)"
+        :style="{
+          stroke: `color-mix(in oklab, var(--ink-3) ${(shown.mouthGrey * 100).toFixed(1)}%, var(--brand))`,
+        }"
+        stroke-width="2.5"
+      />
+    </g>
+
+    <!-- the stamp lands: it shrinks onto the paper as it inks in -->
+    <g
+      v-if="shown.stamp > 0.01"
+      :transform="`rotate(-14 76 62) translate(76 62) scale(${1.3 - 0.3 * shown.stamp}) translate(-76 -62)`"
+      :opacity="0.85 * shown.stamp"
+    >
+      <rect
+        x="65"
+        y="55.5"
+        width="22"
+        height="13"
+        rx="3"
+        fill="none"
+        stroke="var(--danger)"
+        stroke-width="2.4"
+      />
+      <path d="M70 62 H82" stroke="var(--danger)" stroke-width="2.4" stroke-linecap="round" />
+    </g>
+  </svg>
+</template>
+
+<style scoped>
+/* The paper face only shows in dark mode; on cream the line alone is enough. */
+.cat-face {
+  display: none;
+}
+
+@media (prefers-color-scheme: dark) {
+  .cat-face {
+    display: inline;
+    filter: drop-shadow(0 2px 3px rgb(0 0 0 / 40%));
+  }
+}
+</style>

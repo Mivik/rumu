@@ -1,0 +1,3539 @@
+//! Kernel integration tests with a scripted fake LLM and a configurable test
+//! plugin. Covers: tool-calling turns, hook block/rewrite on tool.pre, the
+//! note index, agent (plain-reply summaries), safe-point
+//! queueing, out-of-band posts/wakes, abort, steering and internal plugin
+//! calls (caller isolation, denied tools, traces).
+
+use std::sync::atomic::{AtomicUsize, Ordering};
+use std::sync::{Arc, Mutex};
+use std::time::Duration;
+
+use async_trait::async_trait;
+use rumu_core::kind;
+use rumu_core::{
+    BranchId, BranchStatus, Content, Cx, Decision, Event, HookOutput, HookSpec, Inbox, Manifest,
+    Node, NodeBody, PathState, Plugin, Post, Progress, SessionId, Tagged, TaskDone, TaskKind,
+    TaskStatus, ToolCall, ToolOutput, ToolSpec, Workspace, WorkspaceCatalog, WorkspaceUse,
+};
+use rumu_kernel::{Kernel, Llm, LlmResponse, OnDelta, ScriptedLlm};
+use rumu_store::Store;
+use serde_json::{Value, json};
+
+// ---------- hook output helpers ----------
+
+fn pass() -> HookOutput {
+    HookOutput::default()
+}
+
+fn inject(_key: Option<&str>, text: &str) -> HookOutput {
+    HookOutput {
+        effects: vec![Content::text(text)],
+        decision: Decision::Pass,
+    }
+}
+
+fn block(reason: &str) -> HookOutput {
+    HookOutput {
+        effects: vec![],
+        decision: Decision::Block {
+            reason: reason.into(),
+        },
+    }
+}
+
+fn rewrite(patch: Value) -> HookOutput {
+    HookOutput {
+        effects: vec![],
+        decision: Decision::Rewrite { patch },
+    }
+}
+
+// ---------- fake LLM ----------
+
+/// Replays the script and resolves `$task` placeholders (task ids are random).
+struct FakeLlm {
+    inner: ScriptedLlm,
+}
+
+impl FakeLlm {
+    fn new(scripted: Vec<LlmResponse>) -> Self {
+        Self {
+            inner: ScriptedLlm::strict(scripted),
+        }
+    }
+
+    fn projections(&self) -> Vec<Vec<Node>> {
+        self.inner.projections()
+    }
+}
+
+#[async_trait]
+impl Llm for FakeLlm {
+    async fn complete(
+        &self,
+        system: &str,
+        tools: &[ToolSpec],
+        nodes: &[Node],
+        on_delta: Option<OnDelta>,
+    ) -> std::result::Result<LlmResponse, rumu_kernel::LlmError> {
+        let mut resp = self.inner.complete(system, tools, nodes, on_delta).await?;
+        fill_task_id(&mut resp, nodes);
+        Ok(resp)
+    }
+}
+
+/// Resolve a `$task` tool argument to the id of the task whose "started task
+/// <id>" result is already in the projection (task ids are random).
+fn fill_task_id(resp: &mut LlmResponse, nodes: &[Node]) {
+    let id = nodes.iter().rev().find_map(|n| match &n.body {
+        NodeBody::ToolResult { content, .. } => content
+            .text
+            .split_once("started task ")
+            .and_then(|(_, rest)| rest.split_whitespace().next())
+            .map(str::to_owned),
+        _ => None,
+    });
+    let Some(id) = id else { return };
+    for call in &mut resp.tool_calls {
+        if call.args.get("id").and_then(Value::as_str) == Some("$task") {
+            call.args["id"] = json!(id);
+        }
+    }
+}
+
+// ---------- concurrency-tracking fake LLM ----------
+
+/// Like [`FakeLlm`], but records how many sub-agent completions overlap.
+/// A sub-agent call is recognised by its `You are now a sub-agent` user node
+/// (the `context: "none"` children used by the concurrency tests).
+struct TrackedLlm {
+    inner: ScriptedLlm,
+    active: AtomicUsize,
+    max_active: AtomicUsize,
+    child_sleep: Duration,
+}
+
+impl TrackedLlm {
+    fn new(scripted: Vec<LlmResponse>, child_sleep: Duration) -> Self {
+        Self {
+            inner: ScriptedLlm::strict(scripted),
+            active: AtomicUsize::new(0),
+            max_active: AtomicUsize::new(0),
+            child_sleep,
+        }
+    }
+}
+
+#[async_trait]
+impl Llm for TrackedLlm {
+    async fn complete(
+        &self,
+        system: &str,
+        tools: &[ToolSpec],
+        nodes: &[Node],
+        on_delta: Option<OnDelta>,
+    ) -> std::result::Result<LlmResponse, rumu_kernel::LlmError> {
+        let is_child = nodes.iter().any(|n| match &n.body {
+            NodeBody::User { content } => content.text.contains("You are now a sub-agent"),
+            NodeBody::ToolResult { content, .. } => {
+                content.text.contains("You are now a sub-agent")
+            }
+            _ => false,
+        });
+        if is_child {
+            let now = self.active.fetch_add(1, Ordering::SeqCst) + 1;
+            self.max_active.fetch_max(now, Ordering::SeqCst);
+            tokio::time::sleep(self.child_sleep).await;
+            self.active.fetch_sub(1, Ordering::SeqCst);
+        }
+        self.inner.complete(system, tools, nodes, on_delta).await
+    }
+}
+
+// ---------- test plugin ----------
+
+type HookFn = Arc<dyn Fn(&str, &Event) -> HookOutput + Send + Sync>;
+type ToolFn = Arc<dyn Fn(&str, Value, &Cx) -> ToolOutput + Send + Sync>;
+type PushRx = tokio::sync::mpsc::UnboundedReceiver<Value>;
+
+struct TestPlugin {
+    manifest: Manifest,
+    hook_fn: HookFn,
+    tool_fn: ToolFn,
+    calls: Mutex<Vec<(String, Value)>>,
+    inbox: Mutex<Option<Arc<dyn Inbox>>>,
+    /// Artificial hook latency (fail-closed test).
+    delay: Duration,
+}
+
+impl TestPlugin {
+    fn new(
+        name: &str,
+        tools: Vec<ToolSpec>,
+        hooks: Vec<HookSpec>,
+        hook_fn: HookFn,
+        tool_fn: ToolFn,
+    ) -> Self {
+        Self {
+            manifest: Manifest {
+                name: name.to_owned(),
+                instructions: Some(format!("You have the {name} plugin.")),
+                tools,
+                hooks,
+            },
+            hook_fn,
+            tool_fn,
+            calls: Mutex::new(vec![]),
+            inbox: Mutex::new(None),
+            delay: Duration::ZERO,
+        }
+    }
+
+    fn calls(&self) -> Vec<(String, Value)> {
+        self.calls.lock().unwrap().clone()
+    }
+
+    fn inbox(&self) -> Arc<dyn Inbox> {
+        self.inbox
+            .lock()
+            .unwrap()
+            .clone()
+            .expect("the kernel attached an inbox")
+    }
+
+    fn post(&self, branch: &BranchId, post: Post) -> rumu_core::Result<()> {
+        self.inbox().post(branch, post)
+    }
+}
+
+#[async_trait]
+impl Plugin for TestPlugin {
+    fn manifest(&self) -> Manifest {
+        self.manifest.clone()
+    }
+
+    fn attach(&self, inbox: Arc<dyn Inbox>) {
+        *self.inbox.lock().unwrap() = Some(inbox);
+    }
+
+    async fn on_hook(
+        &self,
+        hook_id: &str,
+        event: &Event,
+        _cx: &Cx,
+    ) -> rumu_core::Result<HookOutput> {
+        if !self.delay.is_zero() {
+            tokio::time::sleep(self.delay).await;
+        }
+        Ok((self.hook_fn)(hook_id, event))
+    }
+
+    async fn call_tool(&self, name: &str, args: Value, cx: &Cx) -> rumu_core::Result<ToolOutput> {
+        self.calls
+            .lock()
+            .unwrap()
+            .push((name.to_owned(), args.clone()));
+        // Special cases used by the injection / abort / code tests.
+        match name {
+            "append_marker" => {
+                // Emulates a plugin recording a marker from a tool.
+                let tag = args
+                    .get("kind")
+                    .and_then(Value::as_str)
+                    .unwrap_or("card_use")
+                    .to_owned();
+                let data = args.get("data").cloned().unwrap_or(json!({}));
+                return Ok(ToolOutput::ok("recorded").with_effect(Content {
+                    text: String::new(),
+                    data: Some(Tagged { tag, v: 1, data }),
+                }));
+            }
+            "probe_state" => {
+                // Reports the default workspace as plugins see it mid-batch.
+                let state = cx.state()?;
+                return Ok(ToolOutput::ok(
+                    state
+                        .default_workspace
+                        .clone()
+                        .unwrap_or_else(|| "-".into()),
+                ));
+            }
+            "probe_index" => {
+                // Counts structured payloads of one tag on the branch view.
+                let tag = args.get("tag").and_then(Value::as_str).unwrap_or_default();
+                let count = cx.index()?.by_tag(tag).count();
+                return Ok(ToolOutput::ok(count.to_string()));
+            }
+            "sleep" => {
+                tokio::time::sleep(Duration::from_secs(120)).await;
+                return Ok(ToolOutput::ok("slept"));
+            }
+            // A background-capable tool: emits progress, waits, returns.
+            "bgwork" => {
+                let ms = args.get("ms").and_then(Value::as_u64).unwrap_or(100);
+                cx.progress(Progress::Append("line one\n".into()));
+                cx.progress(Progress::Append("line two\n".into()));
+                tokio::time::sleep(Duration::from_millis(ms)).await;
+                let out = args
+                    .get("out")
+                    .and_then(Value::as_str)
+                    .unwrap_or("finished work")
+                    .to_owned();
+                return Ok(ToolOutput::ok(out));
+            }
+            "nap" => {
+                let ms = args.get("ms").and_then(Value::as_u64).unwrap_or(20);
+                tokio::time::sleep(Duration::from_millis(ms)).await;
+                return Ok(ToolOutput::ok("napped"));
+            }
+            // Invokes itself through Cx until the kernel's depth limit trips.
+            "recurse" => {
+                return match cx.invoke("recurse", json!({})).await {
+                    Ok(r) => Ok(ToolOutput {
+                        content: r.output.content,
+                        is_error: r.output.is_error,
+                        ..Default::default()
+                    }),
+                    Err(e) => Ok(ToolOutput::err(format!("{e}"))),
+                };
+            }
+            // Tries an internal call; used to check the background-task
+            // restriction (a background task must not invoke).
+            "try_invoke" => {
+                return match cx.invoke("plus", json!({ "a": 1, "b": 2 })).await {
+                    Ok(r) => Ok(r.output),
+                    Err(e) => Ok(ToolOutput::err(format!("{e}"))),
+                };
+            }
+            // Emulates the `code` plugin: run a preset list of internal tool
+            // calls through `Cx::invoke`, strictly in order.
+            "script" => {
+                let calls = args
+                    .get("calls")
+                    .and_then(Value::as_array)
+                    .cloned()
+                    .unwrap_or_default();
+                let mut results = Vec::new();
+                for c in calls {
+                    let name = c
+                        .get("name")
+                        .and_then(Value::as_str)
+                        .unwrap_or_default()
+                        .to_owned();
+                    let inner_args = c.get("args").cloned().unwrap_or_else(|| json!({}));
+                    match cx.invoke(&name, inner_args).await {
+                        Ok(r) => results.push(json!({
+                            "name": name,
+                            "ok": !r.output.is_error,
+                            "blocked": r.blocked,
+                            "text": r.output.content.text,
+                            "dur_ms": r.dur_ms,
+                        })),
+                        Err(e) => results.push(json!({
+                            "name": name,
+                            "ok": false,
+                            "error": format!("{e}"),
+                        })),
+                    }
+                }
+                return Ok(ToolOutput::ok(serde_json::to_string(&results).unwrap()));
+            }
+            "set_ws" => {
+                let name = args
+                    .get("name")
+                    .and_then(Value::as_str)
+                    .unwrap_or_default()
+                    .to_owned();
+                return Ok(
+                    ToolOutput::ok("set").with_effect(Content::marker(&WorkspaceUse { name }))
+                );
+            }
+            // Emulates the `code` plugin's agent fan-out: each agent call runs
+            // in a detached task (so an abort cancels it through its parent
+            // token instead of dropping the future mid-flight).
+            "fanout" => {
+                let tasks = args
+                    .get("tasks")
+                    .and_then(Value::as_array)
+                    .cloned()
+                    .unwrap_or_default();
+                let mut handles = Vec::new();
+                for t in tasks {
+                    let task = t.as_str().unwrap_or_default().to_owned();
+                    let cx = cx.clone();
+                    handles.push(tokio::spawn(async move {
+                        match cx
+                            .invoke(
+                                "agent",
+                                json!({ "task": task, "inherit": { "context": "none" } }),
+                            )
+                            .await
+                        {
+                            Ok(r) => r.output.content.text,
+                            Err(e) => format!("{e}"),
+                        }
+                    }));
+                }
+                let mut texts = Vec::new();
+                for h in handles {
+                    texts.push(h.await.unwrap_or_default());
+                }
+                return Ok(ToolOutput::ok(texts.join("|")));
+            }
+            "append_note" => {
+                return Ok(ToolOutput::ok("noted").with_effect(Content::text("direct note")));
+            }
+            _ => {}
+        }
+        Ok((self.tool_fn)(name, args, cx))
+    }
+}
+
+// ---------- fixtures ----------
+
+fn tool_spec(name: &str) -> ToolSpec {
+    ToolSpec {
+        name: name.to_owned(),
+        description: format!("test tool {name}"),
+        schema: json!({ "type": "object", "properties": {} }),
+        background: false,
+    }
+}
+
+fn hook(id: &str, matcher: Value) -> HookSpec {
+    HookSpec {
+        id: id.to_owned(),
+        matcher,
+        priority: 0,
+    }
+}
+
+fn hook_prio(id: &str, matcher: Value, priority: i32) -> HookSpec {
+    HookSpec {
+        priority,
+        ..hook(id, matcher)
+    }
+}
+
+fn noop_hooks() -> HookFn {
+    Arc::new(|_, _| pass())
+}
+
+fn noop_tools() -> ToolFn {
+    Arc::new(|_, _, _| ToolOutput::ok("ok"))
+}
+
+/// The standard 2+3 adder used by most tool tests.
+fn plus_tool() -> ToolFn {
+    Arc::new(|_name, args, _| {
+        let a = args.get("a").and_then(Value::as_i64).unwrap_or(0);
+        let b = args.get("b").and_then(Value::as_i64).unwrap_or(0);
+        ToolOutput::ok((a + b).to_string())
+    })
+}
+
+fn block_hook(reason: &str) -> HookFn {
+    let reason = reason.to_owned();
+    Arc::new(move |_, _| block(&reason))
+}
+
+/// A plugin that exposes `tools`, runs `hooks`, and blocks with `reason`.
+fn guard(tools: &[&str], hooks: Vec<HookSpec>, reason: &str) -> TestPlugin {
+    plugin_with("guard", tools, hooks, block_hook(reason), noop_tools())
+}
+
+fn plugin_with(
+    name: &str,
+    tools: &[&str],
+    hooks: Vec<HookSpec>,
+    hook_fn: HookFn,
+    tool_fn: ToolFn,
+) -> TestPlugin {
+    TestPlugin::new(
+        name,
+        tools.iter().map(|t| tool_spec(t)).collect(),
+        hooks,
+        hook_fn,
+        tool_fn,
+    )
+}
+
+/// Like [`plugin_with`], but every tool is marked `background: true`.
+fn background_plugin(
+    name: &str,
+    tools: &[&str],
+    hooks: Vec<HookSpec>,
+    hook_fn: HookFn,
+    tool_fn: ToolFn,
+) -> TestPlugin {
+    TestPlugin::new(
+        name,
+        tools
+            .iter()
+            .map(|t| ToolSpec {
+                background: true,
+                ..tool_spec(t)
+            })
+            .collect(),
+        hooks,
+        hook_fn,
+        tool_fn,
+    )
+}
+
+/// A plugin that also exposes the `script` tool (internal code calls).
+fn script_host(
+    extra_tools: &[&str],
+    hooks: Vec<HookSpec>,
+    hook_fn: HookFn,
+    tool_fn: ToolFn,
+) -> TestPlugin {
+    let mut tools = vec!["script"];
+    tools.extend_from_slice(extra_tools);
+    plugin_with("script-host", &tools, hooks, hook_fn, tool_fn)
+}
+
+fn kernel_with(
+    plugins: Vec<Arc<dyn Plugin>>,
+    scripted: Vec<LlmResponse>,
+    catalog: WorkspaceCatalog,
+) -> (Arc<Kernel>, Arc<FakeLlm>) {
+    let store = Store::in_memory();
+    let llm = Arc::new(FakeLlm::new(scripted));
+    let kernel = Kernel::new(Arc::new(store), llm.clone(), plugins, catalog).unwrap();
+    (kernel, llm)
+}
+
+async fn setup_with_catalog(
+    plugins: Vec<Arc<dyn Plugin>>,
+    scripted: Vec<LlmResponse>,
+    catalog: WorkspaceCatalog,
+) -> (Arc<Kernel>, Arc<FakeLlm>, SessionId, BranchId) {
+    let (kernel, llm) = kernel_with(plugins, scripted, catalog);
+    let (session, _) = kernel.create_session(None).await.unwrap();
+    (
+        kernel,
+        llm,
+        session.id.clone(),
+        BranchId::from(session.active_branch.0.as_str()),
+    )
+}
+
+async fn setup(
+    plugins: Vec<Arc<dyn Plugin>>,
+    scripted: Vec<LlmResponse>,
+) -> (Arc<Kernel>, Arc<FakeLlm>, SessionId, BranchId) {
+    setup_with_catalog(plugins, scripted, WorkspaceCatalog::default()).await
+}
+
+fn project(name: &str, root: &str) -> WorkspaceCatalog {
+    WorkspaceCatalog {
+        workspaces: vec![Workspace {
+            name: name.into(),
+            ssh: None,
+            root: root.into(),
+            read_only: false,
+        }],
+        default: Some(name.into()),
+    }
+}
+
+/// Drive pushes until `turn.done`/`turn.error` for `branch` (or any branch
+/// when `branch` is None).
+async fn wait_turn(rx: &mut PushRx, branch: Option<&str>) -> Value {
+    while let Some(v) = rx.recv().await {
+        let m = v["method"].as_str().unwrap_or_default();
+        if (m == "turn.done" || m == "turn.error")
+            && branch.is_none_or(|b| v["params"]["branch"].as_str() == Some(b))
+        {
+            return v;
+        }
+    }
+    panic!("push stream ended before turn finished");
+}
+
+/// Drive pushes until `turn.done`/`turn.error`, collecting every push seen
+/// along the way (for assertions on `code.call` / `hook.fired`).
+async fn wait_turn_collect(rx: &mut PushRx, branch: Option<&str>) -> (Value, Vec<Value>) {
+    let mut seen = Vec::new();
+    while let Some(v) = rx.recv().await {
+        let m = v["method"].as_str().unwrap_or_default();
+        if (m == "turn.done" || m == "turn.error")
+            && branch.is_none_or(|b| v["params"]["branch"].as_str() == Some(b))
+        {
+            return (v, seen);
+        }
+        seen.push(v);
+    }
+    panic!("push stream ended before turn finished");
+}
+
+/// Prompt, wait for the turn, and return `(done, root→head nodes, state)`.
+async fn turn_on(
+    kernel: &Arc<Kernel>,
+    branch: &BranchId,
+    rx: &mut PushRx,
+    text: &str,
+    filter: Option<&str>,
+) -> (Value, Vec<Node>, PathState) {
+    kernel.prompt(branch, text).await.unwrap();
+    let done = wait_turn(rx, filter).await;
+    let (nodes, state) = kernel.branch_path(branch).unwrap();
+    (done, nodes, state)
+}
+
+async fn turn(
+    kernel: &Arc<Kernel>,
+    branch: &BranchId,
+    rx: &mut PushRx,
+    text: &str,
+) -> (Value, Vec<Node>, PathState) {
+    turn_on(kernel, branch, rx, text, None).await
+}
+
+/// Single-turn convenience: tap, prompt, wait, load.
+async fn run_turn(
+    kernel: &Arc<Kernel>,
+    branch: &BranchId,
+    text: &str,
+) -> (Value, Vec<Node>, PathState) {
+    let mut rx = kernel.tap_pushes();
+    turn(kernel, branch, &mut rx, text).await
+}
+
+/// Same as [`run_turn`], but only waits for `branch`'s own turn (agents).
+async fn run_turn_on(
+    kernel: &Arc<Kernel>,
+    branch: &BranchId,
+    text: &str,
+) -> (Value, Vec<Node>, PathState) {
+    let mut rx = kernel.tap_pushes();
+    turn_on(kernel, branch, &mut rx, text, Some(branch.0.as_str())).await
+}
+
+async fn turn_collect(
+    kernel: &Arc<Kernel>,
+    branch: &BranchId,
+    rx: &mut PushRx,
+    text: &str,
+) -> (Value, Vec<Value>) {
+    kernel.prompt(branch, text).await.unwrap();
+    wait_turn_collect(rx, None).await
+}
+
+fn body_kinds(nodes: &[Node]) -> Vec<String> {
+    nodes
+        .iter()
+        .map(|n| match &n.body {
+            NodeBody::User { .. } => "user".to_owned(),
+            NodeBody::Assistant { tool_calls, .. } if tool_calls.is_empty() => {
+                "assistant".to_owned()
+            }
+            NodeBody::Assistant { .. } => "assistant+calls".to_owned(),
+            NodeBody::ToolResult { .. } => "tool_result".to_owned(),
+            NodeBody::Note { content, .. } => match content.data.as_ref() {
+                Some(tagged) if content.text.is_empty() => format!("marker[{}]", tagged.tag),
+                _ => "note".to_owned(),
+            },
+        })
+        .collect()
+}
+
+fn result_text(nodes: &[Node], call_id: &str) -> (String, bool) {
+    for n in nodes {
+        if let NodeBody::ToolResult {
+            call_id: c,
+            content,
+            is_error,
+        } = &n.body
+            && c == call_id
+        {
+            return (content.text.clone(), *is_error);
+        }
+    }
+    panic!("no tool result for {call_id}");
+}
+
+// ---------- turns ----------
+
+#[tokio::test]
+async fn tool_calling_turn_and_title() {
+    let plugin = Arc::new(plugin_with(
+        "calc",
+        &["plus"],
+        vec![],
+        noop_hooks(),
+        plus_tool(),
+    ));
+    let (kernel, llm, _session, branch) = setup(
+        vec![plugin],
+        vec![
+            LlmResponse::calls(vec![ToolCall::new("c1", "plus", json!({"a": 2, "b": 3}))]),
+            LlmResponse::text("sum is 5"),
+        ],
+    )
+    .await;
+
+    let (done, nodes, _state) = run_turn(&kernel, &branch, "add 2 and 3").await;
+    assert_eq!(done["method"], "turn.done");
+    assert_eq!(
+        body_kinds(&nodes),
+        vec![
+            "marker[root]",
+            "user",
+            "assistant+calls",
+            "tool_result",
+            "assistant"
+        ]
+    );
+    assert_eq!(result_text(&nodes, "c1"), ("5".to_owned(), false));
+
+    // Session title = first user prompt.
+    let info = kernel.list_sessions().unwrap().remove(0);
+    assert_eq!(info.title, "add 2 and 3");
+
+    // The tool result was in context for the second LLM call.
+    let projections = llm.projections();
+    assert_eq!(projections.len(), 2);
+    assert_eq!(body_kinds(&projections[1])[3], "tool_result");
+
+    // Tools frozen + sorted in what the LLM receives (the kernel's built-in
+    // `agent` plus the plugin's).
+    assert_eq!(
+        kernel
+            .tools()
+            .iter()
+            .map(|t| t.name.as_str())
+            .collect::<Vec<_>>(),
+        vec!["agent", "plus", "task_kill"]
+    );
+    assert!(kernel.system_prompt().contains("You have the calc plugin."));
+}
+
+#[tokio::test]
+async fn hook_actions_on_tool_pre() {
+    let plugin = Arc::new(guard(
+        &["plus"],
+        vec![hook(
+            "no-math",
+            json!({ "event": kind::TOOL_PRE, "tool": "plus" }),
+        )],
+        "no math today",
+    ));
+    let (kernel, _llm, _s, branch) = setup(
+        vec![plugin],
+        vec![
+            LlmResponse::calls(vec![ToolCall::new("c1", "plus", json!({}))]),
+            LlmResponse::text("fine"),
+        ],
+    )
+    .await;
+
+    let (_, nodes, _) = run_turn(&kernel, &branch, "add something").await;
+    assert_eq!(
+        result_text(&nodes, "c1"),
+        ("Blocked by hook: no math today".to_owned(), true)
+    );
+}
+
+#[tokio::test]
+async fn hook_blocks_prompt() {
+    let plugin = Arc::new(guard(
+        &[],
+        vec![hook("no-prompts", json!({ "event": kind::PROMPT }))],
+        "not in the mood",
+    ));
+    let (kernel, _llm, _s, branch) = setup(vec![plugin], vec![]).await;
+
+    let (done, nodes, _) = run_turn(&kernel, &branch, "hello?").await;
+    assert_eq!(done["method"], "turn.error");
+    assert_eq!(done["params"]["message"], "not in the mood");
+    assert_eq!(body_kinds(&nodes), vec!["marker[root]"]); // nothing appended
+}
+
+#[tokio::test]
+async fn tool_error_results() {
+    let plugin = Arc::new(plugin_with(
+        "calc",
+        &["plus"],
+        vec![],
+        noop_hooks(),
+        noop_tools(),
+    ));
+    let (kernel, _llm, _s, branch) = setup(
+        vec![plugin],
+        vec![
+            LlmResponse::calls(vec![ToolCall::new("c1", "does-not-exist", json!({}))]),
+            LlmResponse::text("ok"),
+        ],
+    )
+    .await;
+
+    let (_, nodes, _) = run_turn(&kernel, &branch, "call a ghost").await;
+    let (text, err) = result_text(&nodes, "c1");
+    assert!(err);
+    assert!(text.contains("no plugin provides tool `does-not-exist`"));
+    // And the turn carried on to a final assistant message.
+    assert_eq!(body_kinds(&nodes).last().unwrap(), "assistant");
+}
+
+// ---------- tool progress ----------
+
+/// A tool's `cx.progress` updates reach clients as `tool.progress` pushes,
+/// keyed by branch + call id; `Append` and `Data` keep their shapes.
+#[tokio::test]
+async fn tool_progress_is_pushed() {
+    let plugin = Arc::new(plugin_with(
+        "prog",
+        &["slowrun"],
+        vec![],
+        noop_hooks(),
+        Arc::new(|_name, _args, cx| {
+            cx.progress(Progress::Append("one".into()));
+            cx.progress(Progress::Data(Tagged::new(&WorkspaceUse {
+                name: "prog".into(),
+            })));
+            ToolOutput::ok("done")
+        }),
+    ));
+    let (kernel, _llm, _s, branch) = setup(
+        vec![plugin],
+        vec![
+            LlmResponse::calls(vec![ToolCall::new("c1", "slowrun", json!({}))]),
+            LlmResponse::text("ok"),
+        ],
+    )
+    .await;
+    let mut rx = kernel.tap_pushes();
+    let (done, seen) = turn_collect(&kernel, &branch, &mut rx, "go").await;
+    assert_eq!(done["method"], "turn.done");
+
+    let progress: Vec<&Value> = seen
+        .iter()
+        .filter(|v| v["method"] == "tool.progress")
+        .collect();
+    assert_eq!(progress.len(), 2, "{seen:?}");
+    assert_eq!(progress[0]["params"]["call_id"], "c1");
+    assert_eq!(progress[0]["params"]["branch"], branch.0.as_str());
+    assert_eq!(progress[0]["params"]["append"], "one");
+    assert_eq!(progress[1]["params"]["data"]["tag"], "workspace.use");
+    assert_eq!(progress[1]["params"]["data"]["v"], 1);
+    assert_eq!(progress[1]["params"]["data"]["data"]["name"], "prog");
+}
+
+// ---------- injection ----------
+
+#[tokio::test]
+async fn inject_ordering_without_dedup() {
+    let plugin = Arc::new(plugin_with(
+        "memory",
+        &["plus"],
+        vec![hook("always-inject", json!({ "event": kind::LLM_PRE }))],
+        Arc::new(|_, _| inject(Some("card:x@a1b2c3d4"), "remember X")),
+        noop_tools(),
+    ));
+    let (kernel, llm, _s, branch) = setup(
+        vec![plugin],
+        vec![
+            LlmResponse::calls(vec![ToolCall::new("c1", "plus", json!({}))]),
+            LlmResponse::text("first turn done"),
+            LlmResponse::text("second turn"),
+        ],
+    )
+    .await;
+    let mut rx = kernel.tap_pushes();
+
+    turn(&kernel, &branch, &mut rx, "one").await;
+    turn(&kernel, &branch, &mut rx, "two").await;
+
+    // The kernel never deduplicates: one note per LLM call (2 + 1).
+    let (nodes, _) = kernel.branch_path(&branch).unwrap();
+    let notes = nodes
+        .iter()
+        .filter(
+            |n| matches!(&n.body, NodeBody::Note { content, .. } if content.text == "remember X"),
+        )
+        .count();
+    assert_eq!(notes, 3);
+    assert_eq!(llm.projections().len(), 3);
+
+    // A prompt-hook import queued before the loop is flushed before the
+    // llm.pre dispatch, so an llm.pre hook's own inject lands *after* it in
+    // the same request (the update-notice ordering).
+    let prompt_plugin = Arc::new(plugin_with(
+        "memory",
+        &[],
+        vec![hook("import", json!({ "event": kind::PROMPT }))],
+        Arc::new(|_, _| inject(Some("card:x@a1b2c3d4"), "# x\nimported body")),
+        noop_tools(),
+    ));
+    let notify_plugin = Arc::new(plugin_with(
+        "notifier",
+        &[],
+        vec![hook_prio(
+            "card-updates",
+            json!({ "event": kind::LLM_PRE }),
+            i32::MAX,
+        )],
+        Arc::new(|_, _| inject(Some("card-update:x@e5f6a7b8"), "card x changed")),
+        noop_tools(),
+    ));
+    let (kernel, llm, _s, branch) = setup(
+        vec![prompt_plugin, notify_plugin],
+        vec![LlmResponse::text("done")],
+    )
+    .await;
+    run_turn(&kernel, &branch, "hello").await;
+
+    let projections = llm.projections();
+    assert_eq!(projections.len(), 1);
+    let texts: Vec<&str> = projections[0]
+        .iter()
+        .filter_map(|n| match &n.body {
+            NodeBody::Note { content, .. } if !content.text.is_empty() => {
+                Some(content.text.as_str())
+            }
+            _ => None,
+        })
+        .collect();
+    assert_eq!(
+        texts,
+        ["# x\nimported body", "card x changed"],
+        "import precedes update note in the same request"
+    );
+}
+
+/// Plugins query the index instead of relying on kernel dedup: an effect
+/// queued earlier in the batch is already visible, and repeating the same
+/// payload appends a second note.
+#[tokio::test]
+async fn index_sees_queued_effects_and_kernel_never_dedups() {
+    let plugin = Arc::new(plugin_with(
+        "memory",
+        &["append_marker", "probe_index"],
+        vec![],
+        noop_hooks(),
+        noop_tools(),
+    ));
+    let (kernel, _llm, _s, branch) = setup(
+        vec![plugin],
+        vec![
+            LlmResponse::calls(vec![
+                ToolCall::new(
+                    "c1",
+                    "append_marker",
+                    json!({"kind": "thing", "data": {"n": 1}}),
+                ),
+                ToolCall::new("c2", "probe_index", json!({"tag": "thing"})),
+                ToolCall::new(
+                    "c3",
+                    "append_marker",
+                    json!({"kind": "thing", "data": {"n": 1}}),
+                ),
+                ToolCall::new("c4", "probe_index", json!({"tag": "thing"})),
+            ]),
+            LlmResponse::text("done"),
+        ],
+    )
+    .await;
+
+    let (_, nodes, _) = run_turn(&kernel, &branch, "go").await;
+    assert_eq!(result_text(&nodes, "c2"), ("1".to_owned(), false));
+    assert_eq!(result_text(&nodes, "c4"), ("2".to_owned(), false));
+    let markers = nodes
+        .iter()
+        .filter(|n| {
+            matches!(&n.body, NodeBody::Note { content, .. }
+                if content.data.as_ref().is_some_and(|t| t.tag == "thing"))
+        })
+        .count();
+    assert_eq!(markers, 2, "the kernel does not deduplicate");
+}
+
+/// A `workspace.use` recorded earlier in the same tool batch is queued to the
+/// safe point, but later calls of that batch must already see it — both the
+/// plugin-facing state and the hook fields (a guard on the new default
+/// workspace must not be bypassed by switching and acting in one batch).
+#[tokio::test]
+async fn queued_markers_are_visible_within_the_batch() {
+    let plugin = Arc::new(plugin_with(
+        "ws",
+        &["append_marker", "probe_state", "write"],
+        vec![hook(
+            "card-guard",
+            json!({ "event": kind::TOOL_PRE, "tool": "write", "paths": { "glob": "/card/**" } }),
+        )],
+        block_hook("cards are guarded"),
+        noop_tools(),
+    ));
+    let (kernel, _llm, _s, branch) = setup(
+        vec![plugin],
+        vec![
+            LlmResponse::calls(vec![
+                ToolCall::new(
+                    "c1",
+                    "append_marker",
+                    json!({"kind": "workspace.use", "data": {"name": "@rumu"}}),
+                ),
+                ToolCall::new("c2", "probe_state", json!({})),
+                ToolCall::new(
+                    "c3",
+                    "write",
+                    json!({"path": "@rumu:/card/dev/x", "content": "x"}),
+                ),
+            ]),
+            LlmResponse::text("done"),
+        ],
+    )
+    .await;
+
+    let (_, nodes, state) = run_turn(&kernel, &branch, "switch and act").await;
+    assert_eq!(result_text(&nodes, "c2"), ("@rumu".to_owned(), false));
+    assert_eq!(
+        result_text(&nodes, "c3"),
+        ("Blocked by hook: cards are guarded".to_owned(), true)
+    );
+    // The marker itself still lands at the safe point, once.
+    assert_eq!(state.default_workspace.as_deref(), Some("@rumu"));
+    let uses = nodes
+        .iter()
+        .filter(|n| matches!(&n.body, NodeBody::Note { content, .. } if content.decode::<WorkspaceUse>().is_some()))
+        .count();
+    assert_eq!(uses, 1);
+}
+
+#[tokio::test]
+async fn safe_point_queueing() {
+    // Notes injected during a tool batch land after ALL ToolResults of that batch.
+    let counter = Arc::new(Mutex::new(0u32));
+    let c2 = counter.clone();
+    let plugin = Arc::new(plugin_with(
+        "memory",
+        &["one", "two"],
+        vec![hook("inject-per-call", json!({ "event": kind::TOOL_PRE }))],
+        Arc::new(move |_, _| {
+            let mut n = c2.lock().unwrap();
+            *n += 1;
+            inject(None, &format!("note-{}", *n))
+        }),
+        noop_tools(),
+    ));
+    let (kernel, _llm, _s, branch) = setup(
+        vec![plugin],
+        vec![
+            LlmResponse::calls(vec![
+                ToolCall::new("c1", "one", json!({})),
+                ToolCall::new("c2", "two", json!({})),
+            ]),
+            LlmResponse::text("done"),
+        ],
+    )
+    .await;
+
+    let (_, nodes, _) = run_turn(&kernel, &branch, "run both").await;
+    assert_eq!(
+        body_kinds(&nodes),
+        vec![
+            "marker[root]",
+            "user",
+            "assistant+calls",
+            "tool_result",
+            "tool_result", // both results before any note
+            "note",
+            "note",
+            "assistant",
+        ]
+    );
+}
+
+// ---------- agent ----------
+
+/// The child investigates and ends with a plain reply, whose text (plus a
+/// transcript address) becomes the parent's tool result. Run for both call
+/// orders: agent alone first, and agent after another call of the batch
+/// (agent must not assume the head is its own assistant node).
+#[tokio::test]
+async fn agent_forks_a_child_and_survives_batch_order() {
+    for calls in [
+        vec![
+            ToolCall::new("e1", "agent", json!({"task": "find the config file"})),
+            ToolCall::new("o1", "other", json!({})),
+        ],
+        vec![
+            ToolCall::new("o1", "other", json!({})),
+            ToolCall::new("e1", "agent", json!({"task": "find the config file"})),
+        ],
+    ] {
+        let plugin = Arc::new(plugin_with(
+            "branch",
+            &["agent", "other"],
+            vec![],
+            noop_hooks(),
+            Arc::new(|_, _, _| ToolOutput::ok("other-done")),
+        ));
+        let (kernel, _llm, session, branch) = setup(
+            vec![plugin],
+            vec![
+                LlmResponse::calls(calls),
+                // child step 1: a reply without tool calls ends the sub-agent
+                LlmResponse::text("config lives in /etc/rumu"),
+                // parent step 2: final
+                LlmResponse::text("all done"),
+            ],
+        )
+        .await;
+
+        let (_, nodes, _) = run_turn_on(&kernel, &branch, "look around").await;
+
+        // Parent: agent result = child summary + transcript address; other
+        // executed normally.
+        let (e1_text, e1_err) = result_text(&nodes, "e1");
+        assert!(
+            e1_text.starts_with("config lives in /etc/rumu"),
+            "{e1_text}"
+        );
+        assert!(
+            e1_text.contains("\n\n[transcript: @rumu:/session/"),
+            "transcript address: {e1_text}"
+        );
+        assert!(!e1_err);
+        assert_eq!(result_text(&nodes, "o1"), ("other-done".to_owned(), false));
+
+        // Child branch: Done, kind Agent, answers for ALL calls of the head
+        // assistant, then its own investigation.
+        let branches = kernel.session_tree(&session).unwrap().2;
+        let child = branches
+            .iter()
+            .find(|b| matches!(&b.kind, rumu_core::BranchKind::Agent { task, .. } if task == "find the config file"))
+            .expect("agent branch exists");
+        assert_eq!(child.status, BranchStatus::Done);
+        assert_eq!(child.forked_from, Some(nodes.get(2).unwrap().id.clone())); // assistant node
+
+        let (cnodes, _) = kernel.branch_path(&child.id).unwrap();
+        let kinds = body_kinds(&cnodes);
+        assert_eq!(kinds[0], "marker[root]");
+        assert_eq!(kinds[1], "user");
+        assert_eq!(kinds[2], "assistant+calls");
+        assert_eq!(kinds[3], "tool_result");
+        assert_eq!(kinds[4], "tool_result");
+        assert_eq!(kinds[5], "assistant");
+        let (child_e1, _) = result_text(&cnodes, "e1");
+        assert!(child_e1.contains("You are now a sub-agent"));
+        assert!(child_e1.contains("find the config file"));
+        assert!(child_e1.contains("a reply without tool calls ends the sub-agent"));
+        assert_eq!(
+            result_text(&cnodes, "o1"),
+            ("(skipped in sub-agent branch)".to_owned(), false)
+        );
+
+        // The transcript address points into this session: `<first>..<head>`
+        // names the child's first own node and its final head.
+        let addr = e1_text
+            .split("[transcript: @rumu:/session/")
+            .nth(1)
+            .unwrap()
+            .trim_end_matches(']');
+        let (sid, range) = addr.split_once('/').unwrap();
+        assert_eq!(sid, session.0);
+        let (first, head) = range.split_once("..").unwrap();
+        assert_eq!(first, cnodes[3].id.0);
+        assert_eq!(head, child.head.0);
+    }
+}
+
+// ---------- agent limits ----------
+
+/// `context: "none"` forks at the session root: the child is seeded with the
+/// task only, sees none of the parent conversation, and its transcript starts
+/// at the task node.
+#[tokio::test]
+async fn agent_context_none_starts_at_the_root() {
+    let plugin = Arc::new(plugin_with(
+        "branch",
+        &["agent"],
+        vec![],
+        noop_hooks(),
+        noop_tools(),
+    ));
+    let (kernel, llm, session, branch) = setup(
+        vec![plugin],
+        vec![
+            LlmResponse::calls(vec![ToolCall::new(
+                "e1",
+                "agent",
+                json!({ "task": "independent work", "inherit": { "context": "none" } }),
+            )]),
+            LlmResponse::text("clean summary"),
+            LlmResponse::text("parent done"),
+        ],
+    )
+    .await;
+
+    let (_, nodes, _) = run_turn_on(&kernel, &branch, "look around").await;
+    let root = nodes[0].id.clone();
+    let child = kernel
+        .session_tree(&session)
+        .unwrap()
+        .2
+        .into_iter()
+        .find(|b| matches!(&b.kind, rumu_core::BranchKind::Agent { task, .. } if task == "independent work"))
+        .expect("agent child");
+    assert_eq!(child.forked_from, Some(root));
+
+    let (cnodes, _) = kernel.branch_path(&child.id).unwrap();
+    let kinds = body_kinds(&cnodes);
+    assert_eq!(kinds[..2], ["marker[root]", "user"]);
+    let NodeBody::User { content } = &cnodes[1].body else {
+        panic!("the child's first own node is its task");
+    };
+    assert!(
+        content.text.contains("You are now a sub-agent"),
+        "{}",
+        content.text
+    );
+    assert!(
+        content.text.contains("independent work"),
+        "{}",
+        content.text
+    );
+
+    // The child's LLM projection held only the root and the task.
+    let projections = llm.projections();
+    assert_eq!(body_kinds(&projections[1]), vec!["marker[root]", "user"]);
+    assert!(
+        !projections[1].iter().any(|n| matches!(
+            &n.body,
+            NodeBody::User { content } if content.text == "look around"
+        )),
+        "the child must not see the parent's conversation"
+    );
+
+    // The transcript address starts at the task node.
+    let (text, err) = result_text(&nodes, "e1");
+    assert!(!err, "{text}");
+    let addr = text
+        .split("[transcript: @rumu:/session/")
+        .nth(1)
+        .unwrap()
+        .trim_end_matches(']');
+    let (_, range) = addr.split_once('/').unwrap();
+    let (first, head) = range.split_once("..").unwrap();
+    assert_eq!(first, cnodes[1].id.0);
+    assert_eq!(head, child.head.0);
+}
+
+/// An unknown `inherit.workspaces` name is a plain tool error: no child
+/// branch is created.
+#[tokio::test]
+async fn agent_unknown_workspace_errors_without_a_branch() {
+    let cat = WorkspaceCatalog {
+        workspaces: vec![Workspace {
+            name: "proj".into(),
+            ssh: None,
+            root: "/tmp/proj".into(),
+            read_only: false,
+        }],
+        default: Some("proj".into()),
+    };
+    let plugin = Arc::new(plugin_with(
+        "branch",
+        &["agent"],
+        vec![],
+        noop_hooks(),
+        noop_tools(),
+    ));
+    let (kernel, _llm, session, branch) = setup_with_catalog(
+        vec![plugin],
+        vec![
+            LlmResponse::calls(vec![ToolCall::new(
+                "e1",
+                "agent",
+                json!({ "task": "x", "inherit": { "workspaces": ["ghost"] } }),
+            )]),
+            LlmResponse::text("done"),
+        ],
+        cat,
+    )
+    .await;
+
+    let (_, nodes, _) = run_turn_on(&kernel, &branch, "go").await;
+    let (text, err) = result_text(&nodes, "e1");
+    assert!(err, "{text}");
+    assert!(text.contains("unknown workspace `ghost`"), "{text}");
+    assert!(text.contains("proj") && text.contains("@rumu"), "{text}");
+    assert_eq!(
+        kernel.session_tree(&session).unwrap().2.len(),
+        1,
+        "no child branch"
+    );
+}
+
+/// A workspace scope marker filters the child's `PathState.workspaces`, and a
+/// default workspace inside the scope is carried over as a `workspace.use`
+/// marker.
+#[tokio::test]
+async fn agent_workspace_scope_filters_child_state() {
+    let cat = WorkspaceCatalog {
+        workspaces: vec![
+            Workspace {
+                name: "proj".into(),
+                ssh: None,
+                root: "/tmp/proj".into(),
+                read_only: false,
+            },
+            Workspace {
+                name: "other".into(),
+                ssh: None,
+                root: "/tmp/other".into(),
+                read_only: false,
+            },
+        ],
+        default: Some("proj".into()),
+    };
+    let plugin = Arc::new(plugin_with(
+        "branch",
+        &["agent"],
+        vec![],
+        noop_hooks(),
+        noop_tools(),
+    ));
+    let (kernel, _llm, session, branch) = setup_with_catalog(
+        vec![plugin],
+        vec![
+            LlmResponse::calls(vec![ToolCall::new(
+                "e1",
+                "agent",
+                json!({
+                    "task": "work",
+                    "inherit": { "context": "none", "workspaces": ["proj"] }
+                }),
+            )]),
+            LlmResponse::text("child done"),
+            LlmResponse::text("parent done"),
+        ],
+        cat,
+    )
+    .await;
+    run_turn_on(&kernel, &branch, "go").await;
+
+    let child = kernel
+        .session_tree(&session)
+        .unwrap()
+        .2
+        .into_iter()
+        .find(|b| matches!(b.kind, rumu_core::BranchKind::Agent { .. }))
+        .expect("agent child");
+    let (cnodes, cstate) = kernel.branch_path(&child.id).unwrap();
+    let kinds = body_kinds(&cnodes);
+    assert_eq!(
+        kinds[..4],
+        [
+            "marker[root]",
+            "marker[workspace.scope]",
+            "marker[workspace.use]",
+            "user"
+        ]
+    );
+    assert_eq!(
+        cstate
+            .workspaces
+            .iter()
+            .map(|w| w.name.as_str())
+            .collect::<Vec<_>>(),
+        ["proj"]
+    );
+    assert_eq!(cstate.default_workspace.as_deref(), Some("proj"));
+}
+
+/// Agents nest at most three levels below main; the fourth call is refused
+/// (and does not create a branch).
+#[tokio::test]
+async fn agent_depth_limit_refuses_the_fourth_level() {
+    let plugin = Arc::new(plugin_with(
+        "branch",
+        &["agent"],
+        vec![],
+        noop_hooks(),
+        noop_tools(),
+    ));
+    // Depth-first LLM order: each level calls the next, then replies on the
+    // way back up.
+    let script = vec![
+        LlmResponse::calls(vec![ToolCall::new("g1", "agent", json!({ "task": "two" }))]),
+        LlmResponse::calls(vec![ToolCall::new(
+            "g2",
+            "agent",
+            json!({ "task": "three" }),
+        )]),
+        LlmResponse::calls(vec![ToolCall::new(
+            "g3",
+            "agent",
+            json!({ "task": "four" }),
+        )]),
+        LlmResponse::calls(vec![ToolCall::new(
+            "g4",
+            "agent",
+            json!({ "task": "five" }),
+        )]),
+        LlmResponse::text("level 3 done"),
+        LlmResponse::text("level 2 done"),
+        LlmResponse::text("level 1 done"),
+        LlmResponse::text("main done"),
+    ];
+    let (kernel, _llm, session, branch) = setup(vec![plugin], script).await;
+
+    run_turn_on(&kernel, &branch, "go").await;
+    let branches = kernel.session_tree(&session).unwrap().2;
+    let agents: Vec<_> = branches
+        .iter()
+        .filter(|b| matches!(b.kind, rumu_core::BranchKind::Agent { .. }))
+        .collect();
+    assert_eq!(agents.len(), 3, "three levels; the fourth is refused");
+
+    let deepest = agents
+        .iter()
+        .find(|b| matches!(&b.kind, rumu_core::BranchKind::Agent { task, .. } if task == "four"))
+        .expect("third-level agent");
+    let (nodes, _) = kernel.branch_path(&deepest.id).unwrap();
+    let (text, err) = result_text(&nodes, "g4");
+    assert!(err, "{text}");
+    assert!(
+        text.contains("agent depth limit reached; do the work yourself"),
+        "{text}"
+    );
+}
+
+/// The concurrency gate serialises sub-agent loops (set to 1 here) even when
+/// a script fans them out with `Promise.all`.
+#[tokio::test(flavor = "multi_thread", worker_threads = 4)]
+async fn agent_concurrency_limit_serialises_script_fanout() {
+    let plugin = Arc::new(plugin_with(
+        "branch",
+        &["fanout"],
+        vec![],
+        noop_hooks(),
+        noop_tools(),
+    ));
+    let llm = Arc::new(TrackedLlm::new(
+        vec![
+            LlmResponse::calls(vec![ToolCall::new(
+                "f1",
+                "fanout",
+                json!({ "tasks": ["a", "b"] }),
+            )]),
+            LlmResponse::text("child a"),
+            LlmResponse::text("child b"),
+            LlmResponse::text("parent done"),
+        ],
+        Duration::from_millis(80),
+    ));
+    let kernel = Kernel::new(
+        Arc::new(Store::in_memory()),
+        llm.clone(),
+        vec![plugin],
+        WorkspaceCatalog::default(),
+    )
+    .unwrap();
+    let (session, _) = kernel.create_session(None).await.unwrap();
+    let branch = BranchId::from(session.active_branch.0.as_str());
+    kernel.set_agent_concurrency(1);
+
+    run_turn_on(&kernel, &branch, "go").await;
+    assert_eq!(
+        llm.max_active.load(Ordering::SeqCst),
+        1,
+        "with one permit the two sub-agents cannot overlap"
+    );
+    let agents = kernel
+        .session_tree(&session.id)
+        .unwrap()
+        .2
+        .into_iter()
+        .filter(|b| matches!(b.kind, rumu_core::BranchKind::Agent { .. }))
+        .count();
+    assert_eq!(agents, 2);
+}
+
+/// Aborting while an agent waits for a permit must not start its child.
+#[tokio::test(flavor = "multi_thread", worker_threads = 4)]
+async fn abort_while_waiting_for_an_agent_permit_creates_no_child() {
+    let plugin = Arc::new(plugin_with(
+        "branch",
+        &["fanout"],
+        vec![],
+        noop_hooks(),
+        noop_tools(),
+    ));
+    let llm = Arc::new(TrackedLlm::new(
+        vec![
+            LlmResponse::calls(vec![ToolCall::new(
+                "f1",
+                "fanout",
+                json!({ "tasks": ["a", "b"] }),
+            )]),
+            LlmResponse::text("child a"),
+            LlmResponse::text("child b"),
+        ],
+        Duration::from_secs(120),
+    ));
+    let kernel = Kernel::new(
+        Arc::new(Store::in_memory()),
+        llm,
+        vec![plugin],
+        WorkspaceCatalog::default(),
+    )
+    .unwrap();
+    let (session, _) = kernel.create_session(None).await.unwrap();
+    let branch = BranchId::from(session.active_branch.0.as_str());
+    kernel.set_agent_concurrency(1);
+    let mut rx = kernel.tap_pushes();
+    kernel.prompt(&branch, "go").await.unwrap();
+
+    // Wait until exactly one child holds the permit (the other is waiting).
+    wait_until(Duration::from_secs(5), || {
+        agent_branches(&kernel, &session.id).len() == 1
+    })
+    .await;
+    kernel.abort(&branch).unwrap();
+    let done = wait_turn(&mut rx, Some(&branch.0)).await;
+    assert_eq!(done["method"], "turn.done", "{done}");
+
+    // The running child is cancelled by its parent token and closes out; the
+    // waiter sees the cancellation before the freed permit and starts nothing.
+    wait_until(Duration::from_secs(5), || {
+        let agents = agent_branches(&kernel, &session.id);
+        agents.len() == 1 && agents.iter().all(|b| b.status == BranchStatus::Done)
+    })
+    .await;
+    tokio::time::sleep(Duration::from_millis(100)).await;
+    assert_eq!(
+        agent_branches(&kernel, &session.id).len(),
+        1,
+        "the waiting agent never created a branch"
+    );
+}
+
+fn agent_branches(kernel: &Arc<Kernel>, session: &SessionId) -> Vec<rumu_core::Branch> {
+    kernel
+        .session_tree(session)
+        .unwrap()
+        .2
+        .into_iter()
+        .filter(|b| matches!(b.kind, rumu_core::BranchKind::Agent { .. }))
+        .collect()
+}
+
+/// Poll `check` until true or `timeout` expires.
+async fn wait_until(timeout: Duration, check: impl Fn() -> bool) {
+    let deadline = tokio::time::Instant::now() + timeout;
+    while !check() {
+        assert!(
+            tokio::time::Instant::now() < deadline,
+            "condition not met within {timeout:?}"
+        );
+        tokio::time::sleep(Duration::from_millis(10)).await;
+    }
+}
+
+// ---------- abort ----------
+
+/// Abort marks every call still pending — direct ones and ones wrapped in a
+/// `code` script — as aborted, and the tree stays valid.
+#[tokio::test]
+async fn abort_appends_error_results() {
+    for inner in [false, true] {
+        let plugin: Arc<dyn Plugin> = if inner {
+            Arc::new(script_host(&["sleep"], vec![], noop_hooks(), noop_tools()))
+        } else {
+            Arc::new(plugin_with(
+                "slow",
+                &["sleep"],
+                vec![],
+                noop_hooks(),
+                noop_tools(),
+            ))
+        };
+        let calls = if inner {
+            LlmResponse::calls(vec![
+                ToolCall::new(
+                    "c1",
+                    "script",
+                    json!({"calls": [{"name": "sleep", "args": {}}]}),
+                ),
+                ToolCall::new("c2", "sleep", json!({})),
+            ])
+        } else {
+            LlmResponse::calls(vec![
+                ToolCall::new("c1", "sleep", json!({})),
+                ToolCall::new("c2", "sleep", json!({})),
+            ])
+        };
+        let (kernel, _llm, _s, branch) = setup(vec![plugin], vec![calls]).await;
+        let mut rx = kernel.tap_pushes();
+
+        kernel.prompt(&branch, "sleep forever").await.unwrap();
+        // Wait until the assistant node with tool calls is appended.
+        while let Some(v) = rx.recv().await {
+            if v["method"] == "node.appended" && v["params"]["node"]["body"]["type"] == "assistant"
+            {
+                break;
+            }
+        }
+        kernel.abort(&branch).unwrap();
+        let done = wait_turn(&mut rx, None).await;
+        assert_eq!(done["method"], "turn.done");
+
+        let (nodes, _) = kernel.branch_path(&branch).unwrap();
+        assert_eq!(
+            result_text(&nodes, "c1"),
+            ("aborted".to_owned(), true),
+            "inner={inner}"
+        );
+        assert_eq!(result_text(&nodes, "c2"), ("aborted".to_owned(), true));
+    }
+}
+
+// ---------- workspaces ----------
+
+#[tokio::test]
+async fn session_default_workspace_is_branch_state() {
+    let (kernel, _llm) = kernel_with(vec![], vec![], project("proj", "/p/rumu"));
+
+    // No initial workspace → the catalog default applies.
+    let (s1, _) = kernel.create_session(None).await.unwrap();
+    let (_, st1) = kernel.branch_path(&s1.active_branch).unwrap();
+    assert_eq!(st1.default_workspace.as_deref(), Some("proj"));
+    assert_eq!(st1.workspaces.len(), 1);
+
+    // An explicit initial default (`@rumu` is valid too) is a `workspace.use`
+    // marker on the path.
+    let (s2, _) = kernel.create_session(Some("@rumu".into())).await.unwrap();
+    let (nodes, st2) = kernel.branch_path(&s2.active_branch).unwrap();
+    assert_eq!(st2.default_workspace.as_deref(), Some("@rumu"));
+    assert!(nodes.iter().any(|n| matches!(&n.body,
+        NodeBody::Note { content, .. } if content.decode::<WorkspaceUse>().is_some_and(|w| w.name == "@rumu"))));
+
+    // Unknown names are rejected outright.
+    let err = kernel
+        .create_session(Some("ghost".into()))
+        .await
+        .unwrap_err();
+    assert!(
+        err.to_string().contains("unknown workspace `ghost`"),
+        "{err:#}"
+    );
+}
+
+/// Fail-fast: a malformed matcher fails kernel construction instead of
+/// silently never matching. (The three bad shapes themselves are unit-tested
+/// in `predicate::compile_rejects_bad_matchers`; here we only check that the
+/// error is attributed to the owning hook.)
+#[tokio::test]
+async fn invalid_matchers_fail_kernel_construction() {
+    let plugin = Arc::new(plugin_with(
+        "bad",
+        &[],
+        vec![hook("broken", json!({ "toolz": "bash" }))],
+        noop_hooks(),
+        noop_tools(),
+    ));
+    let err = Kernel::new(
+        Arc::new(Store::in_memory()),
+        Arc::new(FakeLlm::new(vec![])),
+        vec![plugin],
+        WorkspaceCatalog::default(),
+    )
+    .err()
+    .expect("kernel construction must fail on an invalid matcher");
+    let msg = format!("{err:#}");
+    assert!(msg.contains("hook bad/broken"), "{msg}");
+}
+
+/// A guard on the `workspace` field catches path-less calls (`bash`) in the
+/// target workspace.
+#[tokio::test]
+async fn workspace_field_guards_pathless_calls() {
+    let plugin = Arc::new(guard(
+        &["bash"],
+        vec![hook(
+            "no-bash-in-proj",
+            json!({ "event": kind::TOOL_PRE, "workspace": "proj" }),
+        )],
+        "proj is protected",
+    ));
+    let (kernel, _llm, _s, branch) = setup_with_catalog(
+        vec![plugin],
+        vec![
+            LlmResponse::calls(vec![ToolCall::new("c1", "bash", json!({"command": "ls"}))]),
+            LlmResponse::text("ok"),
+        ],
+        project("proj", "/p/rumu"),
+    )
+    .await;
+
+    let (_, nodes, _) = run_turn(&kernel, &branch, "list things").await;
+    // `bash` carries no `path`; the resolved target (`proj`, the branch
+    // default) is still matchable — and blockable.
+    assert_eq!(
+        result_text(&nodes, "c1"),
+        ("Blocked by hook: proj is protected".to_owned(), true)
+    );
+}
+
+// ---------- two-phase dispatch: rewrite vs. guard ----------
+
+/// A shim that rewrites any `shell` command to `rewrite_to`, plus a guard
+/// that blocks destructive commands. The guard must run again on the final
+/// payload: a stale "allowed" verdict must not let the rewritten command run,
+/// and a stale "blocked" verdict must not survive a sanitized rewrite.
+fn shim(rewrite_to: &str) -> TestPlugin {
+    let rewrite_to = rewrite_to.to_owned();
+    plugin_with(
+        "shim",
+        &["shell"],
+        vec![
+            hook_prio(
+                "guard",
+                json!({ "event": kind::TOOL_PRE, "tool": "shell" }),
+                5,
+            ),
+            hook_prio(
+                "rewrite",
+                json!({ "event": kind::TOOL_PRE, "tool": "shell" }),
+                10,
+            ),
+        ],
+        Arc::new(move |id, ev| {
+            if id == "rewrite" {
+                rewrite(json!({ "args": { "command": rewrite_to.clone() } }))
+            } else if ev
+                .fields
+                .cmd
+                .as_deref()
+                .is_some_and(|c| c.starts_with("rm -rf"))
+            {
+                block("rm -rf is forbidden")
+            } else {
+                pass()
+            }
+        }),
+        Arc::new(|_name, args, _| {
+            ToolOutput::ok(
+                args.get("command")
+                    .and_then(Value::as_str)
+                    .unwrap_or("?")
+                    .to_owned(),
+            )
+        }),
+    )
+}
+
+#[tokio::test]
+async fn two_phase_dispatch() {
+    for (rewrite_to, prompt_cmd, text, is_error, ran) in [
+        (
+            "rm -rf /",
+            "echo hi",
+            "Blocked by hook: rm -rf is forbidden",
+            true,
+            0,
+        ),
+        ("echo cleaned", "rm -rf /tmp/x", "echo cleaned", false, 1),
+    ] {
+        let plugin = Arc::new(shim(rewrite_to));
+        let (kernel, _llm, _s, branch) = setup(
+            vec![plugin.clone()],
+            vec![
+                LlmResponse::calls(vec![ToolCall::new(
+                    "c1",
+                    "shell",
+                    json!({"command": prompt_cmd}),
+                )]),
+                LlmResponse::text("ok"),
+            ],
+        )
+        .await;
+
+        let (_, nodes, _) = run_turn(&kernel, &branch, "run it").await;
+        assert_eq!(
+            result_text(&nodes, "c1"),
+            (text.to_owned(), is_error),
+            "rewrite_to={rewrite_to}"
+        );
+        assert_eq!(plugin.calls().len(), ran, "rewrite_to={rewrite_to}");
+        if is_error {
+            assert!(plugin.calls().is_empty());
+        } else {
+            assert_eq!(plugin.calls()[0].1["command"], "echo cleaned");
+        }
+    }
+}
+
+/// Fail-closed: an intercept hook that times out on `tool.pre` becomes a
+/// synthetic block instead of a silent no-op.
+#[tokio::test]
+async fn intercept_hook_timeout_fails_closed() {
+    let mut plugin = guard(
+        &["shell"],
+        vec![hook(
+            "slow",
+            json!({ "event": kind::TOOL_PRE, "tool": "shell" }),
+        )],
+        "unused",
+    );
+    plugin.delay = Duration::from_millis(300);
+    let plugin = Arc::new(plugin);
+    let (kernel, _llm, _s, branch) = setup(
+        vec![plugin.clone()],
+        vec![
+            LlmResponse::calls(vec![ToolCall::new("c1", "shell", json!({"command": "ls"}))]),
+            LlmResponse::text("ok"),
+        ],
+    )
+    .await;
+    kernel.set_hook_timeout(Duration::from_millis(50));
+
+    let (_, nodes, _) = run_turn(&kernel, &branch, "list files").await;
+    let (text, err) = result_text(&nodes, "c1");
+    assert!(err, "{text}");
+    assert!(text.contains("timed out"), "{text}");
+    assert!(plugin.calls().is_empty());
+}
+
+// ---------- code mode: internal calls ----------
+
+#[tokio::test]
+async fn code_inner_block_is_not_a_node() {
+    let plugin = Arc::new(script_host(
+        &["secret"],
+        vec![hook(
+            "block-secret",
+            json!({ "event": kind::TOOL_PRE, "tool": "secret", "caller": "script-host" }),
+        )],
+        block_hook("secret stays out"),
+        noop_tools(),
+    ));
+    let (kernel, _llm, session, branch) = setup(
+        vec![plugin.clone()],
+        vec![
+            LlmResponse::calls(vec![ToolCall::new(
+                "c1",
+                "script",
+                json!({ "calls": [{ "name": "secret", "args": {} }] }),
+            )]),
+            LlmResponse::text("done"),
+        ],
+    )
+    .await;
+    let mut rx = kernel.tap_pushes();
+
+    let (_, seen) = turn_collect(&kernel, &branch, &mut rx, "go").await;
+
+    let (nodes, _) = kernel.branch_path(&branch).unwrap();
+    let results: Vec<&Node> = nodes
+        .iter()
+        .filter(|n| matches!(&n.body, NodeBody::ToolResult { .. }))
+        .collect();
+    assert_eq!(
+        results.len(),
+        1,
+        "only the outer code call has a result node"
+    );
+    assert!(
+        nodes.iter().all(|n| !matches!(&n.body,
+            NodeBody::ToolResult { call_id, .. } if call_id == "c1.1")),
+        "internal calls never become nodes"
+    );
+    let (text, err) = result_text(&nodes, "c1");
+    assert!(!err, "{text}");
+    let rows: Value = serde_json::from_str(&text).unwrap();
+    assert_eq!(rows[0]["ok"], false);
+    assert_eq!(rows[0]["blocked"], "secret stays out");
+    assert_eq!(rows[0]["text"], "Blocked by hook: secret stays out");
+    assert!(
+        plugin.calls().iter().all(|(name, _)| name != "secret"),
+        "the blocked tool never ran: {:?}",
+        plugin.calls()
+    );
+
+    let pushes: Vec<&Value> = seen.iter().filter(|p| p["method"] == "code.call").collect();
+    assert_eq!(pushes.len(), 1);
+    assert_eq!(pushes[0]["params"]["parent_call"], "c1");
+    assert_eq!(pushes[0]["params"]["seq"], 1);
+    assert_eq!(pushes[0]["params"]["name"], "secret");
+    assert_eq!(pushes[0]["params"]["blocked"], "secret stays out");
+    assert_eq!(pushes[0]["params"]["is_error"], true);
+
+    // The trace is persisted (a side table, not nodes) and survives a reload.
+    let stored = kernel.code_calls(&session).unwrap();
+    assert_eq!(stored.len(), 1);
+    assert_eq!(stored[0].parent_call, "c1");
+    assert_eq!(stored[0].seq, 1);
+    assert_eq!(stored[0].name, "secret");
+    assert_eq!(stored[0].blocked.as_deref(), Some("secret stays out"));
+    assert!(stored[0].is_error);
+}
+
+/// `caller` distinguishes inner (`code`) from direct (`model`) calls in both
+/// directions, and direct calls are the default the hooks see.
+#[tokio::test]
+async fn caller_field_separates_inner_and_direct_calls() {
+    for block_caller in ["script-host", "model"] {
+        let fields = Arc::new(Mutex::new(Vec::<(Option<String>, Option<String>)>::new()));
+        let record = fields.clone();
+        let plugin = Arc::new(TestPlugin::new(
+            "script-host",
+            vec![tool_spec("script"), tool_spec("plus")],
+            vec![
+                hook("record", json!({ "event": kind::TOOL_PRE })),
+                hook(
+                    "guard",
+                    json!({ "event": kind::TOOL_PRE, "tool": "plus", "caller": block_caller }),
+                ),
+            ],
+            Arc::new(move |id, ev| {
+                if id == "record" {
+                    record
+                        .lock()
+                        .unwrap()
+                        .push((ev.fields.tool.clone(), ev.fields.caller.clone()));
+                    pass()
+                } else {
+                    block("guarded")
+                }
+            }),
+            plus_tool(),
+        ));
+        let (kernel, _llm, _s, branch) = setup(
+            vec![plugin.clone()],
+            vec![
+                LlmResponse::calls(vec![
+                    ToolCall::new(
+                        "c1",
+                        "script",
+                        json!({ "calls": [{ "name": "plus", "args": { "a": 1, "b": 2 } }] }),
+                    ),
+                    ToolCall::new("c2", "plus", json!({ "a": 1, "b": 2 })),
+                ]),
+                LlmResponse::text("done"),
+            ],
+        )
+        .await;
+
+        let (_, nodes, _) = run_turn(&kernel, &branch, "go").await;
+
+        // Direct calls default to "model"; plugin invokes name the plugin.
+        assert_eq!(
+            fields.lock().unwrap().as_slice(),
+            [
+                (Some("script".to_owned()), Some("model".to_owned())),
+                (Some("plus".to_owned()), Some("script-host".to_owned())),
+                (Some("plus".to_owned()), Some("model".to_owned())),
+            ],
+            "block_caller={block_caller}"
+        );
+
+        let (text, _) = result_text(&nodes, "c1");
+        let rows: Value = serde_json::from_str(&text).unwrap();
+        let direct = result_text(&nodes, "c2");
+        if block_caller == "script-host" {
+            assert_eq!(rows[0]["blocked"], "guarded");
+            assert_eq!(direct, ("3".to_owned(), false));
+        } else {
+            assert_eq!(rows[0]["text"], "3");
+            assert_eq!(direct, ("Blocked by hook: guarded".to_owned(), true));
+        }
+        // Only the unblocked direct call reached the plugin.
+        assert_eq!(
+            plugin
+                .calls()
+                .iter()
+                .filter(|(name, _)| name == "plus")
+                .count(),
+            1
+        );
+    }
+}
+
+#[tokio::test]
+async fn rewrite_cannot_forge_caller() {
+    let plugin = Arc::new(TestPlugin::new(
+        "script-host",
+        vec![tool_spec("script"), tool_spec("plus")],
+        vec![
+            hook_prio(
+                "forge",
+                json!({ "event": kind::TOOL_PRE, "tool": "plus" }),
+                0,
+            ),
+            hook_prio(
+                "guard",
+                json!({ "event": kind::TOOL_PRE, "tool": "plus", "caller": "script-host" }),
+                10,
+            ),
+        ],
+        Arc::new(|id, _ev| {
+            if id == "forge" {
+                rewrite(json!({ "caller": "model" }))
+            } else {
+                block("inner only")
+            }
+        }),
+        plus_tool(),
+    ));
+    let (kernel, _llm, _s, branch) = setup(
+        vec![plugin],
+        vec![
+            LlmResponse::calls(vec![
+                ToolCall::new(
+                    "c1",
+                    "script",
+                    json!({ "calls": [{ "name": "plus", "args": { "a": 2, "b": 3 } }] }),
+                ),
+                ToolCall::new("c2", "plus", json!({ "a": 2, "b": 3 })),
+            ]),
+            LlmResponse::text("done"),
+        ],
+    )
+    .await;
+
+    let (_, nodes, _) = run_turn(&kernel, &branch, "go").await;
+    // The guard still sees caller = script-host after the rewrite.
+    let (text, _) = result_text(&nodes, "c1");
+    let rows: Value = serde_json::from_str(&text).unwrap();
+    assert_eq!(rows[0]["blocked"], "inner only");
+    // The direct call's forged caller was removed too: it is not "script-host".
+    assert_eq!(result_text(&nodes, "c2"), ("5".to_owned(), false));
+}
+
+#[tokio::test]
+async fn rewrite_cannot_smuggle_a_denied_tool_into_code() {
+    let plugin = Arc::new(script_host(
+        &["plus"],
+        vec![hook(
+            "smuggle",
+            json!({ "event": kind::TOOL_PRE, "tool": "plus", "caller": "script-host" }),
+        )],
+        Arc::new(|_, _| rewrite(json!({ "name": "code" }))),
+        noop_tools(),
+    ));
+    let (kernel, _llm, _s, branch) = setup(
+        vec![plugin.clone()],
+        vec![
+            LlmResponse::calls(vec![ToolCall::new(
+                "c1",
+                "script",
+                json!({ "calls": [{ "name": "plus", "args": {} }] }),
+            )]),
+            LlmResponse::text("done"),
+        ],
+    )
+    .await;
+
+    let (_, nodes, _) = run_turn(&kernel, &branch, "go").await;
+    // The denied check runs again on the effective name: no nested `code`.
+    let (text, _) = result_text(&nodes, "c1");
+    let rows: Value = serde_json::from_str(&text).unwrap();
+    assert_eq!(rows[0]["ok"], false);
+    assert!(
+        rows[0]["text"]
+            .as_str()
+            .unwrap()
+            .contains("not available from a plugin invoke"),
+        "{}",
+        rows[0]
+    );
+    assert_eq!(
+        plugin
+            .calls()
+            .iter()
+            .map(|(name, _)| name.as_str())
+            .collect::<Vec<_>>(),
+        ["script"]
+    );
+}
+
+#[tokio::test]
+async fn code_inner_inject_is_queued() {
+    let plugin = Arc::new(script_host(
+        &["secret", "append_note"],
+        vec![hook(
+            "inject",
+            json!({ "event": kind::TOOL_PRE, "tool": "secret", "caller": "script-host" }),
+        )],
+        Arc::new(|_, _| inject(Some("k"), "inner note")),
+        noop_tools(),
+    ));
+    let (kernel, _llm, _s, branch) = setup(
+        vec![plugin],
+        vec![
+            LlmResponse::calls(vec![
+                ToolCall::new(
+                    "c1",
+                    "script",
+                    json!({ "calls": [{ "name": "secret", "args": {} }] }),
+                ),
+                ToolCall::new("c2", "append_note", json!({})),
+            ]),
+            LlmResponse::text("done"),
+        ],
+    )
+    .await;
+
+    let (_, nodes, _) = run_turn(&kernel, &branch, "go").await;
+    let note_at = nodes
+        .iter()
+        .position(
+            |n| matches!(&n.body, NodeBody::Note { content, .. } if content.text == "inner note"),
+        )
+        .expect("injected note on the path");
+    let c1_at = nodes
+        .iter()
+        .position(|n| matches!(&n.body, NodeBody::ToolResult { call_id, .. } if call_id == "c1"))
+        .unwrap();
+    assert!(
+        note_at > c1_at,
+        "the note lands after the outer tool result"
+    );
+    // Each append is written: the kernel does not deduplicate.
+    let notes = nodes
+        .iter()
+        .filter(|n| {
+            matches!(&n.body, NodeBody::Note { content, .. }
+            if content.text == "inner note" || content.text == "direct note")
+        })
+        .count();
+    assert_eq!(notes, 2);
+    assert_eq!(result_text(&nodes, "c2"), ("noted".to_owned(), false));
+}
+
+#[tokio::test]
+async fn code_inner_workspace_use_is_visible_to_the_next_inner_call() {
+    let plugin = Arc::new(script_host(
+        &["set_ws", "probe_state"],
+        vec![],
+        noop_hooks(),
+        noop_tools(),
+    ));
+    let (kernel, _llm, _s, branch) = setup(
+        vec![plugin],
+        vec![
+            LlmResponse::calls(vec![ToolCall::new(
+                "c1",
+                "script",
+                json!({ "calls": [
+                    { "name": "set_ws", "args": { "name": "@rumu" } },
+                    { "name": "probe_state", "args": {} }
+                ] }),
+            )]),
+            LlmResponse::text("done"),
+        ],
+    )
+    .await;
+
+    let (_, nodes, state) = run_turn(&kernel, &branch, "go").await;
+    let (text, _) = result_text(&nodes, "c1");
+    let rows: Value = serde_json::from_str(&text).unwrap();
+    assert_eq!(rows[0]["text"], "set");
+    assert_eq!(
+        rows[1]["text"], "@rumu",
+        "the queued workspace.use marker is already in effect"
+    );
+    assert_eq!(state.default_workspace.as_deref(), Some("@rumu"));
+    let markers = nodes
+        .iter()
+        .filter(|n| matches!(&n.body, NodeBody::Note { content, .. } if content.decode::<WorkspaceUse>().is_some()))
+        .count();
+    assert_eq!(markers, 1, "the marker still lands once, at the safe point");
+}
+
+#[tokio::test]
+async fn code_denied_tools_skip_hooks() {
+    let seen = Arc::new(Mutex::new(Vec::<String>::new()));
+    let record = seen.clone();
+    let plugin = Arc::new(script_host(
+        &["plus"],
+        vec![hook("record", json!({ "event": kind::TOOL_PRE }))],
+        Arc::new(move |_, ev| {
+            if let Some(tool) = &ev.fields.tool {
+                record.lock().unwrap().push(tool.clone());
+            }
+            pass()
+        }),
+        noop_tools(),
+    ));
+    let denied = ["code"];
+    let calls: Vec<Value> = denied
+        .iter()
+        .map(|name| json!({ "name": name, "args": {} }))
+        .collect();
+    let (kernel, _llm, _s, branch) = setup(
+        vec![plugin],
+        vec![
+            LlmResponse::calls(vec![ToolCall::new(
+                "c1",
+                "script",
+                json!({ "calls": calls }),
+            )]),
+            LlmResponse::text("done"),
+        ],
+    )
+    .await;
+    let mut rx = kernel.tap_pushes();
+
+    let (_, pushes) = turn_collect(&kernel, &branch, &mut rx, "go").await;
+
+    let (nodes, _) = kernel.branch_path(&branch).unwrap();
+    let (text, _) = result_text(&nodes, "c1");
+    let rows: Value = serde_json::from_str(&text).unwrap();
+    for (i, name) in denied.iter().enumerate() {
+        assert_eq!(rows[i]["name"], *name);
+        assert_eq!(rows[i]["ok"], false);
+        assert!(
+            rows[i]["text"]
+                .as_str()
+                .unwrap()
+                .contains("not available from a plugin invoke"),
+            "{name}: {}",
+            rows[i]
+        );
+    }
+    assert_eq!(
+        seen.lock().unwrap().as_slice(),
+        ["script"],
+        "no hook fires for denied tools"
+    );
+    assert!(
+        pushes.iter().all(|p| p["method"] != "code.call"),
+        "denied calls leave no trace row"
+    );
+}
+
+#[tokio::test]
+async fn host_call_tool_outside_a_batch_errors() {
+    let (kernel, _llm, _s, branch) = setup(vec![], vec![]).await;
+    let err = kernel
+        .runtime()
+        .invoke(&branch, "script-host", "c1", 1, "plus", json!({}))
+        .await
+        .unwrap_err();
+    assert!(format!("{err:#}").contains("no running turn"), "{err:#}");
+}
+
+/// Regenerate forks at the prompt, replies again, and does not append the
+/// user message a second time.
+#[tokio::test]
+async fn regenerate_forks_at_the_prompt_and_does_not_duplicate_it() {
+    let (kernel, llm, _s, branch) = setup(
+        vec![],
+        vec![
+            LlmResponse::text("first reply"),
+            LlmResponse::text("second reply"),
+        ],
+    )
+    .await;
+
+    let (_, nodes, _) = run_turn(&kernel, &branch, "hello").await;
+    let prompt = nodes
+        .iter()
+        .find(|n| matches!(n.body, NodeBody::User { .. }))
+        .expect("the turn appended a user node")
+        .id
+        .clone();
+
+    let mut rx = kernel.tap_pushes();
+    let regenerated = kernel.regenerate(&prompt).await.unwrap();
+    assert_eq!(regenerated.forked_from.as_ref(), Some(&prompt));
+    assert!(matches!(regenerated.kind, rumu_core::BranchKind::Fork));
+    wait_turn(&mut rx, Some(regenerated.id.0.as_str())).await;
+
+    let (path, _) = kernel.branch_path(&regenerated.id).unwrap();
+    assert_eq!(body_kinds(&path), vec!["marker[root]", "user", "assistant"]);
+    assert_eq!(
+        path.iter()
+            .filter(|n| matches!(n.body, NodeBody::User { .. }))
+            .count(),
+        1
+    );
+    let Some(NodeBody::Assistant { content, .. }) = path.last().map(|n| &n.body) else {
+        panic!("regenerate did not end on an assistant reply");
+    };
+    assert_eq!(content.text, "second reply");
+
+    // The projection sent to the model carried the prompt exactly once.
+    let projections = llm.projections();
+    let last = projections.last().unwrap();
+    assert_eq!(
+        last.iter()
+            .filter(|n| matches!(n.body, NodeBody::User { .. }))
+            .count(),
+        1
+    );
+
+    // The original branch still holds the first exchange.
+    let (old, _) = kernel.branch_path(&branch).unwrap();
+    assert_eq!(body_kinds(&old), vec!["marker[root]", "user", "assistant"]);
+}
+
+// ---------- out-of-band posts ----------
+
+/// A post carrying one plain note.
+fn note_post(text: &str, wake: bool) -> Post {
+    Post {
+        effects: vec![Content::text(text)],
+        wake,
+    }
+}
+
+/// Wait for the next push satisfying `pred`.
+async fn wait_push(rx: &mut PushRx, pred: impl Fn(&Value) -> bool, label: &str) -> Value {
+    loop {
+        let v = rx
+            .recv()
+            .await
+            .unwrap_or_else(|| panic!("push stream ended before {label}"));
+        if pred(&v) {
+            return v;
+        }
+    }
+}
+
+/// Collect pushes until a `turn.done`/`turn.error` for `branch`.
+async fn collect_turn(rx: &mut PushRx, branch: &str) -> (Value, Vec<Value>) {
+    let mut seen = Vec::new();
+    loop {
+        let v = rx.recv().await.expect("push stream ended");
+        let m = v["method"].as_str().unwrap_or_default();
+        if (m == "turn.done" || m == "turn.error") && v["params"]["branch"] == branch {
+            return (v, seen);
+        }
+        seen.push(v);
+    }
+}
+
+fn pushed_note_text(v: &Value) -> Option<&str> {
+    (v["method"] == "node.appended").then(|| {
+        let body = &v["params"]["node"]["body"];
+        (body["type"] == "note")
+            .then(|| body["content"]["text"].as_str())
+            .flatten()
+    })?
+}
+
+fn turn_starts(seen: &[Value], reason: &str) -> usize {
+    seen.iter()
+        .filter(|v| v["method"] == "turn.started" && v["params"]["reason"].as_str() == Some(reason))
+        .count()
+}
+
+/// A wake post on an idle branch starts a turn; without `wake` it just writes.
+#[tokio::test]
+async fn post_to_idle_branch_with_and_without_wake() {
+    let plugin = Arc::new(plugin_with(
+        "poster",
+        &[],
+        vec![],
+        noop_hooks(),
+        noop_tools(),
+    ));
+    let (kernel, llm, _s, branch) =
+        setup(vec![plugin.clone()], vec![LlmResponse::text("woke up")]).await;
+    kernel.set_wake_debounce(Duration::from_millis(10));
+    let mut rx = kernel.tap_pushes();
+
+    plugin
+        .post(&branch, note_post("quiet", false))
+        .expect("post");
+    wait_push(
+        &mut rx,
+        |v| pushed_note_text(v) == Some("quiet"),
+        "quiet note",
+    )
+    .await;
+    // Give a wrongly-scheduled turn time to appear.
+    tokio::time::sleep(Duration::from_millis(40)).await;
+    assert_eq!(turn_starts(&[], "wake"), 0);
+    assert_eq!(llm.projections().len(), 0, "no turn without wake");
+
+    plugin.post(&branch, note_post("loud", true)).expect("post");
+    let (done, seen) = collect_turn(&mut rx, &branch.0).await;
+    assert_eq!(done["method"], "turn.done");
+    assert_eq!(turn_starts(&seen, "wake"), 1);
+    let started = seen
+        .iter()
+        .find(|v| v["method"] == "turn.started")
+        .expect("turn started");
+    assert_eq!(started["params"]["reason"], "wake");
+    assert_eq!(started["params"]["sources"], json!(["poster"]));
+    assert!(seen.iter().any(|v| pushed_note_text(v) == Some("loud")));
+    assert_eq!(llm.projections().len(), 1);
+}
+
+/// A post while a turn is running is queued and flushed before the next LLM
+/// call, so that call already sees it — and no extra turn is started.
+#[tokio::test]
+async fn post_while_busy_lands_at_the_next_safe_point() {
+    let plugin = Arc::new(plugin_with(
+        "poster",
+        &["nap"],
+        vec![],
+        noop_hooks(),
+        noop_tools(),
+    ));
+    let (kernel, llm, _s, branch) = setup(
+        vec![plugin.clone()],
+        vec![
+            LlmResponse::calls(vec![ToolCall::new("c1", "nap", json!({"ms": 200}))]),
+            LlmResponse::text("done"),
+        ],
+    )
+    .await;
+    kernel.set_wake_debounce(Duration::from_millis(10));
+    let mut rx = kernel.tap_pushes();
+
+    kernel.prompt(&branch, "go").await.unwrap();
+    // Wait until the assistant node is on the path: the nap tool is running.
+    wait_push(
+        &mut rx,
+        |v| v["method"] == "node.appended" && v["params"]["node"]["body"]["type"] == "assistant",
+        "assistant node",
+    )
+    .await;
+    plugin
+        .post(&branch, note_post("mid-turn", true))
+        .expect("post");
+
+    let (done, seen) = collect_turn(&mut rx, &branch.0).await;
+    assert_eq!(done["method"], "turn.done");
+    assert_eq!(turn_starts(&seen, "wake"), 0, "no extra turn");
+    let projections = llm.projections();
+    assert_eq!(projections.len(), 2);
+    assert!(
+        projections[1].iter().any(
+            |n| matches!(&n.body, NodeBody::Note { content, .. } if content.text == "mid-turn")
+        ),
+        "the running turn saw the post"
+    );
+}
+
+/// Two wake posts inside the debounce window write both notes and start one
+/// turn.
+#[tokio::test]
+async fn coalescing_two_wakes_into_one_turn() {
+    let plugin = Arc::new(plugin_with(
+        "poster",
+        &[],
+        vec![],
+        noop_hooks(),
+        noop_tools(),
+    ));
+    let (kernel, llm, _s, branch) =
+        setup(vec![plugin.clone()], vec![LlmResponse::text("combined")]).await;
+    kernel.set_wake_debounce(Duration::from_millis(60));
+    let mut rx = kernel.tap_pushes();
+
+    plugin
+        .post(&branch, note_post("first", true))
+        .expect("post");
+    plugin
+        .post(&branch, note_post("second", true))
+        .expect("post");
+    let (done, seen) = collect_turn(&mut rx, &branch.0).await;
+    assert_eq!(done["method"], "turn.done");
+    assert_eq!(turn_starts(&seen, "wake"), 1, "one turn for both wakes");
+    let notes = seen
+        .iter()
+        .filter_map(pushed_note_text)
+        .filter(|t| *t == "first" || *t == "second")
+        .count();
+    assert_eq!(notes, 2);
+    assert_eq!(llm.projections().len(), 1);
+
+    // No second turn starts afterwards.
+    tokio::time::sleep(Duration::from_millis(120)).await;
+    while let Ok(v) = rx.try_recv() {
+        assert_ne!(v["method"], "turn.started", "unexpected extra turn: {v}");
+    }
+}
+
+/// Abort drops the wake flag of already-queued items; their content is still
+/// written, but no new turn starts.
+#[tokio::test]
+async fn abort_drops_queued_wake_but_writes_content() {
+    let plugin = Arc::new(plugin_with(
+        "poster",
+        &["nap"],
+        vec![],
+        noop_hooks(),
+        noop_tools(),
+    ));
+    let (kernel, _llm, _s, branch) = setup(
+        vec![plugin.clone()],
+        vec![
+            LlmResponse::calls(vec![ToolCall::new("c1", "nap", json!({"ms": 500}))]),
+            LlmResponse::text("done"),
+        ],
+    )
+    .await;
+    kernel.set_wake_debounce(Duration::from_millis(500));
+    let mut rx = kernel.tap_pushes();
+
+    kernel.prompt(&branch, "go").await.unwrap();
+    wait_push(
+        &mut rx,
+        |v| v["method"] == "node.appended" && v["params"]["node"]["body"]["type"] == "assistant",
+        "assistant node",
+    )
+    .await;
+    plugin
+        .post(&branch, note_post("queued", true))
+        .expect("post");
+    // Let the post worker enqueue it, then abort.
+    tokio::time::sleep(Duration::from_millis(40)).await;
+    kernel.abort(&branch).unwrap();
+
+    let (done, seen) = collect_turn(&mut rx, &branch.0).await;
+    assert_eq!(done["method"], "turn.done");
+    assert_eq!(turn_starts(&seen, "wake"), 0);
+    let (nodes, _) = kernel.branch_path(&branch).unwrap();
+    assert!(
+        nodes
+            .iter()
+            .any(|n| matches!(&n.body, NodeBody::Note { content, .. } if content.text == "queued")),
+        "content is still written"
+    );
+}
+
+/// After many consecutive wake-started turns the guard writes content but
+/// stops waking and warns.
+#[tokio::test]
+async fn storm_guard_stops_runaway_wakes() {
+    let plugin = Arc::new(plugin_with(
+        "poster",
+        &[],
+        vec![],
+        noop_hooks(),
+        noop_tools(),
+    ));
+    let turns = rumu_kernel::MAX_WAKE_TURNS;
+    let script = (0..turns)
+        .map(|_| LlmResponse::text("ok"))
+        .collect::<Vec<_>>();
+    let (kernel, _llm, _s, branch) = setup(vec![plugin.clone()], script).await;
+    kernel.set_wake_debounce(Duration::from_millis(5));
+    let mut rx = kernel.tap_pushes();
+
+    for i in 0..turns {
+        plugin
+            .post(&branch, note_post(&format!("wake-{i}"), true))
+            .expect("post");
+        let (done, _) = collect_turn(&mut rx, &branch.0).await;
+        assert_eq!(done["method"], "turn.done");
+    }
+
+    plugin
+        .post(&branch, note_post("too-many", true))
+        .expect("post");
+    let warning = wait_push(&mut rx, |v| v["method"] == "warning", "storm warning").await;
+    assert!(
+        warning["params"]["message"]
+            .as_str()
+            .is_some_and(|m| m.contains("wake storm")),
+        "{warning}"
+    );
+    // The content still lands and no turn starts.
+    tokio::time::sleep(Duration::from_millis(50)).await;
+    let (nodes, _) = kernel.branch_path(&branch).unwrap();
+    assert!(
+        nodes.iter().any(
+            |n| matches!(&n.body, NodeBody::Note { content, .. } if content.text == "too-many")
+        )
+    );
+    while let Ok(v) = rx.try_recv() {
+        assert_ne!(v["method"], "turn.started", "unexpected turn: {v}");
+    }
+}
+
+/// The `post` event is interceptable: Block drops the post, Rewrite patches
+/// its effects, and `source` is matchable.
+#[tokio::test]
+async fn post_event_block_and_rewrite() {
+    let blocker = Arc::new(plugin_with(
+        "poster",
+        &[],
+        vec![hook("guard", json!({"event": "post", "source": "poster"}))],
+        block_hook("no posts"),
+        noop_tools(),
+    ));
+    let (kernel, _llm, _s, branch) = setup(vec![blocker.clone()], vec![]).await;
+    blocker
+        .post(&branch, note_post("dropped", false))
+        .expect("post");
+    tokio::time::sleep(Duration::from_millis(50)).await;
+    let (nodes, _) = kernel.branch_path(&branch).unwrap();
+    assert!(
+        !nodes.iter().any(
+            |n| matches!(&n.body, NodeBody::Note { content, .. } if content.text == "dropped")
+        ),
+        "blocked post was dropped"
+    );
+
+    let rewriter = Arc::new(plugin_with(
+        "poster",
+        &[],
+        vec![hook("shim", json!({"event": "post", "source": "poster"}))],
+        Arc::new(|_, _| rewrite(json!({"effects": [{"text": "patched"}]}))),
+        noop_tools(),
+    ));
+    let (kernel, _llm, _s, branch) = setup(vec![rewriter.clone()], vec![]).await;
+    rewriter
+        .post(&branch, note_post("original", false))
+        .expect("post");
+    tokio::time::sleep(Duration::from_millis(50)).await;
+    let (nodes, _) = kernel.branch_path(&branch).unwrap();
+    assert!(
+        nodes.iter().any(
+            |n| matches!(&n.body, NodeBody::Note { content, .. } if content.text == "patched")
+        ),
+        "rewrite patched the effects"
+    );
+    assert!(
+        !nodes.iter().any(
+            |n| matches!(&n.body, NodeBody::Note { content, .. } if content.text == "original")
+        )
+    );
+}
+
+/// Steering: a prompt while a turn is running is queued as a wake item and
+/// seen by the running turn's next LLM call (no extra turn).
+#[tokio::test]
+async fn steering_prompt_while_busy_is_seen_by_the_running_turn() {
+    let plugin = Arc::new(plugin_with(
+        "calc",
+        &["nap"],
+        vec![],
+        noop_hooks(),
+        noop_tools(),
+    ));
+    let (kernel, llm, _s, branch) = setup(
+        vec![plugin],
+        vec![
+            LlmResponse::calls(vec![ToolCall::new("c1", "nap", json!({"ms": 250}))]),
+            LlmResponse::text("first done"),
+        ],
+    )
+    .await;
+    let mut rx = kernel.tap_pushes();
+
+    kernel.prompt(&branch, "first").await.unwrap();
+    wait_push(
+        &mut rx,
+        |v| v["method"] == "node.appended" && v["params"]["node"]["body"]["type"] == "assistant",
+        "assistant node",
+    )
+    .await;
+    kernel.prompt(&branch, "steer").await.unwrap();
+    wait_push(&mut rx, |v| v["method"] == "prompt.queued", "prompt.queued").await;
+
+    let (done, seen) = collect_turn(&mut rx, &branch.0).await;
+    assert_eq!(done["method"], "turn.done");
+    assert_eq!(turn_starts(&seen, "wake"), 0);
+    let projections = llm.projections();
+    assert_eq!(projections.len(), 2);
+    let users: Vec<&str> = projections[1]
+        .iter()
+        .filter_map(|n| match &n.body {
+            NodeBody::User { content } => Some(content.text.as_str()),
+            _ => None,
+        })
+        .collect();
+    assert_eq!(users, ["first", "steer"]);
+}
+
+/// A gated fake LLM: signals each call and waits for a permit, so a test can
+/// inject a prompt exactly while the final call of a turn is in flight.
+struct GatedLlm {
+    started: tokio::sync::mpsc::UnboundedSender<()>,
+    release: tokio::sync::Semaphore,
+    inner: ScriptedLlm,
+}
+
+#[async_trait]
+impl Llm for GatedLlm {
+    async fn complete(
+        &self,
+        system: &str,
+        tools: &[ToolSpec],
+        nodes: &[Node],
+        on_delta: Option<OnDelta>,
+    ) -> std::result::Result<LlmResponse, rumu_kernel::LlmError> {
+        let _ = self.started.send(());
+        let permit = self.release.acquire().await.expect("semaphore open");
+        permit.forget();
+        self.inner.complete(system, tools, nodes, on_delta).await
+    }
+}
+
+/// If the running turn ends before the queued steering message is flushed, it
+/// starts a new turn instead.
+#[tokio::test]
+async fn steering_prompt_starts_a_new_turn_if_the_turn_ended_first() {
+    let (started_tx, mut started_rx) = tokio::sync::mpsc::unbounded_channel();
+    let llm = Arc::new(GatedLlm {
+        started: started_tx,
+        release: tokio::sync::Semaphore::new(0),
+        inner: ScriptedLlm::strict(vec![
+            LlmResponse::text("first reply"),
+            LlmResponse::text("second reply"),
+        ]),
+    });
+    let kernel = Kernel::new(
+        Arc::new(Store::in_memory()),
+        llm.clone(),
+        vec![],
+        WorkspaceCatalog::default(),
+    )
+    .unwrap();
+    let (session, _) = kernel.create_session(None).await.unwrap();
+    let branch = session.active_branch.clone();
+    kernel.set_wake_debounce(Duration::from_millis(5));
+    let mut rx = kernel.tap_pushes();
+
+    kernel.prompt(&branch, "first").await.unwrap();
+    // The first LLM call is in flight.
+    started_rx.recv().await.expect("first LLM call");
+    // Steering arrives while busy; the call then finishes without tools.
+    kernel.prompt(&branch, "steer").await.unwrap();
+    llm.release.add_permits(1);
+
+    // The queued user message starts a second turn.
+    tokio::time::timeout(Duration::from_secs(2), started_rx.recv())
+        .await
+        .expect("second LLM call")
+        .expect("started");
+    llm.release.add_permits(1);
+
+    let (done1, seen1) = collect_turn(&mut rx, &branch.0).await;
+    assert_eq!(done1["method"], "turn.done");
+    let (done2, seen2) = collect_turn(&mut rx, &branch.0).await;
+    assert_eq!(done2["method"], "turn.done");
+    assert_eq!(turn_starts(&seen1, "prompt"), 1);
+    assert_eq!(turn_starts(&seen2, "prompt"), 1);
+
+    let (nodes, _) = kernel.branch_path(&branch).unwrap();
+    let users: Vec<&str> = nodes
+        .iter()
+        .filter_map(|n| match &n.body {
+            NodeBody::User { content } => Some(content.text.as_str()),
+            _ => None,
+        })
+        .collect();
+    assert_eq!(users, ["first", "steer"]);
+}
+
+/// `Cx::invoke` recursion is bounded.
+#[tokio::test]
+async fn invoke_depth_limit_is_enforced() {
+    let plugin = Arc::new(plugin_with(
+        "deep",
+        &["recurse"],
+        vec![],
+        noop_hooks(),
+        noop_tools(),
+    ));
+    let (kernel, _llm, _s, branch) = setup(
+        vec![plugin.clone()],
+        vec![
+            LlmResponse::calls(vec![ToolCall::new("c1", "recurse", json!({}))]),
+            LlmResponse::text("done"),
+        ],
+    )
+    .await;
+
+    let (_, nodes, _) = run_turn(&kernel, &branch, "go").await;
+    let (text, is_error) = result_text(&nodes, "c1");
+    assert!(is_error, "{text}");
+    assert!(text.contains("invoke depth limit"), "{text}");
+    // Direct call + four nested invokes reach the plugin; the fifth is rejected.
+    let calls = plugin
+        .calls()
+        .iter()
+        .filter(|(name, _)| name == "recurse")
+        .count();
+    assert_eq!(calls, rumu_kernel::MAX_INVOKE_DEPTH + 1);
+}
+
+/// A wake post to a finished agent branch re-activates it for one turn and
+/// leaves it Done again.
+#[tokio::test]
+async fn wake_post_reactivates_a_finished_agent_branch() {
+    let plugin = Arc::new(plugin_with(
+        "branch",
+        &["agent", "other"],
+        vec![],
+        noop_hooks(),
+        Arc::new(|_, _, _| ToolOutput::ok("other-done")),
+    ));
+    let (kernel, _llm, session, branch) = setup(
+        vec![plugin.clone()],
+        vec![
+            LlmResponse::calls(vec![ToolCall::new("e1", "agent", json!({"task": "look"}))]),
+            LlmResponse::text("child summary"),
+            LlmResponse::text("parent done"),
+            LlmResponse::text("child woke"),
+        ],
+    )
+    .await;
+    run_turn_on(&kernel, &branch, "go").await;
+
+    let child = kernel
+        .session_tree(&session)
+        .unwrap()
+        .2
+        .into_iter()
+        .find(|b| matches!(b.kind, rumu_core::BranchKind::Agent { .. }))
+        .expect("agent child");
+    assert_eq!(child.status, BranchStatus::Done);
+
+    let mut rx = kernel.tap_pushes();
+    plugin
+        .post(&child.id, note_post("afterwards", true))
+        .expect("post");
+    let started = wait_push(
+        &mut rx,
+        |v| v["method"] == "turn.started" && v["params"]["branch"] == child.id.0,
+        "wake turn on the child",
+    )
+    .await;
+    assert_eq!(started["params"]["reason"], "wake");
+    let (done, _) = collect_turn(&mut rx, &child.id.0).await;
+    assert_eq!(done["method"], "turn.done");
+
+    let (nodes, _) = kernel.branch_path(&child.id).unwrap();
+    assert!(nodes.iter().any(
+        |n| matches!(&n.body, NodeBody::Note { content, .. } if content.text == "afterwards")
+    ));
+    assert!(nodes.iter().any(
+        |n| matches!(&n.body, NodeBody::Assistant { content, .. } if content.text == "child woke")
+    ));
+    let status = kernel
+        .session_tree(&session)
+        .unwrap()
+        .2
+        .into_iter()
+        .find(|b| b.id == child.id)
+        .unwrap()
+        .status;
+    assert_eq!(status, BranchStatus::Done);
+}
+
+/// A wake-started turn on a finished agent branch re-activates it, runs until
+/// a final reply, and closes it out again.
+#[tokio::test]
+async fn agent_wake_turn_runs_to_a_final_reply() {
+    let plugin = Arc::new(plugin_with(
+        "branch",
+        &["agent", "other"],
+        vec![],
+        noop_hooks(),
+        Arc::new(|_, _, _| ToolOutput::ok("other-done")),
+    ));
+    let script = vec![
+        LlmResponse::calls(vec![ToolCall::new(
+            "e1",
+            "agent",
+            json!({ "task": "look" }),
+        )]),
+        LlmResponse::text("child summary"),
+        LlmResponse::text("parent done"),
+        // The wake turn on the child: one tool call, then the final reply.
+        LlmResponse::calls(vec![ToolCall::new("c", "other", json!({}))]),
+        LlmResponse::text("woken reply"),
+    ];
+    let (kernel, _llm, session, branch) = setup(vec![plugin.clone()], script).await;
+    run_turn_on(&kernel, &branch, "go").await;
+
+    let child = agent_branches(&kernel, &session)
+        .into_iter()
+        .next()
+        .expect("agent child");
+    assert_eq!(child.status, BranchStatus::Done);
+
+    let mut rx = kernel.tap_pushes();
+    plugin
+        .post(&child.id, note_post("afterwards", true))
+        .expect("post");
+    wait_push(
+        &mut rx,
+        |v| v["method"] == "turn.started" && v["params"]["branch"] == child.id.0,
+        "wake turn on the child",
+    )
+    .await;
+    let (done, _) = collect_turn(&mut rx, &child.id.0).await;
+    assert_eq!(done["method"], "turn.done");
+
+    let (nodes, _) = kernel.branch_path(&child.id).unwrap();
+    let tool_call_steps = nodes
+        .iter()
+        .filter(|n| {
+            matches!(&n.body, NodeBody::Assistant { tool_calls, .. }
+                if tool_calls.iter().any(|c| c.name == "other"))
+        })
+        .count();
+    assert_eq!(tool_call_steps, 1, "the wake turn ran its scripted step");
+    assert!(
+        nodes.iter().any(|n| matches!(
+            &n.body,
+            NodeBody::Assistant { content, .. } if content.text.contains("woken reply")
+        )),
+        "the wake turn ended with its final reply"
+    );
+    assert_eq!(
+        agent_branches(&kernel, &session)
+            .into_iter()
+            .find(|b| b.id == child.id)
+            .expect("agent child")
+            .status,
+        BranchStatus::Done
+    );
+}
+
+// ---------- background tasks ----------
+
+/// A note push's structured tag, if any.
+fn pushed_note_tag(v: &Value) -> Option<&str> {
+    (v["method"] == "node.appended")
+        .then(|| v["params"]["node"]["body"]["content"]["data"]["tag"].as_str())?
+}
+
+fn task_note_count(nodes: &[Node]) -> usize {
+    nodes
+        .iter()
+        .filter(|n| {
+            matches!(&n.body, NodeBody::Note { content, .. }
+                if content.decode::<TaskDone>().is_some())
+        })
+        .count()
+}
+
+/// A scripted LLM with separate queues for the parent and for sub-agent
+/// branches (recognised by the sub-agent framing), so background agents can
+/// run concurrently without stealing the parent's replies.
+struct SplitLlm {
+    parent: ScriptedLlm,
+    child: ScriptedLlm,
+}
+
+impl SplitLlm {
+    fn new(parent: Vec<LlmResponse>, child: Vec<LlmResponse>) -> Self {
+        Self {
+            parent: ScriptedLlm::strict(parent),
+            child: ScriptedLlm::strict(child),
+        }
+    }
+}
+
+#[async_trait]
+impl Llm for SplitLlm {
+    async fn complete(
+        &self,
+        system: &str,
+        tools: &[ToolSpec],
+        nodes: &[Node],
+        on_delta: Option<OnDelta>,
+    ) -> std::result::Result<LlmResponse, rumu_kernel::LlmError> {
+        let is_child = nodes.iter().any(|n| match &n.body {
+            NodeBody::User { content } => content.text.contains("You are now a sub-agent"),
+            NodeBody::ToolResult { content, .. } => {
+                content.text.contains("You are now a sub-agent")
+            }
+            _ => false,
+        });
+        let llm = if is_child { &self.child } else { &self.parent };
+        llm.complete(system, tools, nodes, on_delta).await
+    }
+}
+
+async fn setup_split(
+    plugins: Vec<Arc<dyn Plugin>>,
+    parent: Vec<LlmResponse>,
+    child: Vec<LlmResponse>,
+) -> (Arc<Kernel>, SessionId, BranchId) {
+    let store = Store::in_memory();
+    let llm = Arc::new(SplitLlm::new(parent, child));
+    let kernel = Kernel::new(Arc::new(store), llm, plugins, WorkspaceCatalog::default()).unwrap();
+    let (session, _) = kernel.create_session(None).await.unwrap();
+    let branch = BranchId::from(session.active_branch.0.as_str());
+    (kernel, session.id, branch)
+}
+
+/// A background tool returns a task id immediately; its completion note wakes
+/// an idle branch with the result.
+#[tokio::test]
+async fn background_tool_returns_task_id_and_completion_wakes_idle_branch() {
+    let plugin = Arc::new(background_plugin(
+        "bg",
+        &["bgwork"],
+        vec![],
+        noop_hooks(),
+        noop_tools(),
+    ));
+    let (kernel, _llm, session, branch) = setup(
+        vec![plugin],
+        vec![
+            LlmResponse::calls(vec![ToolCall::new(
+                "c1",
+                "bgwork",
+                json!({ "ms": 100, "out": "all done", "background": true }),
+            )]),
+            LlmResponse::text("started"),
+            LlmResponse::text("woken up"),
+        ],
+    )
+    .await;
+    kernel.set_wake_debounce(Duration::from_millis(10));
+    let mut rx = kernel.tap_pushes();
+
+    let (done, nodes, _) = turn(&kernel, &branch, &mut rx, "go").await;
+    assert_eq!(done["method"], "turn.done");
+    let id = kernel.tasks(&session).unwrap()[0].id.clone();
+    assert!(
+        id.0.starts_with("t-") && id.0.len() == "t-00000000".len(),
+        "{id}"
+    );
+    let (text, err) = result_text(&nodes, "c1");
+    assert!(!err, "{text}");
+    assert!(text.contains(&format!("started task {id}")), "{text}");
+    assert!(text.contains("bgwork"), "{text}");
+
+    // The completion note arrives and wakes the idle branch.
+    let note = wait_push(
+        &mut rx,
+        |v| pushed_note_tag(v) == Some("kernel.task"),
+        "task completion note",
+    )
+    .await;
+    let note_text = pushed_note_text(&note).unwrap();
+    assert!(
+        note_text.contains(&format!("task {id} (bgwork: ")),
+        "{note_text}"
+    );
+    assert!(note_text.contains("finished: ok"), "{note_text}");
+    assert!(note_text.contains("all done"), "{note_text}");
+    let (done2, seen2) = collect_turn(&mut rx, &branch.0).await;
+    assert_eq!(done2["method"], "turn.done");
+    assert_eq!(turn_starts(&seen2, "wake"), 1, "{seen2:?}");
+
+    let (nodes, _) = kernel.branch_path(&branch).unwrap();
+    assert!(nodes.iter().any(|n| matches!(&n.body,
+        NodeBody::Assistant { content, .. } if content.text == "woken up")));
+    assert_eq!(task_note_count(&nodes), 1);
+
+    let tasks = kernel.tasks(&session).unwrap();
+    assert_eq!(tasks.len(), 1);
+    assert_eq!(tasks[0].id, id);
+    assert_eq!(tasks[0].status, TaskStatus::Done);
+    assert!(matches!(&tasks[0].kind, TaskKind::Tool { name, .. } if name == "bgwork"));
+    assert_eq!(tasks[0].result.as_ref().unwrap().text, "all done");
+}
+
+/// A completion while the owner is busy is written at the next safe point and
+/// seen by that turn's next LLM call (no extra wake turn).
+#[tokio::test]
+async fn background_completion_while_busy_lands_at_next_safe_point() {
+    let plugin = Arc::new(background_plugin(
+        "bg",
+        &["bgwork", "nap"],
+        vec![],
+        noop_hooks(),
+        noop_tools(),
+    ));
+    let (kernel, llm, _s, branch) = setup(
+        vec![plugin],
+        vec![
+            LlmResponse::calls(vec![ToolCall::new(
+                "c1",
+                "bgwork",
+                json!({ "ms": 120, "background": true }),
+            )]),
+            LlmResponse::calls(vec![ToolCall::new("c2", "nap", json!({ "ms": 300 }))]),
+            LlmResponse::text("saw the task"),
+        ],
+    )
+    .await;
+    let mut rx = kernel.tap_pushes();
+
+    let (done, seen) = turn_collect(&kernel, &branch, &mut rx, "go").await;
+    assert_eq!(done["method"], "turn.done");
+    assert_eq!(turn_starts(&seen, "wake"), 0, "no extra wake turn");
+
+    let projections = llm.projections();
+    assert_eq!(projections.len(), 3);
+    assert!(
+        projections[2].iter().any(|n| matches!(&n.body,
+            NodeBody::Note { content, .. } if content.decode::<TaskDone>().is_some())),
+        "the safe point put the completion note before the next LLM call"
+    );
+}
+
+/// `task_kill` cancels a running task and reports its status; the cancelled
+/// task still posts a completion note.
+#[tokio::test]
+async fn task_kill_cancels_and_reports_cancelled() {
+    let plugin = Arc::new(background_plugin(
+        "bg",
+        &["bgwork"],
+        vec![],
+        noop_hooks(),
+        noop_tools(),
+    ));
+    let (kernel, _llm, session, branch) = setup(
+        vec![plugin],
+        vec![
+            LlmResponse::calls(vec![ToolCall::new(
+                "c1",
+                "bgwork",
+                json!({ "ms": 60_000, "background": true }),
+            )]),
+            LlmResponse::calls(vec![ToolCall::new(
+                "c2",
+                "task_kill",
+                json!({ "id": "$task" }),
+            )]),
+            LlmResponse::text("done"),
+        ],
+    )
+    .await;
+
+    let (_, nodes, _) = run_turn(&kernel, &branch, "go").await;
+    let id = kernel.tasks(&session).unwrap()[0].id.clone();
+    let (text, err) = result_text(&nodes, "c2");
+    assert!(!err, "{text}");
+    assert_eq!(text, format!("task {id}: cancelled"));
+    let note = nodes
+        .iter()
+        .find_map(|n| match &n.body {
+            NodeBody::Note { content, .. } => content.decode::<TaskDone>(),
+            _ => None,
+        })
+        .expect("a cancelled-task completion note");
+    assert_eq!(note.status, TaskStatus::Cancelled);
+    assert_eq!(
+        kernel.tasks(&session).unwrap()[0].status,
+        TaskStatus::Cancelled
+    );
+}
+
+/// Aborting the owner cancels its background tasks and writes the note
+/// without waking.
+#[tokio::test]
+async fn abort_cancels_owned_tasks_and_does_not_wake() {
+    let plugin = Arc::new(background_plugin(
+        "bg",
+        &["bgwork"],
+        vec![],
+        noop_hooks(),
+        noop_tools(),
+    ));
+    let (kernel, _llm, session, branch) = setup(
+        vec![plugin],
+        vec![
+            LlmResponse::calls(vec![ToolCall::new(
+                "c1",
+                "bgwork",
+                json!({ "ms": 60_000, "background": true }),
+            )]),
+            LlmResponse::text("started"),
+        ],
+    )
+    .await;
+    let mut rx = kernel.tap_pushes();
+    kernel.prompt(&branch, "go").await.unwrap();
+    wait_push(
+        &mut rx,
+        |v| v["method"] == "node.appended" && v["params"]["node"]["body"]["type"] == "assistant",
+        "assistant node",
+    )
+    .await;
+    wait_until(Duration::from_secs(5), || {
+        kernel
+            .tasks(&session)
+            .unwrap()
+            .iter()
+            .any(|t| t.status.is_running())
+    })
+    .await;
+
+    kernel.abort(&branch).unwrap();
+    let note = wait_push(
+        &mut rx,
+        |v| pushed_note_tag(v) == Some("kernel.task"),
+        "cancelled task note",
+    )
+    .await;
+    assert!(
+        pushed_note_text(&note)
+            .unwrap()
+            .contains("finished: cancelled")
+    );
+    // The note did not start a wake turn.
+    tokio::time::sleep(Duration::from_millis(100)).await;
+    while let Ok(v) = rx.try_recv() {
+        assert_ne!(v["method"], "turn.started", "abort must not wake: {v}");
+    }
+    assert_eq!(
+        kernel.tasks(&session).unwrap()[0].status,
+        TaskStatus::Cancelled
+    );
+}
+
+/// Running tasks per owner branch are capped.
+#[tokio::test]
+async fn per_branch_task_limit() {
+    let plugin = Arc::new(background_plugin(
+        "bg",
+        &["bgwork"],
+        vec![],
+        noop_hooks(),
+        noop_tools(),
+    ));
+    let (kernel, _llm, _s, branch) = setup(
+        vec![plugin],
+        vec![
+            LlmResponse::calls(vec![
+                ToolCall::new("c1", "bgwork", json!({ "ms": 500, "background": true })),
+                ToolCall::new("c2", "bgwork", json!({ "ms": 500, "background": true })),
+            ]),
+            LlmResponse::text("done"),
+        ],
+    )
+    .await;
+    kernel.set_max_tasks_per_branch(1);
+
+    let (_, nodes, _) = run_turn(&kernel, &branch, "go").await;
+    let (text, err) = result_text(&nodes, "c2");
+    assert!(err, "{text}");
+    assert!(text.contains("limit 1"), "{text}");
+}
+
+/// A plugin invoke (`code` script) may not ask for `background`.
+#[tokio::test]
+async fn background_from_plugin_invoke_is_refused() {
+    let plugin = Arc::new(script_host(&["plus"], vec![], noop_hooks(), plus_tool()));
+    let (kernel, _llm, _s, branch) = setup(
+        vec![plugin],
+        vec![
+            LlmResponse::calls(vec![ToolCall::new(
+                "c1",
+                "script",
+                json!({ "calls": [{ "name": "plus", "args": { "a": 1, "b": 2, "background": true } }] }),
+            )]),
+            LlmResponse::text("done"),
+        ],
+    )
+    .await;
+
+    let (_, nodes, _) = run_turn(&kernel, &branch, "go").await;
+    let (text, _) = result_text(&nodes, "c1");
+    let rows: Value = serde_json::from_str(&text).unwrap();
+    assert_eq!(rows[0]["ok"], false);
+    assert!(
+        rows[0]["text"]
+            .as_str()
+            .unwrap()
+            .contains("background is not available from a plugin invoke"),
+        "{text}"
+    );
+}
+
+/// A background task cannot make internal calls: `Cx::invoke` refuses.
+#[tokio::test]
+async fn background_tool_cannot_invoke() {
+    let plugin = Arc::new(background_plugin(
+        "bg",
+        &["try_invoke"],
+        vec![],
+        noop_hooks(),
+        plus_tool(),
+    ));
+    let (kernel, _llm, session, branch) = setup(
+        vec![plugin],
+        vec![
+            LlmResponse::calls(vec![ToolCall::new(
+                "c1",
+                "try_invoke",
+                json!({ "background": true }),
+            )]),
+            LlmResponse::text("started"),
+            LlmResponse::text("woken"),
+        ],
+    )
+    .await;
+
+    let (_, nodes, _) = run_turn(&kernel, &branch, "go").await;
+    let (text, err) = result_text(&nodes, "c1");
+    assert!(!err, "{text}");
+    assert!(text.contains("started task "), "{text}");
+
+    wait_until(Duration::from_secs(5), || {
+        kernel
+            .tasks(&session)
+            .unwrap()
+            .first()
+            .is_some_and(|t| !t.status.is_running())
+    })
+    .await;
+    let tasks = kernel.tasks(&session).unwrap();
+    let result = tasks[0].result.as_ref().expect("task result");
+    assert!(
+        result
+            .text
+            .contains("invoke is not available in a background task"),
+        "{}",
+        result.text
+    );
+}
+
+/// A background agent posts its summary to the parent when it finishes.
+#[tokio::test]
+async fn background_agent_posts_summary_to_the_parent() {
+    let plugin = Arc::new(plugin_with(
+        "branch",
+        &["agent"],
+        vec![],
+        noop_hooks(),
+        noop_tools(),
+    ));
+    let (kernel, session, branch) = setup_split(
+        vec![plugin],
+        vec![
+            LlmResponse::calls(vec![ToolCall::new(
+                "e1",
+                "agent",
+                json!({ "task": "find it", "background": true }),
+            )]),
+            LlmResponse::text("parent done"),
+            LlmResponse::text("parent woke"),
+        ],
+        vec![LlmResponse::text("child summary")],
+    )
+    .await;
+    kernel.set_wake_debounce(Duration::from_millis(10));
+    let mut rx = kernel.tap_pushes();
+
+    let (done, seen) = turn_collect(&kernel, &branch, &mut rx, "go").await;
+    assert_eq!(done["method"], "turn.done");
+    // The agent completed as a task later; its note wakes the parent.
+    let note = wait_push(
+        &mut rx,
+        |v| pushed_note_tag(v) == Some("kernel.task"),
+        "agent task note",
+    )
+    .await;
+    let text = pushed_note_text(&note).unwrap();
+    let id = kernel.tasks(&session).unwrap()[0].id.clone();
+    assert!(
+        text.contains(&format!("task {id} (agent: find it) finished: ok")),
+        "{text}"
+    );
+    assert!(text.contains("child summary"), "{text}");
+    let (done2, seen2) = collect_turn(&mut rx, &branch.0).await;
+    assert_eq!(done2["method"], "turn.done");
+    assert_eq!(turn_starts(&seen2, "wake"), 1, "{seen:?}");
+
+    let tasks = kernel.tasks(&session).unwrap();
+    assert_eq!(tasks.len(), 1);
+    assert_eq!(tasks[0].status, TaskStatus::Done);
+    match &tasks[0].kind {
+        TaskKind::Agent { child_branch } => {
+            let child = child_branch.as_ref().expect("child branch recorded");
+            let done = kernel
+                .session_tree(&session)
+                .unwrap()
+                .2
+                .into_iter()
+                .find(|b| &b.id == child)
+                .expect("the child branch exists");
+            assert_eq!(done.status, BranchStatus::Done);
+        }
+        other => panic!("expected an agent task, got {other:?}"),
+    }
+}
+
+/// A sub-agent that started a background task does not return its summary
+/// until the task finished and its loop consumed the completion note — and no
+/// separate wake turn runs on the child.
+#[tokio::test]
+async fn sub_agent_waits_for_its_own_background_task() {
+    let plugin = Arc::new(background_plugin(
+        "bg",
+        &["bgwork", "other"],
+        vec![],
+        noop_hooks(),
+        Arc::new(|_, _, _| ToolOutput::ok("other-done")),
+    ));
+    let (kernel, _session, branch) = setup_split(
+        vec![plugin],
+        vec![
+            LlmResponse::calls(vec![ToolCall::new(
+                "e1",
+                "agent",
+                json!({ "task": "wait for work" }),
+            )]),
+            LlmResponse::text("parent done"),
+        ],
+        vec![
+            LlmResponse::calls(vec![ToolCall::new(
+                "c1",
+                "bgwork",
+                json!({ "ms": 100, "background": true }),
+            )]),
+            LlmResponse::text("early"),
+            LlmResponse::text("final after task"),
+        ],
+    )
+    .await;
+    let mut rx = kernel.tap_pushes();
+    kernel.prompt(&branch, "go").await.unwrap();
+    let (done, seen) = wait_turn_collect(&mut rx, Some(&branch.0)).await;
+    assert_eq!(done["method"], "turn.done");
+
+    let (nodes, _) = kernel.branch_path(&branch).unwrap();
+    let (text, err) = result_text(&nodes, "e1");
+    assert!(!err, "{text}");
+    assert!(text.starts_with("final after task"), "{text}");
+
+    let child = nodes
+        .iter()
+        .find_map(|n| match &n.body {
+            NodeBody::Assistant { tool_calls, .. } => {
+                tool_calls.iter().find(|c| c.name == "agent").map(|_| ())
+            }
+            _ => None,
+        })
+        .and_then(|_| {
+            kernel
+                .session_tree(&_session)
+                .unwrap()
+                .2
+                .into_iter()
+                .find(|b| matches!(b.kind, rumu_core::BranchKind::Agent { .. }))
+        })
+        .expect("agent child");
+    let wake_starts = seen
+        .iter()
+        .filter(|v| {
+            v["method"] == "turn.started"
+                && v["params"]["branch"] == child.id.0
+                && v["params"]["reason"].as_str() == Some("wake")
+        })
+        .count();
+    assert_eq!(wake_starts, 0, "no separate wake turn on the child");
+
+    let (cnodes, _) = kernel.branch_path(&child.id).unwrap();
+    assert_eq!(
+        task_note_count(&cnodes),
+        1,
+        "the child consumed its completion note"
+    );
+    assert!(cnodes.iter().any(|n| matches!(&n.body,
+        NodeBody::Assistant { content, .. } if content.text == "final after task")));
+    assert!(cnodes.iter().any(|n| matches!(&n.body,
+        NodeBody::Assistant { content, .. } if content.text == "early")));
+}
+
+/// A kernel restart closes out agent branches that were still active: their
+/// in-flight tasks are gone and they are never resumed.
+#[tokio::test]
+async fn kernel_start_abandons_active_agent_branches() {
+    let store = Arc::new(Store::in_memory());
+    let kernel = Kernel::new(
+        store.clone(),
+        Arc::new(FakeLlm::new(vec![])),
+        vec![],
+        WorkspaceCatalog::default(),
+    )
+    .unwrap();
+    let (session, _) = kernel.create_session(None).await.unwrap();
+    let main = store.get_branch(&session.active_branch).unwrap().unwrap();
+    let child = rumu_core::Branch {
+        id: BranchId::new(),
+        session: session.id.clone(),
+        head: main.head.clone(),
+        forked_from: Some(main.head.clone()),
+        kind: rumu_core::BranchKind::Agent {
+            task: "work".into(),
+            parent_branch: main.id.clone(),
+            call_id: "c1".into(),
+            via_plugin: false,
+            inherit: Default::default(),
+        },
+        status: BranchStatus::Active,
+        created_at: rumu_core::now(),
+    };
+    store.insert_branch(&child).unwrap();
+
+    let _restarted = Kernel::new(
+        store.clone(),
+        Arc::new(FakeLlm::new(vec![])),
+        vec![],
+        WorkspaceCatalog::default(),
+    )
+    .unwrap();
+    let got = store.get_branch(&child.id).unwrap().unwrap();
+    assert_eq!(got.status, BranchStatus::Abandoned);
+}
+
+/// Effects returned by a background tool are posted under the plugin's own
+/// source, before the kernel's completion note.
+#[tokio::test]
+async fn background_task_effects_keep_their_plugin_source() {
+    let plugin = Arc::new(background_plugin(
+        "bg",
+        &["append_note"],
+        vec![],
+        noop_hooks(),
+        noop_tools(),
+    ));
+    let (kernel, _llm, _s, branch) = setup(
+        vec![plugin],
+        vec![
+            LlmResponse::calls(vec![ToolCall::new(
+                "c1",
+                "append_note",
+                json!({ "background": true }),
+            )]),
+            LlmResponse::text("started"),
+            LlmResponse::text("woken up"),
+        ],
+    )
+    .await;
+    kernel.set_wake_debounce(Duration::from_millis(10));
+    let mut rx = kernel.tap_pushes();
+
+    let (done, _, _) = turn(&kernel, &branch, &mut rx, "go").await;
+    assert_eq!(done["method"], "turn.done");
+    wait_push(
+        &mut rx,
+        |v| pushed_note_tag(v) == Some("kernel.task"),
+        "task completion note",
+    )
+    .await;
+    let (done2, _) = collect_turn(&mut rx, &branch.0).await;
+    assert_eq!(done2["method"], "turn.done");
+
+    let (nodes, _) = kernel.branch_path(&branch).unwrap();
+    let effect = nodes
+        .iter()
+        .position(|n| {
+            matches!(&n.body,
+            NodeBody::Note { source, content } if source == "bg" && content.text == "direct note")
+        })
+        .expect("the tool's effect, attributed to its plugin");
+    let note = nodes
+        .iter()
+        .position(|n| matches!(&n.body,
+            NodeBody::Note { source, content } if source == "system" && content.decode::<TaskDone>().is_some()))
+        .expect("the completion note");
+    assert!(effect < note, "effects land before the completion note");
+}

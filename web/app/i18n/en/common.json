@@ -1,0 +1,25 @@
+{
+  "offline": "offline",
+  "offlineReconnecting": "Reconnecting…",
+  "connected": "connected",
+  "working": "rumu is working",
+  "running": "running…",
+  "untitled": "(untitled)",
+  "empty": "(empty)",
+  "noOutput": "(no output yet)",
+  "cancel": "Cancel",
+  "close": "Close",
+  "dismiss": "dismiss",
+  "show": "show",
+  "ok": "ok",
+  "error": "error",
+  "blocked": "blocked",
+  "truncated": "truncated",
+  "copyFailed": "Copy failed",
+  "time": {
+    "justNow": "just now",
+    "minutesAgo": "{n}m ago",
+    "hoursAgo": "{n}h ago",
+    "daysAgo": "{n}d ago"
+  }
+}

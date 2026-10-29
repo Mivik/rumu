@@ -1,0 +1,52 @@
+{
+  "sidebar": {
+    "home": "Home",
+    "close": "Close sessions",
+    "new": "Start session",
+    "today": "Today",
+    "earlier": "Earlier"
+  },
+  "welcome": "What are we working on?",
+  "composer": {
+    "steerPlaceholder": "Steer rumu…",
+    "placeholder": "Send a message…",
+    "enterToSend": "to send",
+    "shiftEnter": "for a new line",
+    "stop": "Stop",
+    "steer": "Steer",
+    "send": "Send"
+  },
+  "header": {
+    "sessions": "Sessions",
+    "openSessions": "Open sessions",
+    "running": "running…",
+    "inspector": "Inspector",
+    "openInspector": "Open inspector",
+    "closeInspector": "Close inspector",
+    "queued": "queued",
+    "branchTitle": "branch {id} · {status}"
+  },
+  "user": {
+    "edit": "Edit message",
+    "editTitle": "Edit and resend",
+    "copyTitle": "Copy message",
+    "forkTitle": "Fork from here",
+    "cancel": "Cancel",
+    "resend": "Resend",
+    "copied": "Copied message"
+  },
+  "assistant": {
+    "working": "working…",
+    "copy": "Copy reply",
+    "regenerate": "Regenerate reply",
+    "noPrompt": "No prompt to regenerate from",
+    "fork": "Fork from this turn",
+    "noSafePoint": "Tool calls unfinished",
+    "copied": "Copied reply",
+    "reasoningReset": "Earlier reasoning dropped"
+  },
+  "timeline": {
+    "label": "Conversation timeline",
+    "emptyPrompt": "(empty prompt)"
+  }
+}

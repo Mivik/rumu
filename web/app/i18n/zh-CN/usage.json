@@ -1,0 +1,18 @@
+{
+  "aria": "用量详情",
+  "tokens": "{n} tok",
+  "tokPerSecond": "{rate} tok/s",
+  "request": "请求",
+  "turn": "本轮",
+  "input": "输入",
+  "output": "输出",
+  "cacheRead": "缓存读取",
+  "cacheWrite": "缓存写入",
+  "latency": "延迟",
+  "speed": "速度",
+  "endToEnd": "端到端",
+  "generation": "生成",
+  "steps": "步数",
+  "tokensLabel": "Token",
+  "inOut": "输入 {input} · 输出 {output}"
+}

@@ -1,0 +1,237 @@
+// WebSocket push handling and boot. This is the only module that translates
+// server pushes into state mutations; it calls actions from the sibling
+// modules rather than mutating anything itself (beyond its own slices).
+
+import { rumu } from '../api'
+import { routeSession, sessionIdFromLocation } from '../router'
+import type {
+  BranchUpdatedPush,
+  CodeCallPush,
+  HookFiredPush,
+  LlmDeltaPush,
+  NodeAppendedPush,
+  PromptQueuedPush,
+  SessionId,
+  SessionUpdatedPush,
+  TaskInfoPush,
+  TaskProgressPush,
+  ToolProgressPush,
+  TurnErrorPush,
+  TurnPush,
+  WarningPush,
+} from '../types'
+import { MAX_DELTA_CHARS, MAX_TRACE, state } from './state'
+import { closeSession, openSession, refreshLists } from './sessions'
+import { loadPath } from './tree'
+import { toast } from './ui'
+
+let traceSeq = 1
+let queuedSeq = 1
+
+/** Live tool/task output kept in memory (chars). */
+const MAX_LIVE_OUTPUT = 1_000_000
+
+function onNodeAppended(p: NodeAppendedPush): void {
+  const { branch, node } = p
+  if (state.sessionId && node.session === state.sessionId) {
+    state.nodes[node.id] = node
+    // If the node extends the active branch's head, the path grows live.
+    const b = state.branches[branch]
+    if (b && branch === state.activeBranch && node.parent === b.head) {
+      b.head = node.id
+    }
+  }
+  // The finalized Assistant node replaces the streaming buffer.
+  if (node.body.type === 'assistant') delete state.deltas[branch]
+  // A finished tool result replaces its live output.
+  if (node.body.type === 'tool_result') {
+    delete state.toolProgress[`${branch}:${node.body.call_id}`]
+  }
+  // A queued steering prompt is no longer pending once its user node lands.
+  if (node.body.type === 'user') {
+    const queued = state.queuedPrompts[branch]
+    if (queued?.length) {
+      const i = queued.findIndex((q) => q.text === node.body.content.text)
+      if (i >= 0) queued.splice(i, 1)
+      else queued.shift()
+      if (!queued.length) delete state.queuedPrompts[branch]
+    }
+  }
+}
+
+/** A prompt accepted while the branch was busy; shown pending until written. */
+function onPromptQueued(p: PromptQueuedPush): void {
+  const list = state.queuedPrompts[p.branch] ?? (state.queuedPrompts[p.branch] = [])
+  list.push({ id: queuedSeq++, text: p.text })
+}
+
+function onLlmDelta(p: LlmDeltaPush): void {
+  let buf = state.deltas[p.branch]
+  if (!buf) {
+    buf = { text: '', reasoning: '' }
+    state.deltas[p.branch] = buf
+  }
+  if (p.reasoning) {
+    buf.reasonStart ??= Date.now()
+    buf.reasoning = (buf.reasoning + p.reasoning).slice(-MAX_DELTA_CHARS)
+  }
+  if (p.text) {
+    if (buf.reasonStart !== undefined && buf.reasonMs === undefined) {
+      buf.reasonMs = Date.now() - buf.reasonStart
+    }
+    buf.text = (buf.text + p.text).slice(-MAX_DELTA_CHARS)
+  }
+}
+
+/** A foreground tool's live output (used by the running-tool rows). */
+function onToolProgress(p: ToolProgressPush): void {
+  const key = `${p.branch}:${p.call_id}`
+  let buf = state.toolProgress[key]
+  if (!buf) {
+    buf = { branch: p.branch, call_id: p.call_id, text: '', data: null }
+    state.toolProgress[key] = buf
+  }
+  if (p.append) buf.text = (buf.text + p.append).slice(-MAX_LIVE_OUTPUT)
+  if (p.data) buf.data = p.data
+}
+
+/** `task.started` / `task.done`: the task table's authoritative snapshots. */
+function onTaskInfo(p: TaskInfoPush): void {
+  state.tasks[p.task.id] = p.task
+  // A finished task keeps its buffered output for the detail view; a running
+  // one starts empty unless progress already arrived.
+  state.taskOutput[p.task.id] ??= ''
+}
+
+function onTaskProgress(p: TaskProgressPush): void {
+  if (p.kind && state.tasks[p.id]) state.tasks[p.id]!.kind = p.kind
+  const prev = state.taskOutput[p.id] ?? ''
+  if (p.append) state.taskOutput[p.id] = (prev + p.append).slice(-MAX_LIVE_OUTPUT)
+  if (p.data && state.tasks[p.id]) state.tasks[p.id]!.data = p.data
+}
+
+function onBranchUpdated(p: BranchUpdatedPush): void {
+  if (state.sessionId && p.branch.session === state.sessionId) {
+    state.branches[p.branch.id] = p.branch
+  }
+}
+
+function onSessionUpdated(p: SessionUpdatedPush): void {
+  const s = p.session
+  const i = state.sessions.findIndex((x) => x.id === s.id)
+  if (i >= 0) state.sessions[i] = s
+  else state.sessions.push(s)
+  if (state.sessionId === s.id) {
+    state.session = s
+    if (
+      s.active_branch !== state.activeBranch &&
+      state.branches[s.active_branch] &&
+      !state.busy[state.activeBranch ?? '']
+    ) {
+      state.activeBranch = s.active_branch
+      loadPath(s.active_branch)
+    }
+  }
+}
+
+function onTurnStarted(p: TurnPush): void {
+  state.busy[p.branch] = true
+}
+
+function onTurnDone(p: TurnPush): void {
+  state.busy[p.branch] = false
+  delete state.deltas[p.branch]
+}
+
+function onTurnError(p: TurnErrorPush): void {
+  state.busy[p.branch] = false
+  delete state.deltas[p.branch]
+  toast('error', p.message)
+}
+
+/** Server-side non-fatal warning: show it, never interrupt the turn. */
+function onWarning(p: WarningPush): void {
+  toast('error', p.message)
+}
+
+function onHookFired(p: HookFiredPush): void {
+  // Attribute to the open session when the branch belongs to it (or is unknown
+  // while one of its branches is busy — mid-turn sub-agents etc.).
+  let session: SessionId | null = null
+  const known = state.branches[p.branch]
+  if (known && known.session === state.sessionId) session = state.sessionId
+  else if (!known && state.sessionId && Object.values(state.busy).some(Boolean)) {
+    session = state.sessionId
+  }
+  state.hookTrace.push({
+    seq: traceSeq++,
+    at: Date.now(),
+    session,
+    branch: p.branch,
+    event: p.event,
+    plugin: p.plugin,
+    hook_id: p.hook_id,
+    effects: p.effects ?? [],
+    decision: p.decision ?? { type: 'pass' },
+    parent_call: p.parent_call,
+  })
+  if (state.hookTrace.length > MAX_TRACE) state.hookTrace.splice(0, state.hookTrace.length - MAX_TRACE)
+}
+
+/** A tool call from inside a `code` script finished. */
+function onCodeCall(p: CodeCallPush): void {
+  const known = state.branches[p.branch]
+  if (known) {
+    if (known.session !== state.sessionId) return
+  } else if (!state.sessionId || !Object.values(state.busy).some(Boolean)) {
+    return
+  }
+  const list = state.codeCalls[p.parent_call] ?? (state.codeCalls[p.parent_call] = [])
+  const i = list.findIndex((c) => c.seq === p.seq)
+  if (i >= 0) list[i] = p
+  else {
+    list.push(p)
+    list.sort((a, b) => a.seq - b.seq)
+  }
+}
+
+let started = false
+
+export function startApp(): void {
+  if (started) return
+  started = true
+
+  rumu.onPush('node.appended', (p) => onNodeAppended(p as unknown as NodeAppendedPush))
+  rumu.onPush('prompt.queued', (p) => onPromptQueued(p as unknown as PromptQueuedPush))
+  rumu.onPush('llm.delta', (p) => onLlmDelta(p as unknown as LlmDeltaPush))
+  rumu.onPush('branch.updated', (p) => onBranchUpdated(p as unknown as BranchUpdatedPush))
+  rumu.onPush('session.updated', (p) => onSessionUpdated(p as unknown as SessionUpdatedPush))
+  rumu.onPush('hook.fired', (p) => onHookFired(p as unknown as HookFiredPush))
+  rumu.onPush('code.call', (p) => onCodeCall(p as unknown as CodeCallPush))
+  rumu.onPush('tool.progress', (p) => onToolProgress(p as unknown as ToolProgressPush))
+  rumu.onPush('task.started', (p) => onTaskInfo(p as unknown as TaskInfoPush))
+  rumu.onPush('task.done', (p) => onTaskInfo(p as unknown as TaskInfoPush))
+  rumu.onPush('task.progress', (p) => onTaskProgress(p as unknown as TaskProgressPush))
+  rumu.onPush('turn.started', (p) => onTurnStarted(p as unknown as TurnPush))
+  rumu.onPush('turn.done', (p) => onTurnDone(p as unknown as TurnPush))
+  rumu.onPush('turn.error', (p) => onTurnError(p as unknown as TurnErrorPush))
+  rumu.onPush('warning', (p) => onWarning(p as unknown as WarningPush))
+
+  // Browser back/forward: reopen the session the address names, or land.
+  window.addEventListener('popstate', () => {
+    const id = sessionIdFromLocation()
+    if (id === state.sessionId) return
+    if (id) void openSession(id, { history: 'none' })
+    else closeSession()
+  })
+
+  rumu.start(async () => {
+    await refreshLists()
+    // First boot follows the URL; a reconnect resyncs the open session. A URL
+    // naming an unknown session falls back to the landing page.
+    const target = sessionIdFromLocation() ?? state.sessionId
+    if (target && !(await openSession(target, { history: 'none' }))) {
+      routeSession(null, 'replace')
+    }
+  })
+}

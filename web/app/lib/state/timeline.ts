@@ -1,0 +1,199 @@
+// Timeline grouping: the chat renders grouped entries, not raw nodes — a user
+// message, then ONE assistant group per turn (assistant → tool results →
+// assistant …) with a single header, plus "context" strips collapsing
+// consecutive notes/markers. Inside a group, the work between two pieces of
+// visible text — each step's reasoning and its tool results — is one
+// "activity" run, folded into a summary line ("Thought for 4s, read 3 files");
+// only answer text and context pills stand on their own.
+
+import { computed } from 'vue'
+import type { Node } from '../types'
+import { CATALOG_TAG, reasoningText } from '../types'
+import { contentText } from '../util'
+import { callsOnPath, pathNodes } from './derived'
+import { state } from './state'
+
+/** Injected at `llm.pre`, so it belongs to the assistant turn, not the user row. */
+function isCatalogNote(n: Node): boolean {
+  return n.body.type === 'note' && n.body.content.data?.tag === CATALOG_TAG
+}
+
+/** An empty-text note (a marker): the root is noise; others are context. */
+function isRootMarker(n: Node): boolean {
+  return n.body.type === 'note' && n.body.content.text === '' && n.body.content.data?.tag === 'root'
+}
+
+export interface ToolRowInfo {
+  result: Node
+  call: { call_id: string; name: string; args: unknown } | null
+  assistant: Node | null
+}
+
+/** An assistant step's answer text (`node: null` = the live stream's). */
+export interface GroupTextItem {
+  kind: 'text'
+  node: Node | null
+  streaming?: boolean
+}
+/** A step's reasoning (`node: null` = the live stream's). */
+export interface ActivityThought {
+  kind: 'thought'
+  node: Node | null
+  streaming?: boolean
+}
+/** Consecutive tool results. */
+export interface ActivityTools {
+  kind: 'tools'
+  rows: ToolRowInfo[]
+}
+export type ActivityStep = ActivityThought | ActivityTools
+export interface GroupActivityItem {
+  kind: 'activity'
+  steps: ActivityStep[]
+}
+export interface GroupContextItem {
+  kind: 'context'
+  nodes: Node[]
+}
+/** This step ran without the reasoning before it: the provider could no
+ * longer verify it, so it is never sent again. */
+export interface GroupResetItem {
+  kind: 'reset'
+  node: Node
+}
+export type GroupItem = GroupTextItem | GroupActivityItem | GroupContextItem | GroupResetItem
+
+/** Append a step to the group's trailing activity run (opening one if needed). */
+function pushActivity(g: TimelineGroup, step: ActivityStep): void {
+  const last = g.items[g.items.length - 1]
+  if (last && last.kind === 'activity') last.steps.push(step)
+  else g.items.push({ kind: 'activity', steps: [step] })
+}
+
+export interface TimelineGroup {
+  kind: 'group'
+  items: GroupItem[]
+  assistants: Node[]
+  /** Last assistant node that is a safe fork/revert point, if any. */
+  safeNode: Node | null
+}
+export interface TimelineUserEntry {
+  kind: 'user'
+  node: Node
+  /** Notes/markers injected right after this prompt (memory imports, notes). */
+  contextNodes: Node[]
+}
+export interface TimelineContextEntry {
+  kind: 'context'
+  nodes: Node[]
+}
+export type TimelineEntry = TimelineUserEntry | TimelineContextEntry | TimelineGroup
+
+export const timeline = computed<TimelineEntry[]>(() => {
+  const out: TimelineEntry[] = []
+  const calls = callsOnPath.value
+  const answered = new Set<string>()
+  for (const n of pathNodes.value) {
+    if (n.body.type === 'tool_result') answered.add(n.body.call_id)
+  }
+
+  let group: TimelineGroup | null = null
+  let ctx: Node[] = []
+  let userEntry: TimelineUserEntry | null = null
+
+  const flushCtx = (): void => {
+    if (ctx.length) {
+      out.push({ kind: 'context', nodes: ctx })
+      ctx = []
+    }
+  }
+  const ensureGroup = (): TimelineGroup => {
+    if (!group) {
+      userEntry = null
+      group = { kind: 'group', items: [], assistants: [], safeNode: null }
+      out.push(group)
+      // Notes collected for this turn (e.g. the card catalog injected at
+      // `llm.pre`) sit inside the group, after the mascot head.
+      if (ctx.length) {
+        group.items.push({ kind: 'context', nodes: ctx })
+        ctx = []
+      }
+    }
+    return group
+  }
+
+  for (const n of pathNodes.value) {
+    const b = n.body
+    if (b.type === 'user') {
+      flushCtx()
+      group = null
+      userEntry = { kind: 'user', node: n, contextNodes: [] }
+      out.push(userEntry)
+    } else if (b.type === 'note') {
+      if (isRootMarker(n)) continue // the root marker is noise
+      if (isCatalogNote(n)) ctx.push(n)
+      else if (userEntry) userEntry.contextNodes.push(n)
+      else ctx.push(n)
+    } else if (b.type === 'assistant') {
+      const g = ensureGroup()
+      if (ctx.length) {
+        g.items.push({ kind: 'context', nodes: ctx })
+        ctx = []
+      }
+      if (b.reasoning_reset) g.items.push({ kind: 'reset', node: n })
+      // Reasoning joins the activity run; a step that only calls tools adds
+      // nothing visible, so the tool rows around it stay one run.
+      if (reasoningText(b.reasoning)) pushActivity(g, { kind: 'thought', node: n })
+      if (contentText(b.content).trim()) g.items.push({ kind: 'text', node: n })
+      g.assistants.push(n)
+      const pending = b.tool_calls.some((c) => !answered.has(c.call_id))
+      if (!pending) g.safeNode = n
+    } else if (b.type === 'tool_result') {
+      const g = ensureGroup()
+      if (ctx.length) {
+        g.items.push({ kind: 'context', nodes: ctx })
+        ctx = []
+      }
+      const paired = calls.get(b.call_id) ?? null
+      const row: ToolRowInfo = {
+        result: n,
+        call: paired?.call ?? null,
+        assistant: paired?.node ?? null,
+      }
+      const last = g.items[g.items.length - 1]
+      const step = last?.kind === 'activity' ? last.steps[last.steps.length - 1] : undefined
+      if (step?.kind === 'tools') step.rows.push(row)
+      else pushActivity(g, { kind: 'tools', rows: [row] })
+    }
+  }
+  // Attach the live stream to the group it belongs to (single header per turn).
+  // The group exists from the moment the prompt is accepted, before the first
+  // token: the mascot shows up immediately and waits.
+  const branch = state.activeBranch
+  const delta = branch ? state.deltas[branch] : undefined
+  let live: TimelineGroup | null = null
+  if (branch && state.busy[branch]) {
+    const last = out[out.length - 1]
+    if (last && last.kind === 'group') live = last
+    else if (last && last.kind === 'user') {
+      live = { kind: 'group', items: [], assistants: [], safeNode: null }
+      out.push(live)
+    }
+  }
+  // Notes queued for this turn (the catalog injected at `llm.pre`) belong
+  // inside the live group, after the mascot. Without a live group they stay
+  // a standalone context row.
+  if (ctx.length) {
+    if (live) {
+      live.items.push({ kind: 'context', nodes: ctx })
+      ctx = []
+    } else {
+      flushCtx()
+    }
+  }
+  if (live && delta?.reasoning) pushActivity(live, { kind: 'thought', node: null, streaming: true })
+  if (live && delta?.text) live.items.push({ kind: 'text', node: null, streaming: true })
+  // No user prompt on the path yet (a brand-new session mid-request):
+  // nothing to hang the group under, so leave the timeline alone.
+  return out
+})

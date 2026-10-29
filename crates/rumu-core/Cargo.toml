@@ -1,0 +1,18 @@
+[package]
+name = "rumu-core"
+edition.workspace = true
+rust-version.workspace = true
+version.workspace = true
+description.workspace = true
+license.workspace = true
+repository.workspace = true
+
+[dependencies]
+async-trait.workspace = true
+schemars.workspace = true
+serde.workspace = true
+serde_json.workspace = true
+thiserror.workspace = true
+ts-rs.workspace = true
+typed-path.workspace = true
+uuid.workspace = true

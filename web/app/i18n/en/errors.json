@@ -1,0 +1,19 @@
+{
+  "listingSessions": "Couldn't load sessions",
+  "loadingSession": "Couldn't open session",
+  "listingTasks": "Couldn't load tasks",
+  "killing": "Couldn't kill {id}",
+  "newSession": "Couldn't start session",
+  "prompt": "Couldn't send message",
+  "abort": "Couldn't stop rumu",
+  "editFirst": "Can't edit the first message",
+  "loadingBranch": "Couldn't load branch",
+  "activate": "Couldn't switch branch",
+  "action": "Couldn't {label}",
+  "regenerate": "Couldn't regenerate reply",
+  "labels": {
+    "fork": "fork",
+    "edit": "edit",
+    "regenerate": "regenerate"
+  }
+}

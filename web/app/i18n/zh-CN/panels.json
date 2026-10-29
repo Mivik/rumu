@@ -1,0 +1,43 @@
+{
+  "context": {
+    "title": "上下文",
+    "virtualRoot": "卡片 · 会话",
+    "workspaces": "工作区 ({count})"
+  },
+  "diagnostics": {
+    "title": "诊断",
+    "cache": "缓存 {pct}%",
+    "hooks": "{count} 个钩子"
+  },
+  "cache": {
+    "hitRate": "会话缓存命中率",
+    "sub": "输入 {prompt} · 缓存 {cached} · 写入 {creation} · 输出 {completion} · {turns} 轮",
+    "perTurn": "每轮",
+    "turn": "第 {n} 轮",
+    "meterLabel": "第 {n} 轮缓存命中率 {pct}%"
+  },
+  "workspaces": {
+    "default": "默认工作区",
+    "readOnly": "只读",
+    "virtual": "虚拟"
+  },
+  "hooks": {
+    "title": "钩子调用"
+  },
+  "branches": {
+    "title": "分支",
+    "noContext": " · 无上下文",
+    "scope": " · 范围 {names}",
+    "status": {
+      "active": "活跃",
+      "done": "完成",
+      "abandoned": "已放弃"
+    },
+    "kind": {
+      "main": "主线",
+      "fork": "分叉",
+      "agent": "子代理",
+      "revert": "回退"
+    }
+  }
+}

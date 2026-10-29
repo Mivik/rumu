@@ -1,0 +1,1111 @@
+//! The agent loop and the built-in `agent` tool.
+
+use std::sync::Arc;
+use std::time::Instant;
+
+use crate::{Error, Result};
+use rumu_core::kind;
+use rumu_core::{
+    Branch, BranchId, BranchKind, BranchStatus, CODE_DENIED_TOOLS, Call, CodeCall, Content, Cx,
+    Inherit, InheritContext, InnerCall, NodeBody, NodeId, Plugin, RUMU_WORKSPACE, SYSTEM_SOURCE,
+    SessionId, ToolCall, ToolError, ToolOutput, ToolResultExt, WorkspaceScope, WorkspaceUse, now,
+    parse_args, truncate_chars,
+};
+use schemars::JsonSchema;
+use serde::Deserialize;
+use serde_json::{Value, json};
+use tokio_util::sync::CancellationToken;
+
+use crate::{Delta, Kernel, MAX_INVOKE_DEPTH, host::KernelRuntime};
+
+/// `code.call` pushes carry at most this much output (the store keeps the
+/// full 20k-char-capped text).
+const CODE_CALL_PUSH_LIMIT: usize = 2000;
+
+/// Who issued a tool call: the model directly, or a plugin on the model's
+/// behalf (which must pass through the same pre/post hooks). `name` is the
+/// invoking plugin's manifest name (e.g. `"code"`).
+#[derive(Clone, Copy)]
+pub(crate) enum Caller<'a> {
+    Model,
+    Plugin { name: &'a str, parent_call: &'a str },
+}
+
+/// What `exec_tool_call` produced, before the caller records the result.
+pub(crate) struct ExecutedTool {
+    pub out: ToolOutput,
+    /// The `tool.pre` payload after rewrite (name/args actually used); the
+    /// caller adds `output`/`is_error` before `tool.post`.
+    pub payload: Value,
+    pub dur_ms: u64,
+    /// The block reason when `tool.pre` blocked the call.
+    pub blocked: Option<String>,
+}
+
+#[derive(Debug, Default)]
+pub(crate) struct LoopOutcome {
+    /// Text of the last assistant reply without tool calls (the exploration
+    /// summary when the loop ended with one).
+    pub last_text: String,
+    /// True when the loop ended without a final reply (abort).
+    pub stopped_early: bool,
+}
+
+/// What a background turn runs: a new prompt, or a replay of an existing one.
+pub(crate) enum TurnKind {
+    Prompt(String),
+    Regenerate(String),
+}
+
+impl Kernel {
+    /// `prompt` WS method: validate, register the loop guard, spawn the turn.
+    /// Progress is reported via pushes. A prompt on a busy branch is steered:
+    /// its `prompt` event is dispatched now and the user node is queued for
+    /// the running turn's next safe point.
+    pub async fn prompt(self: &Arc<Self>, branch: &BranchId, text: &str) -> Result<()> {
+        self.store
+            .get_branch(branch)?
+            .ok_or_else(|| Error::BranchNotFound(branch.clone()))?;
+        self.reset_storm(branch);
+        let token = {
+            let mut inner = self.inner.lock().unwrap();
+            if inner.running.contains_key(branch) {
+                None
+            } else {
+                let token = CancellationToken::new();
+                inner.running.insert(branch.clone(), token.clone());
+                Some(token)
+            }
+        };
+        match token {
+            Some(token) => {
+                self.spawn_turn(branch.clone(), token, TurnKind::Prompt(text.to_owned()))
+            }
+            None => self.steer_prompt(branch, text).await?,
+        }
+        Ok(())
+    }
+
+    /// A user prompt while a turn is running: dispatch the (still
+    /// interceptable) prompt event, then queue the user node as a wake item so
+    /// the running turn sees it at its next safe point — or a new turn starts
+    /// if that turn ends first.
+    async fn steer_prompt(self: &Arc<Self>, branch: &BranchId, text: &str) -> Result<()> {
+        let session = self.session_of(branch)?;
+        let mut ev = self.make_event(
+            kind::PROMPT,
+            session,
+            branch.clone(),
+            json!({ "text": text }),
+        )?;
+        if let Some(reason) = self.dispatch(&mut ev, true).await? {
+            self.push("turn.error", json!({ "branch": branch, "message": reason }));
+            return Ok(());
+        }
+        let text = ev
+            .payload
+            .get("text")
+            .and_then(|v| v.as_str())
+            .unwrap_or(text)
+            .to_owned();
+        self.deliver(
+            branch,
+            NodeId::new(),
+            NodeBody::User {
+                content: Content::text(text.clone()),
+            },
+            Some((SYSTEM_SOURCE, true)),
+        )
+        .await?;
+        self.push("prompt.queued", json!({ "branch": branch, "text": text }));
+        // If the turn ended between the check and the delivery, the debounced
+        // wake path starts a new turn; while busy it is a no-op.
+        self.request_wake(branch, Some(SYSTEM_SOURCE), true);
+        Ok(())
+    }
+
+    fn reset_storm(&self, branch: &BranchId) {
+        self.inner.lock().unwrap().storm.remove(branch);
+    }
+
+    /// `branch.regenerate` WS method: fork at the user message `node` and run
+    /// the step loop again on the new branch. The prompt event is replayed so
+    /// hooks and memory injection behave as they did the first time, but the
+    /// message itself is not appended again. Progress arrives via pushes; the
+    /// new branch is returned immediately.
+    pub async fn regenerate(self: &Arc<Self>, node: &NodeId) -> Result<Branch> {
+        let n = self
+            .store
+            .get_node(node)?
+            .ok_or_else(|| Error::NodeNotFound(node.clone()))?;
+        let text = match &n.body {
+            NodeBody::User { content } => content.text.clone(),
+            _ => return Err(Error::NotAUserMessage),
+        };
+        let branch = self.fork(&n.id).await?;
+        let token = self.begin_loop(&branch.id)?;
+        self.spawn_turn(branch.id.clone(), token, TurnKind::Regenerate(text));
+        Ok(branch)
+    }
+
+    /// `abort` WS method: cancel the running loop for a branch. Already-queued
+    /// items are still written but no longer start a turn; posts arriving
+    /// after the abort wake normally.
+    pub fn abort(&self, branch: &BranchId) -> Result<()> {
+        // Background work started by this branch (or a sub-agent below it)
+        // stops too; its completion notes are still written, without waking.
+        self.abort_tasks(branch);
+        let mut inner = self.inner.lock().unwrap();
+        if let Some(t) = inner.running.get(branch) {
+            t.cancel();
+        }
+        inner.wake_pending.remove(branch);
+        Ok(())
+    }
+
+    /// Register the loop guard for `branch`, returning its cancellation token.
+    fn begin_loop(&self, branch: &BranchId) -> Result<CancellationToken> {
+        let mut inner = self.inner.lock().unwrap();
+        if inner.running.contains_key(branch) {
+            return Err(Error::TurnBusy);
+        }
+        let t = CancellationToken::new();
+        inner.running.insert(branch.clone(), t.clone());
+        Ok(t)
+    }
+
+    /// Run a turn in the background and release its loop guard when it ends.
+    fn spawn_turn(self: &Arc<Self>, branch: BranchId, token: CancellationToken, turn: TurnKind) {
+        let k = self.clone();
+        tokio::spawn(async move {
+            let res = k.run_turn(branch.clone(), turn, token).await;
+            k.finish_turn(branch, res.err()).await;
+        });
+    }
+
+    /// One user turn: prompt event → (unless regenerating) User node → the
+    /// step loop. A regeneration forks at an existing prompt, so its prompt
+    /// event is replayed but the message is not appended again.
+    pub(crate) async fn run_turn(
+        self: &Arc<Self>,
+        branch: BranchId,
+        turn: TurnKind,
+        token: CancellationToken,
+    ) -> Result<()> {
+        let (text, append_user, reason) = match turn {
+            TurnKind::Prompt(text) => (text, true, "prompt"),
+            TurnKind::Regenerate(text) => (text, false, "regenerate"),
+        };
+        if self.open_turn(&branch, text, append_user, reason).await? {
+            return Ok(());
+        }
+        self.run_loop(branch.clone(), &token).await?;
+        self.push("turn.done", json!({ "branch": branch }));
+        Ok(())
+    }
+
+    /// Announce a turn and dispatch its prompt event. Returns true when a hook
+    /// blocked the prompt (turn.error has been pushed). `append_user` is false
+    /// for a regeneration, whose prompt node is already on the branch.
+    async fn open_turn(
+        self: &Arc<Self>,
+        branch: &BranchId,
+        text: String,
+        append_user: bool,
+        reason: &str,
+    ) -> Result<bool> {
+        self.push(
+            "turn.started",
+            json!({ "branch": branch, "reason": reason }),
+        );
+        let session = self.session_of(branch)?;
+
+        // prompt event: interceptable (block / rewrite).
+        let mut ev = self.make_event(
+            kind::PROMPT,
+            session,
+            branch.clone(),
+            json!({ "text": text }),
+        )?;
+        if let Some(reason) = self.dispatch(&mut ev, true).await? {
+            self.push("turn.error", json!({ "branch": branch, "message": reason }));
+            return Ok(true);
+        }
+        if append_user {
+            let text = ev
+                .payload
+                .get("text")
+                .and_then(|v| v.as_str())
+                .unwrap_or_default()
+                .to_owned();
+            self.append_body(
+                branch,
+                NodeBody::User {
+                    content: Content::text(text),
+                },
+                None,
+            )
+            .await?;
+        }
+        Ok(false)
+    }
+
+    /// The step loop shared by turns and agent branches. It ends when the
+    /// model replies without tool calls, when the turn is cancelled, or when a
+    /// step fails.
+    pub(crate) async fn run_loop(
+        self: &Arc<Self>,
+        branch: BranchId,
+        token: &CancellationToken,
+    ) -> Result<LoopOutcome> {
+        let mut outcome = LoopOutcome::default();
+        // A reply without tool calls is the only way a loop "finishes"; abort
+        // leaves it without a final reply.
+        let mut replied = false;
+
+        loop {
+            if token.is_cancelled() {
+                break;
+            }
+            let session = self.session_of(&branch)?;
+
+            // Flush first so llm.pre hooks see notes queued earlier on the path
+            // (e.g. prompt-hook imports); then llm.pre (hooks may inject), then
+            // flush again so those notes are on the path before projection.
+            self.flush_queue(&branch).await?;
+            let mut ev =
+                self.make_event(kind::LLM_PRE, session.clone(), branch.clone(), json!({}))?;
+            self.dispatch(&mut ev, false).await?;
+            self.flush_queue(&branch).await?;
+            // The request below projects everything just flushed; wake items
+            // it carries have now been seen and must not start another turn.
+            self.mark_wake_seen(&branch);
+
+            // LLM call over the projection.
+            let nodes = self.path_nodes(&branch)?;
+            let k = self.clone();
+            let dbranch = branch.clone();
+            let on_delta = Some(Arc::new(move |d: Delta| match d {
+                Delta::Text(t) => k.push("llm.delta", json!({ "branch": dbranch, "text": t })),
+                Delta::Reasoning(r) => {
+                    k.push("llm.delta", json!({ "branch": dbranch, "reasoning": r }))
+                }
+            }) as crate::OnDelta);
+            let llm_started = Instant::now();
+            let resp = tokio::select! {
+                _ = token.cancelled() => { // nothing appended yet; tree stays valid
+                    break;
+                }
+                r = self.llm.complete(&self.system, &self.tools, &nodes, on_delta) => r?,
+            };
+            let llm_ms = llm_started.elapsed().as_millis() as u64;
+
+            self.append_body_dur(
+                &branch,
+                NodeBody::Assistant {
+                    content: Content::text(resp.text.clone()),
+                    reasoning: resp.reasoning.clone(),
+                    reason_ms: resp.reason_ms,
+                    reasoning_reset: resp.reasoning_reset,
+                    tool_calls: resp.tool_calls.clone(),
+                    model: resp.model.clone(),
+                    usage: resp.usage.clone(),
+                },
+                None,
+                Some(llm_ms),
+            )
+            .await?;
+            {
+                let payload = json!({
+                    "text": resp.text,
+                    "tool_calls": resp.tool_calls,
+                    "usage": resp.usage,
+                });
+                let mut ev =
+                    self.make_event(kind::LLM_DONE, session.clone(), branch.clone(), payload)?;
+                self.dispatch(&mut ev, false).await?;
+            }
+
+            // Track the latest assistant text even when it rode along with
+            // tool calls: if the loop is stopped by an abort it still becomes
+            // part of the exploration summary.
+            if !resp.text.is_empty() {
+                outcome.last_text = resp.text.clone();
+            }
+            if resp.tool_calls.is_empty() {
+                replied = true;
+                break;
+            }
+
+            // Tool batch (sequential is fine).
+            let calls = resp.tool_calls.clone();
+            let mut aborted = false;
+            for (i, call) in calls.iter().enumerate() {
+                let step = if token.is_cancelled() {
+                    None
+                } else {
+                    self.exec_tool_call(&branch, &session, call, token, Caller::Model, 0)
+                        .await?
+                };
+                let Some(ExecutedTool {
+                    out,
+                    mut payload,
+                    dur_ms,
+                    ..
+                }) = step
+                else {
+                    // Cancelled: every unanswered call of this assistant node
+                    // gets an error result so the tree stays valid.
+                    for c in &calls[i..] {
+                        self.append_body(
+                            &branch,
+                            NodeBody::ToolResult {
+                                call_id: c.call_id.clone(),
+                                content: Content::text("aborted"),
+                                is_error: true,
+                            },
+                            None,
+                        )
+                        .await?;
+                    }
+                    aborted = true;
+                    break;
+                };
+                payload["output"] = json!(out.content.text);
+                payload["is_error"] = json!(out.is_error);
+                let is_error = out.is_error;
+                let text = out.content.text.clone();
+                self.append_body_dur(
+                    &branch,
+                    NodeBody::ToolResult {
+                        call_id: call.call_id.clone(),
+                        content: Content::text(text),
+                        is_error,
+                    },
+                    None,
+                    Some(dur_ms),
+                )
+                .await?;
+                let mut ev =
+                    self.make_event(kind::TOOL_POST, session.clone(), branch.clone(), payload)?;
+                self.dispatch(&mut ev, false).await?;
+            }
+            if aborted {
+                break;
+            }
+
+            // Safe point: flush queued notes/markers.
+            self.flush_queue(&branch).await?;
+        }
+        // Whatever a post queued as the loop was ending is still written.
+        self.flush_queue(&branch).await?;
+        outcome.stopped_early = !replied;
+        Ok(outcome)
+    }
+
+    /// Execute one tool call: tool.pre dispatch (block/rewrite), routing to
+    /// the owning plugin, control validation. `Ok(None)` = aborted mid-call.
+    async fn exec_tool_call(
+        self: &Arc<Self>,
+        branch: &BranchId,
+        session: &SessionId,
+        call: &ToolCall,
+        token: &CancellationToken,
+        caller: Caller<'_>,
+        depth: usize,
+    ) -> Result<Option<ExecutedTool>> {
+        let started = Instant::now();
+        let mut payload = json!({ "name": call.name, "args": call.args });
+        let parent_call = match caller {
+            Caller::Model => None,
+            Caller::Plugin { name, parent_call } => {
+                payload["caller"] = json!(name);
+                payload["parent_call"] = json!(parent_call);
+                Some(parent_call)
+            }
+        };
+        // tool.pre: interceptable.
+        let mut ev = self.make_event(kind::TOOL_PRE, session.clone(), branch.clone(), payload)?;
+        let mut effect_source: Option<String> = None;
+        let (out, blocked) = match self.dispatch(&mut ev, true).await? {
+            Some(reason) => (
+                ToolOutput::err(format!("Blocked by hook: {reason}")),
+                Some(reason),
+            ),
+            None => {
+                let name = ev
+                    .payload
+                    .get("name")
+                    .and_then(|v| v.as_str())
+                    .unwrap_or(&call.name)
+                    .to_owned();
+                let mut args = ev
+                    .payload
+                    .get("args")
+                    .cloned()
+                    .unwrap_or_else(|| call.args.clone());
+                let wants_background = args
+                    .get("background")
+                    .and_then(Value::as_bool)
+                    .unwrap_or(false);
+                let background_tool = self.tools.iter().any(|t| t.name == name && t.background);
+                let strip_background = |args: &mut Value| {
+                    if let Some(obj) = args.as_object_mut() {
+                        obj.remove("background");
+                    }
+                };
+                // A rewrite may change the name; the denied set still applies
+                // to what will actually run (no nested plugin invokes of a
+                // denied tool), and no controls.
+                let out = if matches!(caller, Caller::Plugin { .. })
+                    && CODE_DENIED_TOOLS.contains(&name.as_str())
+                {
+                    ToolOutput::err(format!(
+                        "tool `{name}` is not available from a plugin invoke"
+                    ))
+                } else if wants_background && matches!(caller, Caller::Plugin { .. }) {
+                    // Scripts already have `Promise.all`; background tasks are
+                    // a model-facing tool affordance.
+                    ToolOutput::err("background is not available from a plugin invoke")
+                } else if name == "task_kill" {
+                    self.tool_task_kill(branch, &args)
+                        .await
+                        .finish()
+                        .unwrap_or_else(|e| {
+                            ToolOutput::err(format!("tool `task_kill` failed: {e}"))
+                        })
+                } else if name == "agent" {
+                    // Kernel built-in (not routed to a plugin). The sub-agent
+                    // owns its cancellation: the child branch's token is a
+                    // child of ours, so an abort lets `run_agent` finish
+                    // (marking the child Done) instead of dropping the future
+                    // mid-flight and leaving the branch Active forever.
+                    match parse_args::<AgentArgs>("agent", &args)
+                        .and_then(|args| args.into_parts().map_err(ToolError::model))
+                    {
+                        Err(e) => ToolOutput::err(e),
+                        Ok((task, inherit)) => {
+                            if wants_background && matches!(caller, Caller::Model) {
+                                match self.start_agent_task(
+                                    branch,
+                                    session,
+                                    &call.call_id,
+                                    task,
+                                    inherit,
+                                ) {
+                                    Ok(out) => out,
+                                    Err(e) => ToolOutput::err(format!("agent failed: {e}")),
+                                }
+                            } else {
+                                let (fork_call, inner_call) = match caller {
+                                    Caller::Model => (call.call_id.as_str(), None),
+                                    Caller::Plugin { parent_call, .. } => {
+                                        (parent_call, Some(call.call_id.as_str()))
+                                    }
+                                };
+                                match Box::pin(self.run_agent(
+                                    branch, fork_call, inner_call, &task, inherit, token,
+                                ))
+                                .await
+                                {
+                                    Ok(AgentRun::Summary { text, .. }) => {
+                                        ToolOutput::ok(text).cap()
+                                    }
+                                    Ok(AgentRun::Aborted) => ToolOutput::err("aborted"),
+                                    Ok(AgentRun::Refused(message)) => ToolOutput::err(message),
+                                    Err(e) => ToolOutput::err(format!("agent failed: {e}")),
+                                }
+                            }
+                        }
+                    }
+                } else {
+                    // `background` is a kernel affordance on tools that
+                    // advertise it; never leak it into the plugin's args.
+                    let summary = if background_tool {
+                        args_summary(&name, &args)
+                    } else {
+                        String::new()
+                    };
+                    if background_tool {
+                        strip_background(&mut args);
+                    }
+                    if wants_background && background_tool && matches!(caller, Caller::Model) {
+                        match self.start_tool_task(
+                            branch,
+                            session,
+                            &call.call_id,
+                            &name,
+                            args,
+                            summary,
+                        ) {
+                            Ok(out) => out,
+                            Err(e) => ToolOutput::err(format!("starting task failed: {e}")),
+                        }
+                    } else {
+                        match self.routes.get(&name) {
+                            None => ToolOutput::err(format!("no plugin provides tool `{name}`")),
+                            Some(&pi) => {
+                                let plugin: Arc<dyn Plugin> = self.plugins[pi].clone();
+                                let source = self.plugin_names[pi].clone();
+                                let cx = Cx::new(
+                                    session.clone(),
+                                    branch.clone(),
+                                    Some(Call::new(
+                                        call.call_id.clone(),
+                                        parent_call.map(str::to_owned),
+                                        false,
+                                        self.tool_progress_sink(branch, &call.call_id),
+                                    )),
+                                    Some(source.clone()),
+                                    depth,
+                                    Arc::new(KernelRuntime(self.clone())),
+                                );
+                                let out = tokio::select! {
+                                    // Abort wins even if the tool future is also ready
+                                    // (an internal call cancelled by the same token).
+                                    biased;
+                                    _ = token.cancelled() => return Ok(None),
+                                    r = plugin.call_tool(&name, args, &cx) => match r {
+                                        Ok(o) => o,
+                                        Err(e) => ToolOutput::err(format!("tool `{name}` failed: {e}")),
+                                    },
+                                };
+                                effect_source = Some(source);
+                                out
+                            }
+                        }
+                    }
+                };
+                (out, None)
+            }
+        };
+        // A tool's returned effects land at the next safe point (or
+        // immediately outside a batch), so later calls of this batch see them.
+        if let Some(source) = effect_source {
+            self.deliver_effects(branch, &source, out.effects.clone())
+                .await?;
+        }
+        // The enclosing `code` call owns the per-parent seq counter; drop it
+        // once that outer call is completely finished (all inner calls done).
+        if matches!(caller, Caller::Model) {
+            self.inner.lock().unwrap().inner_seq.remove(&call.call_id);
+        }
+        Ok(Some(ExecutedTool {
+            out,
+            payload: ev.payload,
+            dur_ms: started.elapsed().as_millis() as u64,
+            blocked,
+        }))
+    }
+
+    /// Run a tool on behalf of a plugin (`Cx::invoke`). Dispatches
+    /// `tool.pre` / `tool.post` exactly like a model call; appends made by
+    /// hooks or plugins are queued for the loop's next safe point. Requires a
+    /// running loop on the branch. No node is appended for the internal call
+    /// itself. Background tasks are refused by `Cx::invoke` before reaching
+    /// this.
+    pub(crate) async fn exec_inner_call(
+        self: &Arc<Self>,
+        branch: &BranchId,
+        caller: &str,
+        parent_call: &str,
+        depth: usize,
+        name: &str,
+        args: Value,
+    ) -> Result<InnerCall> {
+        // Bound invoke recursion: A invokes B invokes A…
+        if depth > MAX_INVOKE_DEPTH {
+            return Ok(InnerCall {
+                output: ToolOutput::err(format!(
+                    "invoke depth limit of {MAX_INVOKE_DEPTH} exceeded"
+                )),
+                blocked: None,
+                dur_ms: 0,
+            });
+        }
+        // Denied tools are rejected before any hook runs — no `tool.pre`,
+        // no `tool.post`, no trace row.
+        if CODE_DENIED_TOOLS.contains(&name) {
+            return Ok(InnerCall {
+                output: ToolOutput::err(format!(
+                    "tool `{name}` is not available from a plugin invoke"
+                )),
+                blocked: None,
+                dur_ms: 0,
+            });
+        }
+        let session = self.session_of(branch)?;
+        let token = self
+            .inner
+            .lock()
+            .unwrap()
+            .running
+            .get(branch)
+            .cloned()
+            .ok_or_else(|| Error::NoRunningTurn {
+                branch: branch.clone(),
+            })?;
+        let (seq, call_id) = {
+            let mut inner = self.inner.lock().unwrap();
+            let n = inner.inner_seq.entry(parent_call.to_owned()).or_insert(0);
+            *n += 1;
+            (*n, format!("{parent_call}.{n}"))
+        };
+        let call = ToolCall {
+            call_id,
+            name: name.to_owned(),
+            args: args.clone(),
+        };
+        let Some(ExecutedTool {
+            out,
+            mut payload,
+            dur_ms,
+            blocked,
+        }) = self
+            .exec_tool_call(
+                branch,
+                &session,
+                &call,
+                &token,
+                Caller::Plugin {
+                    name: caller,
+                    parent_call,
+                },
+                depth,
+            )
+            .await?
+        else {
+            return Err(Error::InternalAborted);
+        };
+        let effective_name = payload
+            .get("name")
+            .and_then(Value::as_str)
+            .unwrap_or(name)
+            .to_owned();
+        let effective_args = payload.get("args").cloned().unwrap_or(args);
+        payload["output"] = json!(out.content.text);
+        payload["is_error"] = json!(out.is_error);
+        let mut ev = self.make_event(kind::TOOL_POST, session.clone(), branch.clone(), payload)?;
+        self.dispatch(&mut ev, false).await?;
+
+        let record = CodeCall {
+            branch: branch.clone(),
+            parent_call: parent_call.to_owned(),
+            seq,
+            name: effective_name,
+            args: effective_args,
+            output: out.content.text.clone(),
+            is_error: out.is_error,
+            blocked: blocked.clone(),
+            dur_ms,
+            at: now(),
+        };
+        // Trace only: a side table, never a node. Stored before the push so a
+        // reload can always reproduce what the live UI saw.
+        self.store.insert_code_call(&session, &record)?;
+        let mut pushed = serde_json::to_value(&record)?;
+        // The live push is display-sized; the stored trace keeps the
+        // boundary-capped output.
+        pushed["output"] = json!(truncate_chars(
+            out.content.text.clone(),
+            CODE_CALL_PUSH_LIMIT
+        ));
+        self.push("code.call", pushed);
+
+        Ok(InnerCall {
+            output: out,
+            blocked,
+            dur_ms,
+        })
+    }
+
+    /// The built-in `agent` tool: fork a child branch, seed it with the
+    /// inherited context (or just the task), run the child loop, and return
+    /// the summary.
+    ///
+    /// The sub-agent ends when it replies without tool calls — that reply is
+    /// the summary. An abort without one yields a fixed stopper line (plus
+    /// the last assistant text, if any). The result also
+    /// carries the address of the child's transcript, which `read` can open
+    /// (`@rumu:/session/...`).
+    ///
+    /// With `context: "full"` the fork point is the assistant node containing
+    /// `call_id` (found by walking the path, not by assuming it is the head:
+    /// inside a tool batch earlier calls have already appended ToolResults,
+    /// and a script's agent forks at the enclosing `code` call; `inner_call`
+    /// is then the internal call recorded on the branch). With `context:
+    /// "none"` it forks at the session root and seeds only markers plus the
+    /// task.
+    pub(crate) async fn run_agent(
+        self: &Arc<Self>,
+        from: &BranchId,
+        call_id: &str,
+        inner_call: Option<&str>,
+        task: &str,
+        inherit: Inherit,
+        parent_token: &CancellationToken,
+    ) -> Result<AgentRun> {
+        let parent = self
+            .store
+            .get_branch(from)?
+            .ok_or_else(|| Error::BranchNotFound(from.clone()))?;
+        let path = self.path_nodes(from)?;
+
+        // Unknown workspace names never start a child.
+        if let Some(message) = self.check_agent_workspaces(&inherit)? {
+            return Ok(AgentRun::Refused(message));
+        }
+
+        // Depth is computed from the Agent ancestry of the branch we are
+        // forking from; 4th level and beyond is refused.
+        let depth_limit = self.inner.lock().unwrap().agent_depth;
+        if self.agent_depth(from)? >= depth_limit {
+            return Ok(AgentRun::Refused(
+                "agent depth limit reached; do the work yourself".into(),
+            ));
+        }
+
+        // Fork point plus the child's first own nodes. Both context modes
+        // are expressed this way so future modes can add their own seeding.
+        let (fork, initial) = match inherit.context {
+            InheritContext::Full => {
+                let head = path
+                    .iter()
+                    .rev()
+                    .find(|n| {
+                        matches!(&n.body, NodeBody::Assistant { tool_calls, .. }
+                            if tool_calls.iter().any(|c| c.call_id == call_id))
+                    })
+                    .ok_or_else(|| Error::AgentCallNotFound {
+                        call_id: call_id.to_owned(),
+                        branch: from.clone(),
+                    })?;
+                let NodeBody::Assistant { tool_calls, .. } = &head.body else {
+                    unreachable!("found a non-assistant node");
+                };
+                let mut initial = Vec::new();
+                if let Some(names) = &inherit.workspaces {
+                    initial.push(scope_marker(names));
+                }
+                for call in tool_calls {
+                    let text = if call.call_id == call_id {
+                        sub_agent_text(task)
+                    } else {
+                        "(skipped in sub-agent branch)".to_owned()
+                    };
+                    initial.push(NodeBody::ToolResult {
+                        call_id: call.call_id.clone(),
+                        content: Content::text(text),
+                        is_error: false,
+                    });
+                }
+                (head.id.clone(), initial)
+            }
+            InheritContext::None => {
+                let root = path
+                    .first()
+                    .ok_or_else(|| Error::Internal(format!("branch {from} has no root node")))?;
+                let mut initial = Vec::new();
+                if let Some(names) = &inherit.workspaces {
+                    initial.push(scope_marker(names));
+                }
+                // Keep the parent's default workspace when the new scope
+                // still allows it; otherwise the child's merge picks one.
+                let parent_state = self.state_of_nodes(&self.pending_path_nodes(from)?);
+                let default = parent_state.default_workspace.clone();
+                if let Some(name) = default
+                    && inherit
+                        .workspaces
+                        .as_ref()
+                        .is_none_or(|names| name == RUMU_WORKSPACE || names.contains(&name))
+                {
+                    initial.push(NodeBody::Note {
+                        source: SYSTEM_SOURCE.into(),
+                        content: Content::marker(&WorkspaceUse { name }),
+                    });
+                }
+                initial.push(NodeBody::User {
+                    content: Content::text(sub_agent_text(task)),
+                });
+                (root.id.clone(), initial)
+            }
+        };
+
+        // Concurrency gate: excess sub-agents wait for a permit, and an abort
+        // while waiting must not start a child at all.
+        let gate = self.inner.lock().unwrap().agent_gate.clone();
+        let _permit = tokio::select! {
+            biased;
+            _ = parent_token.cancelled() => return Ok(AgentRun::Aborted),
+            permit = gate.acquire_owned() => {
+                permit.map_err(|_| Error::Internal("agent gate closed".into()))?
+            }
+        };
+
+        // The child token is created from the parent loop's token before the
+        // branch is published, so an abort from here on propagates.
+        let token = parent_token.child_token();
+
+        let child = Self::make_branch(
+            &parent.session,
+            fork,
+            BranchKind::Agent {
+                task: task.to_owned(),
+                parent_branch: from.clone(),
+                call_id: inner_call.unwrap_or(call_id).to_owned(),
+                via_plugin: inner_call.is_some(),
+                inherit: inherit.clone(),
+            },
+        );
+        self.store.insert_branch(&child)?;
+        self.push("branch.updated", json!({ "branch": child }));
+
+        // The first seeded node starts the child's transcript address.
+        let mut first: Option<NodeId> = None;
+        for body in initial {
+            let node = self.append_body(&child.id, body, None).await?;
+            if first.is_none() {
+                first = Some(node.id);
+            }
+        }
+
+        // The child runs concurrently with other branches; its token is a
+        // child of the parent loop's token (if any), so an abort propagates.
+        {
+            let mut inner = self.inner.lock().unwrap();
+            inner.running.insert(child.id.clone(), token.clone());
+        }
+        self.push("turn.started", json!({ "branch": child.id }));
+
+        let outcome = loop {
+            let outcome = self.run_loop(child.id.clone(), &token).await?;
+            if token.is_cancelled() {
+                break outcome;
+            }
+            // A sub-agent is not finished while it still owns running tasks.
+            // Wait for them; their completion posts land on the child branch
+            // (registered as running for the whole `run_agent`) and are
+            // consumed by another loop iteration instead of a wake turn.
+            let owns_tasks = self.branch_has_running_tasks(&child.id);
+            if owns_tasks {
+                self.wait_branch_tasks(&child.id, &token).await?;
+            }
+            let pending_wake = {
+                let inner = self.inner.lock().unwrap();
+                inner.wake_pending.get(&child.id).is_some_and(|p| p.active)
+            };
+            if !owns_tasks && !pending_wake {
+                break outcome;
+            }
+        };
+
+        // Safe point at the end of the loop; also releases the loop guard and
+        // re-arms a wake that arrived as the loop ended.
+        self.end_loop(&child.id).await;
+
+        // Mark the child branch Done.
+        let b = self
+            .store
+            .get_branch(&child.id)?
+            .ok_or_else(|| Error::Internal("agent branch vanished while finishing".into()))?;
+        let mut done = b.clone();
+        done.status = BranchStatus::Done;
+        self.store.update_branch(&done)?;
+        self.push("branch.updated", json!({ "branch": done }));
+        self.push("turn.done", json!({ "branch": child.id }));
+
+        let summary = if outcome.stopped_early {
+            let mut s = "(sub-agent stopped without a final reply)".to_owned();
+            if !outcome.last_text.is_empty() {
+                s.push('\n');
+                s.push_str(&outcome.last_text);
+            }
+            s
+        } else {
+            outcome.last_text
+        };
+        let first = first.unwrap_or_default();
+        Ok(AgentRun::Summary {
+            text: format!(
+                "{summary}\n\n[transcript: {RUMU_WORKSPACE}:/session/{}/{}..{}]",
+                parent.session, first, b.head
+            ),
+            child: child.id,
+        })
+    }
+
+    /// The nesting depth of `branch`: how many `Agent` branches are in its
+    /// ancestry (main = 0).
+    fn agent_depth(&self, branch: &BranchId) -> Result<usize> {
+        let mut b = self
+            .store
+            .get_branch(branch)?
+            .ok_or_else(|| Error::BranchNotFound(branch.clone()))?;
+        let mut depth = 0;
+        while let BranchKind::Agent { parent_branch, .. } = b.kind.clone() {
+            depth += 1;
+            b = self
+                .store
+                .get_branch(&parent_branch)?
+                .ok_or_else(|| Error::BranchNotFound(parent_branch.clone()))?;
+        }
+        Ok(depth)
+    }
+
+    /// Reject unknown `inherit.workspaces` names before creating a branch.
+    /// `Some(message)` is a refusal naming the valid workspaces.
+    fn check_agent_workspaces(&self, inherit: &Inherit) -> Result<Option<String>> {
+        let Some(names) = &inherit.workspaces else {
+            return Ok(None);
+        };
+        let mut valid: Vec<&str> = self
+            .catalog
+            .workspaces
+            .iter()
+            .map(|w| w.name.as_str())
+            .collect();
+        valid.push(RUMU_WORKSPACE);
+        for name in names {
+            if !valid.iter().any(|v| v == name) {
+                return Ok(Some(format!(
+                    "agent: unknown workspace `{name}` (valid workspaces: {})",
+                    valid.join(", ")
+                )));
+            }
+        }
+        Ok(None)
+    }
+}
+
+/// What a sub-agent run produced.
+pub(crate) enum AgentRun {
+    Summary {
+        text: String,
+        /// The child branch the sub-agent ran on.
+        child: BranchId,
+    },
+    /// The parent was aborted while waiting for a concurrency permit.
+    Aborted,
+    /// A limit refused the call before any child branch existed.
+    Refused(String),
+}
+
+/// A short, single-line summary of a background tool's arguments.
+fn args_summary(name: &str, args: &Value) -> String {
+    let text = match name {
+        "bash" => args
+            .get("command")
+            .and_then(Value::as_str)
+            .unwrap_or_default(),
+        "agent" => args.get("task").and_then(Value::as_str).unwrap_or_default(),
+        _ => "",
+    };
+    let text = if text.is_empty() {
+        serde_json::to_string(args).unwrap_or_default()
+    } else {
+        text.to_owned()
+    };
+    let line = text
+        .lines()
+        .map(str::trim)
+        .filter(|l| !l.is_empty())
+        .collect::<Vec<_>>()
+        .join(" ; ");
+    let mut out: String = line.chars().take(80).collect();
+    if line.chars().count() > 80 {
+        out.push('…');
+    }
+    out
+}
+
+#[derive(Debug, Deserialize, JsonSchema)]
+#[serde(deny_unknown_fields)]
+pub(crate) struct AgentArgs {
+    /// what the sub-agent should do, 1-2 sentences
+    task: String,
+    /// how the sub-agent inherits from this branch
+    inherit: Option<InheritArgs>,
+    /// run in the background; you get a task id now and a notification when it finishes
+    background: Option<bool>,
+}
+
+impl AgentArgs {
+    /// Split into the run's `(task, inherit)`, rejecting a blank task.
+    fn into_parts(self) -> std::result::Result<(String, Inherit), &'static str> {
+        // `background` is a kernel affordance acted on before this point; it is
+        // parsed only so `deny_unknown_fields` accepts it.
+        let _ = self.background;
+        let task = self.task.trim();
+        if task.is_empty() {
+            return Err("agent: `task` must not be empty");
+        }
+        let inherit = self.inherit.unwrap_or_default();
+        let context = match inherit.context.unwrap_or_default() {
+            ContextMode::Full => InheritContext::Full,
+            ContextMode::None => InheritContext::None,
+        };
+        let workspaces = match inherit.workspaces {
+            Some(Workspaces::Names(names)) => Some(names),
+            Some(Workspaces::All(_)) | None => None,
+        };
+        Ok((
+            task.to_owned(),
+            Inherit {
+                context,
+                workspaces,
+            },
+        ))
+    }
+}
+
+// `inherit` arguments; absent means "inherit everything".
+#[derive(Debug, Default, Deserialize, JsonSchema)]
+#[serde(deny_unknown_fields)]
+struct InheritArgs {
+    /// full (default): continue from here with this whole conversation; none: start clean with only the task
+    context: Option<ContextMode>,
+    /// "all" (default) or an array of workspace names the sub-agent may use
+    workspaces: Option<Workspaces>,
+}
+
+// Context inheritance; mirrors `rumu_core::InheritContext`.
+#[derive(Debug, Default, Deserialize, JsonSchema)]
+#[serde(rename_all = "snake_case")]
+enum ContextMode {
+    #[default]
+    Full,
+    None,
+}
+
+// `"all"` or an explicit workspace-name list.
+#[derive(Debug, Deserialize, JsonSchema)]
+#[serde(untagged)]
+enum Workspaces {
+    All(AllLiteral),
+    Names(Vec<String>),
+}
+
+#[derive(Debug, Deserialize, JsonSchema)]
+enum AllLiteral {
+    #[serde(rename = "all")]
+    All,
+}
+
+/// A `workspace.scope` marker body.
+fn scope_marker(names: &[String]) -> NodeBody {
+    NodeBody::Note {
+        source: SYSTEM_SOURCE.into(),
+        content: Content::marker(&WorkspaceScope {
+            allow: names.to_vec(),
+        }),
+    }
+}
+
+/// The framing both context modes give a sub-agent.
+fn sub_agent_text(task: &str) -> String {
+    format!(
+        "You are now a sub-agent. Goal: {task}\n\
+         Do the work, then reply with a concise summary — a reply without tool calls ends the \
+         sub-agent. Nothing you do here is visible to the main branch except that final reply."
+    )
+}

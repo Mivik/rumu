@@ -1,0 +1,5 @@
+[env]
+# ts-rs writes the web's TypeScript mirrors here during `cargo test`.
+TS_RS_EXPORT_DIR = { value = "web/app/lib/generated", relative = true }
+# The web treats timestamps and token counts as plain numbers.
+TS_RS_LARGE_INT = "number"

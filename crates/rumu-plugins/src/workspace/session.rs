@@ -1,0 +1,607 @@
+//! The `@rumu:/session` part of the `@rumu` workspace: read-only views of
+//! past conversations, rendered from `Cx::history`.
+//!
+//! - `list /session` — every session, most recently updated first;
+//! - `list|read /session/<s>` — the session overview (branches with
+//!   `@rumu:/session/<s>/<first>..<head>` ranges);
+//! - `read /session/<s>/<node>` — one node, fully rendered;
+//! - `read /session/<s>/<a>..<b>` — a path fragment from `a` down to `b`
+//!   (`a` must be `b` or one of its ancestors), root→head order.
+//!
+//! Nodes render as `<node id="…" kind="…" …attrs>…</node>` elements, so
+//! assistant markdown headings cannot be confused with record boundaries.
+//! Node ids are abbreviated per session (at least [`MIN_ABBR`] chars) and
+//! addressed by an exact id, or any unambiguous prefix of [`MIN_PREFIX`]+
+//! chars. Range reads clip long tool-call args, fold nested session reads to
+//! an `<elided>` pointer, and keep the head and tail of a long body around a
+//! `<truncated>` pointer; single-node reads are never clipped, folded or
+//! truncated.
+
+use std::cmp::Reverse;
+use std::collections::HashSet;
+
+use rumu_cards::recall::{self, Doc};
+use rumu_core::{
+    Branch, BranchKind, Cx, Node, NodeBody, RUMU_WORKSPACE, SessionId, SessionInfo, ToolCall,
+    ToolError, ToolOutput, ToolResult, Utf8UnixPath,
+};
+use serde_json::Value;
+
+use super::WorkspacePlugin;
+use super::time::iso_local;
+use super::tools::{prefixed, slice_lines, unknown_rumu_path};
+
+/// The `@rumu` result prefix.
+const WS: &str = RUMU_WORKSPACE;
+
+/// Tool results are long and log-heavy: halve their score so prose nodes with
+/// the same match rank above them.
+const TOOL_RESULT_BOOST: f64 = 0.5;
+
+/// A long body in a *range* read keeps this many chars from each end, with a
+/// `<truncated>` pointer between. Single-node reads are uncapped (only the
+/// global output truncation applies).
+const RANGE_HEAD: usize = 1000;
+const RANGE_TAIL: usize = 1000;
+
+/// Range reads clip tool-call args beyond this many chars.
+const RANGE_CALL_ARGS: usize = 300;
+
+/// Shortest per-session node-id abbreviation.
+const MIN_ABBR: usize = 8;
+
+/// A node address prefix shorter than this does not resolve.
+const MIN_PREFIX: usize = 4;
+
+impl WorkspacePlugin {
+    pub(super) async fn session_list(&self, abs: &Utf8UnixPath, cx: &Cx) -> ToolResult<ToolOutput> {
+        if abs.as_str() == "/session" {
+            return self.session_listing(cx).await;
+        }
+        // Below a session, `list` reads like `read` (the overview).
+        self.session_read(abs, None, None, cx).await
+    }
+
+    pub(super) async fn session_read(
+        &self,
+        abs: &Utf8UnixPath,
+        offset: Option<u64>,
+        limit: Option<u64>,
+        cx: &Cx,
+    ) -> ToolResult<ToolOutput> {
+        if abs.as_str() == "/session" {
+            return self.session_listing(cx).await;
+        }
+        let rest = abs
+            .strip_prefix("/session")
+            .ok()
+            .map(Utf8UnixPath::as_str)
+            .filter(|rest| !rest.is_empty());
+        let Some(rest) = rest else {
+            return Err(unknown_rumu_path(abs));
+        };
+        let (sid, what) = match rest.split_once('/') {
+            Some((s, node)) => (s, node),
+            None => (rest, ""),
+        };
+        let (info, nodes, branches) = match cx.history().session_tree(&SessionId::from(sid)) {
+            Ok(t) => t,
+            Err(e) => return Err(ToolError::model(format!("[{WS}] no session `{sid}`: {e}"))),
+        };
+        let text = match what {
+            // The overview.
+            "" => render_overview(&info, &nodes, &branches),
+            // A range `<a>..<b>` or a single node.
+            node if node.contains("..") => {
+                let (a, b) = node.split_once("..").expect("checked for `..`");
+                let from = find_node(&nodes, a, sid)?;
+                let to = find_node(&nodes, b, sid)?;
+                // Walk from `b` up to `a`; it must be `b` itself or an
+                // ancestor of it.
+                let mut range = vec![to];
+                let mut cur = to;
+                while cur.id != from.id {
+                    let Some(parent) = cur.parent.as_ref().and_then(|p| node_by_id(&nodes, &p.0))
+                    else {
+                        return Err(ToolError::model(format!(
+                            "[{WS}] cannot read `{WS}:/session/{sid}/{node}`: \
+                             `{a}` is not `{b}` or an ancestor of it"
+                        )));
+                    };
+                    range.push(parent);
+                    cur = parent;
+                }
+                range.reverse();
+                SessionView::new(sid, &nodes).render(&range, true)
+            }
+            node => {
+                let n = find_node(&nodes, node, sid)?;
+                SessionView::new(sid, &nodes).render(&[n], false)
+            }
+        };
+        let text = match slice_lines(text, offset, limit) {
+            Ok(t) => t,
+            Err(e) => return Err(ToolError::model(prefixed(WS, e))),
+        };
+        Ok(text.into())
+    }
+
+    /// `list /session`: one line per session, most recently updated first.
+    async fn session_listing(&self, cx: &Cx) -> ToolResult<ToolOutput> {
+        let mut sessions = cx.history().sessions()?;
+        sessions.sort_by_key(|s| Reverse(s.updated_at));
+        if sessions.is_empty() {
+            return Ok(format!("[{WS}] no sessions yet").into());
+        }
+        let lines: Vec<String> = sessions
+            .iter()
+            .map(|s| {
+                format!(
+                    "{WS}:/session/{}  {}  \"{}\"",
+                    s.id,
+                    iso_local(s.updated_at),
+                    s.title
+                )
+            })
+            .collect();
+        Ok(format!("[{WS}] {}", lines.join("\n")).into())
+    }
+
+    /// The session half of `search`: BM25-ranked nodes over user text,
+    /// assistant text + tool-call args, tool-result text and note text. Any
+    /// query term matches (OR); equal scores are newest first by `at`, and
+    /// tool results are downweighted. Read-only — no `card_use` markers.
+    pub(super) async fn session_search(
+        &self,
+        query: &str,
+        only: &str,
+        limit: usize,
+        cx: &Cx,
+    ) -> ToolResult<ToolOutput> {
+        // Kept only for the snippet line; the ranker tokenizes the query.
+        let terms: Vec<String> = query.split_whitespace().map(str::to_lowercase).collect();
+        if terms.is_empty() {
+            return Err(ToolError::model("search: empty query"));
+        }
+        let mut sessions = cx.history().sessions()?;
+        sessions.sort_by_key(|s| Reverse(s.updated_at));
+
+        struct Candidate {
+            addr: String,
+            at: rumu_core::Timestamp,
+            title: String,
+            kind: &'static str,
+            text: String,
+        }
+        let mut candidates = Vec::new();
+        for info in &sessions {
+            if !only.is_empty() && info.id.0 != only {
+                continue;
+            }
+            let Ok((_, nodes, _)) = cx.history().session_tree(&info.id) else {
+                continue; // unreadable sessions just have no hits
+            };
+            let view = SessionView::new(&info.id.0, &nodes);
+            for n in &nodes {
+                let Some((kind, text)) = searchable_text(&n.body) else {
+                    continue;
+                };
+                candidates.push(Candidate {
+                    addr: format!("{WS}:/session/{}/{}", info.id, view.short(&n.id.0)),
+                    at: n.at,
+                    title: info.title.clone(),
+                    kind,
+                    text,
+                });
+            }
+        }
+        // Newest first: a stable score sort keeps this order for equal scores.
+        candidates.sort_by_key(|c| Reverse(c.at));
+        let docs: Vec<Doc> = candidates
+            .iter()
+            .map(|c| {
+                let boost = if c.kind == "tool_result" {
+                    TOOL_RESULT_BOOST
+                } else {
+                    1.0
+                };
+                Doc::new([(c.text.as_str(), 1.0)], boost)
+            })
+            .collect();
+        // Explicit search: every positive score is a hit, and a term common to
+        // every node still finds those nodes.
+        let hits = recall::rank_docs(&docs, query, docs.len(), false);
+
+        if hits.is_empty() {
+            return Ok(format!("no conversation nodes match `{query}`").into());
+        }
+        let mut out = Vec::new();
+        for &(i, _) in hits.iter().take(limit) {
+            let c = &candidates[i];
+            let mut block = format!(
+                "{}  {}  \"{}\"  {}",
+                c.addr,
+                iso_local(c.at),
+                c.title,
+                c.kind
+            );
+            if let Some(s) = rumu_cards::body_snippet(&c.text, &terms) {
+                block.push_str(&format!("\n  match: {s}"));
+            }
+            out.push(block);
+        }
+        let mut text = out.join("\n");
+        if hits.len() > limit {
+            text.push_str(&format!("\n(+{} more hits)", hits.len() - limit));
+        }
+        Ok(text.into())
+    }
+}
+
+/// The text a session-search term matches against, with the node kind label:
+/// user text, assistant text + tool-call args, tool-result text, note text.
+/// Markers carry nothing searchable.
+fn searchable_text(body: &NodeBody) -> Option<(&'static str, String)> {
+    match body {
+        NodeBody::User { content } => Some(("user", content.text.clone())),
+        NodeBody::Assistant {
+            content,
+            tool_calls,
+            ..
+        } => {
+            let mut text = content.text.clone();
+            for call in tool_calls {
+                text.push('\n');
+                text.push_str(&call.name);
+                text.push(' ');
+                text.push_str(&serde_json::to_string(&call.args).unwrap_or_default());
+            }
+            Some(("assistant", text))
+        }
+        NodeBody::ToolResult { content, .. } => Some(("tool_result", content.text.clone())),
+        // An empty-text note is a marker: nothing searchable.
+        NodeBody::Note { content, .. } if !content.text.is_empty() => {
+            Some(("note", content.text.clone()))
+        }
+        NodeBody::Note { .. } => None,
+    }
+}
+
+fn no_node_err(sid: &str, node: &str) -> ToolError {
+    ToolError::model(format!("[{WS}] no node `{node}` on session `{sid}`"))
+}
+
+/// Resolve a node address: the full id, else a unique prefix of at least
+/// [`MIN_PREFIX`] chars. Ambiguous prefixes and misses are errors.
+fn find_node<'a>(nodes: &'a [Node], id: &str, sid: &str) -> ToolResult<&'a Node> {
+    if let Some(n) = node_by_id(nodes, id) {
+        return Ok(n);
+    }
+    let matches: Vec<&Node> = if id.chars().count() >= MIN_PREFIX {
+        nodes.iter().filter(|n| n.id.0.starts_with(id)).collect()
+    } else {
+        Vec::new()
+    };
+    match matches.len() {
+        0 => Err(no_node_err(sid, id)),
+        1 => Ok(matches[0]),
+        _ => Err(ToolError::model(format!(
+            "[{WS}] node prefix `{id}` is ambiguous on session `{sid}`: {}",
+            matches
+                .iter()
+                .map(|n| n.id.0.as_str())
+                .collect::<Vec<_>>()
+                .join(", ")
+        ))),
+    }
+}
+
+fn node_by_id<'a>(nodes: &'a [Node], id: &str) -> Option<&'a Node> {
+    nodes.iter().find(|n| n.id.0 == id)
+}
+
+/// The per-session rendering context: the id, every node (for ancestor
+/// lookups) and the session's id abbreviation length.
+struct SessionView<'a> {
+    sid: &'a str,
+    nodes: &'a [Node],
+    abbr: usize,
+}
+
+impl<'a> SessionView<'a> {
+    fn new(sid: &'a str, nodes: &'a [Node]) -> Self {
+        Self {
+            sid,
+            nodes,
+            abbr: abbreviation_len(nodes),
+        }
+    }
+
+    /// The shortest unique id prefix (or the whole id, if shorter).
+    fn short(&self, id: &str) -> String {
+        abbreviate(id, self.abbr)
+    }
+
+    /// Render `selected` nodes in order, each element followed by a newline.
+    fn render(&self, selected: &[&Node], range: bool) -> String {
+        let mut out = String::new();
+        for n in selected {
+            out.push_str(&self.render_node(n, range));
+            out.push('\n');
+        }
+        out
+    }
+
+    /// One node as a `<node>` element. Range reads cap bodies, clip call
+    /// args, and fold nested session reads; single-node reads do none.
+    fn render_node(&self, n: &Node, range: bool) -> String {
+        let short = self.short(&n.id.0);
+        let (kind, attrs, body) = match &n.body {
+            NodeBody::User { content } => (
+                "user",
+                String::new(),
+                self.text(&content.text, range, &short),
+            ),
+            NodeBody::Assistant {
+                content,
+                tool_calls,
+                ..
+            } => {
+                // Only the prose is truncated: cutting across `<call>` lines
+                // could split a tag. Each call clips its own args instead.
+                let mut body = self.text(&content.text, range, &short);
+                for call in tool_calls {
+                    if !body.is_empty() {
+                        body.push('\n');
+                    }
+                    body.push_str(&render_call(call, range));
+                }
+                ("assistant", String::new(), body)
+            }
+            NodeBody::ToolResult {
+                call_id,
+                content,
+                is_error,
+            } => {
+                let call = self.matching_call(n, call_id);
+                let mut attrs = format!(" call=\"{}\"", escape_attr(call_id));
+                if let Some(c) = call {
+                    attrs.push_str(&format!(" tool=\"{}\"", escape_attr(&c.name)));
+                }
+                if *is_error {
+                    attrs.push_str(" error=\"true\"");
+                }
+                let body = if range && call.is_some_and(folds_session_read) {
+                    format!(
+                        "<elided chars=\"{}\" read=\"{WS}:/session/{}/{short}\"/>",
+                        content.text.chars().count(),
+                        self.sid
+                    )
+                } else {
+                    self.text(&content.text, range, &short)
+                };
+                ("tool_result", attrs, body)
+            }
+            NodeBody::Note { source, content } => {
+                // A marker: data only, one line.
+                if content.text.is_empty()
+                    && let Some(tagged) = &content.data
+                {
+                    return format!(
+                        "<node id=\"{short}\" kind=\"marker\" tag=\"{}\">{}</node>",
+                        escape_attr(&tagged.tag),
+                        escape_body(&one_line_json(&tagged.data))
+                    );
+                }
+                let mut attrs = format!(" source=\"{}\"", escape_attr(source));
+                if let Some(tagged) = &content.data {
+                    attrs.push_str(&format!(" tag=\"{}\"", escape_attr(&tagged.tag)));
+                }
+                ("note", attrs, self.text(&content.text, range, &short))
+            }
+        };
+        let open = format!("<node id=\"{short}\" kind=\"{kind}\"{attrs}>");
+        if body.is_empty() {
+            format!("{open}</node>")
+        } else {
+            format!("{open}\n{body}\n</node>")
+        }
+    }
+
+    /// The assistant call this tool result answers: walk ancestors to a
+    /// node with the matching `call_id` (parallel results sit under each
+    /// other: T2→T1→A1).
+    fn matching_call(&self, n: &Node, call_id: &str) -> Option<&'a ToolCall> {
+        let mut cur = n.parent.clone()?;
+        loop {
+            let node = node_by_id(self.nodes, &cur.0)?;
+            if let NodeBody::Assistant { tool_calls, .. } = &node.body
+                && let Some(call) = tool_calls.iter().find(|c| c.call_id == call_id)
+            {
+                return Some(call);
+            }
+            cur = node.parent.clone()?;
+        }
+    }
+
+    /// Escaped body text; in range reads a long one keeps its head and tail
+    /// around a `<truncated>` pointer to the single-node read.
+    fn text(&self, text: &str, range: bool, short: &str) -> String {
+        let total = text.chars().count();
+        if !range || total <= RANGE_HEAD + RANGE_TAIL {
+            return escape_body(text);
+        }
+        let head: String = text.chars().take(RANGE_HEAD).collect();
+        let tail: String = text.chars().skip(total - RANGE_TAIL).collect();
+        format!(
+            "{}\n<truncated chars=\"{}\" read=\"{WS}:/session/{}/{short}\"/>\n{}",
+            escape_body(&head),
+            total - RANGE_HEAD - RANGE_TAIL,
+            self.sid,
+            escape_body(&tail)
+        )
+    }
+}
+
+/// One `<call>` line, its args clipped in range reads.
+fn render_call(call: &ToolCall, range: bool) -> String {
+    let args = one_line_json(&call.args);
+    let len = args.chars().count();
+    let mut attrs = format!(
+        " id=\"{}\" name=\"{}\"",
+        escape_attr(&call.call_id),
+        escape_attr(&call.name)
+    );
+    let args = if range && len > RANGE_CALL_ARGS {
+        attrs.push_str(&format!(" truncated=\"{}\"", len - RANGE_CALL_ARGS));
+        args.chars().take(RANGE_CALL_ARGS).collect()
+    } else {
+        args
+    };
+    format!("<call{attrs}>{}</call>", escape_body(&args))
+}
+
+/// Whether a tool result is a session read/list/search that a range read can
+/// fold to an `<elided>` pointer. Only absolute `@rumu:/session…` arguments
+/// are recognized; relative or default-workspace forms (e.g. `session/…`)
+/// are not detected — accepted.
+fn folds_session_read(call: &ToolCall) -> bool {
+    let arg = match call.name.as_str() {
+        "read" | "list" => call.args.get("path"),
+        "search" => call.args.get("scope"),
+        _ => return false,
+    };
+    arg.and_then(Value::as_str)
+        .is_some_and(|s| s.starts_with(&format!("{WS}:/session")))
+}
+
+/// Escape `<` where body text could forge our markup. Every other `<` (and
+/// every other character) is left alone.
+fn escape_body(s: &str) -> String {
+    const NEEDLES: [&str; 6] = [
+        "<node",
+        "</node",
+        "<call",
+        "</call",
+        "<truncated",
+        "<elided",
+    ];
+    let mut out = String::with_capacity(s.len());
+    for (i, ch) in s.char_indices() {
+        if ch == '<' && NEEDLES.iter().any(|n| s[i..].starts_with(n)) {
+            out.push_str("&lt;");
+        } else {
+            out.push(ch);
+        }
+    }
+    out
+}
+
+/// Escape a value we emit as an attribute.
+fn escape_attr(s: &str) -> String {
+    let mut out = String::with_capacity(s.len());
+    for ch in s.chars() {
+        match ch {
+            '&' => out.push_str("&amp;"),
+            '"' => out.push_str("&quot;"),
+            '<' => out.push_str("&lt;"),
+            _ => out.push(ch),
+        }
+    }
+    out
+}
+
+/// Per session, the smallest id prefix length (at least [`MIN_ABBR`]) that
+/// keeps every node's abbreviation distinct.
+fn abbreviation_len(nodes: &[Node]) -> usize {
+    let mut len = MIN_ABBR;
+    loop {
+        let mut seen = HashSet::new();
+        if nodes.iter().all(|n| seen.insert(abbreviate(&n.id.0, len))) {
+            return len;
+        }
+        len += 1;
+    }
+}
+
+fn abbreviate(id: &str, len: usize) -> String {
+    id.chars().take(len).collect()
+}
+
+/// The session overview: one header line plus one line per branch,
+/// sorted by `created_at`, each with its transcript range.
+fn render_overview(info: &SessionInfo, nodes: &[Node], branches: &[Branch]) -> String {
+    let view = SessionView::new(&info.id.0, nodes);
+    let mut out = format!(
+        "[{WS}] session {} — \"{}\" · updated {}",
+        info.id,
+        info.title,
+        iso_local(info.updated_at)
+    );
+    out.push_str("\nbranches:");
+    let mut sorted: Vec<&Branch> = branches.iter().collect();
+    sorted.sort_by_key(|b| b.created_at);
+    for b in sorted {
+        let kind = match &b.kind {
+            BranchKind::Main => "main",
+            BranchKind::Fork => "fork",
+            BranchKind::Agent { .. } => "agent",
+            BranchKind::Revert { .. } => "revert",
+        };
+        let status = match b.status {
+            rumu_core::BranchStatus::Active => "active",
+            rumu_core::BranchStatus::Done => "done",
+            rumu_core::BranchStatus::Abandoned => "abandoned",
+        };
+        let first = first_own_node(nodes, b)
+            .map(|n| view.short(&n.id.0))
+            .unwrap_or_default();
+        let mut line = format!(
+            "  {kind:<8} {status:<10} {WS}:/session/{}/{first}..{}",
+            info.id,
+            view.short(&b.head.0)
+        );
+        match &b.kind {
+            BranchKind::Agent { task, .. } => {
+                line.push_str(&format!("  task: {}", clip(task, 80)));
+            }
+            BranchKind::Revert { lesson } => {
+                line.push_str(&format!("  lesson: {}", clip(lesson, 80)));
+            }
+            _ => {}
+        }
+        out.push('\n');
+        out.push_str(&line);
+    }
+    out
+}
+
+/// The branch's first own node: the one whose parent is `forked_from` (the
+/// root node for `main`).
+fn first_own_node<'a>(nodes: &'a [Node], b: &Branch) -> Option<&'a Node> {
+    // Walking from the head along parents: several branches may fork at one
+    // node, so scanning for "a child of `forked_from`" is ambiguous — the
+    // head's own chain is not. `main` (forked_from = None) walks down to the
+    // root node.
+    let mut cur = node_by_id(nodes, &b.head.0)?;
+    while cur.parent.as_ref().map(|p| p.0.as_str()) != b.forked_from.as_ref().map(|f| f.0.as_str())
+    {
+        cur = cur.parent.as_ref().and_then(|p| node_by_id(nodes, &p.0))?;
+    }
+    Some(cur)
+}
+
+/// Clip to `max` chars on a char boundary, appending an ellipsis when cut.
+fn clip(s: &str, max: usize) -> String {
+    if s.chars().count() <= max {
+        return s.to_owned();
+    }
+    let mut out: String = s.chars().take(max).collect();
+    out.push('…');
+    out
+}
+
+/// Compact single-line JSON (no spaces after `:` and `,`).
+fn one_line_json(v: &Value) -> String {
+    serde_json::to_string(v).unwrap_or_default()
+}
