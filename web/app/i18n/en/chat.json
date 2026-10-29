@@ -10,8 +10,6 @@
   "composer": {
     "steerPlaceholder": "Steer rumu…",
     "placeholder": "Send a message…",
-    "enterToSend": "to send",
-    "shiftEnter": "for a new line",
     "stop": "Stop",
     "steer": "Steer",
     "send": "Send"

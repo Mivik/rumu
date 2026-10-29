@@ -10,8 +10,6 @@
   "composer": {
     "steerPlaceholder": "引导 rumu…",
     "placeholder": "发送消息…",
-    "enterToSend": "发送",
-    "shiftEnter": "换行",
     "stop": "停止",
     "steer": "引导",
     "send": "发送"

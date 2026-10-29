@@ -1,8 +1,7 @@
 {
   "context": {
-    "title": "上下文",
     "virtualRoot": "卡片 · 会话",
-    "workspaces": "工作区 ({count})"
+    "workspaces": "全部工作区"
   },
   "diagnostics": {
     "title": "诊断",

@@ -1,8 +1,7 @@
 {
   "context": {
-    "title": "Context",
     "virtualRoot": "cards · sessions",
-    "workspaces": "Workspaces ({count})"
+    "workspaces": "All workspaces"
   },
   "diagnostics": {
     "title": "Diagnostics",
