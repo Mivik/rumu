@@ -1,7 +1,6 @@
 <script setup lang="ts">
-// A knowledge card on a tool row: the same little card stub as a recalled
-// card in the timeline (.card-tab), set small enough to sit inside the row's
-// line. Click → drawer.
+// A knowledge card on a tool row, set as a plain card reference (.card-ref)
+// small enough to sit inside the row's line. Click → drawer.
 import type { Card } from '../../lib/types'
 import { openDrawer } from '../../lib/store'
 
@@ -22,7 +21,7 @@ function tooltip(): string {
 <template>
   <button
     type="button"
-    class="card-tab max-w-[180px] border-t-[1.5px] px-1.5 pt-[2px] pb-[3px] text-micro leading-none"
+    class="card-ref max-w-[180px] text-micro"
     :title="title ?? tooltip()"
     @click.stop="onClick"
   >

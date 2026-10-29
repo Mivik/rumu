@@ -39,15 +39,11 @@ function foldedLabel(names: string[]): string {
 </script>
 
 <template>
-  <div v-if="catalog" class="text-meta text-ink-2">
+  <div v-if="catalog" class="text-meta">
     <div v-if="heading" class="mb-1 font-semibold text-ink">{{ heading }}</div>
     <ul class="flex flex-col gap-0.5">
       <li v-for="e in catalog.entries" :key="e.id">
-        <button
-          type="button"
-          class="card-title text-secondary underline-offset-2 hover:underline"
-          @click="openDrawer(e.id)"
-        >
+        <button type="button" class="card-ref" @click="openDrawer(e.id)">
           {{ e.title }}
         </button>
         <span v-if="e.summary" class="text-ink-3"> — {{ e.summary }}</span>

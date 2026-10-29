@@ -227,10 +227,10 @@ function label(names: string[]): string {
           {{ t('cards.pills.imported') }}
         </span>
         <template v-for="c in memoryShown(p)" :key="c.node.id">
-          <button v-if="c.cardId" class="card-tab" :title="c.hover" type="button" @click.stop="openCard(c)">
+          <button v-if="c.cardId" class="card-ref" :title="c.hover" type="button" @click.stop="openCard(c)">
             <span class="truncate">{{ c.title }}</span>
           </button>
-          <span v-else class="card-tab" :title="c.hover">
+          <span v-else class="card-ref" :title="c.hover">
             <span class="truncate">{{ c.title }}</span>
           </span>
         </template>
@@ -241,11 +241,7 @@ function label(names: string[]): string {
       <Chip v-else-if="p.kind === 'update'" icon="note" tone="memory" :title="p.title">
         <template v-for="(name, i) in p.names ?? []" :key="name">
           <span v-if="i > 0">,</span>
-          <button
-            class="font-semibold underline-offset-2 hover:underline"
-            type="button"
-            @click.stop="openDrawer(name)"
-          >
+          <button class="card-ref" type="button" @click.stop="openDrawer(name)">
             {{ name }}
           </button>
         </template>

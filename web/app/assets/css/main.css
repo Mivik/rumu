@@ -480,35 +480,41 @@
     white-space: nowrap;
   }
 
-  /* A card stub inline in the timeline: a tiny card standing in a row, its
-   * coral rule along the top edge. */
-  .card-tab {
+  /* A reference to a knowledge card (timeline pill, tool row, catalog list):
+   * the card's title in the card face, over a thick memory-colored marker
+   * rule that tops out at the baseline. On hover it deepens upward with its
+   * bottom edge fixed; it paints behind the text, so the letters stay clear. */
+  .card-ref {
+    position: relative;
+    isolation: isolate;
     display: inline-flex;
     align-items: center;
     max-width: 100%;
     min-width: 0;
-    padding: 1px 8px 2px;
-    border-top: 2px solid var(--brand);
-    border-radius: 2px 2px 3px 3px;
-    background: var(--surface);
-    box-shadow:
-      0 0 0 1px var(--line),
-      var(--shadow-soft-v);
+    color: inherit;
     font-family: var(--font-card);
-    font-size: var(--text-meta);
-    font-weight: 520;
-    color: var(--ink);
+    font-weight: 600;
+    font-variation-settings: 'opsz' 14;
+    letter-spacing: -0.005em;
     white-space: nowrap;
-    transition:
-      box-shadow 0.15s,
-      translate 0.15s var(--ease-soft);
   }
 
-  button.card-tab:hover {
-    translate: 0 -1px;
-    box-shadow:
-      0 0 0 1px color-mix(in srgb, var(--ink) 18%, var(--line)),
-      var(--shadow-card-v);
+  .card-ref::after {
+    position: absolute;
+    right: 0;
+    bottom: 0;
+    left: 0;
+    z-index: -1;
+    height: 0.31em;
+    border-radius: 1px;
+    background: var(--memory);
+    content: '';
+    transform-origin: bottom;
+    transition: transform 0.16s var(--ease-soft);
+  }
+
+  button.card-ref:hover::after {
+    transform: scaleY(1.7);
   }
 
   /* a card's text (CardDrawer): the card face, a touch more leading for the
