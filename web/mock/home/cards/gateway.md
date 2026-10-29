@@ -1,4 +1,5 @@
 ---
+keywords: [deploy, service, systemd, logs]
 title: Service notes
 description: A sample service card with config path, restart and logs.
 ---

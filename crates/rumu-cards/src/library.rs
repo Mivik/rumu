@@ -49,10 +49,12 @@ pub fn card_infos(store: &FsCardStore) -> Result<Vec<CardInfo>> {
         .into_values()
         .map(|c| {
             let description = c.summary();
+            let keywords = c.keywords().into_iter().map(str::to_owned).collect();
             CardInfo {
                 id: c.id,
                 title: c.title,
                 description,
+                keywords,
                 body: c.body,
                 revision: c.revision,
             }
@@ -128,5 +130,22 @@ mod tests {
             let evil = parse_card("linked/evil", "owned");
             assert!(write_card(&store, &evil).is_err());
         }
+    }
+
+    #[test]
+    fn card_infos_carry_keywords() {
+        let dir = tempfile::tempdir().unwrap();
+        let home = dir.path();
+        let store = FsCardStore::home(home);
+        write_card(
+            &store,
+            &parse_card(
+                "k",
+                "---\ntitle: K\nkeywords: [deploy, rollout]\n---\nbody\n",
+            ),
+        )
+        .unwrap();
+        let infos = card_infos(&store).unwrap();
+        assert_eq!(infos[0].keywords, ["deploy", "rollout"]);
     }
 }

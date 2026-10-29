@@ -16,8 +16,6 @@
 
 use std::collections::{BTreeMap, BTreeSet};
 
-use serde_json::Value;
-
 use crate::Card;
 
 /// Per-field card weights: keywords, title, description, body.
@@ -172,7 +170,7 @@ fn ranked<'a>(
     let docs: Vec<Doc> = list
         .iter()
         .map(|card| {
-            let kw = keywords(card).join(" ");
+            let kw = card.keywords().join(" ");
             let title = card.title.as_deref().unwrap_or(&card.id);
             let desc = card.summary().unwrap_or_default();
             let fields = [kw.as_str(), title, desc.as_str(), card.body.as_str()];
@@ -186,15 +184,6 @@ fn ranked<'a>(
             score,
         })
         .collect()
-}
-
-/// Frontmatter `keywords:`: a string or a list of strings.
-fn keywords(card: &Card) -> Vec<&str> {
-    match card.meta.get("keywords") {
-        Some(Value::String(s)) => vec![s],
-        Some(Value::Array(list)) => list.iter().filter_map(Value::as_str).collect(),
-        _ => Vec::new(),
-    }
 }
 
 /// Split text into lowercase ASCII words (2+ chars) and CJK bigrams (a lone

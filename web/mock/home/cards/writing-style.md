@@ -1,4 +1,5 @@
 ---
+keywords: [writing, tone, style, docs]
 title: Writing style
 description: Technical and direct; conclusion first, short paragraphs, consistent terminology.
 ---

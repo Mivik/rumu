@@ -461,6 +461,25 @@
     color: var(--ink);
   }
 
+  /* A card's subject tags (IndexCard, CardDrawer): the frontmatter
+   * `keywords:` as compact memory-tinted pills. They shrink — with an
+   * ellipsis — rather than push the row past the card's edge. */
+  .keyword-tag {
+    display: inline-block;
+    min-width: 0;
+    max-width: 100%;
+    padding: 0 7px;
+    overflow: hidden;
+    border: 1px solid color-mix(in srgb, var(--memory) 20%, transparent);
+    border-radius: 999px;
+    background: color-mix(in srgb, var(--memory) 8%, transparent);
+    color: color-mix(in srgb, var(--memory) 64%, var(--ink));
+    font-size: var(--text-micro);
+    line-height: 16px;
+    text-overflow: ellipsis;
+    white-space: nowrap;
+  }
+
   /* A card stub inline in the timeline: a tiny card standing in a row, its
    * coral rule along the top edge. */
   .card-tab {

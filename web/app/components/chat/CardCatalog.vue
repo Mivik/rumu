@@ -1,7 +1,7 @@
 <script setup lang="ts">
 // The card catalog: the whole library pulled out over the chat, every card an
-// index card on one sheet, with a filter over titles, descriptions and paths.
-// Opened from the sidebar or the cards popover; a card opens in the
+// index card on one sheet, with a filter over titles, descriptions, paths and
+// keywords. Opened from the sidebar or the cards popover; a card opens in the
 // CardDrawer on top of it. Escape closes the drawer first, then this.
 import { computed, nextTick, onBeforeUnmount, ref, watch } from 'vue'
 import { t } from '../../i18n'
@@ -16,7 +16,9 @@ const shown = computed(() => {
   const q = query.value.trim().toLowerCase()
   if (!q) return state.cards
   return state.cards.filter((c) =>
-    [c.id, c.title ?? '', c.description ?? ''].some((s) => s.toLowerCase().includes(q)),
+    [c.id, c.title ?? '', c.description ?? '', ...(c.keywords ?? [])].some((s) =>
+      s.toLowerCase().includes(q),
+    ),
   )
 })
 

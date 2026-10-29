@@ -21,6 +21,9 @@ pub struct CardInfo {
     pub title: Option<String>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub description: Option<String>,
+    /// Frontmatter `keywords:` — the terms that should bring the card to mind.
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub keywords: Vec<String>,
     pub body: String,
     pub revision: String,
 }
@@ -52,6 +55,21 @@ impl Card {
         match &self.description {
             Some(s) if !s.trim().is_empty() => Some(s.trim().to_owned()),
             _ => fallback_description(&self.body),
+        }
+    }
+
+    /// Frontmatter `keywords:`: a list of strings, or one comma-separated
+    /// string (`a, b, c`, the folded form). In file order; anything else (or
+    /// no `keywords:`) is empty.
+    pub fn keywords(&self) -> Vec<&str> {
+        match self.meta.get("keywords") {
+            Some(Value::String(s)) => s
+                .split([',', '，'])
+                .map(str::trim)
+                .filter(|k| !k.is_empty())
+                .collect(),
+            Some(Value::Array(list)) => list.iter().filter_map(Value::as_str).collect(),
+            _ => Vec::new(),
         }
     }
 }
@@ -506,5 +524,38 @@ mod tests {
         assert_eq!(c.summary().as_deref(), Some("body line"));
         c.body = "\n# only a heading\n".into();
         assert_eq!(c.summary(), None);
+    }
+
+    // ---------- keywords ----------
+
+    #[test]
+    fn keywords_are_a_string_or_a_string_list() {
+        let one = parse_card("k", "---\nkeywords: deploy\n---\nbody\n");
+        assert_eq!(one.keywords(), ["deploy"]);
+        // A lone string holds the whole list, comma-separated (the folded
+        // form the memory prompt's list becomes in the file).
+        let folded = parse_card("k", "---\nkeywords: deploy, k8s , rollout\n---\nbody\n");
+        assert_eq!(folded.keywords(), ["deploy", "k8s", "rollout"]);
+        let fullwidth = parse_card("k", "---\nkeywords: 部署，发布\n---\nbody\n");
+        assert_eq!(fullwidth.keywords(), ["部署", "发布"]);
+        // A folded block scalar joins its lines with spaces, so a phrase
+        // stays one keyword.
+        let long = parse_card(
+            "k",
+            "---\nkeywords: >-\n  deploy, Arch\n  Linux\n---\nbody\n",
+        );
+        assert_eq!(long.keywords(), ["deploy", "Arch Linux"]);
+        // Non-string entries are skipped; order is kept.
+        let many = parse_card("k", "---\nkeywords: [deploy, 2, rollout]\n---\nbody\n");
+        assert_eq!(many.keywords(), ["deploy", "rollout"]);
+        // Anything else is no keywords at all.
+        let none = parse_card("k", "---\nkeywords: 2\n---\nbody\n");
+        assert!(none.keywords().is_empty());
+        assert!(
+            parse_card("k", "---\nkeywords: \" , \"\n---\nbody\n")
+                .keywords()
+                .is_empty()
+        );
+        assert!(parse_card("k", "body\n").keywords().is_empty());
     }
 }

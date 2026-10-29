@@ -15,6 +15,8 @@ import { renderMarkdown } from '../../lib/markdown'
 
 const card = computed(() => (state.drawer ? (cardById.value.get(state.drawer.cardId) ?? null) : null))
 
+const keywords = computed(() => card.value?.keywords ?? [])
+
 const uses = computed(() => (state.drawer ? (cardUsesOnPath.value.get(state.drawer.cardId) ?? []) : []))
 
 /** The use this drawer was opened from (a timeline node), else the latest. */
@@ -125,6 +127,10 @@ onBeforeUnmount(() => window.removeEventListener('keydown', onKey))
             <Icon name="close" :size="13" />
           </button>
         </header>
+
+        <div v-if="keywords.length" class="flex flex-wrap gap-1.5 px-5 pt-3">
+          <span v-for="(k, i) in keywords" :key="i" class="keyword-tag">{{ k }}</span>
+        </div>
 
         <p v-if="!card" class="px-5 pt-3 text-meta text-ink-3">{{ t('cards.drawer.deleted') }}</p>
         <div v-else-if="showTabs" class="flex flex-wrap items-center gap-x-3 gap-y-2 px-5 pt-3">
