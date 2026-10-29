@@ -20,11 +20,8 @@
     "sessions": "Sessions",
     "openSessions": "Open sessions",
     "running": "running…",
-    "inspector": "Inspector",
-    "openInspector": "Open inspector",
-    "closeInspector": "Close inspector",
     "queued": "queued",
-    "branchTitle": "branch {id} · {status}"
+    "cards": "card | cards"
   },
   "user": {
     "edit": "Edit message",

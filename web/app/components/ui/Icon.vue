@@ -2,7 +2,10 @@
 // Minimal stroke icon set (one visual weight, inherits currentColor).
 import { computed } from 'vue'
 
-const props = withDefaults(defineProps<{ name: string; size?: number }>(), { size: 14 })
+const props = withDefaults(defineProps<{ name: string; size?: number; stroke?: number }>(), {
+  size: 14,
+  stroke: 1.8,
+})
 
 const paths: Record<string, string> = {
   user: '<circle cx="12" cy="8" r="3.6"/><path d="M4.5 20.5c.6-4 3.7-6 7.5-6s6.9 2 7.5 6"/>',
@@ -27,6 +30,9 @@ const paths: Record<string, string> = {
   menu: '<path d="M4 7h16M4 12h16M4 17h16"/>',
   panel: '<rect x="3.5" y="4.5" width="17" height="15" rx="2"/><path d="M15 4.5v15"/>',
   chevron: '<path d="M9 6l6 6-6 6"/>',
+  down: '<path d="M6.5 9.5l5.5 5.5 5.5-5.5"/>',
+  gauge:
+    '<path d="M4.2 16.5a8 8 0 1 1 15.6 0"/><path d="M12 15l3.6-4.2"/><circle cx="12" cy="15.5" r="1.2"/>',
   plus: '<path d="M12 5.5v13M5.5 12h13"/>',
   send: '<path d="M12 19V5.5"/><path d="M6.5 11L12 5.5l5.5 5.5"/>',
   stop: '<rect x="7" y="7" width="10" height="10" rx="2" fill="currentColor" stroke="none"/>',
@@ -44,7 +50,7 @@ const html = computed(() => paths[props.name] ?? paths.note)
     viewBox="0 0 24 24"
     fill="none"
     stroke="currentColor"
-    stroke-width="1.8"
+    :stroke-width="stroke"
     stroke-linecap="round"
     stroke-linejoin="round"
     aria-hidden="true"

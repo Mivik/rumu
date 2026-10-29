@@ -20,11 +20,8 @@
     "sessions": "会话",
     "openSessions": "打开会话列表",
     "running": "运行中…",
-    "inspector": "检查器",
-    "openInspector": "打开检查器",
-    "closeInspector": "关闭检查器",
     "queued": "排队中",
-    "branchTitle": "分支 {id} · {status}"
+    "cards": "张卡片"
   },
   "user": {
     "edit": "编辑消息",

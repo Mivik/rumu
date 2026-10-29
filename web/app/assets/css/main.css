@@ -518,6 +518,82 @@
     text-align: center;
   }
 
+  /* the chat: the one sheet of paper on the desk, its edge drawn so it
+   * stands off the cream canvas */
+  .sheet {
+    box-shadow:
+      0 0 0 1px var(--line),
+      var(--shadow-card-v);
+  }
+
+  /* a control in the chat header's bar: a quiet pill that fills in sand
+   * when pointed at or while its popover is open */
+  .bar-btn {
+    display: inline-flex;
+    align-items: center;
+    gap: 6px;
+    height: 32px;
+    padding: 0 10px;
+    border-radius: 999px;
+    font-size: var(--text-meta);
+    font-weight: 700;
+    color: var(--ink-2);
+    white-space: nowrap;
+    transition:
+      background-color 0.15s,
+      color 0.15s;
+  }
+
+  .bar-btn:hover,
+  .bar-btn.is-open {
+    background: var(--surface-2);
+    color: var(--ink);
+  }
+
+  /* popover sections: a heading in ink with its count beside it */
+  .panel-head {
+    display: flex;
+    align-items: baseline;
+    gap: 8px;
+    padding-inline: 12px;
+    margin-bottom: 8px;
+    font-size: var(--text-secondary);
+    font-weight: 700;
+    color: var(--ink);
+  }
+
+  .panel-head > small {
+    font-size: var(--text-meta);
+    font-weight: 600;
+    color: var(--ink-3);
+  }
+
+  /* a folded secondary list in a side panel: label, count, chevron */
+  .panel-row {
+    display: flex;
+    align-items: center;
+    gap: 8px;
+    width: 100%;
+    padding: 7px 12px;
+    border-radius: var(--radius-control);
+    font-size: var(--text-secondary);
+    color: var(--ink-2);
+    list-style: none;
+    user-select: none;
+    transition:
+      background-color 0.15s,
+      color 0.15s;
+  }
+
+  .panel-row::-webkit-details-marker {
+    display: none;
+  }
+
+  .panel-row:hover {
+    background: color-mix(in srgb, var(--surface) 70%, transparent);
+    color: var(--ink);
+  }
+
   /* code blocks / tool I/O: the only sanctioned mono surfaces */
   .code {
     margin: 0;

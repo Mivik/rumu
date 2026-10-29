@@ -7,9 +7,9 @@ import type { BranchTreeNode } from '../lib/store'
 import { selectBranch, state } from '../lib/store'
 import { preview, shortId } from '../lib/util'
 import type { BranchStatus } from '../lib/types'
-import { layout } from '../lib/layout'
 
-// Recursive: child branches render through `nested` instances (no heading).
+// Recursive: child branches render through `nested` instances. The heading
+// is the inspector's.
 withDefaults(defineProps<{ items: BranchTreeNode[]; nested?: boolean }>(), { nested: false })
 
 type Tone = 'neutral' | 'pine' | 'agent' | 'revert'
@@ -29,10 +29,10 @@ function toneOf(b: BranchTreeNode['branch']): Tone {
 
 // Literal utility strings (Tailwind only emits complete class names).
 const toneClass: Record<Tone, string> = {
-  neutral: 'border-line text-ink-2',
-  pine: 'border-pine/40 text-pine',
-  agent: 'border-agent/40 text-agent',
-  revert: 'border-revert/40 text-revert',
+  neutral: 'text-ink-2',
+  pine: 'text-pine',
+  agent: 'text-agent',
+  revert: 'text-revert',
 }
 
 const elbowTone: Record<Tone, string> = {
@@ -61,16 +61,16 @@ function desc(b: BranchTreeNode['branch']): string {
   return ''
 }
 
+const emit = defineEmits<{ picked: [] }>()
+
 function onClick(id: string): void {
   void selectBranch(id)
-  // A branch switch is a chat action; don't leave an overlay covering it.
-  layout.inspectorOpen = false
+  emit('picked')
 }
 </script>
 
 <template>
   <div v-if="state.sessionId">
-    <div v-if="!nested" class="section-title mb-1.5">{{ t('panels.branches.title') }}</div>
     <div class="flex flex-col" :class="{ 'relative ml-4 pl-2': nested }">
       <!-- the trunk, from the parent's dot down to the first elbow -->
       <span v-if="nested" aria-hidden="true" class="absolute -top-[11px] left-0 h-[11px] w-px bg-line" />
@@ -89,7 +89,9 @@ function onClick(id: string): void {
         </template>
         <button
           class="flex w-full items-center gap-1.5 rounded-card px-3 py-1.5 text-left transition-[background-color,box-shadow] duration-200"
-          :class="item.branch.id === state.activeBranch ? 'bg-surface shadow-soft' : 'hover:bg-surface-2/70'"
+          :class="
+            item.branch.id === state.activeBranch ? 'bg-surface-2 font-semibold' : 'hover:bg-surface-2/60'
+          "
           @click="onClick(item.branch.id)"
         >
           <span
@@ -97,16 +99,13 @@ function onClick(id: string): void {
             :class="statusDot[item.branch.status] ?? 'bg-ink-3'"
             :title="t(`panels.branches.status.${item.branch.status}`)"
           />
-          <span
-            class="flex-none rounded-xs border px-1.5 font-mono text-micro"
-            :class="toneClass[toneOf(item.branch)]"
-          >
+          <span class="flex-none text-meta font-bold" :class="toneClass[toneOf(item.branch)]">
             {{ t(`panels.branches.kind.${item.branch.kind.type}`) }}
           </span>
           <span class="min-w-0 truncate text-meta text-ink-2">{{ desc(item.branch) }}</span>
           <span class="ml-auto flex-none font-mono text-micro text-ink-3">{{ shortId(item.branch.id) }}</span>
         </button>
-        <BranchTree v-if="item.children.length" :items="item.children" nested />
+        <BranchTree v-if="item.children.length" :items="item.children" nested @picked="emit('picked')" />
       </div>
     </div>
   </div>

@@ -17,18 +17,9 @@
 // jumping.
 import { computed, nextTick, onBeforeUnmount, ref, watch } from 'vue'
 import { t } from '../../i18n'
-import {
-  activeDelta,
-  currentBranch,
-  isBusy,
-  pathNodes,
-  queuedPrompts,
-  state,
-  timeline,
-} from '../../lib/store'
-import { shortId } from '../../lib/util'
+import { activeDelta, isBusy, queuedPrompts, state, timeline } from '../../lib/store'
 import { prefersReduced, timelineLive, vEnter } from '../../lib/motion'
-import { layout, toggleInspector, toggleSidebar } from '../../lib/layout'
+import { layout, toggleSidebar } from '../../lib/layout'
 import type { TimelineEntry } from '../../lib/store'
 import type { Node } from '../../lib/types'
 import UserRow from './UserRow.vue'
@@ -39,9 +30,8 @@ import Composer from './Composer.vue'
 import TasksPanel from './TasksPanel.vue'
 import TimelineRail from './TimelineRail.vue'
 import Welcome from './Welcome.vue'
-import Chip from '../ui/Chip.vue'
+import SessionBar from './SessionBar.vue'
 import Icon from '../ui/Icon.vue'
-import type { ChipTone } from '../ui/Chip.vue'
 
 const scrollEl = ref<HTMLElement | null>(null)
 const innerEl = ref<HTMLElement | null>(null)
@@ -273,30 +263,6 @@ watch(
   },
 )
 
-/** Non-main branches get one quiet chip (kind, full id + status on hover). */
-const branchChip = computed(() => {
-  const b = currentBranch.value
-  if (!b || b.kind.type === 'main') return null
-  const tone: ChipTone = b.kind.type === 'agent' ? 'agent' : b.kind.type === 'revert' ? 'revert' : 'neutral'
-  return {
-    label: t(`panels.branches.kind.${b.kind.type}`),
-    tone,
-    title: t('chat.header.branchTitle', {
-      id: shortId(b.id),
-      status: t(`panels.branches.status.${b.status}`),
-    }),
-  }
-})
-
-/** The model, shown once per header (full name on hover). */
-const model = computed(() => {
-  for (let i = pathNodes.value.length - 1; i >= 0; i--) {
-    const n = pathNodes.value[i]
-    if (n.body.type === 'assistant') return n.body.model
-  }
-  return null
-})
-
 /** Node id for data-node-id (focus targets). */
 function dataId(e: TimelineEntry): string {
   if (e.kind === 'user') return e.node.id
@@ -348,10 +314,13 @@ function jumpTo(i: number): void {
 
 <template>
   <section
-    class="m-3 flex min-h-0 min-w-0 flex-col overflow-hidden rounded-sheet bg-surface shadow-card lg:mx-0 lg:my-2"
+    class="sheet m-2 flex min-h-0 min-w-0 flex-col overflow-hidden rounded-sheet bg-surface sm:m-3 lg:mx-0 lg:my-4"
   >
-    <header class="flex min-h-14 items-center gap-2 px-4 pt-1 sm:px-6">
-      <!-- the side panels are drawers below their static breakpoints -->
+    <header
+      class="flex min-h-16 flex-none items-center gap-2 px-4 sm:px-6"
+      :class="{ 'border-b border-line-soft': state.sessionId }"
+    >
+      <!-- the sessions sidebar is a drawer below lg -->
       <button
         class="icon-btn -ml-1.5 size-8 flex-none lg:hidden"
         :title="t('chat.header.sessions')"
@@ -370,24 +339,14 @@ function jumpTo(i: number): void {
       >
         <span
           :key="state.sessionId ?? ''"
-          class="min-w-0 truncate font-display text-title font-semibold"
+          class="min-w-0 truncate text-title font-bold"
           :title="state.session?.title"
         >
           {{ state.session?.title || (state.sessionId ? t('common.untitled') : '') }}
         </span>
       </Transition>
-      <Chip
-        v-if="branchChip"
-        class="flex-none"
-        :label="branchChip.label"
-        :tone="branchChip.tone"
-        :title="branchChip.title"
-        mono
-      />
-      <span class="ml-auto flex min-w-0 flex-none items-center gap-3">
-        <span v-if="model" class="hidden truncate font-mono text-micro text-ink-3 md:inline" :title="model">
-          {{ model }}
-        </span>
+      <SessionBar v-if="state.sessionId" part="branch" />
+      <span class="ml-auto flex min-w-0 flex-none items-center gap-2">
         <Transition
           enter-active-class="transition duration-200 ease-soft"
           enter-from-class="translate-x-1 opacity-0"
@@ -396,23 +355,13 @@ function jumpTo(i: number): void {
         >
           <span
             v-if="isBusy"
-            class="inline-flex items-center gap-2 text-micro font-semibold text-brand-strong"
+            class="mr-1 inline-flex items-center gap-2 text-micro font-semibold text-brand-strong"
           >
             <span class="dot-live size-1.5 rounded-full bg-brand" />
             <span class="hidden sm:inline">{{ t('chat.header.running') }}</span>
           </span>
         </Transition>
-        <button
-          class="icon-btn -mr-1.5 size-8 flex-none"
-          :title="t('chat.header.inspector')"
-          :aria-label="
-            layout.inspectorOpen ? t('chat.header.closeInspector') : t('chat.header.openInspector')
-          "
-          :aria-expanded="layout.inspectorOpen"
-          @click="toggleInspector"
-        >
-          <Icon name="panel" :size="16" />
-        </button>
+        <SessionBar v-if="state.sessionId" part="tools" />
       </span>
     </header>
 
@@ -476,7 +425,7 @@ function jumpTo(i: number): void {
           </div>
         </div>
 
-        <div ref="composerEl" class="px-4 pt-1 pb-2.5 sm:px-6">
+        <div ref="composerEl" class="px-3 pt-1 pb-3 sm:px-6 sm:pb-5">
           <!-- running background tasks of this branch + opened task output -->
           <TasksPanel />
           <!-- steering prompts accepted while busy, until they are written -->
@@ -486,9 +435,7 @@ function jumpTo(i: number): void {
               :key="q.id"
               class="ml-auto w-fit max-w-[85%] rounded-sheet rounded-br-xs border border-dashed border-brand/40 bg-brand-soft/50 px-4 py-2 text-message text-ink-3 sm:max-w-[70%]"
             >
-              <span class="mr-1.5 text-micro font-semibold text-brand-strong">{{
-                t('chat.header.queued')
-              }}</span
+              <span class="mr-1.5 text-micro font-semibold text-ink-2">{{ t('chat.header.queued') }}</span
               >{{ q.text }}
             </div>
           </div>
