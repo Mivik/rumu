@@ -50,7 +50,11 @@ export async function loadPath(branch: BranchId): Promise<void> {
   }
 }
 
-export async function selectBranch(id: BranchId): Promise<void> {
+/** Switch to `branch`. `abandon` picks among replaced variants: the server
+ * abandons the branch being left only when the target was itself abandoned,
+ * so a deliberate fork is switched to without anything being hidden from the
+ * branch panel. */
+export async function selectBranch(id: BranchId, abandon = false): Promise<void> {
   state.activeBranch = id
   const b = state.branches[id]
   if (b) {
@@ -60,7 +64,7 @@ export async function selectBranch(id: BranchId): Promise<void> {
     state.pathState = null
   }
   try {
-    await rumu.request('branch.activate', { branch: id })
+    await rumu.request('branch.activate', { branch: id, abandon })
   } catch (err) {
     toast('error', t('errors.activate'), (err as Error).message)
   }
@@ -69,11 +73,15 @@ export async function selectBranch(id: BranchId): Promise<void> {
 
 /**
  * Fork a new branch at `nodeId` and make it active. `label` names the action
- * in the error toast (fork / edit / regenerate).
+ * in the error toast (fork / edit / regenerate); `abandon` replaces the
+ * branch being left (an edit) instead of adding a sibling next to it.
  */
-export async function forkAt(nodeId: NodeId, label = 'fork'): Promise<Branch | null> {
+export async function forkAt(nodeId: NodeId, label = 'fork', abandon = false): Promise<Branch | null> {
   try {
-    const res = await rumu.request<{ branch: Branch }>('branch.fork', { node: nodeId })
+    const res = await rumu.request<{ branch: Branch }>('branch.fork', {
+      node: nodeId,
+      abandon,
+    })
     await resyncTree()
     state.activeBranch = res.branch.id
     if (state.session) state.session.active_branch = res.branch.id
@@ -87,10 +95,6 @@ export async function forkAt(nodeId: NodeId, label = 'fork'): Promise<Branch | n
     )
     return null
   }
-}
-
-export async function forkFrom(nodeId: NodeId): Promise<void> {
-  await forkAt(nodeId)
 }
 
 /**

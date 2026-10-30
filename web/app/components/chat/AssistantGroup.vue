@@ -11,7 +11,7 @@ import { computed, onBeforeUnmount, ref, watch } from 'vue'
 import { t } from '../../i18n'
 import type { Node } from '../../lib/types'
 import type { TimelineGroup } from '../../lib/store'
-import { activeDelta, forkFrom, regenerateFrom, state } from '../../lib/store'
+import { activeDelta, forkAt, regenerateFrom, state } from '../../lib/store'
 import type { CatState } from '../../lib/cat'
 import { renderMarkdown } from '../../lib/markdown'
 import { contentText, copyText } from '../../lib/util'
@@ -20,6 +20,7 @@ import { vEnter } from '../../lib/motion'
 import Icon from '../ui/Icon.vue'
 import RumuCat from '../brand/RumuCat.vue'
 import ActivityRun from './ActivityRun.vue'
+import BranchSwitcher from './BranchSwitcher.vue'
 import ContextPills from './ContextPills.vue'
 import RunningTools from './RunningTools.vue'
 import UsageHud from './UsageHud.vue'
@@ -68,7 +69,7 @@ const answerText = computed(() =>
 const forkTarget = computed(() => props.group.safeNode)
 function onFork(): void {
   const n = forkTarget.value
-  if (n) void forkFrom(n.id)
+  if (n) void forkAt(n.id)
 }
 
 const regenerating = ref(false)
@@ -178,6 +179,7 @@ onBeforeUnmount(() => retryTimer && clearInterval(retryTimer))
         v-if="!live"
         class="flex items-center gap-0.5 opacity-100 transition duration-200 ease-soft sm:opacity-0 sm:group-hover/agroup:opacity-100 sm:group-focus-within/agroup:opacity-100"
       >
+        <BranchSwitcher :parent-id="prompt?.id ?? null" />
         <button
           class="icon-btn size-5"
           :title="t('chat.assistant.copy')"

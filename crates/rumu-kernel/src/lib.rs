@@ -618,7 +618,14 @@ impl Kernel {
         Ok(())
     }
 
-    pub fn activate_branch(&self, branch: &BranchId) -> Result<()> {
+    /// Make `branch` the session's active one. With `abandon_active` this is
+    /// the switcher's pick among replaced variants: an abandoned target is
+    /// revived and the branch left behind is abandoned. A target that was
+    /// never abandoned (a deliberate fork) is a plain activation — nothing
+    /// is abandoned, so the fork stays in the branch panel. Sub-agent
+    /// branches are refused: they belong to their parent's tool call, not
+    /// the user.
+    pub fn activate_branch(&self, branch: &BranchId, abandon_active: bool) -> Result<()> {
         let b = self
             .store
             .get_branch(branch)?
@@ -627,6 +634,15 @@ impl Kernel {
             .store
             .get_session(&b.session)?
             .ok_or_else(|| Error::SessionNotFound(b.session.clone()))?;
+        if abandon_active && session.active_branch != b.id {
+            if matches!(b.kind, BranchKind::Agent { .. }) {
+                return Err(Error::AgentBranchNotActivatable(b.id.clone()));
+            }
+            if b.status == BranchStatus::Abandoned {
+                self.abandon_branch(&session.active_branch)?;
+                self.set_branch_status(&b.id, BranchStatus::Active);
+            }
+        }
         session.active_branch = b.id.clone();
         session.updated_at = now();
         self.store.update_session(&session)?;
@@ -1054,13 +1070,17 @@ impl Kernel {
 
     // ---- UI tree ops ----
 
-    pub async fn fork(self: &Arc<Self>, node: &NodeId) -> Result<Branch> {
+    /// `branch.fork` WS method: a new branch at `node`. Replacing the active
+    /// branch (`abandon_active`) is how an edited prompt steps away from the
+    /// turn it replaces.
+    pub async fn fork(self: &Arc<Self>, node: &NodeId, abandon_active: bool) -> Result<Branch> {
         let n = self
             .store
             .get_node(node)?
             .ok_or_else(|| Error::NodeNotFound(node.clone()))?;
         Self::check_safe_point(&n)?;
-        self.new_branch_at(&n, BranchKind::Fork, false).await
+        self.new_branch_at(&n, BranchKind::Fork, abandon_active)
+            .await
     }
 
     pub async fn revert(self: &Arc<Self>, node: &NodeId, lesson: &str) -> Result<Branch> {
@@ -1133,6 +1153,20 @@ impl Kernel {
         Ok(())
     }
 
+    /// Mark `branch` abandoned because an operation replaced it. Refused
+    /// while it is running, so nothing is silently stopped.
+    fn abandon_branch(&self, branch: &BranchId) -> Result<()> {
+        if self.inner.lock().unwrap().running.contains_key(branch) {
+            return Err(Error::ActiveBranchBusy);
+        }
+        if let Some(mut old) = self.store.get_branch(branch)? {
+            old.status = BranchStatus::Abandoned;
+            self.store.update_branch(&old)?;
+            self.push("branch.updated", json!({ "branch": old }));
+        }
+        Ok(())
+    }
+
     async fn new_branch_at(
         self: &Arc<Self>,
         n: &Node,
@@ -1144,20 +1178,7 @@ impl Kernel {
             .get_session(&n.session)?
             .ok_or_else(|| Error::SessionNotFound(n.session.clone()))?;
         if abandon_active {
-            if self
-                .inner
-                .lock()
-                .unwrap()
-                .running
-                .contains_key(&session.active_branch)
-            {
-                return Err(Error::ActiveBranchBusy);
-            }
-            if let Some(mut old) = self.store.get_branch(&session.active_branch)? {
-                old.status = BranchStatus::Abandoned;
-                self.store.update_branch(&old)?;
-                self.push("branch.updated", json!({ "branch": old }));
-            }
+            self.abandon_branch(&session.active_branch)?;
         }
         let b = Self::make_branch(&n.session, n.id.clone(), kind);
         self.store.insert_branch(&b)?;

@@ -153,10 +153,11 @@ impl Kernel {
     }
 
     /// `branch.regenerate` WS method: fork at the user message `node` and run
-    /// the step loop again on the new branch. The prompt event is replayed so
-    /// hooks and memory injection behave as they did the first time, but the
-    /// message itself is not appended again. Progress arrives via pushes; the
-    /// new branch is returned immediately.
+    /// the step loop again on the new branch. The branch being replaced is
+    /// abandoned. The prompt event is replayed so hooks and memory injection
+    /// behave as they did the first time, but the message itself is not
+    /// appended again. Progress arrives via pushes; the new branch is
+    /// returned immediately.
     pub async fn regenerate(self: &Arc<Self>, node: &NodeId) -> Result<Branch> {
         let n = self
             .store
@@ -166,7 +167,7 @@ impl Kernel {
             NodeBody::User { content } => content.text.clone(),
             _ => return Err(Error::NotAUserMessage),
         };
-        let branch = self.fork(&n.id).await?;
+        let branch = self.fork(&n.id, true).await?;
         let token = self.begin_loop(&branch.id)?;
         self.spawn_turn(branch.id.clone(), token, TurnKind::Regenerate(text));
         Ok(branch)

@@ -27,9 +27,10 @@ export {
   pathNodes,
   queuedPrompts,
   runningTasks,
+  siblingAlternatives,
   sortedSessions,
 } from './state/derived'
-export type { BranchTreeNode, OwedReply } from './state/derived'
+export type { BranchTreeNode, OwedReply, SiblingAlternative } from './state/derived'
 
 export { timeline } from './state/timeline'
 export type {
@@ -50,7 +51,7 @@ export type {
 
 export { closeCatalog, closeDrawer, dismissToast, focusNode, openCatalog, openDrawer } from './state/ui'
 
-export { findAgentChild, forkFrom, regenerateFrom, retryBranch, selectBranch } from './state/tree'
+export { findAgentChild, forkAt, regenerateFrom, retryBranch, selectBranch } from './state/tree'
 export type { OpenHistory } from './state/sessions'
 export {
   closeSession,

@@ -156,7 +156,8 @@ export async function stopTurn(): Promise<void> {
 
 /**
  * Edit a sent prompt: fork from just before it and send the new text there.
- * The original message and its reply stay behind on their own branch.
+ * The branch holding the original message and reply is abandoned; its
+ * alternative stays reachable from the user message's switcher.
  */
 export async function editPrompt(node: Node, text: string): Promise<boolean> {
   const next = text.trim()
@@ -166,6 +167,6 @@ export async function editPrompt(node: Node, text: string): Promise<boolean> {
     toast('error', t('errors.editFirst'))
     return false
   }
-  if (!(await forkAt(before, 'edit'))) return false
+  if (!(await forkAt(before, 'edit', true))) return false
   return sendPrompt(next)
 }

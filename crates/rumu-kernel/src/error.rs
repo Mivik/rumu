@@ -73,6 +73,11 @@ pub enum Error {
     #[error("retry: no recorded failure to retry")]
     NothingToRetry,
 
+    /// `activate` was given a sub-agent branch: it is run by its parent's
+    /// tool call, never by the user.
+    #[error("activate: branch {0} is a sub-agent branch")]
+    AgentBranchNotActivatable(BranchId),
+
     /// The per-branch running-task limit was reached.
     #[error("branch already has {running} running tasks (limit {limit})")]
     TooManyTasks { running: usize, limit: usize },

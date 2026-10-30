@@ -272,7 +272,8 @@ async fn dispatch(state: &AppState, method: &str, p: &Value) -> Result<Value> {
 
         "branch.fork" => {
             let node: NodeId = str_param(p, "node")?.into();
-            let branch = kernel.fork(&node).await?;
+            let abandon = bool_param(p, "abandon");
+            let branch = kernel.fork(&node, abandon).await?;
             Ok(json!({ "branch": branch }))
         }
 
@@ -297,7 +298,8 @@ async fn dispatch(state: &AppState, method: &str, p: &Value) -> Result<Value> {
 
         "branch.activate" => {
             let branch: BranchId = str_param(p, "branch")?.into();
-            kernel.activate_branch(&branch)?;
+            let abandon = bool_param(p, "abandon");
+            kernel.activate_branch(&branch, abandon)?;
             Ok(json!({}))
         }
 
@@ -333,4 +335,9 @@ fn str_param<'a>(p: &'a Value, key: &str) -> Result<&'a str> {
     p.get(key)
         .and_then(Value::as_str)
         .ok_or_else(|| ServerError::MissingParam(key.to_owned()))
+}
+
+/// An optional boolean flag: absent (or not a bool) means false.
+fn bool_param(p: &Value, key: &str) -> bool {
+    p.get(key).and_then(Value::as_bool).unwrap_or(false)
 }

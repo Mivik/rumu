@@ -7,11 +7,12 @@
 import { computed, nextTick, ref } from 'vue'
 import { t } from '../../i18n'
 import type { Node } from '../../lib/types'
-import { editPrompt, forkFrom, isBusy } from '../../lib/store'
+import { editPrompt, forkAt, isBusy } from '../../lib/store'
 import { renderMarkdown } from '../../lib/markdown'
 import { contentText, copyText } from '../../lib/util'
 import { toast } from '../../lib/state/ui'
 import Icon from '../ui/Icon.vue'
+import BranchSwitcher from './BranchSwitcher.vue'
 import ContextPills from './ContextPills.vue'
 
 const props = withDefaults(defineProps<{ node: Node; context?: Node[] }>(), { context: () => [] })
@@ -79,7 +80,7 @@ async function onCopy(): Promise<void> {
 }
 
 function onFork(): void {
-  void forkFrom(props.node.id)
+  void forkAt(props.node.id)
 }
 </script>
 
@@ -130,6 +131,7 @@ function onFork(): void {
       v-if="!editing"
       class="mt-0.5 hidden h-5 items-center justify-end gap-0.5 opacity-0 transition duration-200 ease-soft group-hover/urow:opacity-100 group-focus-within/urow:opacity-100 sm:flex"
     >
+      <BranchSwitcher :parent-id="node.parent" />
       <button
         class="icon-btn size-5"
         :title="t('chat.user.editTitle')"

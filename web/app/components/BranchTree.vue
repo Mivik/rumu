@@ -42,10 +42,10 @@ const elbowTone: Record<Tone, string> = {
   revert: 'border-revert/55',
 }
 
-const statusDot: Record<BranchStatus, string> = {
+// Abandoned branches never reach the panel (see `branchTree`).
+const statusDot: Partial<Record<BranchStatus, string>> = {
   active: 'bg-pine',
   done: 'bg-brand',
-  abandoned: 'bg-ink-3 opacity-40',
 }
 
 function desc(b: BranchTreeNode['branch']): string {

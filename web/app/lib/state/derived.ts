@@ -160,13 +160,34 @@ export interface BranchTreeNode {
   children: BranchTreeNode[]
 }
 
+/** Abandoned branches are replaced variants: hidden here, reachable through
+ * the message switcher instead. A sub-agent goes with the branch it ran on
+ * (its home is that branch's tool row). Other descendants of a hidden branch
+ * hang off the nearest visible ancestor (or the root). */
 export const branchTree = computed<BranchTreeNode[]>(() => {
-  const parentOf = new Map<BranchId, BranchId | null>()
-  const kids = new Map<BranchId | null, Branch[]>()
   const all = Object.values(state.branches).sort((a, b) => a.created_at - b.created_at)
+  const byId = new Map(all.map((b) => [b.id, b]))
+  const hidden = (b: Branch, depth = 0): boolean => {
+    if (b.status === 'abandoned') return true
+    if (b.kind.type !== 'agent' || depth >= 10_000) return false
+    const parent = byId.get(b.kind.parent_branch)
+    return !!parent && hidden(parent, depth + 1)
+  }
+  const nearestVisible = (id: BranchId | null): BranchId | null => {
+    let cur = id
+    let guard = 0
+    while (cur && guard++ < 10_000) {
+      const b = byId.get(cur)
+      if (!b) return null
+      if (!hidden(b)) return b.id
+      cur = parentBranchOf(b)
+    }
+    return null
+  }
+  const kids = new Map<BranchId | null, Branch[]>()
   for (const b of all) {
-    const p = parentBranchOf(b)
-    parentOf.set(b.id, p)
+    if (hidden(b)) continue
+    const p = nearestVisible(parentBranchOf(b))
     if (!kids.has(p)) kids.set(p, [])
     kids.get(p)!.push(b)
   }
@@ -174,6 +195,85 @@ export const branchTree = computed<BranchTreeNode[]>(() => {
     (kids.get(parent) ?? []).map((branch) => ({ branch, children: build(branch.id) }))
   return build(null)
 })
+
+export interface SiblingAlternative {
+  /** Branch to activate when it is picked. */
+  branch: BranchId
+  /** The active branch's head is inside this subtree. */
+  current: boolean
+}
+
+/** parentId → its sibling alternatives, built in one pass over the branches
+ * (each head walks up to the root once) so the per-message switcher is a
+ * lookup, not another walk of every branch. */
+const siblingIndex = computed<Map<NodeId, SiblingAlternative[]>>(() => {
+  // Which child of each ancestor a non-agent branch's head descends through.
+  const byChild = new Map<NodeId, Map<NodeId, Branch[]>>()
+  for (const b of Object.values(state.branches)) {
+    if (b.kind.type === 'agent') continue
+    let cur: NodeId | null | undefined = b.head
+    let guard = 0
+    while (cur && state.nodes[cur] && guard++ < 10_000) {
+      const parent = state.nodes[cur].parent
+      if (parent) {
+        let children = byChild.get(parent)
+        if (!children) {
+          children = new Map()
+          byChild.set(parent, children)
+        }
+        const list = children.get(cur) ?? []
+        list.push(b)
+        children.set(cur, list)
+      }
+      cur = state.nodes[cur].parent
+    }
+  }
+  // The child of each ancestor the active branch's head descends through.
+  const activeChildOf = new Map<NodeId, NodeId>()
+  const head = currentBranch.value?.head
+  if (head) {
+    let cur: NodeId | null | undefined = head
+    let prev: NodeId | null = null
+    let guard = 0
+    while (cur && state.nodes[cur] && guard++ < 10_000) {
+      if (prev) activeChildOf.set(cur, prev)
+      prev = cur
+      cur = state.nodes[cur].parent
+    }
+  }
+  const pick = (branches: Branch[]): Branch =>
+    branches.reduce((best, b) => {
+      const live = b.status !== 'abandoned'
+      if (live !== (best.status !== 'abandoned')) return live ? b : best
+      return b.created_at > best.created_at ? b : best
+    })
+  const index = new Map<NodeId, SiblingAlternative[]>()
+  for (const [parentId, children] of byChild) {
+    if (children.size < 2) continue
+    const activeChild = activeChildOf.get(parentId) ?? null
+    index.set(
+      parentId,
+      [...children.entries()]
+        .sort(([a], [b]) => (state.nodes[a]?.at ?? 0) - (state.nodes[b]?.at ?? 0) || a.localeCompare(b))
+        .map(([nodeId, branches]) => ({
+          branch: pick(branches).id,
+          current: nodeId === activeChild,
+        })),
+    )
+  }
+  return index
+})
+
+/**
+ * The alternatives at a message: one per child subtree of `parentId` that
+ * holds a non-agent branch head. Abandoned branches still count (this is how
+ * they are reached); subtrees that only lead to agent branches (an
+ * `inherit: full` fork at an assistant node) do not.
+ */
+export function siblingAlternatives(parentId: NodeId | null): SiblingAlternative[] {
+  if (!parentId) return []
+  return siblingIndex.value.get(parentId) ?? []
+}
 
 /** Hook trace rows for the open session (unknown-branch rows are dropped here). */
 export const hookTraceForSession = computed(() =>

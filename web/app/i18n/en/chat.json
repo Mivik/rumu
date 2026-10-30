@@ -45,6 +45,11 @@
     "interrupted": "The reply was interrupted",
     "retry": "Retry"
   },
+  "alternatives": {
+    "previous": "Previous variant",
+    "next": "Next variant",
+    "title": "Variant {current} of {total}"
+  },
   "timeline": {
     "label": "Conversation timeline",
     "emptyPrompt": "(empty prompt)"

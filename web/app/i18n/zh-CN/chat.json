@@ -45,6 +45,11 @@
     "interrupted": "回复被中断了",
     "retry": "重试"
   },
+  "alternatives": {
+    "previous": "上一个版本",
+    "next": "下一个版本",
+    "title": "第 {current} 个版本，共 {total} 个"
+  },
   "timeline": {
     "label": "对话时间线",
     "emptyPrompt": "（空提问）"

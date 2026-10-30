@@ -2696,8 +2696,152 @@ async fn regenerate_forks_at_the_prompt_and_does_not_duplicate_it() {
     assert_eq!(body_kinds(&old), vec!["marker[root]", "user", "assistant"]);
 }
 
-// ---------- out-of-band posts ----------
+/// Regenerating replaces the branch it regenerates: the old active branch is
+/// abandoned and the new one active.
+#[tokio::test]
+async fn regenerate_abandons_the_active_branch() {
+    let (kernel, _llm, session, branch) = setup(
+        vec![],
+        vec![
+            LlmResponse::text("first reply"),
+            LlmResponse::text("second reply"),
+        ],
+    )
+    .await;
 
+    let (_, nodes, _) = run_turn(&kernel, &branch, "hello").await;
+    let prompt = nodes
+        .iter()
+        .find(|n| matches!(n.body, NodeBody::User { .. }))
+        .expect("the turn appended a user node")
+        .id
+        .clone();
+
+    let mut rx = kernel.tap_pushes();
+    let regenerated = kernel.regenerate(&prompt).await.unwrap();
+    wait_turn(&mut rx, Some(regenerated.id.0.as_str())).await;
+
+    let (info, _, branches) = kernel.session_tree(&session).unwrap();
+    let status = |id: &BranchId| {
+        branches
+            .iter()
+            .find(|b| &b.id == id)
+            .unwrap_or_else(|| panic!("branch {id} missing"))
+            .status
+    };
+    assert_eq!(info.active_branch, regenerated.id);
+    assert_eq!(status(&branch), BranchStatus::Abandoned);
+    assert_eq!(status(&regenerated.id), BranchStatus::Active);
+}
+
+/// A manual fork is not a replacement: the branch it forked from stays active.
+#[tokio::test]
+async fn plain_fork_keeps_the_old_branch_active() {
+    let (kernel, _llm, session, branch) =
+        setup(vec![], vec![LlmResponse::text("reply")]).await;
+
+    let (_, nodes, _) = run_turn(&kernel, &branch, "hello").await;
+    let prompt = nodes
+        .iter()
+        .find(|n| matches!(n.body, NodeBody::User { .. }))
+        .expect("the turn appended a user node")
+        .id
+        .clone();
+
+    let forked = kernel.fork(&prompt, false).await.unwrap();
+
+    let (info, _, branches) = kernel.session_tree(&session).unwrap();
+    let status = |id: &BranchId| {
+        branches
+            .iter()
+            .find(|b| &b.id == id)
+            .unwrap_or_else(|| panic!("branch {id} missing"))
+            .status
+    };
+    assert_eq!(info.active_branch, forked.id);
+    assert_eq!(status(&branch), BranchStatus::Active);
+    assert_eq!(status(&forked.id), BranchStatus::Active);
+}
+
+/// `branch.activate` with abandonment only swaps replaced variants: an
+/// abandoned target is revived and the branch left behind abandoned, a
+/// deliberate fork (never abandoned) is a plain activation that abandons
+/// nothing, and a sub-agent branch is refused before anything changes.
+#[tokio::test]
+async fn activate_with_abandon_only_swaps_replaced_variants() {
+    let plugin = Arc::new(plugin_with(
+        "branch",
+        &["agent"],
+        vec![],
+        noop_hooks(),
+        noop_tools(),
+    ));
+    let (kernel, _llm, session, main) = setup(
+        vec![plugin],
+        vec![
+            LlmResponse::calls(vec![ToolCall::new("e1", "agent", json!({"task": "dig"}))]),
+            LlmResponse::text("child summary"),
+            LlmResponse::text("parent done"),
+            LlmResponse::text("regenerated"),
+        ],
+    )
+    .await;
+    let (_, nodes, _) = run_turn_on(&kernel, &main, "go").await;
+    let prompt = nodes
+        .iter()
+        .find(|n| matches!(n.body, NodeBody::User { .. }))
+        .expect("the turn appended a user node")
+        .id
+        .clone();
+
+    let tree = || kernel.session_tree(&session).unwrap();
+    let status = |id: &BranchId| {
+        tree()
+            .2
+            .iter()
+            .find(|b| &b.id == id)
+            .unwrap_or_else(|| panic!("branch {id} missing"))
+            .status
+    };
+    let active = || tree().0.active_branch.clone();
+
+    // A sub-agent branch is refused, leaving the session untouched.
+    let child = tree()
+        .2
+        .into_iter()
+        .find(|b| matches!(&b.kind, rumu_core::BranchKind::Agent { .. }))
+        .expect("agent branch exists")
+        .id
+        .clone();
+    let err = kernel.activate_branch(&child, true).unwrap_err();
+    assert!(
+        matches!(err, rumu_kernel::Error::AgentBranchNotActivatable(_)),
+        "{err:#}"
+    );
+    assert_eq!(active(), main);
+    assert_eq!(status(&main), BranchStatus::Active);
+    assert_eq!(status(&child), BranchStatus::Done);
+
+    // Switching between deliberate forks abandons neither.
+    let fork1 = kernel.fork(&prompt, false).await.unwrap();
+    let fork2 = kernel.fork(&prompt, false).await.unwrap();
+    kernel.activate_branch(&fork1.id, true).unwrap();
+    assert_eq!(active(), fork1.id);
+    assert_eq!(status(&fork1.id), BranchStatus::Active);
+    assert_eq!(status(&fork2.id), BranchStatus::Active);
+
+    // A branch a regenerate abandoned is revived; the one left behind goes.
+    let mut rx = kernel.tap_pushes();
+    let regenerated = kernel.regenerate(&prompt).await.unwrap();
+    wait_turn(&mut rx, Some(regenerated.id.0.as_str())).await;
+    assert_eq!(status(&fork1.id), BranchStatus::Abandoned);
+    kernel.activate_branch(&fork1.id, true).unwrap();
+    assert_eq!(active(), fork1.id);
+    assert_eq!(status(&fork1.id), BranchStatus::Active);
+    assert_eq!(status(&regenerated.id), BranchStatus::Abandoned);
+}
+
+// ---------- out-of-band posts ----------
 /// A post carrying one plain note.
 fn note_post(text: &str, wake: bool) -> Post {
     Post {
