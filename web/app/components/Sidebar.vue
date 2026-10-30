@@ -109,7 +109,7 @@ const rows = computed<Row[]>(() => {
     </div>
 
     <button
-      class="group/new flex w-full flex-none items-center gap-2.5 rounded-card border border-line bg-surface px-3 py-2.5 text-left text-secondary font-bold text-ink shadow-soft transition duration-200 ease-soft hover:shadow-card active:scale-[.98]"
+      class="group/new flex w-full flex-none items-center gap-2.5 rounded-control border border-transparent px-3 py-2 text-left text-secondary text-ink-2 transition-colors duration-200 hover:bg-surface/60 hover:text-ink"
       @click="home"
     >
       <span
@@ -124,7 +124,9 @@ const rows = computed<Row[]>(() => {
       class="mt-1.5 flex w-full flex-none items-center gap-2.5 rounded-control border border-transparent px-3 py-2 text-left text-secondary text-ink-2 transition-colors duration-200 hover:bg-surface/60 hover:text-ink"
       @click="library"
     >
-      <Icon name="memory" :size="16" class="flex-none text-memory" />
+      <span class="flex size-5 flex-none items-center justify-center">
+        <Icon name="memory" :size="16" class="text-memory" />
+      </span>
       <span class="flex-1">{{ t('cards.library.title') }}</span>
       <span class="text-micro text-ink-3 tabular-nums">{{ state.cards.length }}</span>
     </button>
