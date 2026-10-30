@@ -32,6 +32,7 @@
   },
   "assistant": {
     "working": "working…",
+    "retrying": "retrying {attempt}/{max} · {seconds}s",
     "copy": "Copy reply",
     "regenerate": "Regenerate reply",
     "noPrompt": "No prompt to regenerate from",
@@ -39,6 +40,10 @@
     "noSafePoint": "Tool calls unfinished",
     "copied": "Copied reply",
     "reasoningReset": "Earlier reasoning dropped"
+  },
+  "error": {
+    "interrupted": "The reply was interrupted",
+    "retry": "Retry"
   },
   "timeline": {
     "label": "Conversation timeline",

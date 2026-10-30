@@ -8,7 +8,7 @@
 
 import { computed } from 'vue'
 import type { Node } from '../types'
-import { CATALOG_TAG, reasoningText } from '../types'
+import { CATALOG_TAG, TURN_ERROR_TAG, reasoningText } from '../types'
 import { contentText } from '../util'
 import { callsOnPath, pathNodes } from './derived'
 import { state } from './state'
@@ -24,15 +24,17 @@ function isRecallNote(n: Node): boolean {
   return n.body.type === 'note' && n.body.source === 'memory' && n.body.content.data?.tag === 'memory.import'
 }
 
-/** A bookkeeping marker with nothing to show: the root marker, and the
+/** A bookkeeping marker with nothing to show: the root marker, the
  * `card_use` record a card read/write leaves after its tool result (the
- * Context data reads it from the path; the tool row already shows the card).
+ * Context data reads it from the path; the tool row already shows the card),
+ * and a `turn.error` failure record (failures are shown live only — a stored
+ * marker is never rendered, so it leaves no trace in the transcript).
  * Kept out of the timeline entirely — as an empty context item it would
  * split the activity run around it in two. */
 function isSilentMarker(n: Node): boolean {
   if (n.body.type !== 'note' || n.body.content.text !== '') return false
   const tag = n.body.content.data?.tag
-  return tag === 'root' || tag === 'card_use'
+  return tag === 'root' || tag === 'card_use' || tag === TURN_ERROR_TAG
 }
 
 export interface ToolRowInfo {

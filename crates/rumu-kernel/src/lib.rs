@@ -19,7 +19,7 @@ pub use predicate::{Pred, PredicateError};
 pub use scripted::{Script, ScriptTurn, ScriptedLlm};
 pub use state::{derive_state, merge_workspaces};
 
-use std::collections::HashMap;
+use std::collections::{HashMap, HashSet};
 use std::sync::{Arc, Mutex};
 use std::time::Duration;
 
@@ -28,7 +28,8 @@ use rumu_core::kind;
 use rumu_core::{
     Branch, BranchId, BranchKind, BranchStatus, Content, Effect, Event, HookSpec, Inbox, Node,
     NodeBody, NodeId, PathState, Plugin, Post, RevertLesson, Runtime, SYSTEM_SOURCE, SessionId,
-    SessionInfo, SessionRoot, TaskId, ToolSpec, WorkspaceCatalog, WorkspaceUse, now, tool_schema,
+    SessionInfo, SessionRoot, TaskId, ToolCall, ToolSpec, TurnError, WorkspaceCatalog, WorkspaceUse,
+    now, tool_schema,
 };
 use rumu_store::Store;
 use serde_json::{Value, json};
@@ -51,6 +52,10 @@ pub const WAKE_DEBOUNCE: Duration = Duration::from_millis(50);
 /// At most this many consecutive wake-started turns without a user prompt;
 /// beyond it effects are written without waking and a warning is pushed.
 pub const MAX_WAKE_TURNS: u32 = 8;
+/// How many times a model call may be replayed after a transient failure.
+/// Not overridable: the capped backoff bounds the total delay, so a longer
+/// budget costs little but a shorter one would give up on a slow provider.
+pub const MAX_LLM_RETRIES: u32 = 5;
 /// Maximum nesting depth of `Cx::invoke` (A invokes B invokes A…).
 pub const MAX_INVOKE_DEPTH: usize = 4;
 /// At most this many running background tasks per owner branch. Overridable
@@ -906,16 +911,106 @@ impl Kernel {
         }
     }
 
-    /// Shared post-turn cleanup: release the loop guard and report an error.
+    /// Shared post-turn cleanup: record a terminal failure, release the loop
+    /// guard, then report it. The recording happens *before*
+    /// [`end_loop`](Self::end_loop) — while the guard is still held, so the
+    /// flush of queued items cannot bury the open calls and no new turn can
+    /// append concurrently — by giving unanswered calls of the last assistant
+    /// node error results, then appending a `turn.error` marker noting the
+    /// message, so the tree stays valid and the failure is on record. The UI
+    /// never renders that marker (a failure shows live only); hook-blocked
+    /// prompts never reach this: they push `turn.error` directly (a refusal,
+    /// with nothing to record).
     pub(crate) async fn finish_turn(self: &Arc<Self>, branch: BranchId, error: Option<Error>) {
+        let failure = match error {
+            Some(e) => {
+                tracing::warn!(%branch, error = %e, "turn failed");
+                let message = format!("{e}");
+                let recorded = match self.record_turn_error(&branch, &message).await {
+                    Ok(()) => true,
+                    Err(e) => {
+                        tracing::warn!(%branch, error = %e, "recording the turn failure failed");
+                        false
+                    }
+                };
+                Some((message, recorded))
+            }
+            None => None,
+        };
         self.end_loop(&branch).await;
-        if let Some(e) = error {
-            tracing::warn!(%branch, error = %e, "turn failed");
-            self.push(
-                "turn.error",
-                json!({ "branch": branch, "message": format!("{e}") }),
-            );
+        if let Some((message, recorded)) = failure {
+            let mut params = json!({ "branch": branch, "message": message });
+            if recorded {
+                params["recorded"] = json!(true);
+            }
+            self.push("turn.error", params);
         }
+    }
+
+    /// Record a terminal turn failure on the branch: make the tree valid
+    /// (error results for calls of the last assistant node on the path that
+    /// never got one — not necessarily the head, since a mid-batch failure
+    /// leaves an earlier call's result at the top), then append the marker
+    /// through the normal path so the usual node push reaches the UI.
+    async fn record_turn_error(self: &Arc<Self>, branch: &BranchId, message: &str) -> Result<()> {
+        if let Some(NodeBody::Assistant { tool_calls, .. }) = self
+            .path_nodes(branch)?
+            .iter()
+            .rev()
+            .find(|n| matches!(n.body, NodeBody::Assistant { .. }))
+            .map(|n| &n.body)
+            && !tool_calls.is_empty()
+        {
+            self.fail_open_calls(branch, tool_calls, "turn failed").await?;
+        }
+        self.append_body(
+            branch,
+            NodeBody::Note {
+                source: SYSTEM_SOURCE.into(),
+                content: Content::marker(&TurnError {
+                    message: message.to_owned(),
+                }),
+            },
+            None,
+        )
+        .await?;
+        Ok(())
+    }
+
+    /// Close out a tool batch that will never finish: every call in `calls`
+    /// without a result on the path gets an error result with `text`, so the
+    /// tree stays valid after an abort or a failed turn. (A batch executes in
+    /// order, so the unanswered ones are exactly the tail the caller names.)
+    pub(crate) async fn fail_open_calls(
+        self: &Arc<Self>,
+        branch: &BranchId,
+        calls: &[ToolCall],
+        text: &str,
+    ) -> Result<()> {
+        let path = self.path_nodes(branch)?;
+        let answered: HashSet<&str> = path
+            .iter()
+            .filter_map(|n| match &n.body {
+                NodeBody::ToolResult { call_id, .. } => Some(call_id.as_str()),
+                _ => None,
+            })
+            .collect();
+        for c in calls {
+            if answered.contains(c.call_id.as_str()) {
+                continue;
+            }
+            self.append_body(
+                branch,
+                NodeBody::ToolResult {
+                    call_id: c.call_id.clone(),
+                    content: Content::text(text),
+                    is_error: true,
+                },
+                None,
+            )
+            .await?;
+        }
+        Ok(())
     }
 
     /// Dispatch and deliver one out-of-band post.
@@ -1125,5 +1220,219 @@ async fn post_worker(kernel: Arc<Kernel>, mut rx: mpsc::UnboundedReceiver<PostRe
         if let Err(e) = result {
             kernel.warn(format!("post delivery failed: {e}"));
         }
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    /// Recording a failed turn repairs the tree first: calls of the head
+    /// assistant node that never got a result receive error results, then the
+    /// `turn.error` marker lands at the head. (Not provokable through the
+    /// public loop — hooks fail closed and plugin errors become tool results
+    /// — so the recording path is driven directly.)
+    #[tokio::test]
+    async fn failed_turn_repairs_open_calls_then_marks() {
+        let kernel = Kernel::new(
+            Arc::new(Store::in_memory()),
+            Arc::new(ScriptedLlm::strict(vec![])),
+            vec![],
+            WorkspaceCatalog::default(),
+        )
+        .unwrap();
+        let (_, branch) = kernel.create_session(None).await.unwrap();
+
+        kernel
+            .append_body(
+                &branch.id,
+                NodeBody::User {
+                    content: Content::text("go"),
+                },
+                None,
+            )
+            .await
+            .unwrap();
+        kernel
+            .append_body(
+                &branch.id,
+                NodeBody::Assistant {
+                    content: Content::text(""),
+                    reasoning: vec![],
+                    reason_ms: None,
+                    reasoning_reset: false,
+                    tool_calls: vec![
+                        ToolCall::new("c1", "one", json!({})),
+                        ToolCall::new("c2", "two", json!({})),
+                    ],
+                    model: "m".into(),
+                    usage: Default::default(),
+                },
+                None,
+            )
+            .await
+            .unwrap();
+
+        kernel
+            .record_turn_error(&branch.id, "llm request failed: boom")
+            .await
+            .unwrap();
+
+        let (nodes, _) = kernel.branch_path(&branch.id).unwrap();
+        let mut kinds = Vec::new();
+        for n in &nodes {
+            match &n.body {
+                NodeBody::Note { content, .. } => {
+                    if let Some(e) = content.decode::<TurnError>() {
+                        assert!(e.message.contains("boom") || e.message == "again");
+                        kinds.push("marker[turn.error]".to_owned());
+                    } else {
+                        kinds.push("marker[root]".to_owned());
+                    }
+                }
+                NodeBody::ToolResult {
+                    call_id, is_error, ..
+                } => {
+                    assert!(is_error, "the repair result for {call_id} is an error");
+                    kinds.push(format!("tool_result[{call_id}]"));
+                }
+                _ => kinds.push("other".to_owned()),
+            }
+        }
+        assert_eq!(
+            kinds,
+            vec![
+                "marker[root]",
+                "other", // the user node
+                "other", // the assistant node with open calls
+                "tool_result[c1]",
+                "tool_result[c2]",
+                "marker[turn.error]",
+            ]
+        );
+        // Already-answered calls are not duplicated.
+        kernel
+            .append_body(
+                &branch.id,
+                NodeBody::Assistant {
+                    content: Content::text(""),
+                    reasoning: vec![],
+                    reason_ms: None,
+                    reasoning_reset: false,
+                    tool_calls: vec![ToolCall::new("c3", "three", json!({}))],
+                    model: "m".into(),
+                    usage: Default::default(),
+                },
+                None,
+            )
+            .await
+            .unwrap();
+        kernel
+            .append_body(
+                &branch.id,
+                NodeBody::ToolResult {
+                    call_id: "c3".into(),
+                    content: Content::text("ok"),
+                    is_error: false,
+                },
+                None,
+            )
+            .await
+            .unwrap();
+        kernel.record_turn_error(&branch.id, "again").await.unwrap();
+        let (nodes, _) = kernel.branch_path(&branch.id).unwrap();
+        let c3: Vec<_> = nodes
+            .iter()
+            .filter_map(|n| match &n.body {
+                NodeBody::ToolResult { call_id, is_error, .. } if call_id == "c3" => Some(*is_error),
+                _ => None,
+            })
+            .collect();
+        assert_eq!(c3, vec![false], "an answered call is left alone");
+        let markers = nodes
+            .iter()
+            .filter(|n| matches!(&n.body, NodeBody::Note { content, .. }
+                if content.decode::<TurnError>().is_some()))
+            .count();
+        assert_eq!(markers, 2);
+    }
+
+    /// A mid-batch failure — an earlier call answered, a later one not —
+    /// leaves a tool result at the head: the repair still finds the assistant
+    /// node behind it and answers only the open call.
+    #[tokio::test]
+    async fn failed_turn_repairs_mid_batch_open_calls() {
+        let kernel = Kernel::new(
+            Arc::new(Store::in_memory()),
+            Arc::new(ScriptedLlm::strict(vec![])),
+            vec![],
+            WorkspaceCatalog::default(),
+        )
+        .unwrap();
+        let (_, branch) = kernel.create_session(None).await.unwrap();
+
+        kernel
+            .append_body(
+                &branch.id,
+                NodeBody::Assistant {
+                    content: Content::text(""),
+                    reasoning: vec![],
+                    reason_ms: None,
+                    reasoning_reset: false,
+                    tool_calls: vec![
+                        ToolCall::new("c1", "one", json!({})),
+                        ToolCall::new("c2", "two", json!({})),
+                    ],
+                    model: "m".into(),
+                    usage: Default::default(),
+                },
+                None,
+            )
+            .await
+            .unwrap();
+        kernel
+            .append_body(
+                &branch.id,
+                NodeBody::ToolResult {
+                    call_id: "c1".into(),
+                    content: Content::text("ok"),
+                    is_error: false,
+                },
+                None,
+            )
+            .await
+            .unwrap();
+
+        kernel.record_turn_error(&branch.id, "llm request failed: boom").await.unwrap();
+
+        let (nodes, _) = kernel.branch_path(&branch.id).unwrap();
+        let mut kinds = Vec::new();
+        for n in &nodes {
+            match &n.body {
+                NodeBody::Note { content, .. } => {
+                    if content.decode::<TurnError>().is_some() {
+                        kinds.push("marker[turn.error]".to_owned());
+                    } else {
+                        kinds.push("marker[root]".to_owned());
+                    }
+                }
+                NodeBody::ToolResult { call_id, is_error, .. } => {
+                    // c1 keeps its real result; only c2 is repaired.
+                    assert_eq!(*is_error, call_id == "c2", "unexpected result for {call_id}");
+                    kinds.push(format!("tool_result[{call_id}]"));
+                }
+                _ => kinds.push("other".to_owned()),
+            }
+        }
+        assert_eq!(
+            kinds,
+            vec![
+                "marker[root]",
+                "other", // the assistant node with c1 answered, c2 open
+                "tool_result[c1]",
+                "tool_result[c2]",
+                "marker[turn.error]",
+            ]
+        );
     }
 }

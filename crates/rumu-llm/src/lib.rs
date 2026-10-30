@@ -881,6 +881,26 @@ mod tests {
     }
 
     #[test]
+    fn turn_error_marker_is_not_projected() {
+        // A recorded turn failure sits at the branch head; the retry's
+        // request must not mention it.
+        let nodes = vec![
+            node(NodeBody::User {
+                content: rumu_core::Content::text("hello"),
+            }),
+            node(NodeBody::Note {
+                source: "system".into(),
+                content: rumu_core::Content::marker(&rumu_core::TurnError {
+                    message: "llm request failed: overloaded".into(),
+                }),
+            }),
+        ];
+        let req = project("SYSTEM", &[], &nodes);
+        assert_eq!(req.messages.len(), 1);
+        assert_eq!(req.messages[0].content.first_text(), Some("hello"));
+    }
+
+    #[test]
     fn recognizes_reasoning_rejections() {
         let rejected = LlmError::Stream(
             "HTTP error. Status: 400 Bad Request Body: {\"message\":\"messages.1.content.0: \

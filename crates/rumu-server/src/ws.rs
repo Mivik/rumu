@@ -289,6 +289,12 @@ async fn dispatch(state: &AppState, method: &str, p: &Value) -> Result<Value> {
             Ok(json!({ "branch": branch }))
         }
 
+        "branch.retry" => {
+            let branch: BranchId = str_param(p, "branch")?.into();
+            kernel.retry(&branch).await?;
+            Ok(json!({}))
+        }
+
         "branch.activate" => {
             let branch: BranchId = str_param(p, "branch")?.into();
             kernel.activate_branch(&branch)?;

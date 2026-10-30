@@ -10,6 +10,7 @@ import type {
   HookFiredPush,
   LlmDeltaPush,
   NodeAppendedPush,
+  PromptBlockedPush,
   PromptQueuedPush,
   SessionId,
   SessionUpdatedPush,
@@ -18,6 +19,7 @@ import type {
   ToolProgressPush,
   TurnErrorPush,
   TurnPush,
+  TurnRetryingPush,
   WarningPush,
 } from '../types'
 import { MAX_DELTA_CHARS, MAX_TRACE, state } from './state'
@@ -66,6 +68,8 @@ function onPromptQueued(p: PromptQueuedPush): void {
 }
 
 function onLlmDelta(p: LlmDeltaPush): void {
+  // The attempt is live again; its retry notice stops applying.
+  delete state.retrying[p.branch]
   let buf = state.deltas[p.branch]
   if (!buf) {
     buf = { text: '', reasoning: '' }
@@ -136,17 +140,50 @@ function onSessionUpdated(p: SessionUpdatedPush): void {
 
 function onTurnStarted(p: TurnPush): void {
   state.busy[p.branch] = true
+  delete state.retrying[p.branch]
+  delete state.failedTurns[p.branch]
 }
 
 function onTurnDone(p: TurnPush): void {
   state.busy[p.branch] = false
   delete state.deltas[p.branch]
+  delete state.retrying[p.branch]
+  delete state.failedTurns[p.branch]
 }
 
 function onTurnError(p: TurnErrorPush): void {
   state.busy[p.branch] = false
   delete state.deltas[p.branch]
+  delete state.retrying[p.branch]
+  // A hook refused the prompt before the turn started: nothing was recorded
+  // and no reply is owed — a toast, never a failure row.
+  if (p.blocked) {
+    toast('error', p.message)
+    return
+  }
+  // Shown once, live, where the missing reply would be (see `owedReply`) —
+  // never rebuilt from the stored marker on a reload. A branch that is not on
+  // screen has no row to land in, so its failure still needs a toast.
+  state.failedTurns[p.branch] = p.message
+  if (p.branch !== state.activeBranch) toast('error', p.message)
+}
+
+/** `prompt.blocked`: a steering prompt was refused by a hook while the turn
+ * kept running. The turn is untouched, so this must not touch busy or
+ * deltas — the refusal is a toast only. */
+function onPromptBlocked(p: PromptBlockedPush): void {
   toast('error', p.message)
+}
+
+/** `turn.retrying`: the model call failed transiently and will be replayed
+ * after a backoff; shown where the thinking indicator is. */
+function onTurnRetrying(p: TurnRetryingPush): void {
+  state.retrying[p.branch] = {
+    attempt: p.attempt,
+    max: p.max,
+    until: Date.now() + p.retry_in_ms,
+    message: p.message,
+  }
 }
 
 /** Server-side non-fatal warning: show it, never interrupt the turn. */
@@ -203,6 +240,7 @@ export function startApp(): void {
 
   rumu.onPush('node.appended', (p) => onNodeAppended(p as unknown as NodeAppendedPush))
   rumu.onPush('prompt.queued', (p) => onPromptQueued(p as unknown as PromptQueuedPush))
+  rumu.onPush('prompt.blocked', (p) => onPromptBlocked(p as unknown as PromptBlockedPush))
   rumu.onPush('llm.delta', (p) => onLlmDelta(p as unknown as LlmDeltaPush))
   rumu.onPush('branch.updated', (p) => onBranchUpdated(p as unknown as BranchUpdatedPush))
   rumu.onPush('session.updated', (p) => onSessionUpdated(p as unknown as SessionUpdatedPush))
@@ -214,6 +252,7 @@ export function startApp(): void {
   rumu.onPush('task.progress', (p) => onTaskProgress(p as unknown as TaskProgressPush))
   rumu.onPush('turn.started', (p) => onTurnStarted(p as unknown as TurnPush))
   rumu.onPush('turn.done', (p) => onTurnDone(p as unknown as TurnPush))
+  rumu.onPush('turn.retrying', (p) => onTurnRetrying(p as unknown as TurnRetryingPush))
   rumu.onPush('turn.error', (p) => onTurnError(p as unknown as TurnErrorPush))
   rumu.onPush('warning', (p) => onWarning(p as unknown as WarningPush))
 

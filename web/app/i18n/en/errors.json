@@ -11,6 +11,7 @@
   "activate": "Couldn't switch branch",
   "action": "Couldn't {label}",
   "regenerate": "Couldn't regenerate reply",
+  "retry": "Couldn't retry the reply",
   "labels": {
     "fork": "fork",
     "edit": "edit",

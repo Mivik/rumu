@@ -17,7 +17,7 @@
 // jumping.
 import { computed, nextTick, onBeforeUnmount, ref, watch } from 'vue'
 import { t } from '../../i18n'
-import { activeDelta, isBusy, queuedPrompts, state, timeline } from '../../lib/store'
+import { activeDelta, isBusy, owedReply, queuedPrompts, state, timeline } from '../../lib/store'
 import { prefersReduced, timelineLive, vEnter } from '../../lib/motion'
 import { layout, toggleSidebar } from '../../lib/layout'
 import type { TimelineEntry } from '../../lib/store'
@@ -27,6 +27,7 @@ import AssistantGroup from './AssistantGroup.vue'
 import ContextPills from './ContextPills.vue'
 import CardDrawer from './CardDrawer.vue'
 import Composer from './Composer.vue'
+import ErrorRow from './ErrorRow.vue'
 import TasksPanel from './TasksPanel.vue'
 import TimelineRail from './TimelineRail.vue'
 import Welcome from './Welcome.vue'
@@ -418,6 +419,9 @@ function jumpTo(i: number): void {
                   <ContextPills v-else-if="entry.kind === 'context'" :nodes="entry.nodes" />
                 </div>
               </template>
+              <!-- the reply this branch still owes: its last exchange failed
+                   (or was never finished) — offer to run it again -->
+              <ErrorRow v-if="owedReply" :owed="owedReply" />
             </div>
             <!-- the page still to be written: keeps the just-sent prompt at
                  the top while its reply grows down into the blank -->

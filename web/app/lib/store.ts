@@ -10,7 +10,7 @@
 //   pushes.ts   WebSocket pushes + boot
 
 export { state } from './state/state'
-export type { DeltaBuffer, HookTraceEntry, Toast, TurnCache } from './state/state'
+export type { DeltaBuffer, HookTraceEntry, RetryState, Toast, TurnCache } from './state/state'
 
 export {
   activeDelta,
@@ -23,12 +23,13 @@ export {
   currentBranch,
   hookTraceForSession,
   isBusy,
+  owedReply,
   pathNodes,
   queuedPrompts,
   runningTasks,
   sortedSessions,
 } from './state/derived'
-export type { BranchTreeNode } from './state/derived'
+export type { BranchTreeNode, OwedReply } from './state/derived'
 
 export { timeline } from './state/timeline'
 export type {
@@ -49,7 +50,7 @@ export type {
 
 export { closeCatalog, closeDrawer, dismissToast, focusNode, openCatalog, openDrawer } from './state/ui'
 
-export { findAgentChild, forkFrom, regenerateFrom, selectBranch } from './state/tree'
+export { findAgentChild, forkFrom, regenerateFrom, retryBranch, selectBranch } from './state/tree'
 export type { OpenHistory } from './state/sessions'
 export {
   closeSession,

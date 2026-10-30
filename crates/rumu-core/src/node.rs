@@ -234,6 +234,21 @@ impl Structured for RevertLesson {
     const V: u32 = 1;
 }
 
+/// Payload of the `turn.error` marker (v1): a turn that failed terminally
+/// after its retries ran out. Recorded at the branch head as a durable record
+/// of the failure; the marker's empty text keeps it out of the model's
+/// projection, and the UI never renders it (failures are shown live only).
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, ts_rs::TS)]
+#[ts(export)]
+pub struct TurnError {
+    pub message: String,
+}
+
+impl Structured for TurnError {
+    const TAG: &'static str = "turn.error";
+    const V: u32 = 1;
+}
+
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize, ts_rs::TS)]
 #[ts(export)]
 pub struct ToolCall {

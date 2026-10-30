@@ -47,6 +47,24 @@ export const activeDelta = computed<DeltaBuffer | null>(() =>
 
 export const isBusy = computed(() => !!state.activeBranch && !!state.busy[state.activeBranch])
 
+export interface OwedReply {
+  /** The live failure's message (empty when the server sent none) — then the
+   * generic interruption text applies. */
+  message: string
+}
+
+/** The failure the active branch hit during this page's lifetime, if any:
+ * shown as the error row at the end of the conversation while the branch is
+ * idle. Deliberately not derived from the tree — a stored `turn.error`
+ * marker never brings the row back, so history stays quiet. A hook-refused
+ * prompt (a blocked `turn.error`) never lands here either: it is a toast. */
+export const owedReply = computed<OwedReply | null>(() => {
+  const branch = state.activeBranch
+  if (!branch || state.busy[branch]) return null
+  const message = state.failedTurns[branch]
+  return message === undefined ? null : { message }
+})
+
 /** Steering prompts waiting to be written on the active branch. */
 export const queuedPrompts = computed(() =>
   state.activeBranch ? (state.queuedPrompts[state.activeBranch] ?? []) : [],

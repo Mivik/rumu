@@ -11,6 +11,7 @@
   "activate": "切换分支失败",
   "action": "{label}失败",
   "regenerate": "重新生成失败",
+  "retry": "重试回复失败",
   "labels": {
     "fork": "分叉",
     "edit": "编辑",

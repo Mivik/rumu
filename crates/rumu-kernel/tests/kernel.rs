@@ -4,6 +4,7 @@
 //! queueing, out-of-band posts/wakes, abort, steering and internal plugin
 //! calls (caller isolation, denied tools, traces).
 
+use std::collections::VecDeque;
 use std::sync::atomic::{AtomicUsize, Ordering};
 use std::sync::{Arc, Mutex};
 use std::time::Duration;
@@ -15,7 +16,7 @@ use rumu_core::{
     Node, NodeBody, PathState, Plugin, Post, Progress, SessionId, Tagged, TaskDone, TaskKind,
     TaskStatus, ToolCall, ToolOutput, ToolSpec, Workspace, WorkspaceCatalog, WorkspaceUse,
 };
-use rumu_kernel::{Kernel, Llm, LlmResponse, OnDelta, ScriptedLlm};
+use rumu_kernel::{Delta, Kernel, Llm, LlmError, LlmResponse, OnDelta, ScriptedLlm};
 use rumu_store::Store;
 use serde_json::{Value, json};
 
@@ -147,6 +148,87 @@ impl Llm for TrackedLlm {
             self.active.fetch_sub(1, Ordering::SeqCst);
         }
         self.inner.complete(system, tools, nodes, on_delta).await
+    }
+}
+
+// ---------- failing fake LLM ----------
+
+/// A genai-shaped transient failure (its `HttpError` Display).
+const TRANSIENT_503: &str = "HTTP error.\nStatus: 503 Service Unavailable\nBody:\noverloaded";
+/// The same shape with a caller-fault status.
+const PERMANENT_400: &str = "HTTP error.\nStatus: 400 Bad Request\nBody:\nbad request";
+
+/// Like [`FakeLlm`], but its first `fail` completions fail with `message`
+/// (after streaming `leak` characters, to cover the
+/// never-retry-after-a-delta rule). The failing budget is shared with the
+/// test so it can be refilled.
+struct FlakyLlm {
+    script: Mutex<VecDeque<LlmResponse>>,
+    seen: Mutex<Vec<Vec<Node>>>,
+    fail: Arc<Mutex<usize>>,
+    message: String,
+    leak: String,
+}
+
+impl FlakyLlm {
+    fn new(script: Vec<LlmResponse>, fail: usize, message: &str) -> Self {
+        Self {
+            script: Mutex::new(script.into_iter().collect()),
+            seen: Mutex::new(vec![]),
+            fail: Arc::new(Mutex::new(fail)),
+            message: message.to_owned(),
+            leak: String::new(),
+        }
+    }
+
+    /// Text streamed before a failing attempt.
+    fn leaking(mut self, leak: &str) -> Self {
+        self.leak = leak.to_owned();
+        self
+    }
+
+    fn projections(&self) -> Vec<Vec<Node>> {
+        self.seen.lock().unwrap().clone()
+    }
+
+    fn calls(&self) -> usize {
+        self.seen.lock().unwrap().len()
+    }
+}
+
+#[async_trait]
+impl Llm for FlakyLlm {
+    async fn complete(
+        &self,
+        _system: &str,
+        _tools: &[ToolSpec],
+        nodes: &[Node],
+        on_delta: Option<OnDelta>,
+    ) -> std::result::Result<LlmResponse, LlmError> {
+        self.seen.lock().unwrap().push(nodes.to_vec());
+        let failing = {
+            let mut fail = self.fail.lock().unwrap();
+            if *fail > 0 {
+                *fail -= 1;
+                true
+            } else {
+                false
+            }
+        };
+        if failing {
+            if let Some(cb) = &on_delta
+                && !self.leak.is_empty()
+            {
+                cb(Delta::Text(self.leak.clone()));
+            }
+            return Err(LlmError::Request(self.message.clone()));
+        }
+        Ok(self
+            .script
+            .lock()
+            .unwrap()
+            .pop_front()
+            .expect("flaky LLM exhausted its script"))
     }
 }
 
@@ -775,6 +857,345 @@ async fn tool_error_results() {
     assert!(text.contains("no plugin provides tool `does-not-exist`"));
     // And the turn carried on to a final assistant message.
     assert_eq!(body_kinds(&nodes).last().unwrap(), "assistant");
+}
+
+// ---------- turn failures: retry, marker, manual retry ----------
+
+/// A kernel over a [`FlakyLlm`] (most failure tests need their own script).
+async fn flaky_setup(
+    script: Vec<LlmResponse>,
+    fail: usize,
+    message: &str,
+) -> (Arc<Kernel>, Arc<FlakyLlm>, BranchId) {
+    let llm = Arc::new(FlakyLlm::new(script, fail, message));
+    let kernel = Kernel::new(
+        Arc::new(Store::in_memory()),
+        llm.clone(),
+        vec![],
+        WorkspaceCatalog::default(),
+    )
+    .unwrap();
+    let (session, _) = kernel.create_session(None).await.unwrap();
+    (kernel, llm, session.active_branch.clone())
+}
+
+/// A transient failure with nothing streamed yet is replayed: one
+/// `turn.retrying` push, then the turn finishes normally — no marker.
+#[tokio::test(start_paused = true)]
+async fn transient_failure_is_retried_to_success() {
+    let (kernel, llm, branch) =
+        flaky_setup(vec![LlmResponse::text("recovered")], 1, TRANSIENT_503).await;
+    let mut rx = kernel.tap_pushes();
+
+    kernel.prompt(&branch, "hello").await.unwrap();
+    let (done, seen) = collect_turn(&mut rx, &branch.0).await;
+    assert_eq!(done["method"], "turn.done", "{done}");
+
+    let retrying: Vec<&Value> = seen.iter().filter(|v| v["method"] == "turn.retrying").collect();
+    assert_eq!(retrying.len(), 1, "{seen:?}");
+    assert_eq!(retrying[0]["params"]["branch"], branch.0);
+    assert_eq!(retrying[0]["params"]["attempt"], 1);
+    assert_eq!(retrying[0]["params"]["max"], rumu_kernel::MAX_LLM_RETRIES);
+    let ms = retrying[0]["params"]["retry_in_ms"].as_u64().unwrap();
+    assert!((600..=1400).contains(&ms), "jittered first backoff: {ms}");
+    assert!(retrying[0]["params"]["message"].as_str().unwrap().contains("503"));
+
+    assert_eq!(llm.calls(), 2, "exactly one replay");
+    let (nodes, _) = kernel.branch_path(&branch).unwrap();
+    assert_eq!(body_kinds(&nodes), vec!["marker[root]", "user", "assistant"]);
+}
+
+/// A transient failure that never clears exhausts the budget, and the turn is
+/// recorded: marker at the head with the message, `turn.error` says recorded.
+#[tokio::test(start_paused = true)]
+async fn persistent_transient_failure_records_a_marker() {
+    let (kernel, llm, branch) = flaky_setup(vec![], usize::MAX, TRANSIENT_503).await;
+    let mut rx = kernel.tap_pushes();
+
+    kernel.prompt(&branch, "hello").await.unwrap();
+    let (done, seen) = collect_turn(&mut rx, &branch.0).await;
+    assert_eq!(done["method"], "turn.error", "{done}");
+    assert_eq!(done["params"]["recorded"], true);
+    assert!(done["params"]["message"].as_str().unwrap().contains("503"));
+
+    let retries = seen
+        .iter()
+        .filter(|v| v["method"] == "turn.retrying")
+        .count();
+    assert_eq!(retries, rumu_kernel::MAX_LLM_RETRIES as usize);
+    assert_eq!(llm.calls(), rumu_kernel::MAX_LLM_RETRIES as usize + 1);
+
+    let (nodes, _) = kernel.branch_path(&branch).unwrap();
+    assert_eq!(
+        body_kinds(&nodes),
+        vec!["marker[root]", "user", "marker[turn.error]"]
+    );
+    let marker = nodes.last().unwrap();
+    let NodeBody::Note { content, .. } = &marker.body else {
+        panic!("the marker is a note");
+    };
+    let payload = content.decode::<rumu_core::TurnError>().expect("turn.error marker");
+    assert!(payload.message.contains("503"), "{}", payload.message);
+}
+
+/// A caller-fault status is terminal on the first attempt: no retry, no
+/// `turn.retrying`, marker written.
+#[tokio::test(start_paused = true)]
+async fn non_transient_failure_is_not_retried() {
+    let (kernel, llm, branch) = flaky_setup(vec![], usize::MAX, PERMANENT_400).await;
+    let mut rx = kernel.tap_pushes();
+
+    kernel.prompt(&branch, "hello").await.unwrap();
+    let (done, seen) = collect_turn(&mut rx, &branch.0).await;
+    assert_eq!(done["method"], "turn.error", "{done}");
+    assert_eq!(done["params"]["recorded"], true);
+    assert!(
+        !seen.iter().any(|v| v["method"] == "turn.retrying"),
+        "{seen:?}"
+    );
+    assert_eq!(llm.calls(), 1, "no replay");
+
+    let (nodes, _) = kernel.branch_path(&branch).unwrap();
+    assert_eq!(body_kinds(&nodes).last().unwrap(), "marker[turn.error]");
+}
+
+/// Once a delta reached the UI, replaying is unsafe: even a transient
+/// failure fails the turn on the first attempt (the leaked text stays a
+/// transient push; the tree records only the marker).
+#[tokio::test(start_paused = true)]
+async fn failure_after_a_delta_is_not_retried() {
+    let llm = Arc::new(FlakyLlm::new(vec![], usize::MAX, TRANSIENT_503).leaking("partial answer"));
+    let kernel = Kernel::new(
+        Arc::new(Store::in_memory()),
+        llm.clone(),
+        vec![],
+        WorkspaceCatalog::default(),
+    )
+    .unwrap();
+    let (session, _) = kernel.create_session(None).await.unwrap();
+    let branch = session.active_branch.clone();
+    let mut rx = kernel.tap_pushes();
+
+    kernel.prompt(&branch, "hello").await.unwrap();
+    let (done, seen) = collect_turn(&mut rx, &branch.0).await;
+    assert_eq!(done["method"], "turn.error", "{done}");
+    assert_eq!(done["params"]["recorded"], true);
+    assert!(
+        !seen.iter().any(|v| v["method"] == "turn.retrying"),
+        "{seen:?}"
+    );
+    assert!(seen.iter().any(|v| {
+        v["method"] == "llm.delta" && v["params"]["text"] == "partial answer"
+    }));
+    assert_eq!(llm.calls(), 1, "no replay");
+
+    let (nodes, _) = kernel.branch_path(&branch).unwrap();
+    assert_eq!(body_kinds(&nodes).last().unwrap(), "marker[turn.error]");
+}
+
+/// Aborting during a backoff wait ends the turn promptly, like any abort: no
+/// further LLM call, no marker.
+#[tokio::test(start_paused = true)]
+async fn abort_during_backoff_ends_the_turn() {
+    let (kernel, llm, branch) = flaky_setup(vec![], usize::MAX, TRANSIENT_503).await;
+    let mut rx = kernel.tap_pushes();
+
+    kernel.prompt(&branch, "hello").await.unwrap();
+    wait_push(&mut rx, |v| v["method"] == "turn.retrying", "retry wait").await;
+    kernel.abort(&branch).unwrap();
+
+    let (done, seen) = collect_turn(&mut rx, &branch.0).await;
+    assert_eq!(done["method"], "turn.done", "{done}");
+    assert_eq!(llm.calls(), 1, "the aborted backoff never replays");
+    assert!(!seen.iter().any(|v| v["method"] == "turn.error"));
+
+    let (nodes, _) = kernel.branch_path(&branch).unwrap();
+    assert_eq!(body_kinds(&nodes), vec!["marker[root]", "user"]);
+}
+
+/// `branch.retry` runs the step loop again on the same branch: the marker
+/// stays on the path (behind the new reply), no new user node, and the turn
+/// announces itself with reason "retry".
+#[tokio::test(start_paused = true)]
+async fn retry_after_failure_appends_after_the_marker() {
+    let (kernel, llm, branch) =
+        flaky_setup(vec![LlmResponse::text("recovered")], usize::MAX, TRANSIENT_503).await;
+    let mut rx = kernel.tap_pushes();
+
+    kernel.prompt(&branch, "hello").await.unwrap();
+    let (done, _) = collect_turn(&mut rx, &branch.0).await;
+    assert_eq!(done["method"], "turn.error");
+    let first_calls = llm.calls();
+
+    *llm.fail.lock().unwrap() = 0; // the provider recovered
+    kernel.retry(&branch).await.unwrap();
+    let started = wait_push(
+        &mut rx,
+        |v| v["method"] == "turn.started" && v["params"]["branch"] == branch.0,
+        "retry turn started",
+    )
+    .await;
+    assert_eq!(started["params"]["reason"], "retry");
+    let (done, _) = collect_turn(&mut rx, &branch.0).await;
+    assert_eq!(done["method"], "turn.done", "{done}");
+
+    assert_eq!(llm.calls(), first_calls + 1, "one more completion");
+    let (nodes, _) = kernel.branch_path(&branch).unwrap();
+    assert_eq!(
+        body_kinds(&nodes),
+        vec!["marker[root]", "user", "marker[turn.error]", "assistant"]
+    );
+    // The marker is on the path the kernel hands the adapter, but the
+    // adapter's projection skips it (empty-text note) — asserted in
+    // rumu-llm. Here: the retry saw the prompt exactly once, no duplicates.
+    let projections = llm.projections();
+    let last = projections.last().unwrap();
+    assert_eq!(
+        last.iter()
+            .filter(|n| matches!(&n.body, NodeBody::User { .. }))
+            .count(),
+        1
+    );
+}
+
+/// `retry` is refused when the branch already has its reply, and while a
+/// turn is running.
+#[tokio::test]
+async fn retry_refused_when_answered_or_busy() {
+    let (kernel, _llm, _s, branch) = setup(vec![], vec![LlmResponse::text("hi")]).await;
+    run_turn(&kernel, &branch, "hello").await;
+    let err = kernel.retry(&branch).await.unwrap_err();
+    assert!(matches!(err, rumu_kernel::Error::NothingToRetry), "{err:#}");
+
+    // Busy with the user message still unanswered: TurnBusy.
+    let (started_tx, mut started_rx) = tokio::sync::mpsc::unbounded_channel();
+    let llm = Arc::new(GatedLlm {
+        started: started_tx,
+        release: tokio::sync::Semaphore::new(0),
+        inner: ScriptedLlm::strict(vec![LlmResponse::text("hi")]),
+    });
+    let kernel = Kernel::new(
+        Arc::new(Store::in_memory()),
+        llm.clone(),
+        vec![],
+        WorkspaceCatalog::default(),
+    )
+    .unwrap();
+    let (session, _) = kernel.create_session(None).await.unwrap();
+    let branch = session.active_branch.clone();
+    kernel.prompt(&branch, "go").await.unwrap();
+    started_rx.recv().await.expect("first LLM call in flight");
+    let err = kernel.retry(&branch).await.unwrap_err();
+    assert!(matches!(err, rumu_kernel::Error::TurnBusy), "{err:#}");
+    llm.release.add_permits(1);
+    let mut rx = kernel.tap_pushes();
+    let (done, _) = collect_turn(&mut rx, &branch.0).await;
+    assert_eq!(done["method"], "turn.done");
+}
+
+/// A prompt hook's import leaves a text note between the user node and the
+/// failure marker (flushed before the LLM call). Notes never answer a
+/// prompt, so the branch still owes its reply and retry works.
+#[tokio::test(start_paused = true)]
+async fn retry_works_behind_a_hook_note() {
+    let llm = Arc::new(FlakyLlm::new(
+        vec![LlmResponse::text("recovered")],
+        usize::MAX,
+        TRANSIENT_503,
+    ));
+    let importer = Arc::new(plugin_with(
+        "memory",
+        &[],
+        vec![hook("import", json!({ "event": kind::PROMPT }))],
+        Arc::new(|_, _| inject(Some("card:x@a1b2c3d4"), "# x\nimported body")),
+        noop_tools(),
+    ));
+    let kernel = Kernel::new(
+        Arc::new(Store::in_memory()),
+        llm.clone(),
+        vec![importer],
+        WorkspaceCatalog::default(),
+    )
+    .unwrap();
+    let (session, _) = kernel.create_session(None).await.unwrap();
+    let branch = session.active_branch.clone();
+    let mut rx = kernel.tap_pushes();
+
+    kernel.prompt(&branch, "hello").await.unwrap();
+    let (done, _) = collect_turn(&mut rx, &branch.0).await;
+    assert_eq!(done["method"], "turn.error");
+    let (nodes, _) = kernel.branch_path(&branch).unwrap();
+    assert_eq!(
+        body_kinds(&nodes),
+        vec!["marker[root]", "user", "note", "marker[turn.error]"]
+    );
+
+    *llm.fail.lock().unwrap() = 0; // the provider recovered
+    kernel.retry(&branch).await.unwrap();
+    let (done, _) = collect_turn(&mut rx, &branch.0).await;
+    assert_eq!(done["method"], "turn.done", "{done}");
+
+    let (nodes, _) = kernel.branch_path(&branch).unwrap();
+    assert_eq!(
+        body_kinds(&nodes),
+        vec![
+            "marker[root]",
+            "user",
+            "note",
+            "marker[turn.error]",
+            "assistant"
+        ]
+    );
+}
+
+/// A prompt-hook refusal is not a recorded failure: the regenerate's
+/// `turn.error` marks itself `blocked`, nothing lands on the branch, and
+/// `retry` — which would replay the loop without dispatching the prompt
+/// event — is refused, so the hook's veto cannot be bypassed.
+#[tokio::test]
+async fn retry_does_not_bypass_a_refused_prompt() {
+    let refusals = Arc::new(AtomicUsize::new(0));
+    let seen_prompts = refusals.clone();
+    let plugin = Arc::new(plugin_with(
+        "guard",
+        &[],
+        vec![hook("one-prompt", json!({ "event": kind::PROMPT }))],
+        Arc::new(move |_, _| {
+            // The first prompt passes; the regenerate's replay is refused.
+            if seen_prompts.fetch_add(1, Ordering::SeqCst) == 0 {
+                pass()
+            } else {
+                block("not again")
+            }
+        }),
+        noop_tools(),
+    ));
+    let (kernel, llm, _s, branch) = setup(vec![plugin], vec![LlmResponse::text("first")]).await;
+
+    let (_, nodes, _) = run_turn(&kernel, &branch, "hello").await;
+    let prompt = nodes
+        .iter()
+        .find(|n| matches!(n.body, NodeBody::User { .. }))
+        .expect("the turn appended a user node")
+        .id
+        .clone();
+    let calls_after_first = llm.projections().len();
+
+    let mut rx = kernel.tap_pushes();
+    let regenerated = kernel.regenerate(&prompt).await.unwrap();
+    let (done, _) = collect_turn(&mut rx, regenerated.id.0.as_str()).await;
+    assert_eq!(done["method"], "turn.error");
+    assert_eq!(done["params"]["blocked"], true, "{done}");
+    assert_eq!(done["params"]["message"], "not again");
+
+    // The forked branch holds only the inherited path: no marker, and the
+    // user node at the head owes a reply — yet there is no recorded failure
+    // to replay.
+    let (nodes, _) = kernel.branch_path(&regenerated.id).unwrap();
+    assert_eq!(body_kinds(&nodes), vec!["marker[root]", "user"]);
+    let err = kernel.retry(&regenerated.id).await.unwrap_err();
+    assert!(matches!(err, rumu_kernel::Error::NothingToRetry), "{err:#}");
+    assert_eq!(llm.projections().len(), calls_after_first, "no LLM call");
 }
 
 // ---------- tool progress ----------

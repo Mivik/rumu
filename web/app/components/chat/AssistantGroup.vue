@@ -7,11 +7,11 @@
 // usage stays visible (hover for the full request/turn breakdown);
 // copy/regenerate/fork reveal on hover once the turn has finished.
 // Only the `live` group (the last one, while a turn runs) shows the stream.
-import { computed, ref } from 'vue'
+import { computed, onBeforeUnmount, ref, watch } from 'vue'
 import { t } from '../../i18n'
 import type { Node } from '../../lib/types'
 import type { TimelineGroup } from '../../lib/store'
-import { activeDelta, forkFrom, regenerateFrom } from '../../lib/store'
+import { activeDelta, forkFrom, regenerateFrom, state } from '../../lib/store'
 import type { CatState } from '../../lib/cat'
 import { renderMarkdown } from '../../lib/markdown'
 import { contentText, copyText } from '../../lib/util'
@@ -86,6 +86,35 @@ async function onRegenerate(): Promise<void> {
 async function onCopy(): Promise<void> {
   toast('info', (await copyText(answerText.value)) ? t('chat.assistant.copied') : t('common.copyFailed'))
 }
+
+/** A transient model failure being retried on this branch (`turn.retrying`),
+ * shown where the thinking indicator is: "retrying 2/5 · 3s", counting down
+ * to the replay. Null unless this is the live group. */
+const retrying = computed(() =>
+  props.live && state.activeBranch ? (state.retrying[state.activeBranch] ?? null) : null,
+)
+const retryLeft = ref(0)
+let retryTimer: ReturnType<typeof setInterval> | undefined
+watch(
+  retrying,
+  (r) => {
+    if (retryTimer) {
+      clearInterval(retryTimer)
+      retryTimer = undefined
+    }
+    if (!r) {
+      retryLeft.value = 0
+      return
+    }
+    const tick = (): void => {
+      retryLeft.value = Math.max(0, Math.ceil((r.until - Date.now()) / 1000))
+    }
+    tick()
+    retryTimer = setInterval(tick, 250)
+  },
+  { immediate: true },
+)
+onBeforeUnmount(() => retryTimer && clearInterval(retryTimer))
 </script>
 
 <template>
@@ -93,7 +122,21 @@ async function onCopy(): Promise<void> {
     <!-- the turn's head: the mascot on its own line -->
     <div class="tl-head">
       <RumuCat :state="catState" :size="52" :paper="false" class="-ml-[6px]" />
-      <span v-if="!hasBody" v-enter="'enter-fade'" class="text-meta text-ink-3">{{
+      <span
+        v-if="retrying"
+        v-enter="'enter-fade'"
+        class="text-meta text-ink-3 tabular-nums"
+        :title="retrying.message"
+      >
+        {{
+          t('chat.assistant.retrying', {
+            attempt: retrying.attempt,
+            max: retrying.max,
+            seconds: retryLeft,
+          })
+        }}
+      </span>
+      <span v-else-if="!hasBody" v-enter="'enter-fade'" class="text-meta text-ink-3">{{
         t('chat.assistant.working')
       }}</span>
     </div>

@@ -32,6 +32,7 @@
   },
   "assistant": {
     "working": "工作中…",
+    "retrying": "重试 {attempt}/{max} · {seconds} 秒",
     "copy": "复制回复",
     "regenerate": "重新生成回复",
     "noPrompt": "没有可重新生成的提问",
@@ -39,6 +40,10 @@
     "noSafePoint": "工具调用未完成",
     "copied": "已复制回复",
     "reasoningReset": "之前的思考已丢弃"
+  },
+  "error": {
+    "interrupted": "回复被中断了",
+    "retry": "重试"
   },
   "timeline": {
     "label": "对话时间线",

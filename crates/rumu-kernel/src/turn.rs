@@ -1,26 +1,46 @@
 //! The agent loop and the built-in `agent` tool.
 
 use std::sync::Arc;
-use std::time::Instant;
+use std::sync::atomic::{AtomicBool, Ordering};
+use std::time::{Duration, Instant};
 
 use crate::{Error, Result};
 use rumu_core::kind;
 use rumu_core::{
     Branch, BranchId, BranchKind, BranchStatus, CODE_DENIED_TOOLS, Call, CodeCall, Content, Cx,
     Inherit, InheritContext, InnerCall, NodeBody, NodeId, Plugin, RUMU_WORKSPACE, SYSTEM_SOURCE,
-    SessionId, ToolCall, ToolError, ToolOutput, ToolResultExt, WorkspaceScope, WorkspaceUse, now,
-    parse_args, truncate_chars,
+    SessionId, ToolCall, ToolError, ToolOutput, ToolResultExt, TurnError, WorkspaceScope,
+    WorkspaceUse, now, parse_args, truncate_chars,
 };
 use schemars::JsonSchema;
 use serde::Deserialize;
 use serde_json::{Value, json};
 use tokio_util::sync::CancellationToken;
 
-use crate::{Delta, Kernel, MAX_INVOKE_DEPTH, host::KernelRuntime};
+use crate::{Delta, Kernel, MAX_INVOKE_DEPTH, MAX_LLM_RETRIES, host::KernelRuntime};
 
 /// `code.call` pushes carry at most this much output (the store keeps the
 /// full 20k-char-capped text).
 const CODE_CALL_PUSH_LIMIT: usize = 2000;
+
+/// Backoff before the first retry; doubles from there.
+const RETRY_BACKOFF_START: Duration = Duration::from_secs(1);
+/// Backoff ceiling, however many retries are left.
+const RETRY_BACKOFF_CAP: Duration = Duration::from_secs(30);
+
+/// The wait before retry `attempt` (0-based): exponential from
+/// [`RETRY_BACKOFF_START`], capped, with jitter so clients that failed
+/// together do not retry in lockstep.
+fn retry_backoff(attempt: u32) -> Duration {
+    let exp = RETRY_BACKOFF_START.saturating_mul(1 << attempt.min(5));
+    let base = exp.min(RETRY_BACKOFF_CAP);
+    // Wall-clock jitter; statistical quality is irrelevant here.
+    let nanos = std::time::SystemTime::now()
+        .duration_since(std::time::UNIX_EPOCH)
+        .map_or(0, |d| d.subsec_nanos());
+    let scale = 60 + nanos % 81; // 60..=140 %
+    base.saturating_mul(scale) / 100
+}
 
 /// Who issued a tool call: the model directly, or a plugin on the model's
 /// behalf (which must pass through the same pre/post hooks). `name` is the
@@ -51,10 +71,12 @@ pub(crate) struct LoopOutcome {
     pub stopped_early: bool,
 }
 
-/// What a background turn runs: a new prompt, or a replay of an existing one.
+/// What a background turn runs: a new prompt, a replay of an existing one, or
+/// an in-place retry of a failed turn.
 pub(crate) enum TurnKind {
     Prompt(String),
     Regenerate(String),
+    Retry,
 }
 
 impl Kernel {
@@ -99,7 +121,9 @@ impl Kernel {
             json!({ "text": text }),
         )?;
         if let Some(reason) = self.dispatch(&mut ev, true).await? {
-            self.push("turn.error", json!({ "branch": branch, "message": reason }));
+            // The running turn keeps going, so this must not look like a
+            // turn end: a plain prompt.blocked toast.
+            self.push("prompt.blocked", json!({ "branch": branch, "message": reason }));
             return Ok(());
         }
         let text = ev
@@ -148,6 +172,46 @@ impl Kernel {
         Ok(branch)
     }
 
+    /// `branch.retry` WS method: run the step loop again on a branch whose
+    /// reply failed — in place, so no prompt event and no new user node; a
+    /// `turn.error` marker left at the head is simply stepped over. Only a
+    /// recorded failure qualifies: the marker a failed turn left behind an
+    /// unanswered prompt — one whose last non-note node is a user message or
+    /// a tool result (notes, hook imports with text included, never answer
+    /// one). A prompt-hook refusal records nothing, so it cannot be replayed
+    /// past the hook. The branch must not be running. Progress arrives via
+    /// pushes.
+    pub async fn retry(self: &Arc<Self>, branch: &BranchId) -> Result<()> {
+        self.store
+            .get_branch(branch)?
+            .ok_or_else(|| Error::BranchNotFound(branch.clone()))?;
+        if self.inner.lock().unwrap().running.contains_key(branch) {
+            return Err(Error::TurnBusy);
+        }
+        self.reset_storm(branch);
+        let mut recorded_failure = false;
+        let owes = self
+            .path_nodes(branch)?
+            .iter()
+            .rev()
+            .find(|n| match &n.body {
+                NodeBody::Note { content, .. } => {
+                    recorded_failure |= content.decode::<TurnError>().is_some();
+                    false
+                }
+                _ => true,
+            })
+            .is_some_and(|n| {
+                matches!(n.body, NodeBody::User { .. } | NodeBody::ToolResult { .. })
+            });
+        if !owes || !recorded_failure {
+            return Err(Error::NothingToRetry);
+        }
+        let token = self.begin_loop(branch)?;
+        self.spawn_turn(branch.clone(), token, TurnKind::Retry);
+        Ok(())
+    }
+
     /// `abort` WS method: cancel the running loop for a branch. Already-queued
     /// items are still written but no longer start a turn; posts arriving
     /// after the abort wake normally.
@@ -185,19 +249,31 @@ impl Kernel {
 
     /// One user turn: prompt event → (unless regenerating) User node → the
     /// step loop. A regeneration forks at an existing prompt, so its prompt
-    /// event is replayed but the message is not appended again.
+    /// event is replayed but the message is not appended again; a retry has
+    /// neither — the loop simply runs again on what is already there.
     pub(crate) async fn run_turn(
         self: &Arc<Self>,
         branch: BranchId,
         turn: TurnKind,
         token: CancellationToken,
     ) -> Result<()> {
-        let (text, append_user, reason) = match turn {
-            TurnKind::Prompt(text) => (text, true, "prompt"),
-            TurnKind::Regenerate(text) => (text, false, "regenerate"),
-        };
-        if self.open_turn(&branch, text, append_user, reason).await? {
-            return Ok(());
+        match turn {
+            TurnKind::Prompt(text) => {
+                if self.open_turn(&branch, text, true, "prompt").await? {
+                    return Ok(());
+                }
+            }
+            TurnKind::Regenerate(text) => {
+                if self.open_turn(&branch, text, false, "regenerate").await? {
+                    return Ok(());
+                }
+            }
+            TurnKind::Retry => {
+                self.push(
+                    "turn.started",
+                    json!({ "branch": branch, "reason": "retry" }),
+                );
+            }
         }
         self.run_loop(branch.clone(), &token).await?;
         self.push("turn.done", json!({ "branch": branch }));
@@ -228,7 +304,12 @@ impl Kernel {
             json!({ "text": text }),
         )?;
         if let Some(reason) = self.dispatch(&mut ev, true).await? {
-            self.push("turn.error", json!({ "branch": branch, "message": reason }));
+            // A refusal ends the turn (turn.error) but records nothing —
+            // `blocked` marks it as such for the UI.
+            self.push(
+                "turn.error",
+                json!({ "branch": branch, "message": reason, "blocked": true }),
+            );
             return Ok(true);
         }
         if append_user {
@@ -281,22 +362,76 @@ impl Kernel {
             // it carries have now been seen and must not start another turn.
             self.mark_wake_seen(&branch);
 
-            // LLM call over the projection.
+            // LLM call over the projection, replaying transient failures. A
+            // failed attempt is retried only while nothing has streamed to
+            // the UI yet: once text or reasoning reached the client,
+            // replaying would duplicate it, so the turn fails instead.
             let nodes = self.path_nodes(&branch)?;
-            let k = self.clone();
-            let dbranch = branch.clone();
-            let on_delta = Some(Arc::new(move |d: Delta| match d {
-                Delta::Text(t) => k.push("llm.delta", json!({ "branch": dbranch, "text": t })),
-                Delta::Reasoning(r) => {
-                    k.push("llm.delta", json!({ "branch": dbranch, "reasoning": r }))
+            let streamed = Arc::new(AtomicBool::new(false));
+            let on_delta = {
+                let k = self.clone();
+                let dbranch = branch.clone();
+                let streamed = streamed.clone();
+                Some(
+                    Arc::new(move |d: Delta| {
+                        streamed.store(true, Ordering::Relaxed);
+                        match d {
+                            Delta::Text(t) => {
+                                k.push("llm.delta", json!({ "branch": dbranch, "text": t }))
+                            }
+                            Delta::Reasoning(r) => {
+                                k.push("llm.delta", json!({ "branch": dbranch, "reasoning": r }))
+                            }
+                        }
+                    }) as crate::OnDelta,
+                )
+            };
+            // Restarted per attempt: the node's duration is the call that
+            // produced it, not the backoff waits before it.
+            let mut llm_started = Instant::now();
+            let mut retries = 0u32;
+            // `None` = cancelled (mid-call or in a backoff wait): nothing has
+            // been appended, so the tree stays valid and the loop just ends.
+            let resp = loop {
+                tokio::select! {
+                    // Abort wins even if the call is also ready.
+                    biased;
+                    _ = token.cancelled() => break None,
+                    r = self.llm.complete(&self.system, &self.tools, &nodes, on_delta.clone()) => {
+                        match r {
+                            Ok(resp) => break Some(resp),
+                            Err(e) => {
+                                if retries >= MAX_LLM_RETRIES
+                                    || streamed.load(Ordering::Relaxed)
+                                    || !e.is_transient()
+                                {
+                                    return Err(e.into());
+                                }
+                                tracing::warn!(
+                                    %branch, attempt = retries + 1, error = %e,
+                                    "transient LLM failure; retrying"
+                                );
+                                let backoff = retry_backoff(retries);
+                                retries += 1;
+                                self.push("turn.retrying", json!({
+                                    "branch": branch,
+                                    "attempt": retries,
+                                    "max": MAX_LLM_RETRIES,
+                                    "retry_in_ms": backoff.as_millis() as u64,
+                                    "message": format!("{e}"),
+                                }));
+                                tokio::select! {
+                                    _ = token.cancelled() => break None,
+                                    _ = tokio::time::sleep(backoff) => {}
+                                }
+                                llm_started = Instant::now();
+                            }
+                        }
+                    }
                 }
-            }) as crate::OnDelta);
-            let llm_started = Instant::now();
-            let resp = tokio::select! {
-                _ = token.cancelled() => { // nothing appended yet; tree stays valid
-                    break;
-                }
-                r = self.llm.complete(&self.system, &self.tools, &nodes, on_delta) => r?,
+            };
+            let Some(resp) = resp else {
+                break;
             };
             let llm_ms = llm_started.elapsed().as_millis() as u64;
 
@@ -340,7 +475,7 @@ impl Kernel {
             // Tool batch (sequential is fine).
             let calls = resp.tool_calls.clone();
             let mut aborted = false;
-            for (i, call) in calls.iter().enumerate() {
+            for call in &calls {
                 let step = if token.is_cancelled() {
                     None
                 } else {
@@ -354,20 +489,9 @@ impl Kernel {
                     ..
                 }) = step
                 else {
-                    // Cancelled: every unanswered call of this assistant node
-                    // gets an error result so the tree stays valid.
-                    for c in &calls[i..] {
-                        self.append_body(
-                            &branch,
-                            NodeBody::ToolResult {
-                                call_id: c.call_id.clone(),
-                                content: Content::text("aborted"),
-                                is_error: true,
-                            },
-                            None,
-                        )
-                        .await?;
-                    }
+                    // Cancelled: unanswered calls get error results so the
+                    // tree stays valid.
+                    self.fail_open_calls(&branch, &calls, "aborted").await?;
                     aborted = true;
                     break;
                 };

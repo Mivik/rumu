@@ -62,6 +62,15 @@ export interface TurnCache {
   completion: number
 }
 
+/** An automatic retry of a model call in flight (`turn.retrying` push). */
+export interface RetryState {
+  attempt: number
+  max: number
+  /** Wall-clock ms the backoff ends at, for the live countdown. */
+  until: number
+  message: string
+}
+
 export const MAX_TRACE = 500
 export const MAX_DELTA_CHARS = 400_000
 
@@ -85,6 +94,14 @@ const initial = {
   busy: {} as Record<BranchId, boolean>,
   /** Prompts accepted while a branch was busy, until their user node lands. */
   queuedPrompts: {} as Record<BranchId, { id: number; text: string }[]>,
+  /** Pending automatic retry of the model call, keyed by branch; cleared by
+   * the next turn event or the branch's first delta. */
+  retrying: {} as Record<BranchId, RetryState>,
+  /** A branch's turn failed terminally (a recorded `turn.error`, never a
+   * hook-refused prompt), keyed by branch. Live only: never rebuilt from
+   * stored markers, so a reloaded history shows no failure row; cleared when
+   * the branch's next turn starts or ends, and when a session is opened. */
+  failedTurns: {} as Record<BranchId, string>,
 
   /** Live foreground tool output, keyed by `${branch}:${call_id}`. */
   toolProgress: {} as Record<

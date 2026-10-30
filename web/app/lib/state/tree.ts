@@ -112,6 +112,25 @@ export async function regenerateFrom(nodeId: NodeId): Promise<void> {
 }
 
 /**
+ * `branch.retry`: run the turn again on the active branch, in place — no
+ * prompt event, no new user node; the failed marker stays on the path.
+ * The server refuses branches that already have their reply.
+ */
+export async function retryBranch(): Promise<boolean> {
+  const branch = state.activeBranch
+  if (!branch) return false
+  state.busy[branch] = true
+  try {
+    await rumu.request('branch.retry', { branch })
+    return true
+  } catch (err) {
+    state.busy[branch] = false
+    toast('error', t('errors.retry'), (err as Error).message)
+    return false
+  }
+}
+
+/**
  * The sub-agent branch spawned by the direct `agent` tool call `callId`
  * (recorded on the branch as `kind.call_id`). Prefers a child of the active
  * branch (the common case); falls back to any match (e.g. after a revert the

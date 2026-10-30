@@ -64,6 +64,11 @@ export type { AgentsNote } from './generated/AgentsNote'
 /** Milliseconds since the Unix epoch (rumu-core's `Timestamp` alias). */
 export type Timestamp = number
 
+/** The tag of the recorded turn-failure marker. The marker carries no text
+ * and the UI never renders it — the failure is shown live only (see
+ * `owedReply`); the timeline just skips it. */
+export const TURN_ERROR_TAG = 'turn.error'
+
 /** A plugin-authored tail append: a note's content (an empty-text note is a
  * marker). The kernel fills the node's `source` with the plugin's name. */
 export type Effect = Content
@@ -174,9 +179,20 @@ export type CodeCallPush = CodeCall
 export interface TurnPush {
   branch: BranchId
   /** Why the turn started. */
-  reason?: 'prompt' | 'regenerate' | 'wake'
+  reason?: 'prompt' | 'regenerate' | 'retry' | 'wake'
   /** Posting plugins, for wake turns. */
   sources?: string[]
+}
+
+/** `turn.retrying` push: the model call failed transiently and will be
+ * replayed after a backoff wait. */
+export interface TurnRetryingPush {
+  branch: BranchId
+  /** Which retry is coming up, 1-based. */
+  attempt: number
+  max: number
+  retry_in_ms: number
+  message: string
 }
 
 /** A user prompt accepted while the branch was busy; it lands on the path at
@@ -186,9 +202,24 @@ export interface PromptQueuedPush {
   text: string
 }
 
+/** A steering prompt refused by a hook while the turn kept running: the turn
+ * is untouched, so this is a toast only. */
+export interface PromptBlockedPush {
+  branch: BranchId
+  message: string
+}
+
 export interface TurnErrorPush {
   branch: BranchId
   message: string
+  /** The failure was recorded as a `turn.error` marker on the branch. A
+   * server-side record only: the UI shows the failure live (`owedReply`) and
+   * never renders the stored marker, so it does not branch on this. */
+  recorded?: boolean
+  /** True when a prompt hook refused the turn before it started: nothing was
+   * recorded and no reply is owed, so the refusal is a toast, not a failure
+   * row. */
+  blocked?: boolean
 }
 
 /** Non-fatal server warning (e.g. a failed post delivery). */

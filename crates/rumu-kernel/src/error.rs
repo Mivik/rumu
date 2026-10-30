@@ -67,6 +67,12 @@ pub enum Error {
     #[error("regenerate: node is not a user message")]
     NotAUserMessage,
 
+    /// `retry` was given a branch with no recorded failure to replay: no
+    /// `turn.error` marker behind an unanswered prompt (a hook-refused
+    /// prompt records nothing), or the last exchange already has its reply.
+    #[error("retry: no recorded failure to retry")]
+    NothingToRetry,
+
     /// The per-branch running-task limit was reached.
     #[error("branch already has {running} running tasks (limit {limit})")]
     TooManyTasks { running: usize, limit: usize },
