@@ -4,8 +4,12 @@
 //! A card's frontmatter `keywords:` (weight 3) outweigh its title (2), its
 //! description (1.5) and its body (1), so a card that names its own trigger
 //! terms is found even when its prose never repeats them. Text is tokenized
-//! into ASCII words and CJK bigrams; an `_`-joined word also emits its 2+-char
-//! parts, so `session_search` matches `session` and `search`.
+//! into lowercase words in any alphabet and CJK bigrams (fullwidth ASCII
+//! folds to halfwidth); an `_`-joined word also emits its 2+-char parts, so
+//! `session_search` matches `session` and `search`. Documents additionally
+//! index a CJK run's single chars as overlap terms, so a one-char search
+//! query hits; those count toward neither field length nor recall — a reply
+//! like `好` must not recall every card containing the char.
 //!
 //! A card only qualifies when it matches a term rare enough to say something:
 //! from [`FLOOR_MIN_CARDS`] cards on, its score must reach [`FLOOR`] times
@@ -44,11 +48,14 @@ impl Doc {
             .into_iter()
             .map(|(text, weight)| {
                 let mut counts = BTreeMap::new();
-                for t in tokens(text) {
+                let mut len = 0;
+                for (t, overlap) in scan(text, true) {
                     *counts.entry(t).or_default() += 1;
+                    if !overlap {
+                        len += 1;
+                    }
                 }
-                let len = counts.values().sum::<usize>() as f64;
-                (counts, len, weight)
+                (counts, len as f64, weight)
             })
             .collect();
         Self { fields, boost }
@@ -68,7 +75,12 @@ impl Doc {
 /// order `docs` by their own tie key. `recall` applies the relevance floor and
 /// drops terms found in every document.
 pub fn rank_docs(docs: &[Doc], query: &str, limit: usize, recall: bool) -> Vec<(usize, f64)> {
-    let query: BTreeSet<String> = tokens(query).into_iter().collect();
+    // Recall ignores one-char query terms, so a reply like `好` does not
+    // recall every card containing the char; explicit search keeps them.
+    let query: BTreeSet<String> = tokens(query)
+        .into_iter()
+        .filter(|t| !recall || t.chars().count() > 1)
+        .collect();
     if query.is_empty() || docs.is_empty() || limit == 0 {
         return Vec::new();
     }
@@ -186,45 +198,91 @@ fn ranked<'a>(
         .collect()
 }
 
-/// Split text into lowercase ASCII words (2+ chars) and CJK bigrams (a lone
-/// CJK char is its own token). `_` joins a word, and its 2+-char parts are
-/// emitted too, so `session_search` matches `session` and `search`.
-pub(crate) fn tokens(text: &str) -> Vec<String> {
+/// Split text into the terms a query matches by: lowercase words of 2+ chars
+/// in any alphabet (`naïve` is one word, `Привет` folds to `привет`), and CJK
+/// bigrams — Han, kana and Hangul only, a lone char its own term. An
+/// `_`-joined word also emits its 2+-char parts, so `session_search` matches
+/// `session` and `search`. Fullwidth ASCII and the ideographic space fold to
+/// halfwidth first, so `ＡＢＣ２０２４` tokenizes like `abc2024`.
+pub fn tokens(text: &str) -> Vec<String> {
+    scan(text, false).into_iter().map(|(t, _)| t).collect()
+}
+
+/// Tokenize for one side of a ranking. `doc` additionally emits a CJK run's
+/// single chars as overlap terms (marked `true`), so a one-char query can hit
+/// a document. Like Lucene's `CJKBigramFilter`, they sit at the same position
+/// as their bigrams and are excluded from length normalization; everything
+/// else counts toward the field's token length.
+fn scan(text: &str, doc: bool) -> Vec<(String, bool)> {
     let mut out = Vec::new();
     let mut word = String::new();
     let mut run: Vec<char> = Vec::new();
-    for c in text.chars() {
-        if c.is_ascii_alphanumeric() || c == '_' {
-            flush(&mut run, &mut out);
-            word.push(c.to_ascii_lowercase());
-        } else if c.is_alphanumeric() {
+    for c in text.chars().map(fold_fullwidth) {
+        if is_cjk(c) {
             flush_word(&mut word, &mut out);
             run.push(c);
+        } else if c.is_alphanumeric() || c == '_' {
+            flush(&mut run, &mut out, doc);
+            word.extend(c.to_lowercase());
         } else {
             flush_word(&mut word, &mut out);
-            flush(&mut run, &mut out);
+            flush(&mut run, &mut out, doc);
         }
     }
     flush_word(&mut word, &mut out);
-    flush(&mut run, &mut out);
+    flush(&mut run, &mut out, doc);
     out
 }
 
-fn flush_word(word: &mut String, out: &mut Vec<String>) {
-    if word.len() >= 2 {
+/// The scripts split into bigrams: Han, kana and Hangul. Every other
+/// alphabet (Cyrillic, Greek, Latin-1 ...) forms ordinary words.
+fn is_cjk(c: char) -> bool {
+    matches!(c,
+        '\u{3040}'..='\u{30FF}' // hiragana, katakana
+        | '\u{31F0}'..='\u{31FF}' // katakana phonetic extensions
+        | '\u{3400}'..='\u{4DBF}' // CJK extension A
+        | '\u{4E00}'..='\u{9FFF}' // unified ideographs
+        | '\u{F900}'..='\u{FAFF}' // compatibility ideographs
+        | '\u{AC00}'..='\u{D7AF}' // hangul syllables
+        | '\u{20000}'..='\u{2FFFF}', // supplementary ideograph planes
+    )
+}
+
+/// Fold fullwidth ASCII (U+FF01–FF5E) by subtracting 0xFEE0, and the
+/// ideographic space to a plain space.
+fn fold_fullwidth(c: char) -> char {
+    match c {
+        '\u{3000}' => ' ',
+        '\u{FF01}'..='\u{FF5E}' => char::from_u32(c as u32 - 0xFEE0).unwrap_or(c),
+        _ => c,
+    }
+}
+
+/// Thresholds count chars, not bytes: a lone `ж` (2 bytes) is no term.
+fn flush_word(word: &mut String, out: &mut Vec<(String, bool)>) {
+    if word.chars().count() >= 2 {
         if word.contains('_') {
-            out.extend(word.split('_').filter(|p| p.len() >= 2).map(str::to_owned));
+            out.extend(
+                word.split('_')
+                    .filter(|p| p.chars().count() >= 2)
+                    .map(|p| (p.to_owned(), false)),
+            );
         }
-        out.push(std::mem::take(word));
+        out.push((std::mem::take(word), false));
     }
     word.clear();
 }
 
-fn flush(run: &mut Vec<char>, out: &mut Vec<String>) {
+fn flush(run: &mut Vec<char>, out: &mut Vec<(String, bool)>, doc: bool) {
     match run.len() {
         0 => {}
-        1 => out.push(run[0].to_string()),
-        _ => out.extend(run.windows(2).map(|p| p.iter().collect())),
+        1 => out.push((run[0].to_string(), false)),
+        _ => {
+            if doc {
+                out.extend(run.iter().map(|&c| (c.to_string(), true)));
+            }
+            out.extend(run.windows(2).map(|p| (p.iter().collect(), false)));
+        }
     }
     run.clear();
 }
@@ -280,8 +338,50 @@ mod tests {
     fn cjk_runs_match_by_bigram() {
         let cards = cards(&[("proxy", "---\ntitle: 代理服务器配置\n---\n正文\n")]);
         assert_eq!(ids(rank(&cards, "代理怎么配", 10)), ["proxy"]);
-        // Documents index bigrams, so a single CJK char is not a term.
+        // Recall ignores one-char query terms: a reply like `服` or `好` must
+        // not recall every card containing the char.
         assert!(rank(&cards, "服", 10).is_empty());
+        assert!(rank(&cards, "好", 10).is_empty());
+        // Explicit search keeps them, and documents index a run's chars.
+        assert_eq!(ids(search(&cards, "服", 10)), ["proxy"]);
+    }
+
+    #[test]
+    fn cjk_overlap_unigrams_do_not_inflate_length() {
+        // `我是人类` indexes 4 overlap unigrams and 3 bigrams; only the
+        // bigrams count toward the field's token length, so CJK documents do
+        // not dwarf English ones in length normalization.
+        let doc = Doc::new([("我是人类", 1.0)], 1.0);
+        let (counts, len, _) = &doc.fields[0];
+        assert_eq!(*len, 3.0);
+        assert_eq!(counts.len(), 7);
+        // A lone run's char is a real token and still counts.
+        let doc = Doc::new([("我", 1.0)], 1.0);
+        assert_eq!(doc.fields[0].1, 1.0);
+    }
+
+    #[test]
+    fn other_alphabets_join_words_and_fullwidth_folds() {
+        let cards = cards(&[(
+            "words",
+            "---\ntitle: naïve Привет\n---\nＡＢＣ ２０２４ 第3章\n",
+        )]);
+        assert_eq!(ids(search(&cards, "naïve", 10)), ["words"]);
+        assert_eq!(ids(search(&cards, "привет", 10)), ["words"]);
+        assert_eq!(ids(search(&cards, "ПРИВЕТ", 10)), ["words"]);
+        // Fullwidth ASCII folds to halfwidth on both sides of the ranking.
+        assert_eq!(ids(search(&cards, "abc", 10)), ["words"]);
+        assert_eq!(ids(search(&cards, "ＡＢＣ", 10)), ["words"]);
+        assert_eq!(ids(search(&cards, "2024", 10)), ["words"]);
+        // Mixed-script text tokenizes without panic.
+        assert_eq!(ids(search(&cards, "第3章", 10)), ["words"]);
+    }
+
+    #[test]
+    fn word_thresholds_count_chars_not_bytes() {
+        // `ж` is 2 bytes but 1 char, so it is no term on either side.
+        let cards = cards(&[("zh", "---\ntitle: ж\n---\nж\n")]);
+        assert!(search(&cards, "ж", 10).is_empty());
     }
 
     #[test]

@@ -2657,6 +2657,84 @@ async fn search_sessions_and_cards_by_scope() {
     }
 }
 
+/// A spaceless CJK query still prints `match:` lines (snippet terms come
+/// from the ranker's tokenizer, not `split_whitespace`), and a one-char
+/// query hits: explicit search indexes a run's chars.
+#[tokio::test]
+async fn search_sessions_snippet_cjk_queries() {
+    let host = FakeRuntime::arc();
+    let sid = rumu_core::SessionId::from("01SSESSIONCJK000000000000000");
+    let info = rumu_core::SessionInfo {
+        id: sid.clone(),
+        title: "服务器".into(),
+        active_branch: rumu_core::BranchId::from("B"),
+        created_at: 1,
+        updated_at: 1,
+    };
+    let mk = |nid: &str, at: i64, body: NodeBody| Node {
+        id: rumu_core::NodeId::from(nid),
+        parent: None,
+        session: sid.clone(),
+        at,
+        dur_ms: None,
+        body,
+    };
+    host.sessions.lock().unwrap().push(info.clone());
+    host.session_trees.lock().unwrap().push((
+        sid.clone(),
+        info,
+        vec![mk(
+            "U1",
+            100,
+            NodeBody::User {
+                content: rumu_core::Content::text("帮我配置代理服务器"),
+            },
+        )],
+        vec![],
+    ));
+    let home = tempfile::tempdir().unwrap();
+    let plugin = WorkspacePlugin::new(home.path(), WorkspaceCatalog::default());
+    let cx = host.cx();
+
+    let out = plugin
+        .call_tool(
+            "search",
+            json!({ "query": "服务器", "scope": "@rumu:/sessions" }),
+            &cx,
+        )
+        .await
+        .unwrap();
+    assert!(!out.is_error, "{}", out.content.text);
+    assert!(
+        out.content
+            .text
+            .contains(&format!("@rumu:/sessions/{sid}/U1")),
+        "{}",
+        out.content.text
+    );
+    assert!(
+        out.content.text.contains("\n  match: "),
+        "a spaceless CJK query still prints a snippet: {}",
+        out.content.text
+    );
+
+    let out = plugin
+        .call_tool(
+            "search",
+            json!({ "query": "服", "scope": "@rumu:/sessions" }),
+            &cx,
+        )
+        .await
+        .unwrap();
+    assert!(
+        out.content
+            .text
+            .contains(&format!("@rumu:/sessions/{sid}/U1")),
+        "{}",
+        out.content.text
+    );
+}
+
 /// Equal text scores equally; a tool result is halved, and a score tie is
 /// broken newest first by node time.
 #[tokio::test]

@@ -158,9 +158,10 @@ impl WorkspacePlugin {
         limit: usize,
         cx: &Cx,
     ) -> ToolResult<ToolOutput> {
-        // Kept only for the snippet line; the ranker tokenizes the query.
-        let terms: Vec<String> = query.split_whitespace().map(str::to_lowercase).collect();
-        if terms.is_empty() {
+        // Snippet terms need the ranker's tokenization, not whitespace: a
+        // spaceless CJK query would otherwise never print a `match:` line.
+        let terms: Vec<String> = recall::tokens(query);
+        if query.trim().is_empty() {
             return Err(ToolError::model("search: empty query"));
         }
         let mut sessions = cx.history().sessions()?;
