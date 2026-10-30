@@ -16,10 +16,10 @@ const alternatives = computed(() => siblingAlternatives(props.parentId))
 const current = computed(() => alternatives.value.findIndex((a) => a.current))
 const position = computed(() => Math.max(current.value, 0) + 1)
 
+/** Step stops at the ends — variants are an ordered list, not a ring. */
 function pick(index: number): void {
   if (isBusy.value) return
-  const n = alternatives.value.length
-  const target = alternatives.value[(index + n) % n]
+  const target = alternatives.value[index]
   if (!target || target.current || target.branch === state.activeBranch) return
   void selectBranch(target.branch, true)
 }
@@ -38,7 +38,7 @@ function step(delta: number): void {
       class="icon-btn size-5"
       :title="t('chat.alternatives.previous')"
       :aria-label="t('chat.alternatives.previous')"
-      :disabled="isBusy"
+      :disabled="isBusy || current <= 0"
       @click="step(-1)"
     >
       <Icon name="chevron" :size="10" class="rotate-180" />
@@ -50,7 +50,7 @@ function step(delta: number): void {
       class="icon-btn size-5"
       :title="t('chat.alternatives.next')"
       :aria-label="t('chat.alternatives.next')"
-      :disabled="isBusy"
+      :disabled="isBusy || current >= alternatives.length - 1"
       @click="step(1)"
     >
       <Icon name="chevron" :size="10" />

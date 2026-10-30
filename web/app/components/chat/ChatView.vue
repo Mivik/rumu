@@ -10,7 +10,8 @@
 // tail spacer after the timeline whose height shrinks as the reply fills it;
 // once it is used up the scroller follows the tail as usual. Only a prompt
 // that arrives while a turn is starting (one you just sent) anchors — a
-// session or branch switch still lands at the end of the conversation.
+// session switch still lands at the end of the conversation, and a branch
+// switch keeps your place in it.
 //
 // The thread is the rail down the sheet's right edge (TimelineRail), which
 // owns its measurement and drawing. This file owns the scroll state and
@@ -217,29 +218,37 @@ watch(
   },
 )
 
-// A session or branch switch re-renders the whole path at once: that render
-// is "history" (no entrance motion; the sheet fades in as one), and the view
-// lands at the latest message. Anything mounted afterwards is live.
-const viewKey = computed(() => `${state.sessionId ?? ''}:${state.activeBranch ?? ''}`)
+// A different view renders all at once: that render is "history" (no entrance
+// motion), the blank-page anchor is dropped, and this path's prompt counts as
+// already seen. Anything mounted afterwards is live.
+function resetView(): void {
+  timelineLive.value = false
+  anchorNode.value = null
+  anchorPlaced = false
+  tailSpace.value = 0
+  seenPrompt = lastPromptId.value
+  void nextTick(() => {
+    timelineLive.value = true
+  })
+}
+
+// A session switch remounts the timeline column (keyed by session below): the
+// sheet fades in as one and opens on its latest message. The end scroll waits
+// for the scroller if this view is still mounting (landing → session), so a
+// session always opens at the end.
 watch(
-  viewKey,
+  () => state.sessionId,
   () => {
-    timelineLive.value = false
-    // A view opens at its end, not on a blank page: drop the previous view's
-    // anchor and treat this path's prompt as already seen.
-    anchorNode.value = null
-    anchorPlaced = false
-    tailSpace.value = 0
-    seenPrompt = lastPromptId.value
-    // The end scroll waits for the scroller if this view is still mounting
-    // (landing → session), so a session always opens on its latest message.
+    resetView()
     requestEndScroll()
-    void nextTick(() => {
-      timelineLive.value = true
-    })
   },
   { flush: 'pre', immediate: true },
 )
+
+// A branch switch (the branch panel, the inline variant switcher) keeps the
+// sheet and your place in it: the path before the fork is not remounted, and
+// the swapped tail renders as history — an instant swap, no fade, no jump.
+watch(() => state.activeBranch, resetView, { flush: 'pre' })
 
 // Context panel / drawer → scroll to a node and flash it. Pills may carry the
 // id in data-node-ids (grouped), so fall back to a contains-match.
@@ -396,7 +405,7 @@ function jumpTo(i: number): void {
             @scroll="onScroll"
           >
             <div
-              :key="viewKey"
+              :key="state.sessionId ?? ''"
               ref="innerEl"
               class="tl-col view-in relative mx-auto flex max-w-[var(--col-max)] flex-col gap-5"
             >
