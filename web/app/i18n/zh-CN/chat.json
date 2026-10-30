@@ -25,6 +25,7 @@
     "edit": "编辑消息",
     "editTitle": "编辑并重新发送",
     "copyTitle": "复制消息",
+    "regenerate": "重新生成回复",
     "forkTitle": "从这里分叉",
     "cancel": "取消",
     "resend": "重新发送",

@@ -100,11 +100,14 @@ export async function forkAt(nodeId: NodeId, label = 'fork', abandon = false): P
 /**
  * Regenerate the reply to a prompt: the server forks at the user message,
  * replays its prompt (hooks and memory injection included) and streams a new
- * answer on that branch. The old reply stays on its own branch.
+ * answer on that branch, replacing the branch it leaves. The old reply stays
+ * reachable from the message's variant switcher.
  */
 export async function regenerateFrom(nodeId: NodeId): Promise<void> {
   try {
-    const res = await rumu.request<{ branch: Branch }>('branch.regenerate', { node: nodeId })
+    const res = await rumu.request<{ branch: Branch }>('branch.regenerate', {
+      node: nodeId,
+    })
     await resyncTree()
     state.activeBranch = res.branch.id
     if (state.session) state.session.active_branch = res.branch.id

@@ -1,13 +1,15 @@
 <script setup lang="ts">
 // A user message: right-aligned coral-tinted bubble (max ~70% of the column,
 // width fits content, no avatar); its coral ring on the thread is ChatView's.
-// Time only on hover; edit/copy/fork appear left of the bubble on hover.
-// Editing swaps the bubble for a textarea and resends the prompt on a branch
-// forked from just before it, so the original turn stays where it was.
+// Time only on hover; edit/copy/regenerate/fork appear left of the bubble on
+// hover. Editing swaps the bubble for a textarea and resends the prompt on a
+// branch forked from just before it; regenerate asks the same question again
+// (same op as the assistant side's regenerate — the reply is replaced); fork
+// branches here silently, without starting a turn.
 import { computed, nextTick, ref } from 'vue'
 import { t } from '../../i18n'
 import type { Node } from '../../lib/types'
-import { editPrompt, forkAt, isBusy } from '../../lib/store'
+import { editPrompt, forkAt, isBusy, regenerateFrom } from '../../lib/store'
 import { renderMarkdown } from '../../lib/markdown'
 import { contentText, copyText } from '../../lib/util'
 import { toast } from '../../lib/state/ui'
@@ -79,6 +81,19 @@ async function onCopy(): Promise<void> {
   toast('info', (await copyText(text.value)) ? t('chat.user.copied') : t('common.copyFailed'))
 }
 
+/** Re-asking the prompt is the assistant side's regenerate: it replaces the
+ *  reply that followed (guarded while the request is in flight). */
+const regenerating = ref(false)
+async function onRegenerate(): Promise<void> {
+  if (isBusy.value || regenerating.value) return
+  regenerating.value = true
+  try {
+    await regenerateFrom(props.node.id)
+  } finally {
+    regenerating.value = false
+  }
+}
+
 function onFork(): void {
   void forkAt(props.node.id)
 }
@@ -148,6 +163,15 @@ function onFork(): void {
         @click="onCopy"
       >
         <Icon name="copy" :size="12" />
+      </button>
+      <button
+        class="icon-btn size-5"
+        :title="t('chat.user.regenerate')"
+        :aria-label="t('chat.user.regenerate')"
+        :disabled="isBusy || regenerating"
+        @click="onRegenerate"
+      >
+        <Icon name="regenerate" :size="12" />
       </button>
       <button
         class="icon-btn size-5"

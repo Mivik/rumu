@@ -25,6 +25,7 @@
     "edit": "Edit message",
     "editTitle": "Edit and resend",
     "copyTitle": "Copy message",
+    "regenerate": "Regenerate reply",
     "forkTitle": "Fork from here",
     "cancel": "Cancel",
     "resend": "Resend",
