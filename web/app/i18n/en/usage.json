@@ -2,7 +2,8 @@
   "aria": "Usage details",
   "tokens": "{n} tok",
   "tokPerSecond": "{rate} tok/s",
-  "request": "Request",
+  "unitTokens": "tok",
+  "unitRate": "tok/s",
   "turn": "Turn",
   "input": "Input",
   "output": "Output",
@@ -12,7 +13,7 @@
   "speed": "Speed",
   "endToEnd": "End-to-end",
   "generation": "Generation",
-  "steps": "Steps",
+  "modelCalls": "Model calls",
   "tokensLabel": "Tokens",
   "inOut": "{input} in · {output} out"
 }

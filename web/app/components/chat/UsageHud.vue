@@ -3,6 +3,9 @@
 // Hover, focus or tap opens a record card for the latest request (model, time,
 // tokens, cache, latency, speed, and the turn's totals).
 //
+// Hovering waits OPEN_DELAY before opening, so sweeping the pointer across the
+// timeline does not flash the card; focus and tap open immediately.
+//
 // Placement is @floating-ui/vue (fixed strategy, flip + shift), teleported to
 // <body> so the timeline scroller can never clip the card. The hover state
 // has a short grace so the pointer can cross the gap into the card.
@@ -27,20 +30,55 @@ const hover = ref(false)
 const pinned = ref(false)
 const open = computed(() => hover.value || pinned.value)
 
+/** Hover dwell before the card opens; keeps a pointer sweep from flashing it. */
+const OPEN_DELAY = 300
+
 let closeTimer: ReturnType<typeof setTimeout> | null = null
+let openTimer: ReturnType<typeof setTimeout> | null = null
+
+function cancelOpen(): void {
+  if (openTimer !== null) {
+    clearTimeout(openTimer)
+    openTimer = null
+  }
+}
+
+/** Pointer hover: arm the delay unless the card is already showing. */
 function enter(): void {
+  if (closeTimer !== null) {
+    clearTimeout(closeTimer)
+    closeTimer = null
+  }
+  if (hover.value || pinned.value || openTimer !== null) return
+  openTimer = setTimeout(() => {
+    openTimer = null
+    hover.value = true
+  }, OPEN_DELAY)
+}
+
+/** Focus and tap: no dwell, since there is no accidental sweep to guard against. */
+function enterNow(): void {
+  cancelOpen()
   if (closeTimer !== null) {
     clearTimeout(closeTimer)
     closeTimer = null
   }
   hover.value = true
 }
+
 function leave(): void {
+  cancelOpen()
   if (closeTimer !== null) clearTimeout(closeTimer)
   closeTimer = setTimeout(() => {
     closeTimer = null
     hover.value = false
   }, 140)
+}
+
+/** Tap toggles the pinned card; drop any pending dwell so it cannot reopen later. */
+function togglePin(): void {
+  cancelOpen()
+  pinned.value = !pinned.value
 }
 
 function onDocPointer(e: PointerEvent): void {
@@ -53,6 +91,7 @@ watch(pinned, (v) => {
 })
 
 onBeforeUnmount(() => {
+  cancelOpen()
   if (closeTimer !== null) clearTimeout(closeTimer)
   document.removeEventListener('pointerdown', onDocPointer, true)
 })
@@ -117,7 +156,7 @@ const stats = computed(() => {
     cachePct,
     endToEnd,
     generation: haveGen ? genMs : null,
-    steps: assistants.length,
+    calls: assistants.length,
     turn: { prompt, completion },
   }
 })
@@ -125,6 +164,7 @@ const stats = computed(() => {
 /** No usage on the path (a fresh branch): drop any open/pinned state. */
 watch(stats, (s) => {
   if (!s) {
+    cancelOpen()
     hover.value = false
     pinned.value = false
   }
@@ -157,26 +197,43 @@ const rateText = computed(() => {
   return t('usage.tokPerSecond', { rate: fmtRate(s.rate) })
 })
 
-const requestFields = computed(() => {
+const headline = computed(() => {
   const s = stats.value
   if (!s) return []
   return [
-    { label: t('usage.input'), value: t('usage.tokens', { n: num(s.usage.prompt_tokens) }) },
-    { label: t('usage.output'), value: t('usage.tokens', { n: num(s.usage.completion_tokens) }) },
+    { label: t('usage.input'), value: num(s.usage.prompt_tokens), unit: t('usage.unitTokens') },
+    { label: t('usage.output'), value: num(s.usage.completion_tokens), unit: t('usage.unitTokens') },
+    {
+      label: t('usage.speed'),
+      value: s.rate === null ? '—' : fmtRate(s.rate),
+      unit: s.rate === null ? '' : t('usage.unitRate'),
+    },
+  ]
+})
+
+const details = computed(() => {
+  const s = stats.value
+  if (!s) return []
+  return [
     {
       label: t('usage.cacheRead'),
       value: s.cachePct === null ? '—' : `${num(s.usage.cached_tokens)} (${s.cachePct}%)`,
     },
     {
       label: t('usage.cacheWrite'),
-      value: t('usage.tokens', { n: num(s.usage.cache_creation_tokens) }),
+      value: `${num(s.usage.cache_creation_tokens)} ${t('usage.unitTokens')}`,
     },
     { label: t('usage.latency'), value: s.dur === null ? '—' : fmtDuration(s.dur) },
-    {
-      label: t('usage.speed'),
-      value: s.rate === null ? '—' : t('usage.tokPerSecond', { rate: fmtRate(s.rate) }),
-    },
+    { label: t('usage.endToEnd'), value: s.endToEnd === null ? '—' : fmtDuration(s.endToEnd) },
+    { label: t('usage.generation'), value: s.generation === null ? '—' : fmtDuration(s.generation) },
+    { label: t('usage.modelCalls'), value: String(s.calls) },
   ]
+})
+
+const turnTokens = computed(() => {
+  const s = stats.value
+  if (!s) return ''
+  return t('usage.inOut', { input: num(s.turn.prompt), output: num(s.turn.completion) })
 })
 
 // ---- placement ----
@@ -216,19 +273,21 @@ const tipStyle = computed<CSSProperties>(() => ({
     class="relative inline-flex"
     @mouseenter="enter"
     @mouseleave="leave"
-    @focusin="enter"
+    @focusin="enterNow"
     @focusout="leave"
     @keydown.escape="pinned = false"
   >
     <button
       type="button"
-      class="-mx-1 inline-flex h-5 items-center gap-1.5 rounded-control px-1 font-mono text-micro tabular-nums text-ink-3 transition-colors hover:bg-surface-2 hover:text-ink-2"
+      class="-mx-1 inline-flex h-5 items-center gap-1.5 rounded-control px-1 text-micro tabular-nums text-ink-3 transition-colors hover:bg-surface-2 hover:text-ink-2"
       :aria-label="t('usage.aria')"
       :aria-expanded="open"
       :aria-describedby="open ? TIP_ID : undefined"
-      @click="pinned = !pinned"
+      @click="togglePin"
     >
-      <span class="text-ink-2">{{ t('usage.tokens', { n: fmtTokens(stats.usage.completion_tokens) }) }}</span>
+      <span class="font-bold text-ink-2">{{
+        t('usage.tokens', { n: fmtTokens(stats.usage.completion_tokens) })
+      }}</span>
       <span aria-hidden="true" class="h-3 w-px bg-line" />
       <span>{{ rateText }}</span>
     </button>
@@ -246,68 +305,40 @@ const tipStyle = computed<CSSProperties>(() => ({
           ref="tip"
           role="tooltip"
           :style="tipStyle"
-          class="z-30 w-80 max-w-[calc(100vw-2rem)] overflow-hidden rounded-card border border-line-soft bg-surface shadow-pop"
+          class="z-30 w-[22rem] max-w-[calc(100vw-2rem)] rounded-card border border-line-soft bg-surface p-3 shadow-pop"
           @mouseenter="enter"
           @mouseleave="leave"
         >
           <!-- record header: the request's model and timestamp -->
-          <div class="border-b border-line-soft bg-surface-2/60 px-3.5 py-2.5">
-            <div class="truncate text-secondary font-bold text-ink" :title="stats.body.model">
+          <div class="flex items-baseline gap-3 px-1">
+            <div class="min-w-0 flex-1 truncate text-secondary font-bold text-ink" :title="stats.body.model">
               {{ stats.body.model }}
             </div>
-            <div class="mt-0.5 font-mono text-micro text-ink-3">{{ whenText }}</div>
+            <div class="flex-none text-micro tabular-nums text-ink-3">{{ whenText }}</div>
           </div>
 
-          <div class="px-3.5 py-3">
-            <div class="flex items-center gap-2">
-              <span class="text-micro font-semibold text-ink-2">{{ t('usage.request') }}</span>
-              <span class="h-px flex-1 bg-line-soft" />
-            </div>
-            <div class="mt-2 grid grid-cols-3 gap-x-3 gap-y-2.5">
-              <div v-for="f in requestFields" :key="f.label">
-                <div class="text-micro text-ink-3">{{ f.label }}</div>
-                <div class="mt-0.5 font-mono text-meta tabular-nums text-ink">{{ f.value }}</div>
+          <!-- the three numbers worth reading at a glance -->
+          <div class="mt-2.5 grid grid-cols-3 gap-1.5">
+            <div v-for="f in headline" :key="f.label" class="rounded-control bg-surface-2 px-2.5 py-2">
+              <div class="text-micro text-ink-3">{{ f.label }}</div>
+              <div class="mt-0.5 flex items-baseline gap-1">
+                <span class="text-message leading-none font-black tabular-nums text-ink">{{ f.value }}</span>
+                <span v-if="f.unit" class="text-micro font-semibold text-ink-3">{{ f.unit }}</span>
               </div>
             </div>
           </div>
 
-          <div class="border-t border-line-soft px-3.5 py-3">
-            <div class="flex items-center gap-2">
-              <span class="text-micro font-semibold text-ink-2">{{ t('usage.turn') }}</span>
-              <span class="h-px flex-1 bg-line-soft" />
+          <dl class="mt-3 grid grid-cols-2 gap-x-3 gap-y-2.5 px-1">
+            <div v-for="d in details" :key="d.label">
+              <dt class="text-micro text-ink-3">{{ d.label }}</dt>
+              <dd class="mt-0.5 text-meta font-semibold tabular-nums text-ink">{{ d.value }}</dd>
             </div>
-            <div class="mt-2 grid grid-cols-2 gap-x-3 gap-y-2.5">
-              <div>
-                <div class="text-micro text-ink-3">{{ t('usage.endToEnd') }}</div>
-                <div class="mt-0.5 font-mono text-meta tabular-nums text-ink">
-                  {{ stats.endToEnd === null ? '—' : fmtDuration(stats.endToEnd) }}
-                </div>
-              </div>
-              <div>
-                <div class="text-micro text-ink-3">{{ t('usage.generation') }}</div>
-                <div class="mt-0.5 font-mono text-meta tabular-nums text-ink">
-                  {{ stats.generation === null ? '—' : fmtDuration(stats.generation) }}
-                </div>
-              </div>
-              <div>
-                <div class="text-micro text-ink-3">{{ t('usage.steps') }}</div>
-                <div class="mt-0.5 font-mono text-meta tabular-nums text-ink">
-                  {{ stats.steps }}
-                </div>
-              </div>
-              <div>
-                <div class="text-micro text-ink-3">{{ t('usage.tokensLabel') }}</div>
-                <div class="mt-0.5 font-mono text-meta tabular-nums text-ink">
-                  {{
-                    t('usage.inOut', {
-                      input: num(stats.turn.prompt),
-                      output: num(stats.turn.completion),
-                    })
-                  }}
-                </div>
-              </div>
+            <!-- Single-step turns repeat the headline numbers; only sum when there is more. -->
+            <div v-if="stats.calls > 1" class="col-span-2">
+              <dt class="text-micro text-ink-3">{{ t('usage.turn') }} · {{ t('usage.tokensLabel') }}</dt>
+              <dd class="mt-0.5 text-meta font-semibold tabular-nums text-ink">{{ turnTokens }}</dd>
             </div>
-          </div>
+          </dl>
         </div>
       </Transition>
     </Teleport>

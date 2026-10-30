@@ -56,13 +56,24 @@ export function fmtThought(ms: number): string {
   return `${m}m ${String(s - m * 60).padStart(2, '0')}s`
 }
 
-/** Precise-but-compact duration for usage stats: '850ms', '1.2s', '1m 05s'. */
+/**
+ * Precise-but-compact duration for usage stats. Precision follows magnitude so
+ * the number stays around three significant digits, and units change only at
+ * the points where the leading figure would otherwise get unwieldy:
+ * '834ms' → '1.44s' → '39.9s' → '1m 05s' → '1h 05m'.
+ *
+ * The ms/s boundary is 1s, not an arbitrary 10s: 9.9s as '9900ms' reads worse
+ * and jumps size; below a second, ms is where the precision actually lives.
+ */
 export function fmtDuration(ms: number): string {
-  if (ms < 1000) return `${Math.round(ms)}ms`
-  if (ms < 60_000) return `${(ms / 1000).toFixed(1).replace(/\.0$/, '')}s`
-  const s = Math.round(ms / 1000)
-  const m = Math.floor(s / 60)
-  return `${m}m ${String(s - m * 60).padStart(2, '0')}s`
+  const total = Math.round(ms)
+  if (total < 1000) return `${total}ms`
+  if (total < 10_000) return `${String(Number((total / 1000).toFixed(2)))}s`
+  if (total < 60_000) return `${String(Number((total / 1000).toFixed(1)))}s`
+  const s = Math.round(total / 1000)
+  if (s < 3600) return `${Math.floor(s / 60)}m ${String(s % 60).padStart(2, '0')}s`
+  const m = Math.round(s / 60)
+  return `${Math.floor(m / 60)}h ${String(m % 60).padStart(2, '0')}m`
 }
 
 /** One-line argument summary for a tool call, preferring the obvious fields. */
