@@ -3,7 +3,8 @@
 // model, each opening in the CardDrawer, and the folded directories as one
 // line each. Shown inside an opened activity run (ActivityRun). The root
 // catalog needs no heading — the run's summary already names it; directory
-// and workspace catalogs say which slice they are.
+// and workspace catalogs say which slice they are. It only mounts when its
+// run opens, so its cards' underlines draw in each time (.underline-cascade).
 import { computed } from 'vue'
 import { t } from '../../i18n'
 import type { CatalogNote, Node } from '../../lib/types'
@@ -39,11 +40,11 @@ function foldedLabel(names: string[]): string {
 </script>
 
 <template>
-  <div v-if="catalog" class="text-meta">
+  <div v-if="catalog" class="underline-cascade text-meta">
     <div v-if="heading" class="mb-1 font-semibold text-ink">{{ heading }}</div>
     <ul class="flex flex-col gap-0.5">
-      <li v-for="e in catalog.entries" :key="e.id">
-        <button type="button" class="card-ref" @click="openDrawer(e.id)">
+      <li v-for="(e, i) in catalog.entries" :key="e.id">
+        <button type="button" class="card-ref" :style="{ '--i': i }" @click="openDrawer(e.id)">
           {{ e.title }}
         </button>
         <span v-if="e.summary" class="text-ink-3"> — {{ e.summary }}</span>

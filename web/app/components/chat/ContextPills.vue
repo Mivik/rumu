@@ -4,8 +4,8 @@
 // "card A changed". Same-kind items share one pill; card names are clickable
 // and open the CardDrawer. Each pill carries node ids so the Context panel can
 // jump to the injection point. Pills pop in when they happen live; a recalled
-// memory glows once. It lines up with the content column's left edge and puts
-// no node on the thread (only messages do).
+// memory fades in and underlines its cards one by one. It lines up with the
+// content column's left edge and puts no node on the thread (only messages do).
 import { computed, ref } from 'vue'
 import { t } from '../../i18n'
 import type { Content, Node, TaskDone, TaskStatus } from '../../lib/types'
@@ -209,7 +209,7 @@ function label(names: string[]): string {
     <span
       v-for="p in pills"
       :key="p.key"
-      v-enter="p.kind === 'memory' ? 'enter-glow' : 'enter-pop'"
+      v-enter="p.kind === 'memory' ? 'enter-recall' : 'enter-pop'"
       :data-node-id="p.nodeIds[0]"
       :data-node-ids="p.nodeIds.join(' ')"
       class="inline-flex min-w-0 max-w-full"
@@ -218,19 +218,27 @@ function label(names: string[]): string {
       <!-- memory: "imported" then each card as a little card stub (+N) -->
       <span
         v-if="p.kind === 'memory'"
-        class="inline-flex min-w-0 max-w-full flex-wrap items-center gap-1.5"
+        class="inline-flex min-w-0 max-w-full flex-wrap items-baseline gap-1.5"
         :title="p.title"
       >
-        <!-- set like the fold lines around it (.reason-toggle) -->
-        <span class="inline-flex items-center gap-1.5 text-micro font-semibold text-ink-3">
-          <Icon name="memory" :size="12" class="text-memory" />
+        <!-- set like the fold lines around it (.reason-toggle); the row sits
+             on the titles' baseline, which are larger and in the card face -->
+        <span class="inline-flex items-baseline gap-1.5 text-micro font-semibold text-ink-3">
+          <Icon name="memory" :size="12" class="self-center text-memory" />
           {{ t('cards.pills.imported') }}
         </span>
-        <template v-for="c in memoryShown(p)" :key="c.node.id">
-          <button v-if="c.cardId" class="card-ref" :title="c.hover" type="button" @click.stop="openCard(c)">
+        <template v-for="(c, i) in memoryShown(p)" :key="c.node.id">
+          <button
+            v-if="c.cardId"
+            class="card-ref"
+            :style="{ '--i': i }"
+            :title="c.hover"
+            type="button"
+            @click.stop="openCard(c)"
+          >
             <span class="truncate">{{ c.title }}</span>
           </button>
-          <span v-else class="card-ref" :title="c.hover">
+          <span v-else class="card-ref" :style="{ '--i': i }" :title="c.hover">
             <span class="truncate">{{ c.title }}</span>
           </span>
         </template>

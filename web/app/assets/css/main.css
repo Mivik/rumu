@@ -514,7 +514,7 @@
     border-radius: 1px;
     background: var(--memory);
     content: '';
-    transform-origin: bottom;
+    transform-origin: left bottom;
     transition: transform 0.16s var(--ease-soft);
   }
 
@@ -1138,10 +1138,10 @@
  *
  *   enter-rise   new timeline entry          enter-send   your message
  *   enter-fade   new step inside a turn      enter-slide  new tool row
- *   enter-pop    context pill                enter-glow   recalled memory
+ *   enter-pop    context pill                enter-recall recalled memory
  *   enter-stamp  "blocked" verdict           reveal       disclosed detail
  *   view-in      session / branch switch     cascade      panel contents
- *   dot-live     the coral dot, working
+ *   dot-live     the coral dot, working     underline-cascade  card catalog
  */
 
 @layer components {
@@ -1166,10 +1166,19 @@
     animation: pop 0.34s var(--ease-spring) 0.12s both;
   }
 
-  .enter-glow {
-    animation:
-      pop 0.34s var(--ease-spring) 0.12s both,
-      glow 1.4s ease-out 0.2s;
+  /* the row fades in, then its cards' underlines draw (.underline-cascade);
+   * the row's own animation outlasts them, since v-enter drops the class
+   * once the row's animation ends */
+  .enter-recall {
+    animation: recall 0.9s ease-out both;
+  }
+
+  /* card titles whose underlines draw one after another (--i), capped so a
+   * long list doesn't trail: a recalled memory, an opened catalog */
+  .enter-recall .card-ref::after,
+  .underline-cascade .card-ref::after {
+    animation: underline 0.45s var(--ease-soft) both;
+    animation-delay: calc(min(var(--i, 0), 6) * 70ms + 160ms);
   }
 
   .enter-stamp {
@@ -1376,12 +1385,20 @@
   }
 }
 
-@keyframes glow {
-  0% {
-    box-shadow: 0 0 0 0 color-mix(in srgb, var(--memory) 45%, transparent);
+@keyframes recall {
+  from {
+    opacity: 0;
   }
-  100% {
-    box-shadow: 0 0 0 10px color-mix(in srgb, var(--memory) 0%, transparent);
+  25%,
+  to {
+    opacity: 1;
+  }
+}
+
+/* `scale`, not `transform`: hover thickens the line with the latter */
+@keyframes underline {
+  from {
+    scale: 0 1;
   }
 }
 
