@@ -238,6 +238,11 @@ export function startApp(): void {
   if (started) return
   started = true
 
+  // A refresh on `/s/<id>` names its session in the address. From the first
+  // paint, hold the chat pane for it instead of flashing the landing page
+  // while the boot requests are in flight.
+  state.booting = sessionIdFromLocation() !== null
+
   rumu.onPush('node.appended', (p) => onNodeAppended(p as unknown as NodeAppendedPush))
   rumu.onPush('prompt.queued', (p) => onPromptQueued(p as unknown as PromptQueuedPush))
   rumu.onPush('prompt.blocked', (p) => onPromptBlocked(p as unknown as PromptBlockedPush))
@@ -269,8 +274,12 @@ export function startApp(): void {
     // First boot follows the URL; a reconnect resyncs the open session. A URL
     // naming an unknown session falls back to the landing page.
     const target = sessionIdFromLocation() ?? state.sessionId
-    if (target && !(await openSession(target, { history: 'none' }))) {
-      routeSession(null, 'replace')
+    try {
+      if (target && !(await openSession(target, { history: 'none' }))) {
+        routeSession(null, 'replace')
+      }
+    } finally {
+      state.booting = false
     }
   })
 }

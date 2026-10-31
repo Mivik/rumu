@@ -18,7 +18,7 @@
 // jumping.
 import { computed, nextTick, onBeforeUnmount, ref, watch } from 'vue'
 import { t } from '../../i18n'
-import { activeDelta, isBusy, owedReply, queuedPrompts, state, timeline } from '../../lib/store'
+import { activeDelta, connected, isBusy, owedReply, queuedPrompts, state, timeline } from '../../lib/store'
 import { prefersReduced, timelineLive, vEnter } from '../../lib/motion'
 import { layout, toggleSidebar } from '../../lib/layout'
 import type { TimelineEntry } from '../../lib/store'
@@ -33,6 +33,7 @@ import TasksPanel from './TasksPanel.vue'
 import TimelineRail from './TimelineRail.vue'
 import Welcome from './Welcome.vue'
 import SessionBar from './SessionBar.vue'
+import RumuMark from '../brand/RumuMark.vue'
 import Icon from '../ui/Icon.vue'
 
 const scrollEl = ref<HTMLElement | null>(null)
@@ -90,9 +91,9 @@ let endSeq = 0
 
 /**
  * Jump to the tail of a freshly opened view. The scroller may not exist yet
- * (opening from the landing page mounts it only after that pane's leave
- * transition, and a cold boot renders the landing first), so a request that
- * arrives too early waits for the ref instead of giving up.
+ * (opening from the landing page, or a cold boot on `/s/<id>` that shows the
+ * booting mark, mounts it only after that pane's leave transition), so a
+ * request that arrives too early waits for the ref instead of giving up.
  */
 function requestEndScroll(): void {
   const seq = ++endSeq
@@ -384,7 +385,7 @@ function jumpTo(i: number): void {
     >
       <!-- landing: the composer is the one thing to touch -->
       <div
-        v-if="!state.sessionId"
+        v-if="!state.sessionId && !state.booting"
         key="landing"
         class="flex min-h-0 flex-1 flex-col items-center justify-center overflow-y-auto px-4 pb-10"
       >
@@ -394,6 +395,13 @@ function jumpTo(i: number): void {
             <Composer />
           </div>
         </div>
+      </div>
+
+      <!-- booting straight into a session (a refresh on `/s/<id>`): hold the
+           sheet with a quietly breathing wordmark rather than flashing the
+           landing page while the tree loads -->
+      <div v-else-if="!state.sessionId" key="booting" class="flex min-h-0 flex-1 items-center justify-center">
+        <RumuMark :height="30" live :offline="!connected" />
       </div>
 
       <!-- the conversation: timeline + composer at the foot of the sheet -->

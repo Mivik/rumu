@@ -89,6 +89,9 @@ const initial = {
 
   // Open session tree (from session.tree, kept live via pushes).
   sessionId: null as SessionId | null,
+  /** The boot request is still opening the session the address names. The
+   *  landing pane holds back rather than flashing before it arrives. */
+  booting: false,
   session: null as SessionInfo | null,
   nodes: {} as Record<NodeId, Node>,
   branches: {} as Record<BranchId, Branch>,

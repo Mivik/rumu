@@ -62,6 +62,7 @@ export function goHome(): void {
 /** Back to the landing page (browser back past the first session). */
 export function closeSession(): void {
   openSeq++ // drop any in-flight open
+  state.booting = false // and any boot into a session URL still pending
   state.sessionId = null
   state.session = null
   state.nodes = {}
