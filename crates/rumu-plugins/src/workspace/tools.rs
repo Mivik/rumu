@@ -158,10 +158,13 @@ pub(super) fn manifest() -> Manifest {
         tools: vec![
             ToolSpec {
                 name: "read".into(),
-                description: "Read a file's raw text content (no line numbers). `path` is a \
+                description: "Read a file's raw text content (no line numbers), or view an \
+image (PNG, JPEG, GIF, WebP) as an image attachment beside a one-line header naming the file, \
+its dimensions and stored size. `path` is a \
 workspace path (relative to the workspace root, absolute on its machine, or \
 `<workspace>:<path>`; `@rumu:/cards/<id>` for a card). `offset` is a 1-based start line and \
-`limit` a line count; a trailing `#L<n>` / `#L<a>-L<b>` anchor sets them when omitted."
+`limit` a line count (text only — they do not apply to images); a trailing `#L<n>` / \
+`#L<a>-L<b>` anchor sets them when omitted."
                     .into(),
                 schema: tool_schema::<ReadArgs>(),
                 background: false,
@@ -476,6 +479,14 @@ impl WorkspacePlugin {
                 let name = ws.name.clone();
                 let backend = self.backend_for(&ws);
                 match backend.read_bytes(&abs).await {
+                    Ok(bytes) if rumu_blob::is_image(&bytes) => {
+                        // Effects are applied once, after the image path
+                        // settles (its error branches are nested).
+                        match self.read_image(&ws, &abs, bytes, offset, limit).await {
+                            Ok(out) => Ok(out.with_effects(effects)),
+                            Err(e) => Err(e.with_effects(effects)),
+                        }
+                    }
                     Ok(bytes) => {
                         let text = String::from_utf8_lossy(&bytes).into_owned();
                         match slice_lines(text, offset, limit) {
@@ -491,6 +502,41 @@ impl WorkspacePlugin {
             }
             Target::Rumu { abs } => self.rumu_read(&abs, offset, limit, cx).await,
         }
+    }
+
+    /// An image read: ingest the bytes (normalized once, off the async
+    /// executor) into the blob store and return the attachment beside a
+    /// one-line header. `offset`/`limit` slice text lines — an image has
+    /// none, so they are refused rather than silently ignored.
+    async fn read_image(
+        &self,
+        ws: &Workspace,
+        abs: &Utf8TypedPathBuf,
+        bytes: Vec<u8>,
+        offset: Option<u64>,
+        limit: Option<u64>,
+    ) -> ToolResult<ToolOutput> {
+        if offset.is_some() || limit.is_some() {
+            return Err(ToolError::model(prefixed(
+                &ws.name,
+                "`offset`/`limit` do not apply to image reads",
+            )));
+        }
+        let blobs = self
+            .blobs()
+            .map_err(|e| backend_err(&ws.name, "read", Some(display(ws, abs)), e))?;
+        let file_name = abs.file_name().map(str::to_owned);
+        let at = display(ws, abs);
+        let name = ws.name.clone();
+        let attachment = tokio::task::spawn_blocking(move || blobs.ingest_image(&bytes, file_name))
+            .await
+            .map_err(|e| ToolError::model(prefixed(&name, format!("reading image: {e}"))))?
+            .map_err(|e| backend_err(&name, "read", Some(at.clone()), e))?;
+        Ok(ToolOutput::ok(format!(
+            "[{name}] image {at} ({}×{}, {} bytes stored)",
+            attachment.width, attachment.height, attachment.size
+        ))
+        .with_attachments([attachment]))
     }
 
     /// Shared write preflight for real workspaces: the read-only check.

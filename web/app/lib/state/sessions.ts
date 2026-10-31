@@ -123,19 +123,28 @@ export async function newSession(): Promise<boolean> {
   }
 }
 
+/** An attachment sent with a prompt: the uploaded blob, plus the name it was
+ * attached under. */
+export interface PromptAttachment {
+  hash: string
+  name?: string
+}
+
 /**
  * Send a message on the active branch. With no session open (the landing
  * state), start a new session first and send the text as its first prompt.
- * Returns whether the prompt was accepted.
+ * `attachments` name already-uploaded images the text places with
+ * `[Image #N]` anchors (empty text is allowed when there is one). Returns
+ * whether the prompt was accepted.
  */
-export async function sendPrompt(text: string): Promise<boolean> {
-  if (!text.trim()) return false
+export async function sendPrompt(text: string, attachments: PromptAttachment[] = []): Promise<boolean> {
+  if (!text.trim() && !attachments.length) return false
   if (!state.sessionId && !(await newSession())) return false
   const branch = state.activeBranch
   if (!branch) return false
   state.busy[branch] = true
   try {
-    await rumu.request('prompt', { branch, text })
+    await rumu.request('prompt', attachments.length ? { branch, text, attachments } : { branch, text })
     return true
   } catch (err) {
     state.busy[branch] = false
@@ -157,16 +166,22 @@ export async function stopTurn(): Promise<void> {
 /**
  * Edit a sent prompt: fork from just before it and send the new text there.
  * The branch holding the original message and reply is abandoned; its
- * alternative stays reachable from the user message's switcher.
+ * alternative stays reachable from the user message's switcher. An edited
+ * message resends its attachments unchanged — the edited text's anchors say
+ * where they sit.
  */
-export async function editPrompt(node: Node, text: string): Promise<boolean> {
+export async function editPrompt(
+  node: Node,
+  text: string,
+  attachments: PromptAttachment[] = [],
+): Promise<boolean> {
   const next = text.trim()
-  if (!next || !state.sessionId) return false
+  if ((!next && !attachments.length) || !state.sessionId) return false
   const before = node.parent
   if (!before) {
     toast('error', t('errors.editFirst'))
     return false
   }
   if (!(await forkAt(before, 'edit', true))) return false
-  return sendPrompt(next)
+  return sendPrompt(next, attachments)
 }

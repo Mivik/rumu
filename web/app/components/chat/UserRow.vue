@@ -6,20 +6,35 @@
 // branch forked from just before it; regenerate asks the same question again
 // (same op as the assistant side's regenerate — the reply is replaced); fork
 // branches here silently, without starting a turn.
+//
+// Images lead the message as thumbnails, the way the web composer sends them
+// (`withLeadingAnchors`); the text below is what was typed. An anchor placed
+// elsewhere by another client stays visible as text. Editing changes only the
+// typed text and resends the images as they are.
 import { computed, nextTick, ref } from 'vue'
 import { t } from '../../i18n'
 import type { Node } from '../../lib/types'
+import type { PromptAttachment } from '../../lib/store'
 import { editPrompt, forkAt, isBusy, regenerateFrom } from '../../lib/store'
 import { renderMarkdown } from '../../lib/markdown'
-import { contentText, copyText } from '../../lib/util'
+import { renderedContent, typedText, withLeadingAnchors } from '../../lib/attachments'
+import { copyText } from '../../lib/util'
 import { toast } from '../../lib/state/ui'
 import Icon from '../ui/Icon.vue'
 import BranchSwitcher from './BranchSwitcher.vue'
 import ContextPills from './ContextPills.vue'
+import ImageThumb from './ImageThumb.vue'
 
 const props = withDefaults(defineProps<{ node: Node; context?: Node[] }>(), { context: () => [] })
 
-const text = computed(() => contentText((props.node.body as Extract<Node['body'], { type: 'user' }>).content))
+const content = computed(() => (props.node.body as Extract<Node['body'], { type: 'user' }>).content)
+const images = computed(() => content.value.attachments ?? [])
+const text = computed(() => typedText(content.value.text, images.value.length))
+
+/** The attachments an edit resends, unchanged. */
+function resendAttachments(): PromptAttachment[] {
+  return images.value.map((a) => ({ hash: a.hash, name: a.name ?? undefined }))
+}
 
 const editing = ref(false)
 const saving = ref(false)
@@ -54,14 +69,15 @@ function cancelEdit(): void {
 
 async function saveEdit(): Promise<void> {
   const next = draft.value.trim()
-  if (!next || saving.value) return
+  const resend = resendAttachments()
+  if ((!next && !resend.length) || saving.value) return
   if (next === text.value.trim()) {
     editing.value = false
     return
   }
   saving.value = true
   try {
-    if (await editPrompt(props.node, next)) editing.value = false
+    if (await editPrompt(props.node, withLeadingAnchors(next, resend.length), resend)) editing.value = false
   } finally {
     saving.value = false
   }
@@ -71,14 +87,18 @@ function onEditorKeydown(e: KeyboardEvent): void {
   if (e.key === 'Escape') {
     e.preventDefault()
     cancelEdit()
-  } else if (e.key === 'Enter' && !e.shiftKey) {
+  } else if (e.key === 'Enter' && !e.shiftKey && !e.isComposing) {
     e.preventDefault()
-    void saveEdit()
+    saveEdit()
   }
 }
 
 async function onCopy(): Promise<void> {
-  toast('info', (await copyText(text.value)) ? t('chat.user.copied') : t('common.copyFailed'))
+  // The clipboard gets the text-only form: images as their placeholders.
+  toast(
+    'info',
+    (await copyText(renderedContent(content.value))) ? t('chat.user.copied') : t('common.copyFailed'),
+  )
 }
 
 /** Re-asking the prompt is the assistant side's regenerate: it replaces the
@@ -106,6 +126,16 @@ function onFork(): void {
         v-if="editing"
         class="w-[85%] min-w-0 rounded-sheet rounded-br-xs bg-brand-soft px-4 py-2 text-ink shadow-soft sm:w-[70%]"
       >
+        <!-- the images are resent as they are; shown so the edit has its context -->
+        <div v-if="images.length" class="mb-2 flex flex-wrap gap-1.5">
+          <ImageThumb
+            v-for="(a, i) in images"
+            :key="`${a.hash}:${i}`"
+            :attachment="a"
+            :max-h="56"
+            :max-w="96"
+          />
+        </div>
         <textarea
           ref="editor"
           v-model="draft"
@@ -125,20 +155,31 @@ function onFork(): void {
           </button>
           <button
             class="text-micro font-semibold text-brand-strong transition-opacity hover:underline disabled:opacity-50"
-            :disabled="saving || !draft.trim()"
+            :disabled="saving || (!draft.trim() && !images.length)"
             @click="saveEdit"
           >
             {{ t('chat.user.resend') }}
           </button>
         </div>
       </div>
-      <div
-        v-else
-        ref="bubble"
-        class="md w-fit max-w-[85%] rounded-sheet rounded-br-xs bg-brand-soft px-4 py-2 text-ink sm:max-w-[70%]"
-        :title="new Date(node.at).toLocaleString()"
-        v-html="renderMarkdown(text)"
-      />
+      <div v-else class="flex max-w-[85%] min-w-0 flex-col items-end gap-1.5 sm:max-w-[70%]">
+        <div v-if="images.length" class="flex flex-wrap justify-end gap-1.5">
+          <ImageThumb
+            v-for="(a, i) in images"
+            :key="`${a.hash}:${i}`"
+            :attachment="a"
+            :max-h="120"
+            :max-w="200"
+          />
+        </div>
+        <div
+          v-if="text"
+          ref="bubble"
+          class="md w-fit max-w-full rounded-sheet rounded-br-xs bg-brand-soft px-4 py-2 text-ink"
+          :title="new Date(node.at).toLocaleString()"
+          v-html="renderMarkdown(text)"
+        />
+      </div>
     </div>
 
     <!-- actions sit at the message's bottom-right, revealed on hover -->

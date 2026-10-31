@@ -4,12 +4,13 @@
 // activity run folds them into. Shared by ToolList (the rows) and
 // ActivityRun (the summary line).
 
-import type { Branch, Node, TaskStatus } from './types'
+import type { Attachment, Branch, Node, TaskStatus } from './types'
 import { INTERNAL_WORKSPACE } from './types'
 import type { ToolRowInfo } from './store'
 import { findAgentChild, state } from './store'
 import { taskIdOf, taskLabel } from './tasks'
-import { argSummary, contentText, preview } from './util'
+import { argSummary, preview } from './util'
+import { renderedContent } from './attachments'
 import { i18n, t } from '../i18n'
 import type { MessageKey } from '../i18n'
 
@@ -25,6 +26,8 @@ export interface ToolRowView {
   /** The full one-line call summary, for the tooltip. */
   callFull: string
   output: string
+  /** Image attachments of the result (e.g. `read` on an image file). */
+  attachments: Attachment[]
   status: ToolStatus
   statusLabel: string
   /** Card id from a card read/write call, for the row's CardChip. */
@@ -227,7 +230,10 @@ function blockedReasonOf(text: string): string | null {
 }
 
 export function toolRowView(row: ToolRowInfo): ToolRowView {
-  const output = contentText(row.result.body.type === 'tool_result' ? row.result.body.content : undefined)
+  const content = row.result.body.type === 'tool_result' ? row.result.body.content : undefined
+  // The output is read as text: images appear as their placeholders.
+  const output = renderedContent(content)
+  const attachments = content?.attachments ?? []
   const isError = row.result.body.type === 'tool_result' && row.result.body.is_error
   const blocked = isError ? blockedReasonOf(output) : null
   const name = row.call?.name ?? 'tool'
@@ -281,6 +287,7 @@ export function toolRowView(row: ToolRowInfo): ToolRowView {
     resultText: parsed.result,
     callFull: parsed.callFull,
     output: blocked ?? output,
+    attachments,
     status: blocked !== null ? 'blocked' : isError ? 'error' : 'ok',
     statusLabel:
       blocked !== null

@@ -390,6 +390,81 @@ async fn read_write_edit_list_roundtrip() {
     );
 }
 
+/// Reading an image: the bytes are ingested into `<home>/blobs` and come
+/// back as one attachment beside a header line; `offset`/`limit` are
+/// refused, undecodable bytes are a model-facing error, and text reads of
+/// the same workspace are unchanged.
+#[tokio::test]
+async fn image_read_ingests_and_attaches() {
+    let dir = tempfile::tempdir().unwrap();
+    let (plugin, _host, cx, home) = setup(dir.path(), false);
+    std::fs::create_dir_all(dir.path().join("img")).unwrap();
+    let mut png = Vec::new();
+    image::DynamicImage::ImageRgb8(image::RgbImage::from_fn(40, 30, |x, y| {
+        image::Rgb([(x % 256) as u8, (y % 256) as u8, 128])
+    }))
+    .write_to(&mut std::io::Cursor::new(&mut png), image::ImageFormat::Png)
+    .unwrap();
+    std::fs::write(dir.path().join("img/demo.png"), &png).unwrap();
+
+    let out = plugin
+        .call_tool("read", json!({ "path": "img/demo.png" }), &cx)
+        .await
+        .unwrap();
+    assert!(!out.is_error, "{}", out.content.text);
+    assert!(
+        out.content
+            .text
+            .starts_with("[proj] image proj:img/demo.png (40×30, ")
+            && out.content.text.ends_with(" bytes stored)"),
+        "{}",
+        out.content.text
+    );
+    assert_eq!(out.content.attachments.len(), 1);
+    let a = &out.content.attachments[0];
+    assert_eq!((a.width, a.height), (40, 30));
+    assert_eq!(a.mime, "image/png");
+    assert_eq!(a.name.as_deref(), Some("demo.png"));
+    // The blob exists and the attachment describes it.
+    let blob = std::fs::read(home.path().join("blobs").join(&a.hash)).unwrap();
+    assert_eq!(blob.len() as u64, a.size);
+
+    // `offset`/`limit` have no lines to slice and are refused.
+    let out = plugin
+        .call_tool("read", json!({ "path": "img/demo.png", "offset": 1 }), &cx)
+        .await
+        .unwrap();
+    assert!(
+        out.is_error && out.content.text.contains("do not apply to image reads"),
+        "{}",
+        out.content.text
+    );
+
+    // Bytes that sniff as PNG but do not decode fail like other reads.
+    std::fs::write(dir.path().join("img/broken.png"), b"\x89PNG\r\n\x1a\nnope").unwrap();
+    let out = plugin
+        .call_tool("read", json!({ "path": "img/broken.png" }), &cx)
+        .await
+        .unwrap();
+    assert!(out.is_error, "{}", out.content.text);
+    assert!(
+        out.content
+            .text
+            .starts_with("[proj] read proj:img/broken.png: "),
+        "{}",
+        out.content.text
+    );
+
+    // A text read still returns raw text with no attachments.
+    std::fs::write(dir.path().join("note.txt"), "plain").unwrap();
+    let out = plugin
+        .call_tool("read", json!({ "path": "note.txt" }), &cx)
+        .await
+        .unwrap();
+    assert_eq!(out.content.text, "plain");
+    assert!(out.content.attachments.is_empty());
+}
+
 #[tokio::test]
 async fn read_only_and_bash_behaviour() {
     let dir = tempfile::tempdir().unwrap();
@@ -1444,6 +1519,7 @@ fn staged_session() -> (rumu_core::SessionInfo, Vec<Node>, Vec<rumu_core::Branch
                 source: "system".into(),
                 content: rumu_core::Content {
                     text: String::new(),
+                    attachments: Vec::new(),
                     data: Some(Tagged {
                         tag: "tag".into(),
                         v: 1,
@@ -1734,6 +1810,90 @@ async fn session_node_and_range_reads() {
     );
 }
 
+/// Nodes carrying image attachments render their `[image: …]` placeholder
+/// (transcripts are text-only): an anchor is replaced in place, an
+/// unanchored image follows the text.
+#[tokio::test]
+async fn session_nodes_show_image_placeholders() {
+    let sid = rumu_core::SessionId::from("01STESTSSESSION0000000000000");
+    let image = rumu_core::Attachment {
+        hash: "0".repeat(64),
+        mime: "image/png".into(),
+        name: Some("shot.png".into()),
+        width: 800,
+        height: 600,
+        size: 10,
+    };
+    let mk = |id: &str, body: NodeBody| Node {
+        id: rumu_core::NodeId::from(id),
+        parent: None,
+        session: sid.clone(),
+        at: 0,
+        dur_ms: None,
+        body,
+    };
+    let nodes = vec![
+        mk(
+            "U1",
+            NodeBody::User {
+                content: rumu_core::Content::text("look at this [Image #1]")
+                    .with_attachments([image.clone()]),
+            },
+        ),
+        mk(
+            "T1",
+            NodeBody::ToolResult {
+                call_id: "c1".into(),
+                content: rumu_core::Content::text(
+                    "[proj] image proj:a.png (800×600, 9 bytes stored)",
+                )
+                .with_attachments([image]),
+                is_error: false,
+            },
+        ),
+    ];
+    let info = rumu_core::SessionInfo {
+        id: sid.clone(),
+        title: "with images".into(),
+        active_branch: rumu_core::BranchId::from("B1"),
+        created_at: 0,
+        updated_at: 0,
+    };
+    let host = session_host(info, nodes, vec![]);
+    let cx = host.cx();
+    let plugin = session_plugin();
+    let base = "@rumu:/sessions/01STESTSSESSION0000000000000";
+
+    let out = plugin
+        .call_tool("read", json!({ "path": format!("{base}/U1") }), &cx)
+        .await
+        .unwrap();
+    assert!(
+        out.content
+            .text
+            .contains("look at this [image: shot.png 800×600]"),
+        "{}",
+        out.content.text
+    );
+    assert!(
+        !out.content.text.contains("[Image #1]"),
+        "{}",
+        out.content.text
+    );
+
+    let out = plugin
+        .call_tool("read", json!({ "path": format!("{base}/T1") }), &cx)
+        .await
+        .unwrap();
+    assert!(
+        out.content.text.contains(
+            "[proj] image proj:a.png (800×600, 9 bytes stored)\n[image: shot.png 800×600]"
+        ),
+        "{}",
+        out.content.text
+    );
+}
+
 /// Range reads keep the head and tail of a long node body around a
 /// `<truncated>` pointer; single-node reads stay whole.
 #[tokio::test]
@@ -1895,6 +2055,7 @@ async fn session_render_escapes_markup() {
                 source: "memory".into(),
                 content: rumu_core::Content {
                     text: "note".into(),
+                    attachments: Vec::new(),
                     data: Some(Tagged {
                         tag: "memo".into(),
                         v: 1,

@@ -45,6 +45,9 @@ use backend::{Backend, LocalBackend, SshBackend};
 pub struct WorkspacePlugin {
     home: PathBuf,
     catalog: WorkspaceCatalog,
+    /// The blob store behind image reads (`<home>/blobs`), opened lazily on
+    /// the first one — most plugin instances never read an image.
+    blobs: std::sync::OnceLock<rumu_blob::Blobs>,
     /// ControlPath socket directory for ssh multiplexing (lazily created).
     ssh_ctl_dir: PathBuf,
     /// Probed `uname -sm` per ssh host (cached for the process lifetime).
@@ -59,6 +62,7 @@ impl WorkspacePlugin {
         Self {
             home: home.to_path_buf(),
             catalog,
+            blobs: std::sync::OnceLock::new(),
             ssh_ctl_dir: ssh_ctl_dir(),
             ssh_uname: Mutex::new(HashMap::new()),
             agents_missing: Mutex::new(std::collections::HashSet::new()),
@@ -68,6 +72,18 @@ impl WorkspacePlugin {
     /// The catalog this plugin was built with (config.yaml presets).
     pub fn catalog(&self) -> &WorkspaceCatalog {
         &self.catalog
+    }
+
+    /// The blob store for image reads, opened on first use (creating
+    /// `<home>/blobs`). Cheap to clone; every handle sees the same blobs.
+    fn blobs(&self) -> rumu_blob::Result<rumu_blob::Blobs> {
+        if let Some(blobs) = self.blobs.get() {
+            return Ok(blobs.clone());
+        }
+        let opened = rumu_blob::Blobs::in_home(&self.home)?;
+        let _ = self.blobs.set(opened.clone());
+        // Another call may have won the race; either handle is equivalent.
+        Ok(self.blobs.get().cloned().unwrap_or(opened))
     }
 
     fn backend_for(&self, ws: &Workspace) -> std::sync::Arc<dyn Backend> {

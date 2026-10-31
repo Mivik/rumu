@@ -17,15 +17,21 @@ use std::sync::Arc;
 use std::sync::atomic::{AtomicUsize, Ordering};
 
 use async_trait::async_trait;
+use base64::Engine as _;
 use futures_util::StreamExt;
 use genai::adapter::AdapterKind;
 use genai::chat::{
-    CacheControl, ChatMessage, ChatOptions, ChatRole, ChatStreamEvent, ContentPart, CustomPart,
-    MessageContent, MessageOptions, ReasoningEffort, ToolCall as GenaiToolCall, ToolResponse,
+    Binary, CacheControl, ChatMessage, ChatOptions, ChatRole, ChatStreamEvent, ContentPart,
+    CustomPart, MessageContent, MessageOptions, ReasoningEffort, ToolCall as GenaiToolCall,
+    ToolResponse,
 };
 use genai::resolver::{AuthData, Endpoint};
 use genai::{Client, ModelIden, ServiceTarget};
-use rumu_core::{Node, NodeBody, ReasoningBlock, ToolCall, ToolSpec, Usage};
+use rumu_blob::Blobs;
+use rumu_core::{
+    Attachment, Content, Node, NodeBody, ReasoningBlock, Segment, ToolCall, ToolSpec, Usage,
+    image_label,
+};
 use rumu_kernel::{Delta, Llm, LlmError, LlmResponse, OnDelta};
 use serde_json::{Value, json};
 use tracing::warn;
@@ -41,9 +47,18 @@ pub struct GenaiLlm {
     client: Client,
     model: String,
     effort: String,
+    /// Where the projection reads attachment bytes from; `None` projects
+    /// every image as its stand-in text.
+    blobs: Option<Blobs>,
 }
 
 impl GenaiLlm {
+    /// Read attachments from this blob store (`<RUMU_HOME>/blobs`).
+    pub fn with_blobs(mut self, blobs: Blobs) -> Self {
+        self.blobs = Some(blobs);
+        self
+    }
+
     /// Build from `RUMU_MODEL` (required), `RUMU_EFFORT` (default `high`),
     /// `ANTHROPIC_BASE_URL` and `ANTHROPIC_AUTH_TOKEN`.
     pub fn from_env() -> Result<Self, LlmError> {
@@ -96,6 +111,7 @@ impl GenaiLlm {
             client,
             model,
             effort,
+            blobs: None,
         })
     }
 
@@ -253,8 +269,12 @@ impl Llm for GenaiLlm {
         on_delta: Option<OnDelta>,
     ) -> std::result::Result<LlmResponse, LlmError> {
         let from = replay_from(nodes);
+        let blobs = self.blobs.as_ref();
         match self
-            .stream(project_from(system, tools, nodes, from), on_delta.clone())
+            .stream(
+                project_from(system, tools, nodes, from, blobs),
+                on_delta.clone(),
+            )
             .await
         {
             Ok(resp) => Ok(resp),
@@ -263,7 +283,7 @@ impl Llm for GenaiLlm {
             // one): retry once without any, and record the reset.
             Err((e, false)) if rejects_reasoning(&e) && replays_reasoning(&nodes[from..]) => {
                 warn!(error = %e, "provider rejected replayed reasoning; retrying without it");
-                let req = project_from(system, tools, nodes, nodes.len());
+                let req = project_from(system, tools, nodes, nodes.len(), blobs);
                 let mut resp = self.stream(req, on_delta).await.map_err(|(e, _)| e)?;
                 resp.reasoning_reset = true;
                 Ok(resp)
@@ -400,19 +420,33 @@ fn reasoning_blocks(end: &genai::chat::StreamEnd, text: String) -> Vec<Reasoning
 /// Deterministically project a branch path into a genai `ChatRequest`
 /// (the cache contract).
 ///
-/// - User → user text; Assistant → assistant text + tool calls, prefixed by
-///   its captured thinking blocks so Anthropic can continue a tool-use loop
-///   (none before the latest reasoning reset);
-/// - ToolResult → tool response (even when its text is empty); the results of
-///   one tool batch share one message, since providers that pair calls with
-///   results per message (Gemini) reject them split;
+/// - User → user message following `content.segments()`: text, and each
+///   attachment as its `Image n:` label followed by a base64 image part (its
+///   blob read through `blobs`; a blob that cannot be read projects as the
+///   attachment's placeholder plus an "(image unavailable)" note instead of
+///   failing the request). Text-only content projects exactly as one text
+///   message;
+/// - Assistant → assistant text + tool calls, prefixed by its captured
+///   thinking blocks so Anthropic can continue a tool-use loop (none before
+///   the latest reasoning reset);
+/// - ToolResult → tool response (even when its text is empty); a result with
+///   attachments becomes one Custom part holding the full Anthropic
+///   `tool_result` block, so it still batches with the results of its tool
+///   batch into one message; the results of one batch share one message,
+///   since providers that pair calls with results per message (Gemini) reject
+///   them split;
 /// - Note → `<note source="…">` user message, from `content.text` alone; a
 ///   note with empty text is a marker and projects nothing. Structured
 ///   `content.data` is never projected.
 /// - Message-level ephemeral cache breakpoints on the **last message** and the
 ///   **last user-role message**.
-pub fn project(system: &str, tools: &[ToolSpec], nodes: &[Node]) -> genai::chat::ChatRequest {
-    project_from(system, tools, nodes, replay_from(nodes))
+pub fn project(
+    system: &str,
+    tools: &[ToolSpec],
+    nodes: &[Node],
+    blobs: Option<&Blobs>,
+) -> genai::chat::ChatRequest {
+    project_from(system, tools, nodes, replay_from(nodes), blobs)
 }
 
 /// [`project`], replaying thinking only from `nodes[replay_from..]`.
@@ -421,12 +455,27 @@ fn project_from(
     tools: &[ToolSpec],
     nodes: &[Node],
     replay_from: usize,
+    blobs: Option<&Blobs>,
 ) -> genai::chat::ChatRequest {
+    let load = |a: &Attachment| -> Option<Vec<u8>> { blobs.and_then(|b| b.get(&a.hash).ok()) };
     let mut messages: Vec<ChatMessage> = Vec::new();
     for (i, n) in nodes.iter().enumerate() {
         match &n.body {
             NodeBody::User { content } => {
-                messages.push(ChatMessage::user(content.text.clone()));
+                if content.attachments.is_empty() {
+                    messages.push(ChatMessage::user(content.text.clone()));
+                    continue;
+                }
+                let parts: Vec<ContentPart> = pieces(content, &load)
+                    .into_iter()
+                    .map(|piece| match piece {
+                        Piece::Text(t) => ContentPart::Text(t),
+                        Piece::Image { mime, data, name } => {
+                            ContentPart::Binary(Binary::from_base64(mime, data, name))
+                        }
+                    })
+                    .collect();
+                messages.push(ChatMessage::user(MessageContent::from_parts(parts)));
             }
             NodeBody::Assistant {
                 content,
@@ -481,12 +530,45 @@ fn project_from(
             NodeBody::ToolResult {
                 call_id, content, ..
             } => {
-                let response = ToolResponse::new(call_id.clone(), content.text.clone());
+                // A plain result is a ToolResponse (string content). One with
+                // attachments needs Anthropic's block form — genai's adapter
+                // passes Custom parts of a Tool message through verbatim, so
+                // the whole `tool_result` block (text and image content
+                // blocks in segments() order, labels included) still batches
+                // with the sibling results into one message. `is_error` stays
+                // unprojected, exactly as for the plain-string form.
+                let response = if content.attachments.is_empty() {
+                    ContentPart::ToolResponse(ToolResponse::new(
+                        call_id.clone(),
+                        content.text.clone(),
+                    ))
+                } else {
+                    let blocks: Vec<Value> = pieces(content, &load)
+                        .into_iter()
+                        .map(|piece| match piece {
+                            Piece::Text(t) => json!({ "type": "text", "text": t }),
+                            Piece::Image { mime, data, .. } => json!({
+                                "type": "image",
+                                "source": { "type": "base64", "media_type": mime, "data": data },
+                            }),
+                        })
+                        .collect();
+                    ContentPart::Custom(CustomPart {
+                        model_iden: None,
+                        data: json!({
+                            "type": "tool_result",
+                            "tool_use_id": call_id,
+                            "content": blocks,
+                        }),
+                    })
+                };
                 // A batch's results are consecutive on the path (markers in
                 // between project nothing).
                 match messages.last_mut() {
                     Some(m) if m.role == ChatRole::Tool => m.content.push(response),
-                    _ => messages.push(ChatMessage::from(response)),
+                    _ => messages.push(ChatMessage::tool(MessageContent::from_parts(vec![
+                        response,
+                    ]))),
                 }
             }
             NodeBody::Note {
@@ -526,6 +608,47 @@ fn project_from(
         }));
     }
     req
+}
+
+/// One projected piece of a content with attachments, in `segments()` order.
+enum Piece {
+    Text(String),
+    /// Base64 of the stored bytes, with the stored MIME type.
+    Image {
+        mime: String,
+        data: String,
+        name: Option<String>,
+    },
+}
+
+/// Text and images of `content`, in reading order: empty text segments
+/// dropped, each image preceded by its `Image n:` label. A blob that cannot
+/// be read becomes `Image n: [image: name W×H] (image unavailable)` — a
+/// missing image must never fail the request.
+fn pieces(content: &Content, load: &dyn Fn(&Attachment) -> Option<Vec<u8>>) -> Vec<Piece> {
+    let mut out = Vec::new();
+    for segment in content.segments() {
+        match segment {
+            Segment::Text(t) if !t.is_empty() => out.push(Piece::Text(t.to_owned())),
+            Segment::Text(_) => {}
+            Segment::Image { n, attachment, .. } => match load(attachment) {
+                Some(bytes) => {
+                    out.push(Piece::Text(image_label(n)));
+                    out.push(Piece::Image {
+                        mime: attachment.mime.clone(),
+                        data: base64::engine::general_purpose::STANDARD.encode(bytes),
+                        name: attachment.name.clone(),
+                    });
+                }
+                None => out.push(Piece::Text(format!(
+                    "{} {} (image unavailable)",
+                    image_label(n),
+                    attachment.placeholder()
+                ))),
+            },
+        }
+    }
+    out
 }
 
 #[cfg(test)]
@@ -601,7 +724,7 @@ mod tests {
                 background: false,
             },
         ];
-        let req = project("SYSTEM", &tools, &nodes);
+        let req = project("SYSTEM", &tools, &nodes, None);
 
         assert_eq!(req.system.as_deref(), Some("SYSTEM"));
         // Marker dropped; notes are user messages with the exact format.
@@ -639,8 +762,8 @@ mod tests {
         assert_eq!(names, vec!["alpha", "zeta"]);
 
         // Deterministic: identical input → byte-identical serialization.
-        let a = serde_json::to_string(&project("SYSTEM", &tools, &nodes)).unwrap();
-        let b = serde_json::to_string(&project("SYSTEM", &tools, &nodes)).unwrap();
+        let a = serde_json::to_string(&project("SYSTEM", &tools, &nodes, None)).unwrap();
+        let b = serde_json::to_string(&project("SYSTEM", &tools, &nodes, None)).unwrap();
         assert_eq!(a, b);
     }
 
@@ -663,7 +786,7 @@ mod tests {
             model: "m".into(),
             usage: Usage::default(),
         })];
-        let req = project("SYSTEM", &[], &nodes);
+        let req = project("SYSTEM", &[], &nodes, None);
         let parts = req.messages[0].content.parts();
         // Thinking blocks lead, in the order they were captured: the signed
         // block, then the redacted one, then the text.
@@ -714,7 +837,7 @@ mod tests {
             model: "m".into(),
             usage: Usage::default(),
         })];
-        let req = project("SYSTEM", &[], &nodes);
+        let req = project("SYSTEM", &[], &nodes, None);
         let signatures: Vec<&str> = req.messages[0]
             .content
             .parts()
@@ -755,7 +878,7 @@ mod tests {
             model: "m".into(),
             usage: Usage::default(),
         })];
-        let req = project("SYSTEM", &[], &nodes);
+        let req = project("SYSTEM", &[], &nodes, None);
         assert_eq!(req.messages[0].content.parts().len(), 1);
     }
 
@@ -770,11 +893,252 @@ mod tests {
             source: "memory".into(),
             content: rumu_core::Content::text(frozen).with_data(&payload),
         })];
-        let req = project("SYSTEM", &[], &nodes);
+        let req = project("SYSTEM", &[], &nodes, None);
         assert_eq!(req.messages.len(), 1);
         let text = req.messages[0].content.first_text().unwrap();
         assert_eq!(text, format!("<note source=\"memory\">\n{frozen}\n</note>"));
         assert!(!text.contains("hidden payload"), "{text}");
+    }
+
+    // ---------- image attachments ----------
+
+    /// A blob store holding `imgs`, plus the attachment naming each stored
+    /// blob (hash and MIME are all the projection reads).
+    fn blobs_with(imgs: &[&[u8]]) -> (tempfile::TempDir, Blobs, Vec<Attachment>) {
+        let dir = tempfile::tempdir().unwrap();
+        let blobs = Blobs::open(dir.path()).unwrap();
+        let attachments = imgs
+            .iter()
+            .map(|&bytes| {
+                blobs.put(bytes).unwrap();
+                Attachment {
+                    hash: rumu_blob::hash_of(bytes),
+                    mime: "image/png".into(),
+                    name: Some(format!("{}.png", String::from_utf8_lossy(bytes))),
+                    width: 4,
+                    height: 3,
+                    size: bytes.len() as u64,
+                }
+            })
+            .collect();
+        (dir, blobs, attachments)
+    }
+
+    /// The parts of one message as a compact shape: text verbatim, images as
+    /// their base64 payload, everything else as `?`.
+    fn shape(parts: &[ContentPart]) -> Vec<String> {
+        parts
+            .iter()
+            .map(|p| match p {
+                ContentPart::Text(t) => format!("text:{t:?}"),
+                ContentPart::Binary(b) => match &b.source {
+                    genai::chat::BinarySource::Base64(data) => format!("img:{data}"),
+                    genai::chat::BinarySource::Url(u) => format!("url:{u}"),
+                },
+                _ => "?".to_owned(),
+            })
+            .collect()
+    }
+
+    #[test]
+    fn user_images_project_at_their_anchors_with_labels() {
+        let (_dir, blobs, atts) = blobs_with(&[b"aa", b"bb"]);
+        let b64 = |b: &[u8]| base64::engine::general_purpose::STANDARD.encode(b);
+
+        // Anchors place images inline, each behind its label, in segments()
+        // order; unanchored images follow the text.
+        let user = |text: &str| {
+            vec![node(NodeBody::User {
+                content: rumu_core::Content::text(text).with_attachments(atts.clone()),
+            })]
+        };
+        let parts = |nodes: &[Node]| {
+            project("SYSTEM", &[], nodes, Some(&blobs)).messages[0]
+                .content
+                .parts()
+                .to_vec()
+        };
+        assert_eq!(
+            shape(&parts(&user("before [Image #2] and [Image #1] after"))),
+            [
+                "text:\"before \"",
+                "text:\"Image 2:\"",
+                &format!("img:{}", b64(b"bb")),
+                "text:\" and \"",
+                "text:\"Image 1:\"",
+                &format!("img:{}", b64(b"aa")),
+                "text:\" after\"",
+            ]
+        );
+        assert_eq!(
+            shape(&parts(&user("look"))),
+            [
+                "text:\"look\"",
+                "text:\"Image 1:\"",
+                &format!("img:{}", b64(b"aa")),
+                "text:\"Image 2:\"",
+                &format!("img:{}", b64(b"bb")),
+            ]
+        );
+        // Adjacent anchors leave no empty text parts.
+        assert_eq!(
+            shape(&parts(&user("[Image #1][Image #2]"))),
+            [
+                "text:\"Image 1:\"",
+                &format!("img:{}", b64(b"aa")),
+                "text:\"Image 2:\"",
+                &format!("img:{}", b64(b"bb")),
+            ]
+        );
+
+        // A text-only user message projects exactly as before, even with a
+        // blob store configured (only the usual message-level breakpoint is
+        // added by `project` itself).
+        let plain = vec![node(NodeBody::User {
+            content: rumu_core::Content::text("hello"),
+        })];
+        let msg = project("SYSTEM", &[], &plain, Some(&blobs)).messages[0].clone();
+        assert_eq!(msg.role, ChatRole::User);
+        assert_eq!(
+            serde_json::to_value(&msg.content).unwrap(),
+            serde_json::to_value(&ChatMessage::user("hello").content).unwrap()
+        );
+    }
+
+    #[test]
+    fn tool_result_with_images_is_one_anthropic_block() {
+        let (_dir, blobs, atts) = blobs_with(&[b"pic"]);
+        let b64 = base64::engine::general_purpose::STANDARD.encode(b"pic");
+        let nodes = vec![node(NodeBody::ToolResult {
+            call_id: "c1".into(),
+            content: rumu_core::Content::text("shot [Image #1]").with_attachments(atts),
+            is_error: false,
+        })];
+        let m = &project("SYSTEM", &[], &nodes, Some(&blobs)).messages[0];
+        assert_eq!(m.role, ChatRole::Tool);
+        let parts = m.content.parts();
+        assert_eq!(parts.len(), 1, "one Custom part holds the whole block");
+        let ContentPart::Custom(c) = &parts[0] else {
+            panic!("not a custom part: {parts:?}");
+        };
+        assert_eq!(
+            c.data,
+            json!({
+                "type": "tool_result",
+                "tool_use_id": "c1",
+                "content": [
+                    { "type": "text", "text": "shot " },
+                    { "type": "text", "text": "Image 1:" },
+                    { "type": "image", "source": {
+                        "type": "base64", "media_type": "image/png", "data": b64,
+                    }},
+                ],
+            })
+        );
+    }
+
+    #[test]
+    fn mixed_tool_results_batch_into_one_message() {
+        let (_dir, blobs, atts) = blobs_with(&[b"pic"]);
+        let nodes = vec![
+            node(NodeBody::User {
+                content: rumu_core::Content::text("go"),
+            }),
+            assistant(vec![], false, &["c1", "c2"]),
+            node(NodeBody::ToolResult {
+                call_id: "c1".into(),
+                content: rumu_core::Content::text("plain"),
+                is_error: false,
+            }),
+            node(NodeBody::ToolResult {
+                call_id: "c2".into(),
+                content: rumu_core::Content::text("shot").with_attachments(atts),
+                is_error: false,
+            }),
+        ];
+        let m = &project("SYSTEM", &[], &nodes, Some(&blobs)).messages;
+        assert_eq!(m.len(), 3);
+        assert_eq!(m[2].role, ChatRole::Tool);
+        let parts = m[2].content.parts();
+        assert_eq!(parts.len(), 2, "plain and image results share one message");
+        assert!(matches!(&parts[0], ContentPart::ToolResponse(r) if r.call_id == "c1"));
+        assert!(matches!(&parts[1], ContentPart::Custom(c) if c.data["tool_use_id"] == "c2"));
+        // The message-level breakpoint still lands on this Tool message.
+        assert!(
+            m[2].options
+                .as_ref()
+                .and_then(|o| o.cache_control.as_ref())
+                .is_some()
+        );
+    }
+
+    #[test]
+    fn a_missing_blob_projects_its_placeholder() {
+        let gone = Attachment {
+            hash: "f".repeat(64),
+            mime: "image/png".into(),
+            name: Some("gone.png".into()),
+            width: 800,
+            height: 600,
+            size: 10,
+        };
+        let fallback = "Image 1: [image: gone.png 800×600] (image unavailable)";
+
+        // In a user message …
+        let nodes = vec![node(NodeBody::User {
+            content: rumu_core::Content::text("see [Image #1]").with_attachments([gone.clone()]),
+        })];
+        let parts = project("SYSTEM", &[], &nodes, None).messages[0]
+            .content
+            .parts()
+            .to_vec();
+        assert_eq!(
+            shape(&parts),
+            ["text:\"see \"", &format!("text:{fallback:?}")]
+        );
+
+        // … and in a tool result.
+        let nodes = vec![node(NodeBody::ToolResult {
+            call_id: "c1".into(),
+            content: rumu_core::Content::text("shot [Image #1]").with_attachments([gone]),
+            is_error: false,
+        })];
+        let parts = project("SYSTEM", &[], &nodes, None).messages[0]
+            .content
+            .parts()
+            .to_vec();
+        let ContentPart::Custom(c) = &parts[0] else {
+            panic!("not a custom part: {parts:?}");
+        };
+        assert_eq!(
+            c.data["content"],
+            json!([
+                { "type": "text", "text": "shot " },
+                { "type": "text", "text": fallback },
+            ])
+        );
+    }
+
+    #[test]
+    fn image_projection_is_deterministic() {
+        let (_dir, blobs, atts) = blobs_with(&[b"aa"]);
+        let (_dir2, _blobs2, atts2) = blobs_with(&[b"bb"]);
+        let nodes = vec![
+            node(NodeBody::User {
+                content: rumu_core::Content::text("see [Image #1]").with_attachments(atts),
+            }),
+            assistant(vec![], false, &["c1"]),
+            node(NodeBody::ToolResult {
+                call_id: "c1".into(),
+                // The second image's blob is not in `blobs`: its fallback is
+                // part of the determinism contract too.
+                content: rumu_core::Content::text("shot [Image #1]").with_attachments(atts2),
+                is_error: true,
+            }),
+        ];
+        let a = serde_json::to_string(&project("SYSTEM", &[], &nodes, Some(&blobs))).unwrap();
+        let b = serde_json::to_string(&project("SYSTEM", &[], &nodes, Some(&blobs))).unwrap();
+        assert_eq!(a, b);
     }
 
     fn assistant(reasoning: Vec<ReasoningBlock>, reset: bool, calls: &[&str]) -> Node {
@@ -832,7 +1196,7 @@ mod tests {
             assistant(vec![], false, &["c3"]),
             result("c3"),
         ];
-        let req = project("SYSTEM", &[], &nodes);
+        let req = project("SYSTEM", &[], &nodes, None);
         let m = &req.messages;
         assert_eq!(m.len(), 6);
         let ids = |i: usize| -> Vec<String> {
@@ -860,7 +1224,7 @@ mod tests {
             result("c2"),
             assistant(vec![signed("new")], false, &[]),
         ];
-        let signatures: Vec<String> = project("SYSTEM", &[], &nodes)
+        let signatures: Vec<String> = project("SYSTEM", &[], &nodes, None)
             .messages
             .iter()
             .flat_map(|m| m.content.thought_signatures())
@@ -895,7 +1259,7 @@ mod tests {
                 }),
             }),
         ];
-        let req = project("SYSTEM", &[], &nodes);
+        let req = project("SYSTEM", &[], &nodes, None);
         assert_eq!(req.messages.len(), 1);
         assert_eq!(req.messages[0].content.first_text(), Some("hello"));
     }

@@ -40,14 +40,14 @@
 mod error;
 pub use error::{Error, Result};
 
-use std::collections::HashMap;
+use std::collections::{HashMap, HashSet};
 use std::io::Write;
 use std::path::{Path, PathBuf};
 use std::sync::Mutex;
 
 use rumu_core::{
-    Branch, BranchId, BranchStatus, CodeCall, IoError, Node, NodeId, SessionId, SessionInfo,
-    Timestamp,
+    Branch, BranchId, BranchStatus, CodeCall, IoError, Node, NodeBody, NodeId, SessionId,
+    SessionInfo, Timestamp,
 };
 use serde::{Deserialize, Serialize};
 use serde_json::Value;
@@ -364,6 +364,32 @@ impl Store {
             Some(Entry::Corrupt(msg)) => return Err(unreadable(session, msg)),
             None => vec![],
         })
+    }
+
+    /// Every blob hash referenced by a node of any session — every `Content`
+    /// of every body variant, on every branch, referenced or not. This is the
+    /// live set the blob store's GC keeps. An unreadable session is an error
+    /// (its references are unknowable, so GC must not run past it).
+    pub fn referenced_blobs(&self) -> Result<HashSet<String>> {
+        let st = self.state.lock().unwrap();
+        let mut hashes = HashSet::new();
+        for (sid, entry) in &st.sessions {
+            match entry {
+                Entry::Loaded(s) => {
+                    for node in s.nodes.values() {
+                        let content = match &node.body {
+                            NodeBody::User { content }
+                            | NodeBody::Assistant { content, .. }
+                            | NodeBody::ToolResult { content, .. }
+                            | NodeBody::Note { content, .. } => content,
+                        };
+                        hashes.extend(content.attachments.iter().map(|a| a.hash.clone()));
+                    }
+                }
+                Entry::Corrupt(msg) => return Err(unreadable(sid, msg)),
+            }
+        }
+        Ok(hashes)
     }
 }
 
@@ -867,6 +893,101 @@ mod tests {
         assert!(store.code_calls_of_session(&other.id).unwrap().is_empty());
     }
 
+    fn attachment(hash: &str) -> rumu_core::Attachment {
+        rumu_core::Attachment {
+            hash: hash.to_owned(),
+            mime: "image/png".into(),
+            name: Some(format!("{hash}.png")),
+            width: 4,
+            height: 3,
+            size: 10,
+        }
+    }
+
+    /// The blob reference set covers every content of every node of every
+    /// session — all four body variants — and survives a reopen.
+    #[test]
+    fn referenced_blobs_covers_every_body_variant() {
+        let dir = temp_dir("blobs");
+        let sid = {
+            let store = Store::open(&dir).unwrap();
+            let (session, _, root) = mk_session(&store);
+            let node = |session: &SessionId, parent: &NodeId, body| Node {
+                id: NodeId::new(),
+                parent: Some(parent.clone()),
+                session: session.clone(),
+                at: now(),
+                dur_ms: None,
+                body,
+            };
+            store
+                .insert_node(&node(
+                    &session.id,
+                    &root.id,
+                    NodeBody::User {
+                        content: rumu_core::Content::text("look [Image #1]")
+                            .with_attachments([attachment("aa"), attachment("bb")]),
+                    },
+                ))
+                .unwrap();
+            store
+                .insert_node(&node(
+                    &session.id,
+                    &root.id,
+                    NodeBody::Assistant {
+                        content: rumu_core::Content::text("").with_attachments([attachment("ee")]),
+                        reasoning: vec![],
+                        reason_ms: None,
+                        reasoning_reset: false,
+                        tool_calls: vec![],
+                        model: "m".into(),
+                        usage: Default::default(),
+                    },
+                ))
+                .unwrap();
+            store
+                .insert_node(&node(
+                    &session.id,
+                    &root.id,
+                    NodeBody::ToolResult {
+                        call_id: "c1".into(),
+                        content: rumu_core::Content::text("shot")
+                            .with_attachments([attachment("cc")]),
+                        is_error: false,
+                    },
+                ))
+                .unwrap();
+            // A second session references the same blob plus one of its own.
+            let (other, _, other_root) = mk_session(&store);
+            store
+                .insert_node(&node(
+                    &other.id,
+                    &other_root.id,
+                    NodeBody::Note {
+                        source: "system".into(),
+                        content: rumu_core::Content::text("note")
+                            .with_attachments([attachment("aa"), attachment("dd")]),
+                    },
+                ))
+                .unwrap();
+            let hashes = store.referenced_blobs().unwrap();
+            assert_eq!(
+                hashes,
+                ["aa", "bb", "cc", "dd", "ee"]
+                    .into_iter()
+                    .map(str::to_owned)
+                    .collect::<HashSet<_>>()
+            );
+            session.id
+        };
+
+        // The same set comes back from a reopened (re-scanned) store.
+        let store = Store::open(&dir).unwrap();
+        assert_eq!(store.referenced_blobs().unwrap().len(), 5);
+        assert!(store.get_session(&sid).unwrap().is_some());
+        std::fs::remove_dir_all(&dir).ok();
+    }
+
     /// A crash mid-append leaves a torn last line: it is dropped with a
     /// warning and truncated, and later appends land cleanly.
     #[test]
@@ -903,6 +1024,7 @@ mod tests {
                 source: "system".into(),
                 content: rumu_core::Content {
                     text: String::new(),
+                    attachments: Vec::new(),
                     data: Some(rumu_core::Tagged {
                         tag: "x".into(),
                         v: 1,

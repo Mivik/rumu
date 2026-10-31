@@ -44,6 +44,15 @@ export interface Toast {
   detail?: string
 }
 
+/** The image the lightbox shows: where its bytes are, and what to caption
+ *  it with (dimensions only once the server has stored it). */
+export interface LightboxImage {
+  src: string
+  name?: string | null
+  width?: number
+  height?: number
+}
+
 export interface DeltaBuffer {
   text: string
   reasoning: string
@@ -122,6 +131,8 @@ const initial = {
   catalogOpen: false,
   /** Card drawer (opened by any card chip): card ref (library-qualified) + optional use node. */
   drawer: null as { cardId: string; useNodeId?: string } | null,
+  /** The image shown full-size (opened by any thumbnail). */
+  lightbox: null as LightboxImage | null,
   /** Timeline scroll/highlight request (Context panel → injection point). */
   focus: null as { nodeId: string; seq: number } | null,
 }

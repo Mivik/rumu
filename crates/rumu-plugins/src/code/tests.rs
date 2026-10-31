@@ -171,6 +171,58 @@ async fn tool_errors_and_blocked_errors() {
     );
 }
 
+/// Internal image reads reach the script as their placeholder and forward
+/// onto the `code` result, deduped by hash.
+#[tokio::test]
+async fn internal_images_forward_to_the_code_result() {
+    let p = plugin(&["read"]);
+    let image = |hash: char, name: &str| rumu_core::Attachment {
+        hash: hash.to_string().repeat(64),
+        mime: "image/png".into(),
+        name: Some(name.into()),
+        width: 800,
+        height: 600,
+        size: 1234,
+    };
+    let header = "[proj] image proj:a.png (800×600, 1234 bytes stored)";
+    let host = FakeRuntime::arc();
+    queue(
+        &host,
+        vec![
+            ScriptedInner::ok(header).with_attachments(vec![image('a', "shot.png")]),
+            // A second read adds one new blob; the first one is not repeated.
+            ScriptedInner::ok(header)
+                .with_attachments(vec![image('a', "shot.png"), image('b', "other.png")]),
+        ],
+    );
+    let out = p
+        .call_tool(
+            "code",
+            json!({ "code": r#"const a = await rumu.read({path: "a.png"});
+                await rumu.read({path: "a.png"});
+                return a.split("\n").pop();"# }),
+            &host.cx(),
+        )
+        .await
+        .unwrap();
+    assert!(!out.is_error, "{}", out.content.text);
+    // The script saw the placeholder, not the raw header line.
+    assert!(
+        out.content
+            .text
+            .ends_with("--- result ---\n[image: shot.png 800×600]"),
+        "{}",
+        out.content.text
+    );
+    let hashes: Vec<&str> = out
+        .content
+        .attachments
+        .iter()
+        .map(|a| a.hash.as_str())
+        .collect();
+    assert_eq!(hashes, ["a".repeat(64).as_str(), "b".repeat(64).as_str()]);
+}
+
 #[tokio::test]
 async fn timeout_interrupts_infinite_loops() {
     let p = plugin(&[]);

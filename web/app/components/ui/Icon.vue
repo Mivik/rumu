@@ -35,6 +35,8 @@ const paths: Record<string, string> = {
     '<path d="M4.2 16.5a8 8 0 1 1 15.6 0"/><path d="M12 15l3.6-4.2"/><circle cx="12" cy="15.5" r="1.2"/>',
   plus: '<path d="M12 5.5v13M5.5 12h13"/>',
   send: '<path d="M12 19V5.5"/><path d="M6.5 11L12 5.5l5.5 5.5"/>',
+  image:
+    '<rect x="3.5" y="4.5" width="17" height="15" rx="2"/><circle cx="9" cy="9.5" r="1.5"/><path d="M5.5 16.8l4-4.2 3.2 3.2 2.8-2.8 3 3"/>',
   stop: '<rect x="7" y="7" width="10" height="10" rx="2" fill="currentColor" stroke="none"/>',
   brain:
     '<path d="M9.5 4.5A3 3 0 0 0 6.6 8 3 3 0 0 0 5 10.8a3 3 0 0 0 1.5 2.6A3 3 0 0 0 9.8 19a2.8 2.8 0 0 0 2.2-1V5.3a2.6 2.6 0 0 0-2.5-.8z"/><path d="M14.5 4.5A3 3 0 0 1 17.4 8 3 3 0 0 1 19 10.8a3 3 0 0 1-1.5 2.6A3 3 0 0 1 14.2 19a2.8 2.8 0 0 1-2.2-1V5.3a2.6 2.6 0 0 1 2.5-.8z"/>',

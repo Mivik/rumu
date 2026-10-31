@@ -74,8 +74,8 @@ pub(crate) struct LoopOutcome {
 /// What a background turn runs: a new prompt, a replay of an existing one, or
 /// an in-place retry of a failed turn.
 pub(crate) enum TurnKind {
-    Prompt(String),
-    Regenerate(String),
+    Prompt(Content),
+    Regenerate(Content),
     Retry,
 }
 
@@ -84,7 +84,11 @@ impl Kernel {
     /// Progress is reported via pushes. A prompt on a busy branch is steered:
     /// its `prompt` event is dispatched now and the user node is queued for
     /// the running turn's next safe point.
-    pub async fn prompt(self: &Arc<Self>, branch: &BranchId, text: &str) -> Result<()> {
+    pub async fn prompt(
+        self: &Arc<Self>,
+        branch: &BranchId,
+        content: impl Into<Content>,
+    ) -> Result<()> {
         self.store
             .get_branch(branch)?
             .ok_or_else(|| Error::BranchNotFound(branch.clone()))?;
@@ -100,10 +104,8 @@ impl Kernel {
             }
         };
         match token {
-            Some(token) => {
-                self.spawn_turn(branch.clone(), token, TurnKind::Prompt(text.to_owned()))
-            }
-            None => self.steer_prompt(branch, text).await?,
+            Some(token) => self.spawn_turn(branch.clone(), token, TurnKind::Prompt(content.into())),
+            None => self.steer_prompt(branch, content.into()).await?,
         }
         Ok(())
     }
@@ -112,13 +114,13 @@ impl Kernel {
     /// interceptable) prompt event, then queue the user node as a wake item so
     /// the running turn sees it at its next safe point — or a new turn starts
     /// if that turn ends first.
-    async fn steer_prompt(self: &Arc<Self>, branch: &BranchId, text: &str) -> Result<()> {
+    async fn steer_prompt(self: &Arc<Self>, branch: &BranchId, content: Content) -> Result<()> {
         let session = self.session_of(branch)?;
         let mut ev = self.make_event(
             kind::PROMPT,
             session,
             branch.clone(),
-            json!({ "text": text }),
+            prompt_payload(&content),
         )?;
         if let Some(reason) = self.dispatch(&mut ev, true).await? {
             // The running turn keeps going, so this must not look like a
@@ -126,22 +128,15 @@ impl Kernel {
             self.push("prompt.blocked", json!({ "branch": branch, "message": reason }));
             return Ok(());
         }
-        let text = ev
-            .payload
-            .get("text")
-            .and_then(|v| v.as_str())
-            .unwrap_or(text)
-            .to_owned();
+        let content = rewritten(&ev, content);
+        self.push("prompt.queued", json!({ "branch": branch, "text": content.text }));
         self.deliver(
             branch,
             NodeId::new(),
-            NodeBody::User {
-                content: Content::text(text.clone()),
-            },
+            NodeBody::User { content },
             Some((SYSTEM_SOURCE, true)),
         )
         .await?;
-        self.push("prompt.queued", json!({ "branch": branch, "text": text }));
         // If the turn ended between the check and the delivery, the debounced
         // wake path starts a new turn; while busy it is a no-op.
         self.request_wake(branch, Some(SYSTEM_SOURCE), true);
@@ -163,13 +158,13 @@ impl Kernel {
             .store
             .get_node(node)?
             .ok_or_else(|| Error::NodeNotFound(node.clone()))?;
-        let text = match &n.body {
-            NodeBody::User { content } => content.text.clone(),
+        let content = match &n.body {
+            NodeBody::User { content } => content.clone(),
             _ => return Err(Error::NotAUserMessage),
         };
         let branch = self.fork(&n.id, true).await?;
         let token = self.begin_loop(&branch.id)?;
-        self.spawn_turn(branch.id.clone(), token, TurnKind::Regenerate(text));
+        self.spawn_turn(branch.id.clone(), token, TurnKind::Regenerate(content));
         Ok(branch)
     }
 
@@ -259,13 +254,13 @@ impl Kernel {
         token: CancellationToken,
     ) -> Result<()> {
         match turn {
-            TurnKind::Prompt(text) => {
-                if self.open_turn(&branch, text, true, "prompt").await? {
+            TurnKind::Prompt(content) => {
+                if self.open_turn(&branch, content, true, "prompt").await? {
                     return Ok(());
                 }
             }
-            TurnKind::Regenerate(text) => {
-                if self.open_turn(&branch, text, false, "regenerate").await? {
+            TurnKind::Regenerate(content) => {
+                if self.open_turn(&branch, content, false, "regenerate").await? {
                     return Ok(());
                 }
             }
@@ -287,7 +282,7 @@ impl Kernel {
     async fn open_turn(
         self: &Arc<Self>,
         branch: &BranchId,
-        text: String,
+        content: Content,
         append_user: bool,
         reason: &str,
     ) -> Result<bool> {
@@ -297,12 +292,13 @@ impl Kernel {
         );
         let session = self.session_of(branch)?;
 
-        // prompt event: interceptable (block / rewrite).
+        // prompt event: interceptable (block / rewrite). Only `text` is
+        // rewritable; the attachments ride along unchanged.
         let mut ev = self.make_event(
             kind::PROMPT,
             session,
             branch.clone(),
-            json!({ "text": text }),
+            prompt_payload(&content),
         )?;
         if let Some(reason) = self.dispatch(&mut ev, true).await? {
             // A refusal ends the turn (turn.error) but records nothing —
@@ -314,20 +310,9 @@ impl Kernel {
             return Ok(true);
         }
         if append_user {
-            let text = ev
-                .payload
-                .get("text")
-                .and_then(|v| v.as_str())
-                .unwrap_or_default()
-                .to_owned();
-            self.append_body(
-                branch,
-                NodeBody::User {
-                    content: Content::text(text),
-                },
-                None,
-            )
-            .await?;
+            let content = rewritten(&ev, content);
+            self.append_body(branch, NodeBody::User { content }, None)
+                .await?;
         }
         Ok(false)
     }
@@ -499,12 +484,13 @@ impl Kernel {
                 payload["output"] = json!(out.content.text);
                 payload["is_error"] = json!(out.is_error);
                 let is_error = out.is_error;
-                let text = out.content.text.clone();
+                // The whole content, attachments included, becomes the node.
+                let content = out.content.clone();
                 self.append_body_dur(
                     &branch,
                     NodeBody::ToolResult {
                         call_id: call.call_id.clone(),
-                        content: Content::text(text),
+                        content,
                         is_error,
                     },
                     None,
@@ -1224,6 +1210,21 @@ fn scope_marker(names: &[String]) -> NodeBody {
             allow: names.to_vec(),
         }),
     }
+}
+
+/// The `prompt` event payload: the text (the only part a hook rewrite may
+/// change) plus the serialized attachments, so hooks can see them.
+fn prompt_payload(content: &Content) -> Value {
+    json!({ "text": content.text, "attachments": content.attachments })
+}
+
+/// The prompt content after dispatch: a rewritten `text`, when a hook changed
+/// it, over the original attachments — a rewrite cannot touch those.
+fn rewritten(ev: &rumu_core::Event, mut content: Content) -> Content {
+    if let Some(text) = ev.payload.get("text").and_then(Value::as_str) {
+        content.text = text.to_owned();
+    }
+    content
 }
 
 /// The framing both context modes give a sub-agent.

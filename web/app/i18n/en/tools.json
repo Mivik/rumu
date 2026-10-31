@@ -69,6 +69,7 @@
     "script": "Script",
     "args": "Args",
     "output": "Output",
+    "images": "Images",
     "outputError": "Output · error",
     "liveOutput": "Task output",
     "runningTag": "· running",

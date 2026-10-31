@@ -240,17 +240,18 @@ impl WorkspacePlugin {
 }
 
 /// The text a session-search term matches against, with the node kind label:
-/// user text, assistant text + tool-call args, tool-result text, note text.
-/// Markers carry nothing searchable.
+/// user text, assistant text + tool-call args, tool-result text, note text —
+/// images as their `[image: …]` placeholder. Markers carry nothing
+/// searchable.
 fn searchable_text(body: &NodeBody) -> Option<(&'static str, String)> {
     match body {
-        NodeBody::User { content } => Some(("user", content.text.clone())),
+        NodeBody::User { content } => Some(("user", content.rendered())),
         NodeBody::Assistant {
             content,
             tool_calls,
             ..
         } => {
-            let mut text = content.text.clone();
+            let mut text = content.rendered();
             for call in tool_calls {
                 text.push('\n');
                 text.push_str(&call.name);
@@ -259,10 +260,10 @@ fn searchable_text(body: &NodeBody) -> Option<(&'static str, String)> {
             }
             Some(("assistant", text))
         }
-        NodeBody::ToolResult { content, .. } => Some(("tool_result", content.text.clone())),
+        NodeBody::ToolResult { content, .. } => Some(("tool_result", content.rendered())),
         // An empty-text note is a marker: nothing searchable.
         NodeBody::Note { content, .. } if !content.text.is_empty() => {
-            Some(("note", content.text.clone()))
+            Some(("note", content.rendered()))
         }
         NodeBody::Note { .. } => None,
     }
@@ -341,7 +342,7 @@ impl<'a> SessionView<'a> {
             NodeBody::User { content } => (
                 "user",
                 String::new(),
-                self.text(&content.text, range, &short),
+                self.text(&content.rendered(), range, &short),
             ),
             NodeBody::Assistant {
                 content,
@@ -350,7 +351,7 @@ impl<'a> SessionView<'a> {
             } => {
                 // Only the prose is truncated: cutting across `<call>` lines
                 // could split a tag. Each call clips its own args instead.
-                let mut body = self.text(&content.text, range, &short);
+                let mut body = self.text(&content.rendered(), range, &short);
                 for call in tool_calls {
                     if !body.is_empty() {
                         body.push('\n');
@@ -372,14 +373,16 @@ impl<'a> SessionView<'a> {
                 if *is_error {
                     attrs.push_str(" error=\"true\"");
                 }
+                // The elided size counts what the full read would show, so
+                // the image placeholders count too.
                 let body = if range && call.is_some_and(folds_session_read) {
                     format!(
                         "<elided chars=\"{}\" read=\"{WS}:/sessions/{}/{short}\"/>",
-                        content.text.chars().count(),
+                        content.rendered().chars().count(),
                         self.sid
                     )
                 } else {
-                    self.text(&content.text, range, &short)
+                    self.text(&content.rendered(), range, &short)
                 };
                 ("tool_result", attrs, body)
             }
@@ -398,7 +401,7 @@ impl<'a> SessionView<'a> {
                 if let Some(tagged) = &content.data {
                     attrs.push_str(&format!(" tag=\"{}\"", escape_attr(&tagged.tag)));
                 }
-                ("note", attrs, self.text(&content.text, range, &short))
+                ("note", attrs, self.text(&content.rendered(), range, &short))
             }
         };
         let open = format!("<node id=\"{short}\" kind=\"{kind}\"{attrs}>");

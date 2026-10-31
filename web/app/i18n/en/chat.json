@@ -12,7 +12,18 @@
     "placeholder": "Send a message…",
     "stop": "Stop",
     "steer": "Steer",
-    "send": "Send"
+    "send": "Send",
+    "attach": "Attach images",
+    "removeImage": "Remove image",
+    "retryUpload": "Retry upload",
+    "tooManyImages": "Too many images (at most {max})",
+    "notAnImage": "Only image files can be attached",
+    "uploadFailed": "Couldn't upload image"
+  },
+  "image": {
+    "open": "Open image",
+    "close": "Close image",
+    "alt": "image"
   },
   "header": {
     "sessions": "Sessions",
@@ -53,6 +64,7 @@
   },
   "timeline": {
     "label": "Conversation timeline",
-    "emptyPrompt": "(empty prompt)"
+    "emptyPrompt": "(empty prompt)",
+    "images": "{count} image | {count} images"
   }
 }

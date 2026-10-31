@@ -60,11 +60,14 @@ impl WorkspacePlugin {
         } else {
             text.push_str(&output);
         }
-        if let Some(result) = &info.result
-            && !result.text.is_empty()
-        {
-            text.push_str("\n\n--- result ---\n");
-            text.push_str(&result.text);
+        // The result renders images as their placeholder (task views are
+        // text-only).
+        if let Some(result) = &info.result {
+            let rendered = result.rendered();
+            if !rendered.is_empty() {
+                text.push_str("\n\n--- result ---\n");
+                text.push_str(&rendered);
+            }
         }
         let text = match slice_lines(text, offset, limit) {
             Ok(t) => t,

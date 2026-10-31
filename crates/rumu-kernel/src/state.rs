@@ -100,6 +100,7 @@ mod tests {
                 source: "system".into(),
                 content: rumu_core::Content {
                     text: String::new(),
+                    attachments: Vec::new(),
                     data: Some(rumu_core::Tagged {
                         tag: "tag".into(),
                         v: 1,
@@ -111,6 +112,7 @@ mod tests {
                 source: "system".into(),
                 content: rumu_core::Content {
                     text: String::new(),
+                    attachments: Vec::new(),
                     data: Some(rumu_core::Tagged {
                         tag: "checkpoint".into(),
                         v: 1,

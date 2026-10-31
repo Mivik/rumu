@@ -49,10 +49,19 @@ export type {
   ToolRowInfo,
 } from './state/timeline'
 
-export { closeCatalog, closeDrawer, dismissToast, focusNode, openCatalog, openDrawer } from './state/ui'
+export {
+  closeCatalog,
+  closeDrawer,
+  dismissToast,
+  focusNode,
+  openCatalog,
+  openDrawer,
+  openLightbox,
+  closeLightbox,
+} from './state/ui'
 
 export { findAgentChild, forkAt, regenerateFrom, retryBranch, selectBranch } from './state/tree'
-export type { OpenHistory } from './state/sessions'
+export type { OpenHistory, PromptAttachment } from './state/sessions'
 export {
   closeSession,
   editPrompt,

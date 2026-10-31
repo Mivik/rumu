@@ -19,6 +19,8 @@ pub(crate) struct ScriptedInner {
     pub is_error: bool,
     pub blocked: Option<String>,
     pub dur_ms: u64,
+    /// Attachments carried by the answer's output.
+    pub attachments: Vec<rumu_core::Attachment>,
 }
 
 impl ScriptedInner {
@@ -45,6 +47,12 @@ impl ScriptedInner {
             blocked: Some(reason),
             ..Default::default()
         }
+    }
+
+    /// Attach images to the answer's output.
+    pub fn with_attachments(mut self, attachments: Vec<rumu_core::Attachment>) -> Self {
+        self.attachments = attachments;
+        self
     }
 }
 
@@ -208,7 +216,7 @@ impl Runtime for FakeRuntime {
             .unwrap_or_default();
         Ok(InnerCall {
             output: ToolOutput {
-                content: rumu_core::Content::text(spec.text),
+                content: Content::text(spec.text).with_attachments(spec.attachments),
                 is_error: spec.is_error,
                 ..Default::default()
             },

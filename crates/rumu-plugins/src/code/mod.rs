@@ -22,8 +22,8 @@ use std::time::{Duration, Instant};
 
 use async_trait::async_trait;
 use rumu_core::{
-    CODE_DENIED_TOOLS, Cx, Manifest, Plugin, ToolError, ToolOutput, ToolResult, ToolResultExt,
-    ToolSpec, parse_args, tool_schema,
+    Attachment, CODE_DENIED_TOOLS, Cx, Manifest, Plugin, ToolError, ToolOutput, ToolResult,
+    ToolResultExt, ToolSpec, parse_args, tool_schema,
 };
 use schemars::JsonSchema;
 use serde::Deserialize;
@@ -152,6 +152,11 @@ async fn run_script(cx: &Cx, code: &str, timeout: u64, api: &[String]) -> ToolOu
 
     let mut calls: u64 = 0;
     let blocked = Arc::new(AtomicU64::new(0));
+    // Attachments of the internal calls, forwarded onto the `code` result
+    // (deduped by hash below): a script cannot see pixels, so an image it
+    // reads is for the model's benefit — dropping it would lose it (internal
+    // calls never become nodes).
+    let images = Arc::new(std::sync::Mutex::new(Vec::<Attachment>::new()));
     let mut reqs_open = true;
     let mut timed_out = false;
     let outcome = loop {
@@ -167,12 +172,14 @@ async fn run_script(cx: &Cx, code: &str, timeout: u64, api: &[String]) -> ToolOu
                             let cx = cx.clone();
                             let reply_tx = reply_tx.clone();
                             let blocked = blocked.clone();
+                            let images = images.clone();
                             tokio::spawn(async move {
-                                let (json, was_blocked) =
+                                let (json, was_blocked, found) =
                                     answer_cx(&cx, &req.name, &req.args_json).await;
                                 if was_blocked {
                                     blocked.fetch_add(1, Ordering::Relaxed);
                                 }
+                                images.lock().unwrap().extend(found);
                                 let _ = reply_tx.send(engine::EngineReply {
                                     ticket: req.ticket,
                                     json,
@@ -180,11 +187,12 @@ async fn run_script(cx: &Cx, code: &str, timeout: u64, api: &[String]) -> ToolOu
                             });
                         } else {
                             let ticket = req.ticket;
-                            let (json, was_blocked) =
+                            let (json, was_blocked, found) =
                                 answer_cx(cx, &req.name, &req.args_json).await;
                             if was_blocked {
                                 blocked.fetch_add(1, Ordering::Relaxed);
                             }
+                            images.lock().unwrap().extend(found);
                             // The std channel never blocks; the engine polls it.
                             let _ = reply_tx.send(engine::EngineReply { ticket, json });
                         }
@@ -225,10 +233,20 @@ async fn run_script(cx: &Cx, code: &str, timeout: u64, api: &[String]) -> ToolOu
     if !timed_out {
         let _ = handle.join();
     }
+    // First appearance wins: reading the same image twice attaches it once.
+    let mut seen = std::collections::HashSet::new();
+    let attachments = images
+        .lock()
+        .unwrap()
+        .iter()
+        .filter(|a| seen.insert(a.hash.clone()))
+        .cloned()
+        .collect::<Vec<_>>();
     format_outcome(
         outcome,
         calls,
         blocked.load(Ordering::Relaxed),
+        attachments,
         started.elapsed().as_millis() as u64,
         timeout,
         timed_out,
@@ -236,14 +254,18 @@ async fn run_script(cx: &Cx, code: &str, timeout: u64, api: &[String]) -> ToolOu
 }
 
 /// Answer one submitted call. Blocked calls return the hook's reason as the
-/// text so the prelude can throw a `BlockedError(message = reason)`.
-async fn answer_cx(cx: &Cx, name: &str, args_json: &str) -> (String, bool) {
+/// text so the prelude can throw a `BlockedError(message = reason)`. The
+/// reply text is [`rumu_core::Content::rendered`] — a script sees an image
+/// as its placeholder — and the call's attachments are returned alongside
+/// for the `code` result to forward (see `run_script`).
+async fn answer_cx(cx: &Cx, name: &str, args_json: &str) -> (String, bool, Vec<Attachment>) {
     let args: Value = match serde_json::from_str(args_json) {
         Ok(v) => v,
         Err(e) => {
             return (
                 json!({ "ok": false, "text": format!("bad arguments: {e}") }).to_string(),
                 false,
+                Vec::new(),
             );
         }
     };
@@ -254,9 +276,9 @@ async fn answer_cx(cx: &Cx, name: &str, args_json: &str) -> (String, bool) {
                 inner
                     .blocked
                     .clone()
-                    .unwrap_or_else(|| inner.output.content.text.clone())
+                    .unwrap_or_else(|| inner.output.content.rendered())
             } else {
-                inner.output.content.text.clone()
+                inner.output.content.rendered()
             };
             let reply = if blocked {
                 json!({ "ok": false, "blocked": true, "text": text })
@@ -265,11 +287,16 @@ async fn answer_cx(cx: &Cx, name: &str, args_json: &str) -> (String, bool) {
             } else {
                 json!({ "ok": true, "text": text })
             };
-            (reply.to_string(), blocked)
+            (
+                reply.to_string(),
+                blocked,
+                inner.output.content.attachments.clone(),
+            )
         }
         Err(e) => (
             json!({ "ok": false, "text": format!("tool `{name}` failed: {e}") }).to_string(),
             false,
+            Vec::new(),
         ),
     }
 }
@@ -278,6 +305,7 @@ fn format_outcome(
     outcome: engine::EngineOutcome,
     calls: u64,
     blocked: u64,
+    attachments: Vec<Attachment>,
     dur_ms: u64,
     timeout: u64,
     timed_out: bool,
@@ -339,7 +367,8 @@ fn format_outcome(
         }
     }
     ToolOutput {
-        content: rumu_core::Content::text(text),
+        // The forwarded attachments follow the text unanchored.
+        content: rumu_core::Content::text(text).with_attachments(attachments),
         is_error,
         ..Default::default()
     }

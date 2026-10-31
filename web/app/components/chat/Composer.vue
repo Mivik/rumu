@@ -6,27 +6,172 @@
 // A sheet of paper with the writing on top and a footer that says where the
 // prompt will go: the branch's default workspace (where its commands run —
 // it opens the list of all workspaces) and the model answering it, on the
-// left; the send button on the right —
-// solid coral once there is something to send. While rumu works, sending
-// steers the turn and a stop button joins it.
-import { computed, ref } from 'vue'
+// left; the send button on the right — solid coral once there is something
+// to send. While rumu works, sending steers the turn and a stop button
+// joins it.
+//
+// Images attach three ways — paste, drop, the footer's picture key — and
+// upload the moment they arrive, into the tray above the writing; a failed
+// upload keeps its tile (the server's word arrived as a toast) until retried
+// or removed. The writing stays plain text: like the Claude and ChatGPT web
+// apps, the sent message leads with its images (`withLeadingAnchors`).
+import { computed, onBeforeUnmount, reactive, ref } from 'vue'
 import { t } from '../../i18n'
 import { isBusy, pathNodes, sendPrompt, state, stopTurn } from '../../lib/store'
+import type { PromptAttachment } from '../../lib/store'
+import type { Attachment } from '../../lib/types'
+import { uploadBlob, withLeadingAnchors } from '../../lib/attachments'
 import { INTERNAL_WORKSPACE } from '../../lib/types'
+import { openLightbox, toast } from '../../lib/state/ui'
 import Icon from '../ui/Icon.vue'
 import Popover from '../ui/Popover.vue'
 import WorkspacesPanel from '../WorkspacesPanel.vue'
 
+/** One image being attached: the file, its local preview, and where its
+ * upload stands. */
+interface PendingImage {
+  id: number
+  file: File
+  /** Object URL of the original bytes, for the tray's preview. */
+  url: string
+  status: 'uploading' | 'done' | 'failed'
+  attachment?: Attachment
+  error?: string
+  ctrl: AbortController
+}
+
+const MAX_IMAGES = 20
+
 const draft = ref('')
+const attachments = ref<PendingImage[]>([])
 const textareaEl = ref<HTMLTextAreaElement>()
-const canSend = computed(() => draft.value.trim() !== '')
+const fileEl = ref<HTMLInputElement>()
+
+const uploading = computed(() => attachments.value.some((a) => a.status === 'uploading'))
+const canSend = computed(
+  () => !uploading.value && (draft.value.trim() !== '' || attachments.value.some((a) => a.status === 'done')),
+)
+
+let attachSeq = 0
+
+async function run(item: PendingImage): Promise<void> {
+  item.status = 'uploading'
+  item.error = undefined
+  try {
+    item.attachment = await uploadBlob(item.file, item.ctrl.signal)
+    item.status = 'done'
+  } catch (err) {
+    if (item.ctrl.signal.aborted) return // removed while in flight
+    item.status = 'failed'
+    item.error = (err as Error).message
+    toast('error', t('chat.composer.uploadFailed'), item.error)
+  }
+}
+
+function attachFiles(list: FileList | File[]): void {
+  const files = [...list]
+  const images = files.filter((f) => f.type.startsWith('image/'))
+  if (images.length < files.length) toast('error', t('chat.composer.notAnImage'))
+  const room = MAX_IMAGES - attachments.value.length
+  if (images.length > room) {
+    toast('error', t('chat.composer.tooManyImages', { max: MAX_IMAGES }))
+    images.length = Math.max(0, room)
+  }
+  if (!images.length) return
+  for (const file of images) {
+    const item = reactive<PendingImage>({
+      id: ++attachSeq,
+      file,
+      url: URL.createObjectURL(file),
+      status: 'uploading',
+      ctrl: new AbortController(),
+    })
+    attachments.value.push(item)
+    void run(item)
+  }
+}
+
+/** Show a tile full-size: the stored image once uploaded, the local
+ *  preview before that. */
+function preview(item: PendingImage): void {
+  openLightbox(item.attachment ?? { src: item.url, name: item.file.name || null })
+}
+
+function removeAt(i: number): void {
+  const item = attachments.value[i]
+  if (!item) return
+  item.ctrl.abort()
+  URL.revokeObjectURL(item.url)
+  attachments.value.splice(i, 1)
+}
+
+function onPaste(e: ClipboardEvent): void {
+  const files = e.clipboardData?.files
+  if (!files?.length) return
+  e.preventDefault()
+  attachFiles(files)
+}
+
+// ---- drop target (a counter: dragleave fires per child element) ----
+
+const dragDepth = ref(0)
+
+function hasFiles(e: DragEvent): boolean {
+  return !!e.dataTransfer?.types?.includes('Files')
+}
+
+function onDragenter(e: DragEvent): void {
+  if (!hasFiles(e)) return
+  e.preventDefault()
+  dragDepth.value++
+}
+
+function onDragover(e: DragEvent): void {
+  if (hasFiles(e)) e.preventDefault()
+}
+
+function onDragleave(): void {
+  dragDepth.value = Math.max(0, dragDepth.value - 1)
+}
+
+function onDrop(e: DragEvent): void {
+  if (!hasFiles(e)) return
+  e.preventDefault()
+  dragDepth.value = 0
+  const files = e.dataTransfer?.files
+  if (files?.length) attachFiles(files)
+}
+
+function onPick(e: Event): void {
+  const input = e.target as HTMLInputElement
+  attachFiles(input.files ?? [])
+  input.value = ''
+}
+
+onBeforeUnmount(() => {
+  for (const item of attachments.value) {
+    item.ctrl.abort()
+    URL.revokeObjectURL(item.url)
+  }
+})
 
 async function submit(): Promise<void> {
+  if (!canSend.value) return
+  const items = [...attachments.value]
+  // Tiles that never made it stay behind; they are not part of the message.
+  const sent: PromptAttachment[] = items
+    .filter((i) => i.status === 'done')
+    .map((i) => ({ hash: i.attachment!.hash, name: i.file.name || undefined }))
   const text = draft.value.trim()
-  if (!text) return
   draft.value = ''
-  // Put the text back if creating/sending failed so nothing typed is lost.
-  if (!(await sendPrompt(text))) draft.value = text
+  attachments.value = []
+  // Put everything back if creating/sending failed so nothing is lost.
+  if (!(await sendPrompt(withLeadingAnchors(text, sent.length), sent))) {
+    draft.value = text
+    attachments.value = items
+  } else {
+    for (const item of items) URL.revokeObjectURL(item.url)
+  }
 }
 
 function onKeydown(e: KeyboardEvent): void {
@@ -64,15 +209,68 @@ const model = computed(() => {
   <!-- the footer's empty stretch is part of the page: clicking it writes -->
   <div
     class="composer mx-auto flex w-full max-w-[var(--col-max)] flex-col rounded-sheet"
+    :class="{ 'is-drag': dragDepth > 0 }"
     @click.self="textareaEl?.focus()"
+    @dragenter="onDragenter"
+    @dragover="onDragover"
+    @dragleave="onDragleave"
+    @drop="onDrop"
   >
+    <div v-if="attachments.length" class="flex flex-wrap gap-2 px-5 pt-4">
+      <div v-for="(item, i) in attachments" :key="item.id" class="relative">
+        <button
+          type="button"
+          class="block rounded-control transition-opacity hover:opacity-90"
+          :title="item.file.name || t('chat.image.open')"
+          :aria-label="t('chat.image.open')"
+          @click="preview(item)"
+        >
+          <img
+            :src="item.url"
+            :alt="item.file.name"
+            class="size-14 rounded-control border border-line bg-surface-2 object-cover"
+            :class="{
+              'opacity-60': item.status === 'uploading',
+              'border-danger/60': item.status === 'failed',
+            }"
+          />
+        </button>
+        <span
+          v-if="item.status === 'uploading'"
+          class="pointer-events-none absolute inset-0 flex items-center justify-center"
+        >
+          <span class="size-4 animate-spin rounded-full border-2 border-brand border-t-transparent" />
+        </span>
+        <button
+          v-else-if="item.status === 'failed'"
+          class="absolute inset-0 flex items-center justify-center rounded-control text-danger"
+          :title="
+            item.error ? `${t('chat.composer.retryUpload')} · ${item.error}` : t('chat.composer.retryUpload')
+          "
+          :aria-label="t('chat.composer.retryUpload')"
+          @click="run(item)"
+        >
+          <Icon name="error" :size="14" />
+        </button>
+        <button
+          class="absolute -top-1.5 -right-1.5 flex size-[18px] items-center justify-center rounded-full border border-line bg-surface text-ink-3 shadow-soft transition-colors hover:border-danger/50 hover:bg-danger-soft hover:text-danger"
+          :title="t('chat.composer.removeImage')"
+          :aria-label="t('chat.composer.removeImage')"
+          @click="removeAt(i)"
+        >
+          <Icon name="close" :size="9" :stroke="2.4" />
+        </button>
+      </div>
+    </div>
     <textarea
       ref="textareaEl"
       v-model="draft"
-      class="max-h-[240px] min-h-[52px] resize-none rounded-none border-0 bg-transparent px-5 pt-4 pb-1 text-message leading-normal [field-sizing:content] focus:shadow-none"
+      class="max-h-[240px] min-h-[52px] resize-none rounded-none border-0 bg-transparent px-5 pb-1 text-message leading-normal [field-sizing:content] focus:shadow-none"
+      :class="attachments.length ? 'pt-2' : 'pt-4'"
       rows="2"
       :placeholder="placeholder"
       @keydown="onKeydown"
+      @paste="onPaste"
     />
     <div class="flex min-w-0 items-center gap-2 pt-1 pr-3 pb-3 pl-4" @click.self="textareaEl?.focus()">
       <Popover v-if="workspace" :label="t('panels.context.workspaces')" placement="top-start">
@@ -97,6 +295,23 @@ const model = computed(() => {
         {{ model }}
       </span>
       <span class="flex-1" @click.self="textareaEl?.focus()" />
+      <input
+        ref="fileEl"
+        type="file"
+        accept="image/*"
+        multiple
+        class="hidden"
+        :aria-label="t('chat.composer.attach')"
+        @change="onPick"
+      />
+      <button
+        class="composer-attach"
+        :title="t('chat.composer.attach')"
+        :aria-label="t('chat.composer.attach')"
+        @click="fileEl?.click()"
+      >
+        <Icon name="image" :size="16" />
+      </button>
       <Transition
         enter-active-class="transition duration-200 ease-spring"
         enter-from-class="scale-75 opacity-0"

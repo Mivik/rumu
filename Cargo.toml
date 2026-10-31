@@ -12,6 +12,7 @@ repository = "https://github.com/Mivik/rumu"
 
 [workspace.dependencies]
 rumu-core = { path = "crates/rumu-core" }
+rumu-blob = { path = "crates/rumu-blob" }
 rumu-cards = { path = "crates/rumu-cards" }
 rumu-kernel = { path = "crates/rumu-kernel" }
 rumu-store = { path = "crates/rumu-store" }
@@ -20,9 +21,11 @@ rumu-plugins = { path = "crates/rumu-plugins" }
 anyhow = "1"
 async-trait = "0.1"
 axum = { version = "0.8", features = ["ws"] }
+base64 = "0.23"
 futures-util = "0.3"
 genai = "0.7.2"
 globset = "0.4"
+image = { version = "0.25", default-features = false, features = ["png", "jpeg", "gif", "webp"] }
 jiff = "0.2"
 json-patch = "4"
 regex = "1"

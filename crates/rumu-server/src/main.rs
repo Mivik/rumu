@@ -8,12 +8,19 @@ use std::sync::Arc;
 use std::time::Duration;
 
 use anyhow::{Context, Result, bail};
+use rumu_blob::Blobs;
 use rumu_core::Plugin;
 use rumu_kernel::{Kernel, Llm, LlmResponse, Script, ScriptedLlm};
 use rumu_llm::GenaiLlm;
 use rumu_store::Store;
 use tracing::info;
 use tracing_subscriber::EnvFilter;
+
+/// How often unreferenced blobs are collected.
+const BLOB_GC_INTERVAL: Duration = Duration::from_secs(6 * 60 * 60);
+/// How long an unreferenced blob survives: an upload stays unreferenced until
+/// the node carrying it is written, and the grace covers that gap.
+const BLOB_GC_GRACE: Duration = Duration::from_secs(24 * 60 * 60);
 
 #[tokio::main]
 async fn main() -> Result<()> {
@@ -34,7 +41,8 @@ async fn main() -> Result<()> {
         .and_then(|h| h.parse().ok())
         .unwrap_or(IpAddr::V4(Ipv4Addr::LOCALHOST));
 
-    let store = Store::open(&home.join("sessions"))?;
+    let store = Arc::new(Store::open(&home.join("sessions"))?);
+    let blobs = Blobs::in_home(&home)?;
     let config = rumu_plugins::load_config(&home)?;
     let catalog = config.catalog_or_cwd()?;
     info!(
@@ -47,15 +55,39 @@ async fn main() -> Result<()> {
         "workspaces loaded"
     );
     let plugins = load_plugins(&home, &config, catalog.clone()).await?;
-    let llm = load_llm()?;
-    let kernel = Kernel::new(Arc::new(store), llm, plugins, catalog.clone())?;
+    let llm = load_llm(blobs.clone())?;
+    let kernel = Kernel::new(store.clone(), llm, plugins, catalog.clone())?;
+    spawn_blob_gc(store, blobs.clone());
 
-    let app = ws::router(kernel, home.clone());
+    let app = ws::router(kernel, home.clone(), blobs);
     let addr = SocketAddr::new(host, port);
     let listener = tokio::net::TcpListener::bind(addr).await?;
     info!(home = %home.display(), %addr, "listening on http://{addr}");
     axum::serve(listener, app).await?;
     Ok(())
+}
+
+/// Collect blobs no session references: at startup, then every
+/// [`BLOB_GC_INTERVAL`]. The store scan and the directory walk are blocking,
+/// so the whole pass runs off the async executor.
+fn spawn_blob_gc(store: Arc<Store>, blobs: Blobs) {
+    tokio::spawn(async move {
+        loop {
+            let store = store.clone();
+            let blobs = blobs.clone();
+            let result = tokio::task::spawn_blocking(move || -> anyhow::Result<usize> {
+                let live = store.referenced_blobs()?;
+                Ok(blobs.gc(&live, BLOB_GC_GRACE)?)
+            })
+            .await
+            .expect("blob gc task panicked");
+            match result {
+                Ok(n) => info!(removed = n, "blob gc pass complete"),
+                Err(e) => tracing::warn!(error = %e, "blob gc failed"),
+            }
+            tokio::time::sleep(BLOB_GC_INTERVAL).await;
+        }
+    });
 }
 
 /// Initialize logging; `RUST_LOG` overrides the default `info` level.
@@ -73,10 +105,11 @@ fn dirs_home() -> Option<PathBuf> {
 
 /// The model backend. `RUMU_LLM=script:<path>` replays a YAML/JSON turn
 /// script through [`ScriptedLlm`] (no model endpoint is needed); otherwise
-/// the genai adapter reads `RUMU_MODEL` / `ANTHROPIC_*` from the env.
-fn load_llm() -> Result<Arc<dyn Llm>> {
+/// the genai adapter reads `RUMU_MODEL` / `ANTHROPIC_*` from the env and
+/// projects image attachments from `blobs`.
+fn load_llm(blobs: Blobs) -> Result<Arc<dyn Llm>> {
     let Some(spec) = std::env::var("RUMU_LLM").ok() else {
-        return Ok(Arc::new(GenaiLlm::from_env()?));
+        return Ok(Arc::new(GenaiLlm::from_env()?.with_blobs(blobs)));
     };
     let Some(path) = spec.strip_prefix("script:") else {
         bail!("RUMU_LLM must be `script:<path>` (got `{spec}`)");

@@ -12,9 +12,9 @@ use std::time::Duration;
 use async_trait::async_trait;
 use rumu_core::kind;
 use rumu_core::{
-    BranchId, BranchStatus, Content, Cx, Decision, Event, HookOutput, HookSpec, Inbox, Manifest,
-    Node, NodeBody, PathState, Plugin, Post, Progress, SessionId, Tagged, TaskDone, TaskKind,
-    TaskStatus, ToolCall, ToolOutput, ToolSpec, Workspace, WorkspaceCatalog, WorkspaceUse,
+    Attachment, BranchId, BranchStatus, Content, Cx, Decision, Event, HookOutput, HookSpec, Inbox,
+    Manifest, Node, NodeBody, PathState, Plugin, Post, Progress, SessionId, Tagged, TaskDone,
+    TaskKind, TaskStatus, ToolCall, ToolOutput, ToolSpec, Workspace, WorkspaceCatalog, WorkspaceUse,
 };
 use rumu_kernel::{Delta, Kernel, Llm, LlmError, LlmResponse, OnDelta, ScriptedLlm};
 use rumu_store::Store;
@@ -327,6 +327,7 @@ impl Plugin for TestPlugin {
                 let data = args.get("data").cloned().unwrap_or(json!({}));
                 return Ok(ToolOutput::ok("recorded").with_effect(Content {
                     text: String::new(),
+                    attachments: Vec::new(),
                     data: Some(Tagged { tag, v: 1, data }),
                 }));
             }
@@ -857,6 +858,161 @@ async fn tool_error_results() {
     assert!(text.contains("no plugin provides tool `does-not-exist`"));
     // And the turn carried on to a final assistant message.
     assert_eq!(body_kinds(&nodes).last().unwrap(), "assistant");
+}
+
+// ---------- image attachments ----------
+
+fn attachment(hash: &str) -> Attachment {
+    Attachment {
+        hash: hash.to_owned(),
+        mime: "image/png".into(),
+        name: Some(format!("{hash}.png")),
+        width: 4,
+        height: 3,
+        size: 10,
+    }
+}
+
+/// The first user or tool-result content matching `f`.
+fn content_where(nodes: &[Node], f: impl Fn(&Content) -> bool) -> &Content {
+    nodes
+        .iter()
+        .find_map(|n| match &n.body {
+            NodeBody::User { content } | NodeBody::ToolResult { content, .. }
+                if f(content) =>
+            {
+                Some(content)
+            }
+            _ => None,
+        })
+        .expect("a matching content")
+}
+
+/// Attachments travel the whole path: the prompt event shows them to hooks (a
+/// text rewrite keeps them), the user node carries them, a tool's output
+/// attachments survive into the ToolResult node, and the next LLM projection
+/// sees both contents whole.
+#[tokio::test]
+async fn attachments_travel_with_prompts_and_tool_results() {
+    let payloads = Arc::new(Mutex::new(vec![]));
+    let recorder = payloads.clone();
+    let rewriter = Arc::new(plugin_with(
+        "guard",
+        &[],
+        vec![hook("rewrite", json!({ "event": kind::PROMPT }))],
+        Arc::new(move |_, ev: &Event| {
+            recorder.lock().unwrap().push(ev.payload.clone());
+            rewrite(json!({ "text": "rewritten text" }))
+        }),
+        noop_tools(),
+    ));
+    let camera = Arc::new(plugin_with(
+        "camera",
+        &["snap"],
+        vec![],
+        noop_hooks(),
+        Arc::new(|_, _, _| ToolOutput {
+            content: Content::text("took [Image #1]").with_attachments([attachment("a1")]),
+            ..Default::default()
+        }),
+    ));
+    let (kernel, llm, _s, branch) = setup(
+        vec![rewriter, camera],
+        vec![
+            LlmResponse::calls(vec![ToolCall::new("c1", "snap", json!({}))]),
+            LlmResponse::text("done"),
+        ],
+    )
+    .await;
+    let mut rx = kernel.tap_pushes();
+
+    kernel
+        .prompt(
+            &branch,
+            Content::text("see [Image #1]").with_attachments([attachment("b2")]),
+        )
+        .await
+        .unwrap();
+    let (done, _) = collect_turn(&mut rx, branch.0.as_str()).await;
+    assert_eq!(done["method"], "turn.done");
+
+    // The hook saw text and attachments; its rewrite changed only the text.
+    {
+        let payloads = payloads.lock().unwrap();
+        assert_eq!(payloads.len(), 1, "{payloads:?}");
+        assert_eq!(payloads[0]["text"], "see [Image #1]");
+        assert_eq!(payloads[0]["attachments"][0]["hash"], "b2");
+    }
+    let (nodes, _) = kernel.branch_path(&branch).unwrap();
+    let user = content_where(&nodes, |c| c.text == "rewritten text");
+    assert_eq!(user.attachments, vec![attachment("b2")]);
+    let result = content_where(&nodes, |c| c.text.starts_with("took"));
+    assert_eq!(result.attachments, vec![attachment("a1")]);
+
+    // The follow-up request projected both contents whole.
+    let projections = llm.projections();
+    let projected = content_where(&projections[1], |c| c.text.starts_with("took"));
+    assert_eq!(projected.attachments, vec![attachment("a1")]);
+}
+
+/// `regenerate` replays the original prompt's attachments, not just its text:
+/// the replayed prompt event shows hooks the same attachments again.
+#[tokio::test]
+async fn regenerate_replays_the_prompt_attachments() {
+    let payloads = Arc::new(Mutex::new(vec![]));
+    let recorder = payloads.clone();
+    let plugin = Arc::new(plugin_with(
+        "watcher",
+        &[],
+        vec![hook("watch", json!({ "event": kind::PROMPT }))],
+        Arc::new(move |_, ev: &Event| {
+            recorder.lock().unwrap().push(ev.payload.clone());
+            pass()
+        }),
+        noop_tools(),
+    ));
+    let (kernel, _llm, _s, branch) = setup(
+        vec![plugin],
+        vec![LlmResponse::text("first"), LlmResponse::text("again")],
+    )
+    .await;
+    let mut rx = kernel.tap_pushes();
+
+    kernel
+        .prompt(
+            &branch,
+            Content::text("see [Image #1]").with_attachments([attachment("c3")]),
+        )
+        .await
+        .unwrap();
+    let _ = collect_turn(&mut rx, branch.0.as_str()).await;
+    let prompt_node = kernel
+        .branch_path(&branch)
+        .unwrap()
+        .0
+        .into_iter()
+        .find(|n| matches!(n.body, NodeBody::User { .. }))
+        .expect("the turn appended a user node")
+        .id;
+
+    let regenerated = kernel.regenerate(&prompt_node).await.unwrap();
+    let _ = collect_turn(&mut rx, regenerated.id.0.as_str()).await;
+
+    // Both prompt events (original + replay) carried the attachments.
+    let payloads = payloads.lock().unwrap();
+    assert_eq!(payloads.len(), 2, "{payloads:?}");
+    for p in payloads.iter() {
+        assert_eq!(p["attachments"][0]["hash"], "c3");
+    }
+    let (nodes, _) = kernel.branch_path(&regenerated.id).unwrap();
+    let user = nodes
+        .iter()
+        .find_map(|n| match &n.body {
+            NodeBody::User { content } => Some(content),
+            _ => None,
+        })
+        .unwrap();
+    assert_eq!(user.attachments, vec![attachment("c3")]);
 }
 
 // ---------- turn failures: retry, marker, manual retry ----------

@@ -25,6 +25,7 @@ import Icon from '../ui/Icon.vue'
 import Chip from '../ui/Chip.vue'
 import CardChip from './CardChip.vue'
 import CodeCalls from './CodeCalls.vue'
+import ImageThumb from './ImageThumb.vue'
 
 const props = defineProps<{ rows: ToolRowInfo[] }>()
 
@@ -198,6 +199,18 @@ function liveTaskOutput(id: string | null): string {
           <pre class="code" :class="{ 'border-danger/40 text-danger': v.status !== 'ok' }">{{
             v.output || t('common.empty')
           }}</pre>
+        </div>
+        <div v-if="v.attachments.length">
+          <div class="mb-1 text-micro font-semibold text-ink-3">{{ t('tools.detail.images') }}</div>
+          <div class="flex flex-wrap gap-2">
+            <ImageThumb
+              v-for="(a, i) in v.attachments"
+              :key="`${a.hash}:${i}`"
+              :attachment="a"
+              :max-h="160"
+              :max-w="240"
+            />
+          </div>
         </div>
         <div v-if="v.taskId && (v.taskStatus === 'running' || liveTaskOutput(v.taskId))">
           <div class="mb-1 text-micro font-semibold text-ink-3">

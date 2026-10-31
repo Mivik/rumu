@@ -22,6 +22,7 @@ import type { TaskKind } from './generated/TaskKind'
 
 export type { Tagged } from './generated/Tagged'
 export type { Content } from './generated/Content'
+export type { Attachment } from './generated/Attachment'
 export type { ToolCall } from './generated/ToolCall'
 export type { Usage } from './generated/Usage'
 export type { ReasoningBlock } from './generated/ReasoningBlock'

@@ -22,7 +22,8 @@ import { computed, onBeforeUnmount, onMounted, ref, shallowRef, watch } from 'vu
 import { t } from '../../i18n'
 import { isBusy, timeline } from '../../lib/store'
 import type { TimelineUserEntry } from '../../lib/store'
-import { contentText, preview } from '../../lib/util'
+import { preview } from '../../lib/util'
+import { contentSegments } from '../../lib/attachments'
 import type { Node } from '../../lib/types'
 
 // The scroller, the content column and the composer arrive as getters
@@ -99,9 +100,20 @@ const railHover = ref(false)
 const railFocus = ref(false)
 const dragging = ref(false)
 
+/** A prompt's one-line label: the words the user typed, with images left out
+ *  of the text (their count stands in for an image-only prompt). The
+ *  `[image: …]` placeholders belong to text-only readers, not the wheel. */
 function promptLabel(e: TimelineUserEntry): string {
-  const body = e.node.body as Extract<Node['body'], { type: 'user' }>
-  return preview(contentText(body.content), 80)
+  const content = (e.node.body as Extract<Node['body'], { type: 'user' }>).content
+  const text = preview(
+    contentSegments(content)
+      .map((seg) => (seg.type === 'text' ? seg.text : ''))
+      .join(''),
+    80,
+  )
+  const images = content.attachments?.length ?? 0
+  if (text || !images) return text
+  return t('chat.timeline.images', { count: images })
 }
 
 /** Only the last group can be the one streaming. */

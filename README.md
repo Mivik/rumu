@@ -58,6 +58,20 @@ rumu's own data — knowledge cards and past conversations — lives in the
 reserved `@rumu:/…` workspace. The leading `@` is not a valid preset name, so
 a project called `rumu` can be an ordinary workspace.
 
+## Images
+
+Prompts (and tool results) can carry images. Uploads go to
+`POST /blobs?name=<file name>` (raw body = image bytes) and come back as an
+`Attachment`; the web client then sends `{hash, name}` references with a
+`prompt` and serves them back from `GET /blobs/{hash}`. The bytes live in
+`<RUMU_HOME>/blobs`, one file per SHA-256, normalized once at ingest
+(orientation applied, long edge ≤ 2000 px, PNG or JPEG out) so what the model
+sees never changes afterwards — the projection, and so the prompt cache, is
+byte-stable. In text, an `[Image #N]` anchor marks where the N-th attachment
+sits (`what is [Image #1]?`); attachments without an anchor follow the text.
+The server garbage-collects blobs no session references, with a 24 h grace
+period that covers the gap between an upload and the node that references it.
+
 ## Layout
 
 ```

@@ -1296,6 +1296,36 @@
     caret-color: var(--brand);
   }
 
+  /* an image dragged over the sheet: the edge reaches for it */
+  .composer.is-drag {
+    border-color: var(--brand);
+  }
+
+  /* attach: a quiet picture key beside send */
+  .composer-attach {
+    display: inline-flex;
+    flex: none;
+    align-items: center;
+    justify-content: center;
+    width: 32px;
+    height: 32px;
+    border-radius: 10px;
+    color: var(--ink-3);
+    transition:
+      background-color 0.15s,
+      color 0.15s,
+      scale 0.15s var(--ease-soft);
+  }
+
+  .composer-attach:hover {
+    background: var(--surface-2);
+    color: var(--ink);
+  }
+
+  .composer-attach:active {
+    scale: 0.92;
+  }
+
   /* send: a solid coral button once there is something to send; with
    * nothing written it stays a plain, legible key on sand. */
   .composer-send,

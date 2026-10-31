@@ -1,7 +1,7 @@
 use std::sync::{Arc, OnceLock};
 
 use crate::{
-    Branch, BranchId, Content, Error, Event, Index, Node, PathState, Result, SessionId,
+    Attachment, Branch, BranchId, Content, Error, Event, Index, Node, PathState, Result, SessionId,
     SessionInfo, Tagged, TaskId, TaskInfo,
 };
 use async_trait::async_trait;
@@ -91,6 +91,12 @@ impl ToolOutput {
         self
     }
 
+    /// Attach images to the output.
+    pub fn with_attachments(mut self, attachments: impl IntoIterator<Item = Attachment>) -> Self {
+        self.content.attachments.extend(attachments);
+        self
+    }
+
     pub fn with_effect(mut self, effect: Effect) -> Self {
         self.effects.push(effect);
         self
@@ -101,7 +107,10 @@ impl ToolOutput {
         self
     }
 
-    /// The model-facing text, capped to [`crate::OUTPUT_LIMIT`].
+    /// The model-facing text, capped to [`crate::OUTPUT_LIMIT`]. Only the
+    /// text is touched: a cut `[Image #N]` anchor simply leaves its image
+    /// unanchored, and [`Content::segments`] places unanchored images after
+    /// the text — attachments always survive the cap.
     ///
     /// Tool boundaries apply this automatically ([`ToolResultExt::finish`]
     /// for plugin tools; the plugin host for stdio plugins), so tool bodies
@@ -302,6 +311,26 @@ mod tests {
         let out = ToolResult::<String>::Ok(long).finish().unwrap();
         assert!(out.content.text.contains("[truncated"));
         assert!(out.content.text.chars().count() < crate::OUTPUT_LIMIT + 100);
+    }
+
+    #[test]
+    fn cap_keeps_attachments_even_when_the_cut_takes_their_anchor() {
+        let image = Attachment {
+            hash: "0".repeat(64),
+            mime: "image/png".into(),
+            name: Some("a.png".into()),
+            width: 4,
+            height: 3,
+            size: 10,
+        };
+        let long = format!("{} [Image #1]", "x".repeat(crate::OUTPUT_LIMIT + 10));
+        let out = ToolOutput::ok(long).with_attachments([image]).cap();
+        assert!(out.content.text.contains("[truncated"));
+        assert_eq!(out.content.attachments.len(), 1);
+        // The anchor is gone, so the image follows the text unanchored.
+        let rendered = out.content.rendered();
+        assert!(!rendered.contains("[Image #1]"), "{rendered}");
+        assert!(rendered.ends_with("\n[image: a.png 4×3]"), "{rendered}");
     }
 }
 

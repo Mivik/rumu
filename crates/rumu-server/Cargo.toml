@@ -13,6 +13,7 @@ path = "src/main.rs"
 
 [dependencies]
 rumu-core.workspace = true
+rumu-blob.workspace = true
 rumu-cards.workspace = true
 rumu-kernel.workspace = true
 rumu-llm.workspace = true

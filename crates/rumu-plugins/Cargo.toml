@@ -9,6 +9,7 @@ repository.workspace = true
 
 [dependencies]
 rumu-core.workspace = true
+rumu-blob.workspace = true
 rumu-cards.workspace = true
 rquickjs.workspace = true
 async-trait.workspace = true
@@ -28,3 +29,5 @@ ts-rs.workspace = true
 rumu-kernel.workspace = true
 rumu-store.workspace = true
 tempfile.workspace = true
+# building test images
+image.workspace = true

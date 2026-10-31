@@ -205,6 +205,7 @@ mod tests {
                 source: "workspace".into(),
                 content: Content {
                     text: String::new(),
+                    attachments: Vec::new(),
                     data: Some(rumu_core::Tagged {
                         tag: CARD_USE.into(),
                         v: 1,

@@ -3,6 +3,7 @@ import { onBeforeUnmount, onMounted, ref } from 'vue'
 import Sidebar from './components/Sidebar.vue'
 import ChatView from './components/chat/ChatView.vue'
 import CardCatalog from './components/chat/CardCatalog.vue'
+import Lightbox from './components/Lightbox.vue'
 import Toasts from './components/Toasts.vue'
 import { closePanels, layout } from './lib/layout'
 
@@ -49,6 +50,7 @@ onBeforeUnmount(() => {
     />
     <ChatView />
     <CardCatalog />
+    <Lightbox />
     <Toasts />
 
     <Transition

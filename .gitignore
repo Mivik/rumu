@@ -8,5 +8,6 @@ __pycache__/
 *.pyc
 /TODO.md
 web/mock/home/sessions/
+web/mock/home/blobs/
 web/mock/home/scratch/*
 !web/mock/home/scratch/.gitkeep

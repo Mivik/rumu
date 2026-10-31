@@ -64,11 +64,70 @@ pub const SYSTEM_SOURCE: &str = "system";
 #[derive(Debug, Clone, Default, PartialEq, Serialize, Deserialize, ts_rs::TS)]
 #[ts(export)]
 pub struct Content {
-    /// Frozen at write time; the ONLY thing the model sees.
+    /// Frozen at write time; with `attachments`, the ONLY thing the model
+    /// sees. An `[Image #N]` anchor marks where the N-th attachment sits
+    /// (see [`Content::segments`]).
     pub text: String,
+    /// Images, in anchor-number order. Each names a blob in the
+    /// content-addressed blob store, normalized once at ingest so its bytes
+    /// (and so the projection) never change afterwards.
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub attachments: Vec<Attachment>,
     /// For the UI and plugins; never projected.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub data: Option<Tagged>,
+}
+
+/// A reference to a normalized image in the blob store.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, ts_rs::TS)]
+#[ts(export)]
+pub struct Attachment {
+    /// Lowercase hex SHA-256 of the stored bytes; the blob's file name.
+    pub hash: String,
+    /// MIME type of the stored bytes (`image/png`, `image/jpeg`).
+    pub mime: String,
+    /// Original file name, for display.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub name: Option<String>,
+    pub width: u32,
+    pub height: u32,
+    /// Stored size in bytes.
+    pub size: u64,
+}
+
+impl Attachment {
+    /// The stand-in text for readers that cannot show the image (transcripts,
+    /// search, a blob gone missing): `[image: name 800×600]`.
+    pub fn placeholder(&self) -> String {
+        match &self.name {
+            Some(name) => format!("[image: {name} {}×{}]", self.width, self.height),
+            None => format!("[image: {}×{}]", self.width, self.height),
+        }
+    }
+}
+
+/// The in-text anchor of the `n`-th (1-based) attachment: `[Image #n]`.
+pub fn image_anchor(n: usize) -> String {
+    format!("[Image #{n}]")
+}
+
+/// The label projected ahead of the `n`-th image, so the model can refer to
+/// it by name: `Image n:`.
+pub fn image_label(n: usize) -> String {
+    format!("Image {n}:")
+}
+
+/// One piece of a [`Content`], in reading order.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum Segment<'a> {
+    Text(&'a str),
+    /// The `n`-th (1-based) attachment. `anchored` is false for one whose
+    /// anchor is missing from the text; those follow all of the text.
+    Image {
+        n: usize,
+        attachment: &'a Attachment,
+        anchored: bool,
+    },
 }
 
 impl Content {
@@ -76,8 +135,94 @@ impl Content {
     pub fn text(s: impl Into<String>) -> Self {
         Self {
             text: s.into(),
-            data: None,
+            ..Self::default()
         }
+    }
+
+    /// Add images to the content.
+    pub fn with_attachments(mut self, attachments: impl IntoIterator<Item = Attachment>) -> Self {
+        self.attachments.extend(attachments);
+        self
+    }
+
+    /// Split the content into text and images, in reading order: the first
+    /// `[Image #N]` anchor of each attachment (1 ≤ N ≤ count, no leading
+    /// zero) is replaced by that image; repeated or out-of-range anchors stay
+    /// text. Attachments without an anchor follow the text, in order. This is
+    /// the one placement rule — the model projection, transcripts and the UI
+    /// all follow it.
+    pub fn segments(&self) -> Vec<Segment<'_>> {
+        const OPEN: &str = "[Image #";
+        let text = self.text.as_str();
+        let mut placed = vec![false; self.attachments.len()];
+        let mut out = Vec::new();
+        let (mut last, mut scan) = (0, 0);
+        while let Some(off) = text[scan..].find(OPEN) {
+            let at = scan + off;
+            let digits = at + OPEN.len();
+            let len = text[digits..]
+                .bytes()
+                .take_while(u8::is_ascii_digit)
+                .count();
+            let end = digits + len;
+            let n = (len > 0 && !text[digits..].starts_with('0') && text[end..].starts_with(']'))
+                .then(|| text[digits..end].parse::<usize>().ok())
+                .flatten()
+                .filter(|n| (1..=placed.len()).contains(n) && !placed[n - 1]);
+            let Some(n) = n else {
+                scan = at + 1;
+                continue;
+            };
+            if last < at {
+                out.push(Segment::Text(&text[last..at]));
+            }
+            placed[n - 1] = true;
+            out.push(Segment::Image {
+                n,
+                attachment: &self.attachments[n - 1],
+                anchored: true,
+            });
+            last = end + 1;
+            scan = last;
+        }
+        if last < text.len() {
+            out.push(Segment::Text(&text[last..]));
+        }
+        for (i, attachment) in self.attachments.iter().enumerate() {
+            if !placed[i] {
+                out.push(Segment::Image {
+                    n: i + 1,
+                    attachment,
+                    anchored: false,
+                });
+            }
+        }
+        out
+    }
+
+    /// The text with every image as its [`Attachment::placeholder`], for
+    /// text-only readers (transcripts, search).
+    pub fn rendered(&self) -> String {
+        if self.attachments.is_empty() {
+            return self.text.clone();
+        }
+        let mut out = String::new();
+        for segment in self.segments() {
+            match segment {
+                Segment::Text(t) => out.push_str(t),
+                Segment::Image {
+                    attachment,
+                    anchored,
+                    ..
+                } => {
+                    if !anchored && !out.is_empty() && !out.ends_with('\n') {
+                        out.push('\n');
+                    }
+                    out.push_str(&attachment.placeholder());
+                }
+            }
+        }
+        out
     }
 
     /// Note text plus a structured payload.
@@ -89,8 +234,8 @@ impl Content {
     /// only through the node index and structured readers.
     pub fn marker<T: Structured>(data: &T) -> Self {
         Self {
-            text: String::new(),
             data: Some(Tagged::new(data)),
+            ..Self::default()
         }
     }
 
@@ -105,9 +250,9 @@ impl Content {
         self.data.as_ref()?.decode()
     }
 
-    /// True when this is a marker: empty text (not projected) with a payload.
+    /// True when this is a marker: nothing projected, only a payload.
     pub fn is_marker(&self) -> bool {
-        self.text.is_empty() && self.data.is_some()
+        self.text.is_empty() && self.attachments.is_empty() && self.data.is_some()
     }
 
     /// Validate that a note carries either projected text or a structured
@@ -118,6 +263,18 @@ impl Content {
             return Err(crate::Error::EmptyNote);
         }
         Ok(())
+    }
+}
+
+impl From<&str> for Content {
+    fn from(text: &str) -> Self {
+        Self::text(text)
+    }
+}
+
+impl From<String> for Content {
+    fn from(text: String) -> Self {
+        Self::text(text)
     }
 }
 
@@ -382,4 +539,71 @@ pub struct PathState {
     /// default → first available) and kept within the workspace scope.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub default_workspace: Option<String>,
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    fn image(name: &str) -> Attachment {
+        Attachment {
+            hash: "0".repeat(64),
+            mime: "image/png".into(),
+            name: Some(name.into()),
+            width: 4,
+            height: 3,
+            size: 10,
+        }
+    }
+
+    fn content(text: &str, names: &[&str]) -> Content {
+        Content::text(text).with_attachments(names.iter().map(|n| image(n)))
+    }
+
+    /// Segments as a compact string: text verbatim, images as `<n>` when
+    /// anchored and `<n…>` when appended.
+    fn shape(c: &Content) -> String {
+        c.segments()
+            .iter()
+            .map(|s| match s {
+                Segment::Text(t) => (*t).to_owned(),
+                Segment::Image { n, anchored, .. } => {
+                    format!("<{n}{}>", if *anchored { "" } else { "…" })
+                }
+            })
+            .collect()
+    }
+
+    #[test]
+    fn anchors_place_images_inline() {
+        let c = content("before [Image #2] and [Image #1] after", &["a", "b"]);
+        assert_eq!(shape(&c), "before <2> and <1> after");
+        // Adjacent anchors and anchors at the edges leave no empty text.
+        let c = content("[Image #1][Image #2]", &["a", "b"]);
+        assert_eq!(c.segments().len(), 2);
+    }
+
+    #[test]
+    fn stray_anchors_stay_text_and_missing_ones_append() {
+        let c = content(
+            "[Image #1] again [Image #1], none [Image #3], [Image #01] [Image #] [Image #2",
+            &["a", "b"],
+        );
+        assert_eq!(
+            shape(&c),
+            "<1> again [Image #1], none [Image #3], [Image #01] [Image #] [Image #2<2…>"
+        );
+        // No anchors at all: text first, then every image.
+        assert_eq!(shape(&content("look", &["a", "b"])), "look<1…><2…>");
+        assert_eq!(shape(&content("", &["a"])), "<1…>");
+        // Text without attachments is one segment, anchors included.
+        assert_eq!(shape(&content("[Image #1]", &[])), "[Image #1]");
+    }
+
+    #[test]
+    fn rendered_uses_placeholders() {
+        let c = content("see [Image #1]:", &["a.png", "b.png"]);
+        assert_eq!(c.rendered(), "see [image: a.png 4×3]:\n[image: b.png 4×3]");
+        assert_eq!(content("plain", &[]).rendered(), "plain");
+    }
 }

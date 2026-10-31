@@ -846,6 +846,66 @@ for line in sys.stdin.buffer:
         assert!(matches!(&updates[1].2, rumu_core::Progress::Data(t) if t.tag == "x"));
     }
 
+    /// A plugin's `ToolOutput` may carry image attachments; the host must
+    /// round-trip them (the output cap touches text only).
+    #[tokio::test]
+    async fn tool_output_attachments_round_trip() {
+        let dir = tempfile::tempdir().unwrap();
+        let script = dir.path().join("pic.py");
+        std::fs::write(
+            &script,
+            r#"
+import json, sys
+
+def send(m):
+    sys.stdout.buffer.write((json.dumps(m) + "\n").encode("utf-8"))
+    sys.stdout.buffer.flush()
+
+MANIFEST = {
+    "name": "pic",
+    "tools": [{
+        "name": "snap",
+        "description": "returns an image attachment",
+        "schema": {"type": "object", "properties": {}, "additionalProperties": False},
+    }],
+    "hooks": [],
+}
+
+for line in sys.stdin.buffer:
+    line = line.strip()
+    if not line:
+        continue
+    req = json.loads(line)
+    m = req.get("method"); rid = req.get("id")
+    if m == "initialize":
+        send({"jsonrpc": "2.0", "id": rid, "result": MANIFEST})
+    elif m == "tool/call":
+        send({"jsonrpc": "2.0", "id": rid, "result": {
+            "content": {"text": "see", "attachments": [{
+                "hash": "ab" * 32, "mime": "image/png", "name": "a.png",
+                "width": 4, "height": 3, "size": 10}]},
+            "is_error": False, "effects": []}})
+"#,
+        )
+        .unwrap();
+
+        let argv = vec!["python3".into(), script.to_string_lossy().into_owned()];
+        let plugin = StdioPlugin::spawn("pic", &argv, dir.path()).await.unwrap();
+        let host = FakeRuntime::arc();
+        let out = plugin
+            .call_tool("snap", json!({}), &host.cx())
+            .await
+            .unwrap();
+        assert!(!out.is_error, "{}", out.content.text);
+        assert_eq!(out.content.text, "see");
+        assert_eq!(out.content.attachments.len(), 1);
+        let a = &out.content.attachments[0];
+        assert_eq!(a.hash, "ab".repeat(32));
+        assert_eq!(a.mime, "image/png");
+        assert_eq!(a.name.as_deref(), Some("a.png"));
+        assert_eq!((a.width, a.height, a.size), (4, 3, 10));
+    }
+
     /// Cancelling a tool call (dropping its future) removes its pending entry
     /// instead of leaking it.
     #[tokio::test]

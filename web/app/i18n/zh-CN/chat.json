@@ -12,7 +12,18 @@
     "placeholder": "发送消息…",
     "stop": "停止",
     "steer": "引导",
-    "send": "发送"
+    "send": "发送",
+    "attach": "添加图片",
+    "removeImage": "移除图片",
+    "retryUpload": "重试上传",
+    "tooManyImages": "图片太多（最多 {max} 张）",
+    "notAnImage": "只能附加图片文件",
+    "uploadFailed": "上传图片失败"
+  },
+  "image": {
+    "open": "查看图片",
+    "close": "关闭图片",
+    "alt": "图片"
   },
   "header": {
     "sessions": "会话",
@@ -53,6 +64,7 @@
   },
   "timeline": {
     "label": "对话时间线",
-    "emptyPrompt": "（空提问）"
+    "emptyPrompt": "（空提问）",
+    "images": "{count} 张图片"
   }
 }

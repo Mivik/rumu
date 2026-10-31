@@ -1,8 +1,9 @@
-// Transient UI state: toasts, the card catalog and drawer, and timeline focus
-// requests.
+// Transient UI state: toasts, the card catalog and drawer, the image
+// lightbox, and timeline focus requests.
 
-import type { ToastKind } from '../types'
-import { state, type Toast } from './state'
+import type { Attachment, ToastKind } from '../types'
+import { blobUrl } from '../attachments'
+import { state, type LightboxImage, type Toast } from './state'
 
 let toastSeq = 1
 
@@ -33,6 +34,19 @@ export function openDrawer(cardId: string, useNodeId?: string): void {
 
 export function closeDrawer(): void {
   state.drawer = null
+}
+
+/** Show an image full-size: a stored attachment, or a local preview (an
+ *  object URL) of one still being attached. */
+export function openLightbox(image: Attachment | LightboxImage): void {
+  state.lightbox =
+    'hash' in image
+      ? { src: blobUrl(image.hash), name: image.name, width: image.width, height: image.height }
+      : image
+}
+
+export function closeLightbox(): void {
+  state.lightbox = null
 }
 
 let focusSeq = 0

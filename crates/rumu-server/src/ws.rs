@@ -1,23 +1,31 @@
-//! WebSocket protocol and static serving.
+//! WebSocket protocol, blob routes and static serving.
 
+use std::collections::HashMap;
 use std::net::IpAddr;
 use std::path::PathBuf;
 use std::sync::Arc;
 
+use axum::Json;
 use axum::Router;
-use axum::extract::State;
+use axum::body::Bytes;
 use axum::extract::ws::{Message, WebSocket, WebSocketUpgrade};
-use axum::http::header::{CONTENT_TYPE, HOST, ORIGIN};
+use axum::extract::{DefaultBodyLimit, Path, Query, State};
+use axum::http::header::{CACHE_CONTROL, CONTENT_TYPE, HOST, ORIGIN};
 use axum::http::{HeaderMap, StatusCode, Uri};
 use axum::response::{IntoResponse, Response};
-use axum::routing::get;
+use axum::routing::{get, post};
 use futures_util::{SinkExt, StreamExt};
-use rumu_core::{BranchId, NodeId, SessionId, TaskId};
+use rumu_blob::Blobs;
+use rumu_core::{BranchId, Content, NodeId, SessionId, TaskId};
 use rumu_kernel::Kernel;
 use rust_embed::{EmbeddedFile, RustEmbed};
 use serde_json::{Value, json};
 use tokio::sync::broadcast::error::RecvError;
 use tracing::warn;
+
+/// The upload body limit: the largest ingest accepts, plus headroom for
+/// encoding overhead. Anything larger is axum's own 413.
+const BLOB_BODY_LIMIT: usize = rumu_blob::MAX_INPUT_BYTES + 64 * 1024;
 
 /// A WebSocket request failure.
 #[derive(Debug, thiserror::Error)]
@@ -29,6 +37,10 @@ enum ServerError {
     /// The card library failed.
     #[error(transparent)]
     Cards(#[from] rumu_cards::Error),
+
+    /// A blob-store operation failed (unknown hash, refused upload, …).
+    #[error(transparent)]
+    Blob(#[from] rumu_blob::Error),
 
     /// A response value could not be serialized.
     #[error(transparent)]
@@ -56,11 +68,13 @@ impl ServerError {
 
 type Result<T> = std::result::Result<T, ServerError>;
 
-/// Shared handler state: the kernel and RUMU_HOME (for the home card library).
+/// Shared handler state: the kernel, RUMU_HOME (for the home card library)
+/// and the blob store behind image attachments.
 #[derive(Clone)]
 struct AppState {
     kernel: Arc<Kernel>,
     home: PathBuf,
+    blobs: Blobs,
 }
 
 /// The built frontend. Debug builds read `web/dist` from disk, release builds
@@ -70,10 +84,21 @@ struct AppState {
 #[allow_missing = true]
 struct WebAssets;
 
-pub fn router(kernel: Arc<Kernel>, home: PathBuf) -> Router {
-    let state = AppState { kernel, home };
+pub fn router(kernel: Arc<Kernel>, home: PathBuf, blobs: Blobs) -> Router {
+    let state = AppState {
+        kernel,
+        home,
+        blobs,
+    };
     Router::new()
         .route("/ws", get(ws_upgrade))
+        // Registered routes take precedence over the SPA fallback below, so
+        // `/blobs` is never swallowed by index.html.
+        .route(
+            "/blobs",
+            post(blob_upload).layer(DefaultBodyLimit::max(BLOB_BODY_LIMIT)),
+        )
+        .route("/blobs/{hash}", get(blob_get))
         .fallback(static_asset)
         .with_state(state)
 }
@@ -150,6 +175,78 @@ fn origin_allowed(headers: &HeaderMap) -> bool {
     (local_name && a.eq_ignore_ascii_case(host))
         || a.eq_ignore_ascii_case("localhost:5173")
         || a.eq_ignore_ascii_case("127.0.0.1:5173")
+}
+
+/// `POST /blobs?name=<url-encoded file name>`: the raw request body is the
+/// image bytes. They are normalized once (orientation, size, format) and
+/// stored; the JSON [`rumu_core::Attachment`] naming the stored blob comes
+/// back. A body the ingest refuses is a 400 naming why.
+async fn blob_upload(
+    State(state): State<AppState>,
+    headers: HeaderMap,
+    Query(params): Query<HashMap<String, String>>,
+    bytes: Bytes,
+) -> Response {
+    if !origin_allowed(&headers) {
+        return (StatusCode::FORBIDDEN, "cross-origin upload refused\n").into_response();
+    }
+    let name = params.get("name").cloned().filter(|n| !n.trim().is_empty());
+    let blobs = state.blobs.clone();
+    // Normalization is CPU-bound: keep it off the async executor.
+    let ingested = tokio::task::spawn_blocking(move || blobs.ingest_image(&bytes, name)).await;
+    match ingested {
+        Ok(Ok(attachment)) => Json(attachment).into_response(),
+        Ok(Err(e)) => blob_error(&e),
+        Err(e) => (
+            StatusCode::INTERNAL_SERVER_ERROR,
+            Json(json!({ "error": format!("image ingest failed: {e}") })),
+        )
+            .into_response(),
+    }
+}
+
+/// `GET /blobs/{hash}`: the stored bytes. A blob never changes once written,
+/// so the response is immutable and caches forever.
+async fn blob_get(
+    State(state): State<AppState>,
+    headers: HeaderMap,
+    Path(hash): Path<String>,
+) -> Response {
+    if !origin_allowed(&headers) {
+        return (StatusCode::FORBIDDEN, "cross-origin blob refused\n").into_response();
+    }
+    // `describe` re-derives MIME and dimensions from the stored bytes; a hash
+    // from the wire is trusted for nothing but addressing the blob.
+    match state.blobs.describe(&hash, None) {
+        Ok(attachment) => match state.blobs.get(&hash) {
+            Ok(bytes) => (
+                [
+                    (CONTENT_TYPE, attachment.mime),
+                    (
+                        CACHE_CONTROL,
+                        "public, max-age=31536000, immutable".to_owned(),
+                    ),
+                ],
+                bytes,
+            )
+                .into_response(),
+            Err(e) => blob_error(&e),
+        },
+        Err(e) => blob_error(&e),
+    }
+}
+
+/// The error response of a blob route: `{"error": message}` with the status
+/// the failure asks for (bad input 400, unknown hash 404, the rest 500).
+fn blob_error(e: &rumu_blob::Error) -> Response {
+    use rumu_blob::Error;
+    let status = match e {
+        Error::Unsupported | Error::TooLarge { .. } | Error::Decode(_) => StatusCode::BAD_REQUEST,
+        Error::NotFound(_) => StatusCode::NOT_FOUND,
+        Error::InvalidHash(_) => StatusCode::BAD_REQUEST,
+        Error::Io(_) | Error::Encode(_) => StatusCode::INTERNAL_SERVER_ERROR,
+    };
+    (status, Json(json!({ "error": e.to_string() }))).into_response()
 }
 
 async fn handle_socket(state: AppState, socket: WebSocket) {
@@ -259,8 +356,30 @@ async fn dispatch(state: &AppState, method: &str, p: &Value) -> Result<Value> {
 
         "prompt" => {
             let branch: BranchId = str_param(p, "branch")?.into();
-            let text = str_param(p, "text")?;
-            kernel.prompt(&branch, text).await?;
+            // `attachments` (optional): stored-blob references, resolved
+            // server-side into full attachments — the wire is trusted for the
+            // hash and display name only. An unknown hash is a request error.
+            // Text may be empty when images ride along.
+            let mut attachments = Vec::new();
+            for a in p
+                .get("attachments")
+                .and_then(Value::as_array)
+                .into_iter()
+                .flatten()
+            {
+                let hash = a
+                    .get("hash")
+                    .and_then(Value::as_str)
+                    .ok_or_else(|| ServerError::MissingParam("attachments[].hash".into()))?;
+                let name = a.get("name").and_then(Value::as_str).map(str::to_owned);
+                attachments.push(state.blobs.describe(hash, name)?);
+            }
+            let text = p.get("text").and_then(Value::as_str).unwrap_or_default();
+            if text.is_empty() && attachments.is_empty() {
+                return Err(ServerError::MissingParam("text".into()));
+            }
+            let content = Content::text(text).with_attachments(attachments);
+            kernel.prompt(&branch, content).await?;
             Ok(json!({}))
         }
 
