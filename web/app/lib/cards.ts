@@ -12,7 +12,7 @@
 
 import { computed } from 'vue'
 import type { Card, CardImport, CardUpdate, CardUse as CardUseRecord, Content, Node } from './types'
-import { callsOnPath, hookTraceForSession, pathNodes, state } from './store'
+import { callsOnPath, pathNodes, state } from './store'
 
 /** The payload tag/version decode for one Content, or null. */
 function payload<T>(content: Content | null | undefined, tag: string, v: number): T | null {
@@ -130,16 +130,6 @@ export const cardUsesOnPath = computed(() => {
   return uses
 })
 
-/** Card ids used on the current path (imported, read or written). */
-export const activeCardIds = computed(() => new Set(cardUsesOnPath.value.keys()))
-
-/** The latest use of each active card. */
-export const latestUseByCard = computed(() => {
-  const m = new Map<string, CardUse>()
-  for (const [id, list] of cardUsesOnPath.value) m.set(id, list[list.length - 1]!)
-  return m
-})
-
 /** Card id → update notes on this path (`memory.card_update`), in order. */
 export const updateNotesByCard = computed(() => {
   const m = new Map<string, Node[]>()
@@ -162,30 +152,4 @@ export function noteTitleFromText(text: string): string {
 /** Look up a card for an import payload; null if none. */
 export function cardForImport(imp: CardImport | null): Card | null {
   return imp ? (cardById.value.get(imp.id) ?? null) : null
-}
-
-/**
- * Which hook injected a note, from the live hook trace
- * (e.g. 'memory · recall'). Live sessions only — null when unknown.
- * Matches the effect's structured payload when present, else its text.
- */
-export function importedBy(content: Content | null | undefined): string | null {
-  if (!content) return null
-  const imp = importOf(content)
-  const trace = hookTraceForSession.value
-  for (let i = trace.length - 1; i >= 0; i--) {
-    const e = trace[i]
-    if (
-      e.effects.some((a) => {
-        if (imp) {
-          const ai = importOf(a)
-          return ai?.id === imp.id && ai.rev === imp.rev
-        }
-        return a.text === content.text && a.data?.tag === content.data?.tag
-      })
-    ) {
-      return `${e.plugin} · ${e.hook_id}`
-    }
-  }
-  return null
 }

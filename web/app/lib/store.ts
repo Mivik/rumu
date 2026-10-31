@@ -53,7 +53,6 @@ export {
   closeCatalog,
   closeDrawer,
   dismissToast,
-  focusNode,
   openCatalog,
   openDrawer,
   openLightbox,

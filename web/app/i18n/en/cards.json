@@ -31,12 +31,7 @@
     "olderSeen": "This conversation saw an earlier version."
   },
   "library": {
-    "onPath": "Cards on this path",
-    "changed": "Changed",
-    "by": "by {name}",
-    "title": "Card library",
-    "noneOnPath": "No cards used on this path yet.",
-    "browse": "Browse all {count} cards"
+    "title": "Card library"
   },
   "catalog": {
     "search": "Search cards",

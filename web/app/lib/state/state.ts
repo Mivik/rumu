@@ -136,8 +136,6 @@ const initial = {
   drawer: null as { cardId: string; useNodeId?: string } | null,
   /** The image shown full-size (opened by any thumbnail). */
   lightbox: null as LightboxImage | null,
-  /** Timeline scroll/highlight request (Context panel → injection point). */
-  focus: null as { nodeId: string; seq: number } | null,
 }
 
 // Cast off Vue's `UnwrapNestedRefs`: the wire payloads embed a recursive JSON

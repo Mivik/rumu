@@ -4,8 +4,7 @@
 // once, then back on. Elements that mount while it's on — things that just
 // happened — get a one-shot entrance class (main.css, "motion vocabulary");
 // history stays still. The class is removed once its animations finish, so
-// a later animation on the same element (e.g. the focus flash) can't replay
-// the entrance.
+// a later animation on the same element can't replay the entrance.
 
 import { ref, type Directive } from 'vue'
 

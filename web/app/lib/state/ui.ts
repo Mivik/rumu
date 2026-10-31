@@ -1,5 +1,4 @@
-// Transient UI state: toasts, the card catalog and drawer, the image
-// lightbox, and timeline focus requests.
+// Transient UI state: toasts, the card catalog and drawer, the image lightbox.
 
 import type { Attachment, ToastKind } from '../types'
 import { blobUrl } from '../attachments'
@@ -18,7 +17,7 @@ export function dismissToast(id: number): void {
   if (i >= 0) state.toasts.splice(i, 1)
 }
 
-// ---- card catalog + drawer + timeline focus (shared UI state) ----
+// ---- card catalog + drawer (shared UI state) ----
 
 export function openCatalog(): void {
   state.catalogOpen = true
@@ -47,10 +46,4 @@ export function openLightbox(image: Attachment | LightboxImage): void {
 
 export function closeLightbox(): void {
   state.lightbox = null
-}
-
-let focusSeq = 0
-
-export function focusNode(nodeId: string): void {
-  state.focus = { nodeId, seq: ++focusSeq }
 }

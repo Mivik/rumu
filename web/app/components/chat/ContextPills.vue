@@ -46,7 +46,6 @@ function taskDoneOf(content: Content): TaskDone | null {
 interface PillSpec {
   key: string
   kind: 'memory' | 'update' | 'workspace' | 'agents' | 'revert' | 'note' | 'task'
-  nodeIds: string[]
   title: string
   cards?: CardItem[]
   names?: string[]
@@ -84,14 +83,10 @@ const pills = computed<PillSpec[]>(() => {
   ): PillSpec => {
     let p = byKind.get(key)
     if (!p) {
-      p = { key, kind, nodeIds: [], title, ...extra }
+      p = { key, kind, title, ...extra }
       byKind.set(key, p)
     }
     return p
-  }
-
-  const addNode = (p: PillSpec, n: Node): void => {
-    p.nodeIds.push(n.id)
   }
 
   for (const n of props.nodes) {
@@ -108,20 +103,17 @@ const pills = computed<PillSpec[]>(() => {
       if (task) {
         // A background-task completion: one pill per task, opening the live /
         // buffered output in the tasks panel.
-        const p = ensure(`task:${task.id}`, 'task', b.content.text, {
+        ensure(`task:${task.id}`, 'task', b.content.text, {
           taskId: task.id,
           taskStatus: task.status,
         })
-        addNode(p, n)
       } else if (b.source === 'memory' && update) {
         // Update notice: names the card, carries no body.
         const p = ensure('update', 'update', t('cards.pills.changed'), { names: [], texts: [] })
-        addNode(p, n)
         if (!p.names!.includes(update.id)) p.names!.push(update.id)
         p.texts!.push(b.content.text)
       } else if (b.source === 'memory' && imp) {
         const p = ensure('memory', 'memory', t('cards.pills.imported'), { cards: [] })
-        addNode(p, n)
         const card = cardForImport(imp)
         if (card) {
           p.cards!.push({
@@ -148,22 +140,18 @@ const pills = computed<PillSpec[]>(() => {
           .trim()
         const name = `${agents.ws}/${doc || agents.file}`
         const p = ensure('agents', 'agents', '', { names: [] })
-        addNode(p, n)
         if (!p.names!.includes(name)) p.names!.push(name)
       } else if (revert) {
         const p = ensure(`revert:${n.id}`, 'revert', revert.lesson, { texts: [] })
-        addNode(p, n)
         p.texts!.push(revert.lesson)
       } else if (wsUse) {
         const p = ensure('workspace', 'workspace', '', { names: [] })
-        addNode(p, n)
         if (!p.names!.includes(wsUse.name)) p.names!.push(wsUse.name)
       } else if (b.content.text || !b.content.data) {
         const p = ensure(`note:${b.source}`, 'note', b.content.text, {
           texts: [],
           expandable: true,
         })
-        addNode(p, n)
         p.texts!.push(b.content.text)
       }
       // An empty-text note with data that no producer claimed (e.g. the root
@@ -210,8 +198,6 @@ function label(names: string[]): string {
       v-for="p in pills"
       :key="p.key"
       v-enter="p.kind === 'memory' ? 'enter-recall' : 'enter-pop'"
-      :data-node-id="p.nodeIds[0]"
-      :data-node-ids="p.nodeIds.join(' ')"
       class="inline-flex min-w-0 max-w-full"
       :class="p.kind === 'memory' ? 'rounded-control' : 'rounded-full'"
     >

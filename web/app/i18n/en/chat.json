@@ -29,8 +29,7 @@
     "sessions": "Sessions",
     "openSessions": "Open sessions",
     "running": "running…",
-    "queued": "queued",
-    "cards": "card | cards"
+    "queued": "queued"
   },
   "user": {
     "edit": "Edit message",

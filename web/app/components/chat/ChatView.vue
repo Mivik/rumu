@@ -252,30 +252,7 @@ watch(
 // the swapped tail renders as history — an instant swap, no fade, no jump.
 watch(() => state.activeBranch, resetView, { flush: 'pre' })
 
-// Context panel / drawer → scroll to a node and flash it. Pills may carry the
-// id in data-node-ids (grouped), so fall back to a contains-match.
-watch(
-  () => state.focus,
-  async (f) => {
-    if (!f) return
-    await nextTick()
-    const root = scrollEl.value
-    if (!root) return
-    let el = root.querySelector(`[data-node-id="${f.nodeId}"]`)
-    if (!el) {
-      el =
-        [...root.querySelectorAll('[data-node-ids]')].find((x) =>
-          (x.getAttribute('data-node-ids') ?? '').split(' ').includes(f.nodeId),
-        ) ?? null
-    }
-    if (!el) return
-    el.scrollIntoView({ behavior: prefersReduced() ? 'auto' : 'smooth', block: 'center' })
-    el.classList.add('flash')
-    setTimeout(() => el.classList.remove('flash'), 2000)
-  },
-)
-
-/** Node id for data-node-id (focus targets). */
+/** Node id for data-node-id (entry keys and the anchored-prompt measurement). */
 function dataId(e: TimelineEntry): string {
   if (e.kind === 'user') return e.node.id
   if (e.kind === 'context') return e.nodes[0]?.id ?? ''

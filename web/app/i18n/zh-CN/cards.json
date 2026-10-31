@@ -31,12 +31,7 @@
     "olderSeen": "这段对话看到的是旧版本。"
   },
   "library": {
-    "onPath": "此路径上的卡片",
-    "changed": "已变更",
-    "by": "来自 {name}",
-    "title": "卡片库",
-    "noneOnPath": "这条路径还没有用到卡片。",
-    "browse": "浏览全部 {count} 张卡片"
+    "title": "卡片库"
   },
   "catalog": {
     "search": "搜索卡片",

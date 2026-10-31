@@ -29,8 +29,7 @@
     "sessions": "会话",
     "openSessions": "打开会话列表",
     "running": "运行中…",
-    "queued": "排队中",
-    "cards": "张卡片"
+    "queued": "排队中"
   },
   "user": {
     "edit": "编辑消息",
