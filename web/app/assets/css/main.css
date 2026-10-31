@@ -11,13 +11,10 @@
  * cleared: only the names below exist (bg-surface, text-ink-2, text-meta,
  * rounded-card, shadow-soft …), which keeps one-off values out of components.
  *
- * Type: Nunito for the conversation and the UI (its round terminals match
- * the wordmark's stroke); Literata, a reading serif, only on cards — what
- * rumu remembers is set like a printed catalog card; JetBrains Mono for
- * code, paths and tool I/O.
+ * Type: Nunito for UI and body text; Literata for knowledge headings,
+ * paths and inline references; JetBrains Mono for code and tool I/O.
  *
- * Motifs: paper on a grainy desk, the index card (.index-card: a coral
- * header rule over ruled lines — rumu's memory), the coral dot (rumu's
+ * Motifs: paper on a grainy desk, the coral dot (rumu's
  * presence: wordmark, a running turn's head, streaming caret, live states)
  * and the thread (the root → head path drawn as a pinned rail beside the
  * timeline — the conversation's minimap, in TimelineRail). The motion
@@ -58,8 +55,6 @@
   /* semantic set: value + soft tint */
   --memory: #7a5cc7;
   --memory-soft: #efeafa;
-  /* a card's ruled lines: memory, faint */
-  --rule: #ebe3f6;
   --tool: #4f6f8f;
   --tool-soft: #e8eef4;
   --danger: #be3144;
@@ -111,7 +106,6 @@
 
     --memory: #a88bf0;
     --memory-soft: #2b2340;
-    --rule: #3a3348;
     --tool: #8eaacb;
     --tool-soft: #1f2732;
     --danger: #ef6f7a;
@@ -137,9 +131,8 @@
   --radius-*: initial;
   --shadow-*: initial;
 
-  /* fonts: Nunito for UI + messages, Literata for cards (titles and card
-   * text), JetBrains Mono for code & tool I/O only. CJK falls through to
-   * the system han faces — song (serif) ones under Literata. */
+  /* Nunito for UI and body text; Literata for knowledge headings and paths;
+   * JetBrains Mono for code & tool I/O. CJK uses the system han faces. */
   --font-sans:
     'Nunito Variable', 'PingFang SC', 'HarmonyOS Sans SC', 'Source Han Sans SC', 'Noto Sans CJK SC',
     'Microsoft YaHei', system-ui, sans-serif;
@@ -193,7 +186,6 @@
   --color-pine-soft: var(--pine-soft);
   --color-memory: var(--memory);
   --color-memory-soft: var(--memory-soft);
-  --color-rule: var(--rule);
   --color-tool: var(--tool);
   --color-tool-soft: var(--tool-soft);
   --color-danger: var(--danger);
@@ -422,65 +414,25 @@
     background: color-mix(in srgb, var(--tone, var(--ink-2)) 16%, transparent);
   }
 
-  /* An index card: paper with nearly square corners, a coral header rule
-   * under the title and pale blue ruled lines below it. --card-head is the
-   * title band's height, --card-lh the ruled line pitch (set the text's
-   * line-height to it and each line sits on a rule). */
-  .index-card {
-    --card-head: 30px;
-    --card-lh: 20px;
-    position: relative;
-    border-radius: 3px;
-    background-color: var(--surface);
-    background-image:
-      linear-gradient(var(--brand), var(--brand)),
-      repeating-linear-gradient(
-        to bottom,
-        transparent 0 calc(var(--card-lh) - 1px),
-        var(--rule) calc(var(--card-lh) - 1px) var(--card-lh)
-      );
-    background-repeat: no-repeat;
-    background-size:
-      100% 1.5px,
-      100% 100%;
-    background-position:
-      0 var(--card-head),
-      0 calc(var(--card-head) + 1.5px);
-    box-shadow:
-      0 0 0 1px var(--line-soft),
-      var(--shadow-soft-v);
+  /* A quiet card surface; the content sets its height, not paper rules. */
+  .card-entry {
+    border: 1px solid var(--line);
+    border-radius: 12px;
+    background: var(--surface);
   }
 
-  button.index-card:hover {
-    box-shadow:
-      0 0 0 1px var(--line),
-      var(--shadow-card-v);
-  }
-
-  /* a card's title, set like a catalog heading */
-  .card-title {
-    font-family: var(--font-card);
-    font-weight: 560;
-    font-variation-settings: 'opsz' 14;
-    letter-spacing: -0.005em;
-    color: var(--ink);
-  }
-
-  /* A card's subject tags (IndexCard, CardDrawer): the frontmatter
-   * `keywords:` as compact memory-tinted pills. They shrink — with an
-   * ellipsis — rather than push the row past the card's edge. */
   .keyword-tag {
     display: inline-block;
     min-width: 0;
     max-width: 100%;
-    padding: 0 7px;
+    padding: 0 8px;
     overflow: hidden;
     border: 1px solid color-mix(in srgb, var(--memory) 20%, transparent);
     border-radius: 999px;
-    background: color-mix(in srgb, var(--memory) 8%, transparent);
+    background: var(--memory-soft);
     color: color-mix(in srgb, var(--memory) 64%, var(--ink));
-    font-size: var(--text-micro);
-    line-height: 16px;
+    font-size: var(--text-meta);
+    line-height: 20px;
     text-overflow: ellipsis;
     white-space: nowrap;
   }

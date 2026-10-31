@@ -96,28 +96,24 @@ function onBackdrop(e: MouseEvent): void {
       @cancel.prevent="closeDrawer"
       @click="onBackdrop"
     >
-      <div class="flex flex-none items-center gap-3 px-5 pt-3 sm:px-7 sm:pt-4">
-        <span class="min-w-0 flex-1 break-anywhere text-meta text-ink-3">{{
-          path.includes('/') ? path.slice(0, path.lastIndexOf('/') + 1) : ''
-        }}</span>
-        <button
-          class="icon-btn"
-          autofocus
-          :title="t('cards.drawer.close')"
-          :aria-label="t('cards.drawer.closeAria')"
-          @click="closeDrawer"
-        >
-          <Icon name="close" :size="16" />
-        </button>
-      </div>
-      <article
-        ref="reader"
-        :key="path"
-        class="reader-content min-h-0 overflow-auto px-6 pt-2 pb-6 sm:px-10 sm:pt-3 sm:pb-7"
+      <button
+        class="icon-btn absolute top-3 right-3"
+        autofocus
+        :title="t('cards.drawer.close')"
+        :aria-label="t('cards.drawer.closeAria')"
+        @click="closeDrawer"
       >
-        <header class="reader-heading pb-5">
-          <h1 class="card-title text-[24px] leading-snug sm:text-[28px]">{{ title }}</h1>
-          <p v-if="description" class="mt-2 text-meta leading-relaxed text-ink-2">{{ description }}</p>
+        <Icon name="close" :size="16" />
+      </button>
+      <article ref="reader" :key="path" class="reader-content min-h-0 overflow-auto p-6 sm:px-8 sm:pb-7">
+        <header class="pb-1">
+          <div class="pr-6 font-card">
+            <p v-if="path.includes('/')" class="break-anywhere text-meta leading-none text-ink-3">
+              {{ path.slice(0, path.lastIndexOf('/') + 1) }}
+            </p>
+            <h1 class="text-[24px] leading-tight font-semibold sm:text-[28px]">{{ title }}</h1>
+          </div>
+          <p v-if="description" class="mt-3 text-[14px] leading-relaxed text-ink-2">{{ description }}</p>
           <div v-if="scope.length" class="mt-3 flex flex-wrap gap-x-2 gap-y-1 text-meta text-ink-2">
             <span>{{ t('cards.drawer.scope') }}</span>
             <span v-for="(entry, i) in scope" :key="i" class="font-mono">{{ entry }}</span>
@@ -138,7 +134,7 @@ function onBackdrop(e: MouseEvent): void {
           </button>
         </div>
         <div class="md mt-5 text-ink" v-html="shownHtml" />
-        <div v-if="keywords.length" class="mt-4 flex flex-wrap gap-1">
+        <div v-if="keywords.length" class="mt-5 flex flex-wrap gap-1.5">
           <span v-for="(keyword, i) in keywords" :key="i" class="keyword-tag">{{ keyword }}</span>
         </div>
         <details :key="`${path}:${snapshot}`" class="mt-5 text-meta text-ink-2">
@@ -209,8 +205,8 @@ function onBackdrop(e: MouseEvent): void {
   overscroll-behavior: contain;
   overflow-wrap: anywhere;
 }
-.reader-heading {
-  border-bottom: 1px solid color-mix(in srgb, var(--brand) 45%, var(--line));
+.reader-content :deep(.md) {
+  line-height: 1.75;
 }
 @starting-style {
   .card-reader[open] {

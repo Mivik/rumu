@@ -1,8 +1,5 @@
 <script setup lang="ts">
-// The card catalog: the whole library pulled out over the chat, every card an
-// index card on one sheet, with a filter over titles, descriptions, paths and
-// keywords. Opened from the sidebar or the cards popover; a card opens in the
-// CardDrawer on top of it. Escape closes the drawer first, then this.
+// A searchable knowledge library. Escape closes its reader first, then this.
 import { computed, nextTick, onBeforeUnmount, ref, watch } from 'vue'
 import { t } from '../../i18n'
 import { closeCatalog, state } from '../../lib/store'
@@ -70,10 +67,10 @@ onBeforeUnmount(() => window.removeEventListener('keydown', onKey, true))
         <section
           role="dialog"
           :aria-label="t('cards.library.title')"
-          class="pointer-events-auto flex max-h-[min(80vh,620px)] w-full max-w-[860px] flex-col overflow-hidden rounded-sheet bg-surface shadow-pop"
+          class="pointer-events-auto flex max-h-[min(80dvh,680px)] w-full max-w-[680px] flex-col overflow-hidden rounded-sheet bg-surface shadow-pop"
         >
           <header
-            class="flex flex-none flex-wrap items-center gap-x-4 gap-y-3 border-b border-line-soft px-5 py-4 sm:px-7"
+            class="flex flex-none flex-wrap items-center gap-x-4 gap-y-3 border-b border-line-soft px-8 py-4 sm:px-9"
           >
             <h2 class="flex items-baseline gap-2 text-title font-bold">
               {{ t('cards.library.title') }}
@@ -99,9 +96,9 @@ onBeforeUnmount(() => window.removeEventListener('keydown', onKey, true))
             </button>
           </header>
 
-          <div class="min-h-0 overflow-y-auto bg-canvas/60 px-5 py-6 sm:px-7">
-            <div v-if="shown.length" class="grid grid-cols-[repeat(auto-fill,minmax(220px,1fr))] gap-4">
-              <IndexCard v-for="c in shown" :key="c.id" :card="c" class="catalog-card" />
+          <div class="min-h-0 overflow-y-auto bg-canvas/60 p-4 sm:p-5">
+            <div v-if="shown.length" class="flex flex-col gap-3">
+              <IndexCard v-for="c in shown" :key="c.id" :card="c" />
             </div>
             <p v-else class="py-16 text-center text-secondary text-ink-3">
               {{
@@ -114,16 +111,3 @@ onBeforeUnmount(() => window.removeEventListener('keydown', onKey, true))
     </Transition>
   </Teleport>
 </template>
-
-<style scoped>
-.catalog-card {
-  transition:
-    translate 0.2s var(--ease-soft),
-    box-shadow 0.2s var(--ease-soft);
-}
-
-.catalog-card:hover,
-.catalog-card:focus-visible {
-  translate: 0 -2px;
-}
-</style>
