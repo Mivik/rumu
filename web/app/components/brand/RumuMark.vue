@@ -46,8 +46,12 @@ const UMU =
 </template>
 
 <style scoped>
+/* The gap is wider than the dash so the hidden start state leaves no dash
+ * touching the path: a 1:1 pattern starts a dash exactly at the path's end,
+ * and the round cap renders that as a stray dot that pops out before the
+ * stroke begins drawing from the other end. */
 .mark-draw {
-  stroke-dasharray: 1 1;
+  stroke-dasharray: 1 2;
   animation: mark-draw 0.55s cubic-bezier(0.5, 0, 0.3, 1) both;
 }
 
@@ -55,10 +59,13 @@ const UMU =
   animation-delay: 0.06s;
 }
 
-/* The dot lands only after the line has written itself, so it never floats
- * ahead of the stroke at the right end of a half-drawn wordmark. */
+/* The dot wells up in place as the stroke reaches it — it sits midway along
+ * the UMU line, where the draw arrives at ~0.29 s. Growing from the centre
+ * keeps it from dropping in from above ahead of the line. */
 .mark-drop {
-  animation: mark-drop 0.42s cubic-bezier(0.34, 1.56, 0.64, 1) 0.62s both;
+  transform-box: fill-box;
+  transform-origin: center;
+  animation: mark-drop 0.4s cubic-bezier(0.34, 1.4, 0.64, 1) 0.27s both;
 }
 
 .mark-live {
@@ -69,7 +76,7 @@ const UMU =
 
 @keyframes mark-draw {
   from {
-    stroke-dashoffset: 1;
+    stroke-dashoffset: 1.01;
   }
   to {
     stroke-dashoffset: 0;
@@ -79,14 +86,14 @@ const UMU =
 @keyframes mark-drop {
   from {
     opacity: 0;
-    transform: translateY(-28px);
+    transform: scale(0.3);
   }
-  60% {
+  40% {
     opacity: 1;
   }
   to {
     opacity: 1;
-    transform: translateY(0);
+    transform: scale(1);
   }
 }
 
