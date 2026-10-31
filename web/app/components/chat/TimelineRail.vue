@@ -10,8 +10,10 @@
 // Pointing at the rail opens a picker wheel beside the pointer: prompts on a
 // drum, the one nearest the pointer at the front and highlighted. Moving along
 // the rail turns the drum; clicking jumps to the front one. Inside the wheel
-// the drum holds still — click a row or scroll to turn it. On touch, press and
-// slide to scrub; lifting jumps.
+// the drum holds still — click a row or scroll to turn it. On touch there is
+// no hover to hold the wheel open, so a tap opens it and leaves it pinned:
+// press and slide to scrub, swipe the drum to turn it, tap a row to jump, and
+// a tap anywhere outside the rail dismisses it.
 //
 // Drag the viewport stretch to scroll (a tap jumps); the mouse wheel scrolls
 // the conversation; Alt+↑/↓ step between prompts anywhere, and ↑/↓ + Enter
@@ -24,7 +26,7 @@ import { isBusy, timeline } from '../../lib/store'
 import type { TimelineUserEntry } from '../../lib/store'
 import { preview } from '../../lib/util'
 import { contentSegments } from '../../lib/attachments'
-import type { Node } from '../../lib/types'
+import type { Node as RumuNode } from '../../lib/types'
 
 // The scroller, the content column and the composer arrive as getters
 // (ChatView's template refs), not elements: passing a template ref straight
@@ -104,7 +106,7 @@ const dragging = ref(false)
  *  of the text (their count stands in for an image-only prompt). The
  *  `[image: …]` placeholders belong to text-only readers, not the wheel. */
 function promptLabel(e: TimelineUserEntry): string {
-  const content = (e.node.body as Extract<Node['body'], { type: 'user' }>).content
+  const content = (e.node.body as Extract<RumuNode['body'], { type: 'user' }>).content
   const text = preview(
     contentSegments(content)
       .map((seg) => (seg.type === 'text' ? seg.text : ''))
@@ -299,6 +301,9 @@ const wheelPos = ref(0)
 const wheelY = ref(0)
 /** The pointer is over the wheel: the drum holds still under it. */
 const inWheel = ref(false)
+/** A touch opened the wheel: it stays until a tap outside (no hover to hold
+ *  it, and lifting the finger must not jump blindly). */
+let touchPinned = false
 
 let openTimer: ReturnType<typeof setTimeout> | undefined
 let closeTimer: ReturnType<typeof setTimeout> | undefined
@@ -361,6 +366,7 @@ function closeWheel(): void {
   clearTimeout(snapTimer)
   wheelOpen.value = false
   inWheel.value = false
+  touchPinned = false
 }
 
 function pick(i: number): void {
@@ -405,6 +411,7 @@ function onWheelEnter(): void {
 function onWheelLeave(): void {
   inWheel.value = false
   cancelTimers()
+  if (touchPinned) return
   closeTimer = setTimeout(closeWheel, CLOSE_GRACE)
 }
 
@@ -414,6 +421,62 @@ function onWheelScroll(e: WheelEvent): void {
   wheelPos.value = clampPos(wheelPos.value + dy / WHEEL_ROW_DELTA)
   clearTimeout(snapTimer)
   snapTimer = setTimeout(() => (wheelPos.value = Math.round(wheelPos.value)), WHEEL_SNAP)
+}
+
+/** A touch swipe on the drum: which pointer, where it started, and whether it
+ *  moved far enough to be a turn rather than a row tap. */
+let dragPointer: number | null = null
+let dragFromY = 0
+let dragFromPos = 0
+let dragMoved = false
+
+/** Touch has no wheel to scroll, so a vertical swipe on the drum turns it.
+ *  The window listeners follow the finger past the wheel's edge; lifting
+ *  settles on the nearest row. */
+function onWheelDown(e: PointerEvent): void {
+  if (e.pointerType === 'mouse' || !e.isPrimary) return
+  cancelTimers()
+  clearTimeout(snapTimer)
+  inWheel.value = true
+  dragPointer = e.pointerId
+  dragFromY = e.clientY
+  dragFromPos = wheelPos.value
+  dragMoved = false
+  window.addEventListener('pointermove', onWheelMove)
+  window.addEventListener('pointerup', onWheelUp)
+  window.addEventListener('pointercancel', onWheelUp)
+}
+
+function onWheelMove(e: PointerEvent): void {
+  if (e.pointerId !== dragPointer) return
+  const dy = dragFromY - e.clientY
+  if (!dragMoved) {
+    if (Math.abs(dy) < DRAG_SLOP) return
+    dragMoved = true
+  }
+  wheelPos.value = clampPos(dragFromPos + dy / WHEEL_ROW_DELTA)
+}
+
+function onWheelUp(e: PointerEvent): void {
+  if (e.pointerId !== dragPointer) return
+  endWheelDrag()
+  if (dragMoved) wheelPos.value = Math.round(wheelPos.value)
+}
+
+function endWheelDrag(): void {
+  dragPointer = null
+  window.removeEventListener('pointermove', onWheelMove)
+  window.removeEventListener('pointerup', onWheelUp)
+  window.removeEventListener('pointercancel', onWheelUp)
+}
+
+/** A row's click picks it, unless it is the tail of a swipe on the drum. */
+function pickRow(i: number): void {
+  if (dragMoved) {
+    dragMoved = false
+    return
+  }
+  pick(i)
 }
 
 // ---- the strip: hover / click / scrub ----
@@ -433,7 +496,7 @@ function onStripEnter(e: PointerEvent): void {
 
 function onStripLeave(): void {
   railHover.value = false
-  if (scrubbing) return
+  if (scrubbing || touchPinned) return
   cancelTimers()
   closeTimer = setTimeout(closeWheel, CLOSE_GRACE)
 }
@@ -447,6 +510,7 @@ function onStripDown(e: PointerEvent): void {
   swallowClick = false
   if (e.pointerType === 'mouse' || !e.isPrimary) return
   scrubbing = true
+  touchPinned = true
   ;(e.currentTarget as HTMLElement).setPointerCapture(e.pointerId)
   follow(trackY(e))
   openWheel()
@@ -455,8 +519,9 @@ function onStripDown(e: PointerEvent): void {
 function onStripUp(): void {
   if (!scrubbing) return
   scrubbing = false
+  // A touch leaves the wheel open rather than jumping where the finger left
+  // it: tap a row to jump, or tap outside to dismiss.
   swallowClick = true
-  pick(hot.value)
 }
 
 function onStripCancel(): void {
@@ -481,7 +546,21 @@ function onStripScroll(e: WheelEvent): void {
   sc.scrollBy({ top: e.deltaMode === 1 ? e.deltaY * 16 : e.deltaY })
 }
 
-// ---- the viewport handle: drag to scroll, tap to jump ----
+/** A touch-pinned wheel is dismissed by a press anywhere outside the rail
+ * (the strip or the wheel; a row's own click then owns the jump). */
+function onDocPointerDown(e: PointerEvent): void {
+  if (!touchPinned) return
+  const target = e.target as Node
+  if (layerEl.value?.contains(target)) return
+  closeWheel()
+}
+
+watch(wheelOpen, (v) => {
+  if (v) document.addEventListener('pointerdown', onDocPointerDown, true)
+  else document.removeEventListener('pointerdown', onDocPointerDown, true)
+})
+
+// ---- the viewport handle: drag to scroll, tap to jump (mouse) / open (touch) ----
 
 /** Track point → scroll-content position. */
 function unmap(y: number): number {
@@ -490,7 +569,8 @@ function unmap(y: number): number {
 }
 
 /** Past the slop, scrollTop follows the pointer 1:1 in track space; a press
- * that never moves is a click (jump to the nearest prompt). */
+ * that never moves is a click. A mouse click jumps to the nearest prompt; a
+ * touch tap pins the wheel, exactly as a tap on the rail beside the handle. */
 function onBoxDown(e: PointerEvent): void {
   const sc = scrollEl.value
   if (!sc || !layerEl.value) return
@@ -511,7 +591,15 @@ function onBoxDown(e: PointerEvent): void {
     sc.scrollTop = Math.max(0, Math.min(S - C, unmap(y) - grab))
   }
   const up = (ev: PointerEvent): void => {
-    if (!dragging.value && ev.type === 'pointerup') pick(nearestAt(trackY(ev)))
+    if (!dragging.value && ev.type === 'pointerup') {
+      if (ev.pointerType === 'mouse') {
+        pick(nearestAt(trackY(ev)))
+      } else {
+        touchPinned = true
+        follow(trackY(ev))
+        openWheel()
+      }
+    }
     dragging.value = false
     el.removeEventListener('pointermove', move)
     el.removeEventListener('pointerup', up)
@@ -546,7 +634,9 @@ function onStripKey(e: KeyboardEvent): void {
 
 function onStripBlur(): void {
   railFocus.value = false
-  if (!railHover.value && !inWheel.value) closeWheel()
+  // A touch-pinned wheel outlives focus changes (tapping a row moves focus);
+  // only the outside press or Escape dismisses it.
+  if (!railHover.value && !inWheel.value && !touchPinned) closeWheel()
 }
 
 /**
@@ -588,6 +678,8 @@ onMounted(() => window.addEventListener('keydown', onKeydown))
 
 onBeforeUnmount(() => {
   window.removeEventListener('keydown', onKeydown)
+  document.removeEventListener('pointerdown', onDocPointerDown, true)
+  endWheelDrag()
   resize?.disconnect()
   scrollEl.value?.removeEventListener('scroll', onScrollSync)
   cancelTimers()
@@ -677,6 +769,7 @@ onBeforeUnmount(() => {
           :style="{ top: `${wheelTop}px`, height: `${WHEEL_H}px` }"
           @pointerenter="onWheelEnter"
           @pointerleave="onWheelLeave"
+          @pointerdown="onWheelDown"
           @wheel.prevent="onWheelScroll"
         >
           <span aria-hidden="true" class="tl-wheel-band" :style="{ height: `${ITEM_H}px` }" />
@@ -690,7 +783,7 @@ onBeforeUnmount(() => {
               :class="{ 'is-hot': r.k === frontK, 'is-cur': r.d.i === currentPrompt }"
               :style="{ ...r.style, height: `${ITEM_H}px`, marginTop: `${-ITEM_H / 2}px` }"
               :title="r.d.label"
-              @click="pick(r.d.i)"
+              @click="pickRow(r.d.i)"
             >
               <span class="min-w-0 flex-1 truncate">{{ r.d.label || t('chat.timeline.emptyPrompt') }}</span>
               <span class="tl-wheel-num">{{ r.k + 1 }}</span>
