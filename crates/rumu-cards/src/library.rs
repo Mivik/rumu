@@ -57,6 +57,7 @@ pub fn card_infos(store: &FsCardStore) -> Result<Vec<CardInfo>> {
                 keywords,
                 body: c.body,
                 revision: c.revision,
+                meta: c.meta,
             }
         })
         .collect())
@@ -133,19 +134,45 @@ mod tests {
     }
 
     #[test]
-    fn card_infos_carry_keywords() {
+    fn card_infos_carry_frontmatter() {
         let dir = tempfile::tempdir().unwrap();
-        let home = dir.path();
-        let store = FsCardStore::home(home);
-        write_card(
-            &store,
-            &parse_card(
-                "k",
-                "---\ntitle: K\nkeywords: [deploy, rollout]\n---\nbody\n",
-            ),
-        )
-        .unwrap();
+        let store = FsCardStore::home(dir.path());
+        let card = parse_card(
+            "k",
+            "---\ntitle: K\ndescription: A deployment guide\nkeywords: [deploy, rollout]\n\
+             scope: [proj, 'proj:src/**']\npriority: 0\nactive: false\nextra: null\n\
+             owner: {team: platform}\n---\nbody\n",
+        );
+        write_card(&store, &card).unwrap();
         let infos = card_infos(&store).unwrap();
         assert_eq!(infos[0].keywords, ["deploy", "rollout"]);
+        assert_eq!(infos[0].description.as_deref(), Some("A deployment guide"));
+        assert_eq!(infos[0].meta, card.meta);
+        assert_eq!(infos[0].revision, card.revision);
+        let value = serde_json::to_value(&infos[0]).unwrap();
+        assert_eq!(
+            value["meta"]["scope"],
+            serde_json::json!(["proj", "proj:src/**"])
+        );
+        assert_eq!(value["meta"]["priority"], 0);
+        assert_eq!(value["meta"]["active"], false);
+        assert!(value["meta"]["extra"].is_null());
+        assert_eq!(value["meta"]["owner"]["team"], "platform");
+    }
+
+    #[test]
+    fn card_infos_omit_empty_frontmatter() {
+        let dir = tempfile::tempdir().unwrap();
+        let store = FsCardStore::home(dir.path());
+        write_card(&store, &parse_card("plain", "# Title\n- Summary\n")).unwrap();
+        let infos = card_infos(&store).unwrap();
+        assert_eq!(infos[0].description.as_deref(), Some("Summary"));
+        assert!(infos[0].meta.is_empty());
+        assert!(
+            serde_json::to_value(&infos[0])
+                .unwrap()
+                .get("meta")
+                .is_none()
+        );
     }
 }

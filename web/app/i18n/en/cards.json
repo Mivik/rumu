@@ -24,7 +24,10 @@
     "deleted": "This card was deleted; below is the version this conversation saw.",
     "asSeen": "As seen here",
     "current": "Current",
-    "showInTimeline": "Show in conversation",
+    "details": "Details",
+    "scope": "Scope",
+    "path": "Path",
+    "revision": "Revision",
     "olderSeen": "This conversation saw an earlier version."
   },
   "library": {

@@ -522,18 +522,6 @@
     transform: scaleY(1.7);
   }
 
-  /* a card's text (CardDrawer): the card face, a touch more leading for the
-   * serif; code inside stays mono */
-  .md.card-face {
-    font-family: var(--font-card);
-    font-size: 14px;
-    line-height: 1.7;
-  }
-
-  .md.card-face :is(h1, h2, h3, h4) {
-    font-weight: 600;
-  }
-
   /* sentence-case section headings in side panels */
   .section-title {
     padding-inline: 12px;

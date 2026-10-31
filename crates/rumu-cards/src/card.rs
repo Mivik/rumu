@@ -26,6 +26,9 @@ pub struct CardInfo {
     pub keywords: Vec<String>,
     pub body: String,
     pub revision: String,
+    /// Parsed frontmatter, including scope and user-defined fields.
+    #[serde(default, skip_serializing_if = "Map::is_empty")]
+    pub meta: Map<String, Value>,
 }
 
 /// One loaded card: parsed frontmatter + body. The raw frontmatter mapping is
