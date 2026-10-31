@@ -1,16 +1,17 @@
 <script setup lang="ts">
-// Left column, straight on the canvas: the wordmark with the language key
-// beside it, the new-session button, the card library (rumu's memory, opened
-// as the CardCatalog), the sessions (grouped Today / Earlier) and, at the
-// foot, the connection status.
+// Left column: the wordmark with the language key beside it, the new-session
+// button, the card library (rumu's memory, opened as the CardCatalog), the
+// sessions (grouped Today / Earlier) and, at the foot, the connection status.
+// Below lg it is the drawer; at lg it is the desk's second sheet of paper
+// (the card's edge lives on the <aside> in app.vue).
 //
-// Alignment: the column pads 12px; rows and buttons span it, and every line
-// of text starts 12px further in, at 24px.
+// Alignment: the column pads 12px; rows and buttons add 12px more, so every
+// line of text starts 24px in from the card's edge on both sides.
 // The wordmark (RumuMark) breathes while a turn runs, goes hollow when the
 // connection drops, and doubles as the way home: clicking it returns to the
 // landing page, as does the new-session button — the first prompt typed there
-// starts the session. The open session is a bordered sheet of paper; the
-// rest are plain lines with their last activity time.
+// starts the session. The open session is a bordered sheet of paper on this
+// one; the rest are plain lines with their last activity time.
 import { computed } from 'vue'
 import { LOCALE_LABELS, SUPPORTED_LOCALES, locale, setLocale, t } from '../i18n'
 import type { Locale } from '../i18n'
@@ -78,7 +79,7 @@ const rows = computed<Row[]>(() => {
 
 <template>
   <aside class="flex min-h-0 min-w-0 flex-col px-3">
-    <div class="flex h-16 flex-none items-center gap-2 px-3">
+    <div class="flex h-16 flex-none items-center gap-2 pl-3 pr-1.5 lg:pr-3">
       <button
         class="flex items-center rounded-md transition duration-200 ease-soft hover:opacity-70 active:scale-[.97]"
         :title="presence.title"
@@ -98,7 +99,7 @@ const rows = computed<Row[]>(() => {
           {{ LOCALE_KEYS[otherLocale] }}
         </button>
         <button
-          class="icon-btn size-8 lg:hidden"
+          class="icon-btn -mr-2 size-8 lg:hidden"
           :title="t('chat.sidebar.close')"
           :aria-label="t('chat.sidebar.close')"
           @click="layout.sidebarOpen = false"
@@ -109,7 +110,7 @@ const rows = computed<Row[]>(() => {
     </div>
 
     <button
-      class="group/new flex w-full flex-none items-center gap-2.5 rounded-control border border-transparent px-3 py-2 text-left text-secondary text-ink-2 transition-colors duration-200 hover:bg-surface/60 hover:text-ink"
+      class="group/new flex w-full flex-none items-center gap-2.5 rounded-control border border-transparent py-2 pl-3 pr-1.5 text-left text-secondary text-ink-2 transition-colors duration-200 hover:bg-surface-2/60 hover:text-ink lg:pr-3"
       @click="home"
     >
       <span
@@ -121,7 +122,7 @@ const rows = computed<Row[]>(() => {
     </button>
 
     <button
-      class="mt-1.5 flex w-full flex-none items-center gap-2.5 rounded-control border border-transparent px-3 py-2 text-left text-secondary text-ink-2 transition-colors duration-200 hover:bg-surface/60 hover:text-ink"
+      class="mt-1.5 flex w-full flex-none items-center gap-2.5 rounded-control border border-transparent py-2 pl-3 pr-1.5 text-left text-secondary text-ink-2 transition-colors duration-200 hover:bg-surface-2/60 hover:text-ink lg:pr-3"
       @click="library"
     >
       <span class="flex size-5 flex-none items-center justify-center">
@@ -144,11 +145,11 @@ const rows = computed<Row[]>(() => {
         </div>
         <button
           v-else
-          class="flex w-full min-w-0 items-center gap-2 rounded-control border px-3 py-2 text-left text-secondary transition-[background-color,border-color,color,box-shadow] duration-200"
+          class="flex w-full min-w-0 items-center gap-2 rounded-control border py-2 pl-3 pr-1.5 text-left text-secondary transition-[background-color,border-color,color,box-shadow] duration-200 lg:pr-3"
           :class="
             r.s.id === state.sessionId
-              ? 'border-line bg-surface font-bold text-ink shadow-soft'
-              : 'border-transparent text-ink-2 hover:bg-surface/60 hover:text-ink'
+              ? 'border-line bg-surface-2 font-bold text-ink shadow-soft'
+              : 'border-transparent text-ink-2 hover:bg-surface-2/60 hover:text-ink'
           "
           :aria-current="r.s.id === state.sessionId ? 'page' : undefined"
           @click="pickSession(r.s.id)"
