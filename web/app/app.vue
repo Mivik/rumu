@@ -41,10 +41,10 @@ onBeforeUnmount(() => {
        of paper, given the rest of the desk. Everything about the open session
        (branches, cards in play, diagnostics) lives in that sheet's header;
        below lg the sidebar overlays the chat, leaving it alone on screen. -->
-  <div class="grid h-full grid-cols-1 lg:grid-cols-[264px_minmax(0,1fr)] lg:gap-x-3 lg:pr-4">
+  <div class="desk grid h-full grid-cols-1 lg:grid-cols-[264px_minmax(0,1fr)] lg:gap-x-3 lg:pr-4">
     <Sidebar
-      class="fixed inset-y-0 left-0 z-50 w-[min(86vw,300px)] border-r border-line-soft bg-canvas shadow-pop transition-transform duration-300 ease-soft lg:static lg:z-auto lg:w-auto lg:translate-x-0 lg:border-0 lg:bg-transparent lg:shadow-none"
-      :class="layout.sidebarOpen ? 'translate-x-0' : '-translate-x-full lg:translate-x-0'"
+      class="fixed inset-y-0 left-0 z-50 w-[min(86vw,300px)] border-r border-line-soft bg-canvas transition-transform duration-300 ease-soft lg:static lg:z-auto lg:w-auto lg:translate-x-0 lg:border-0 lg:bg-transparent lg:shadow-none"
+      :class="layout.sidebarOpen ? 'translate-x-0 shadow-pop' : '-translate-x-full lg:translate-x-0'"
       :inert="!layout.sidebarOpen && !lgUp ? '' : undefined"
       :aria-hidden="!layout.sidebarOpen && !lgUp ? 'true' : undefined"
     />

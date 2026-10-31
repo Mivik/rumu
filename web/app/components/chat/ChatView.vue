@@ -2,7 +2,8 @@
 // Center column, the one paper sheet on the canvas: header, the grouped
 // timeline, and the composer card. Entries come from the store's `timeline`
 // computed (user / context pills / assistant group); the content
-// column is capped at --col-max (main.css), centered.
+// column is capped at --col-max (main.css), centered. On phones and in
+// portrait the sheet drops its card edges and becomes the page (main.css).
 //
 // A prompt you just sent opens near the top of the sheet, with the rest of
 // the page left blank: the reply grows down into that blank rather than
