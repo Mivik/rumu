@@ -5,7 +5,7 @@
 // Below lg it is the drawer; at lg it is the desk's second sheet of paper
 // (the card's edge lives on the <aside> in app.vue).
 //
-// Alignment: the column pads 12px; rows and buttons add 12px more, so every
+// Alignment: the column pads 12px; session rows add 12px more, so every
 // line of text starts 24px in from the card's edge on both sides.
 // The wordmark (RumuMark) breathes while a turn runs, goes hollow when the
 // connection drops, and doubles as the way home: clicking it returns to the
@@ -110,19 +110,17 @@ const rows = computed<Row[]>(() => {
     </div>
 
     <button
-      class="group/new flex w-full flex-none items-center gap-2.5 rounded-control border border-transparent py-2 pl-3 pr-1.5 text-left text-secondary text-ink-2 transition-colors duration-200 hover:bg-surface-2/60 hover:text-ink lg:pr-3"
+      class="flex w-full flex-none items-center gap-2.5 rounded-control border border-transparent py-1.5 pl-2.5 pr-1.5 text-left text-secondary text-ink-2 transition-colors duration-200 hover:bg-surface-2/60 hover:text-ink lg:pr-3"
       @click="home"
     >
-      <span
-        class="flex size-5 flex-none items-center justify-center rounded-full bg-brand text-on-brand transition-transform duration-300 ease-soft group-hover/new:rotate-90"
-      >
-        <Icon name="plus" :size="12" :stroke="2.6" />
+      <span class="flex size-5 flex-none items-center justify-center">
+        <Icon name="plus" :size="16" />
       </span>
       {{ t('chat.sidebar.new') }}
     </button>
 
     <button
-      class="mt-1.5 flex w-full flex-none items-center gap-2.5 rounded-control border border-transparent py-2 pl-3 pr-1.5 text-left text-secondary text-ink-2 transition-colors duration-200 hover:bg-surface-2/60 hover:text-ink lg:pr-3"
+      class="mt-0.5 flex w-full flex-none items-center gap-2.5 rounded-control border border-transparent py-1.5 pl-2.5 pr-1.5 text-left text-secondary text-ink-2 transition-colors duration-200 hover:bg-surface-2/60 hover:text-ink lg:pr-3"
       @click="library"
     >
       <span class="flex size-5 flex-none items-center justify-center">
