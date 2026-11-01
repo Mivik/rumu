@@ -16,6 +16,7 @@ import DOMPurify from 'dompurify'
 import hljs from 'highlight.js/lib/core'
 import { marked } from 'marked'
 import { shallowRef } from 'vue'
+import { t } from '../i18n'
 import { INTERNAL_WORKSPACE } from './types'
 
 /** One chunk per grammar, fetched on first use. Core stays in the entry
@@ -112,6 +113,26 @@ function escapeHtml(s: string): string {
   return s.replace(/&/g, '&amp;').replace(/</g, '&lt;').replace(/>/g, '&gt;').replace(/"/g, '&quot;')
 }
 
+// Same strokes as Icon.vue's `copy` / `ok`; the click handler in the client
+// plugin toggles between them (and copies the fence's source).
+const SVG_OPEN =
+  '<svg width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true">'
+const COPY_ICON = `${SVG_OPEN}<rect x="9" y="9" width="10.5" height="10.5" rx="2"/><path d="M15 9V6.5A2.5 2.5 0 0 0 12.5 4h-6A2.5 2.5 0 0 0 4 6.5v6A2.5 2.5 0 0 0 6.5 15H9"/></svg>`
+const CHECK_ICON = `${SVG_OPEN}<path d="M5.5 13l4.2 4.2L18.5 8"/></svg>`
+
+/** A fence: the (highlighted) code plus its hover copy button. */
+function codeBlock(body: string, language?: string): string {
+  const label = escapeHtml(t('common.copyCode'))
+  return (
+    '<div class="md-code">' +
+    `<pre><code${language ? ` class="language-${language}"` : ''}>${body}</code></pre>` +
+    `<button type="button" class="md-copy" title="${label}" aria-label="${label}">` +
+    `<span class="md-copy-icon">${COPY_ICON}</span>` +
+    `<span class="md-copy-check">${CHECK_ICON}</span>` +
+    '</button></div>'
+  )
+}
+
 function renderCode(text: string, info: string | undefined): string {
   void grammarVersion.value // tracked: re-render when a grammar lands
 
@@ -120,13 +141,13 @@ function renderCode(text: string, info: string | undefined): string {
   const name = ALIASES[raw] ?? raw
   if (!name || !hljs.getLanguage(name)) {
     loadGrammar(name)
-    return `<pre><code>${escapeHtml(text)}</code></pre>`
+    return codeBlock(escapeHtml(text))
   }
   try {
     const body = hljs.highlight(text, { language: name, ignoreIllegals: true }).value
-    return `<pre><code class="language-${name}">${body}</code></pre>`
+    return codeBlock(body, name)
   } catch {
-    return `<pre><code>${escapeHtml(text)}</code></pre>`
+    return codeBlock(escapeHtml(text))
   }
 }
 

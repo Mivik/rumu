@@ -15,6 +15,8 @@
   "blocked": "已拦截",
   "truncated": "已截断",
   "copyFailed": "复制失败",
+  "copyCode": "复制代码",
+  "copiedCode": "已复制代码",
   "time": {
     "justNow": "刚刚",
     "minutesAgo": "{n} 分钟前",

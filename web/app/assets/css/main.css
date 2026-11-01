@@ -974,6 +974,66 @@
     background: none;
   }
 
+  /* ---- fence wrapper + copy affordance. The wrapper owns the block margin
+   * so the button can sit in the top-right corner of the code surface. ---- */
+
+  .md .md-code {
+    position: relative;
+    margin: 0.5em 0;
+  }
+
+  .md .md-code > pre {
+    margin: 0;
+  }
+
+  .md-copy {
+    position: absolute;
+    top: 6px;
+    right: 6px;
+    display: inline-flex;
+    align-items: center;
+    justify-content: center;
+    width: 22px;
+    height: 22px;
+    border-radius: var(--radius-xs);
+    background: var(--surface-2);
+    color: var(--ink-3);
+    transition:
+      opacity 0.15s,
+      background-color 0.15s,
+      color 0.15s;
+  }
+
+  /* pointer devices: quiet until the block is hovered; touch keeps it shown */
+  @media (hover: hover) {
+    .md-copy {
+      opacity: 0;
+    }
+
+    .md-code:hover .md-copy,
+    .md-copy:focus-visible {
+      opacity: 1;
+    }
+  }
+
+  .md-copy:hover {
+    background: var(--line);
+    color: var(--ink);
+  }
+
+  .md-copy-check {
+    display: none;
+  }
+
+  .md-copy[data-copied] .md-copy-icon {
+    display: none;
+  }
+
+  .md-copy[data-copied] .md-copy-check {
+    display: block;
+    color: var(--pine);
+  }
+
   /* ---- syntax highlighting (highlight.js token classes). The palette is
    * the semantic set — coral keywords, pine strings, violet numbers, teal
    * titles, blue attributes, grey comments — so dark mode needs no extra
