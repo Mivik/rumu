@@ -62,7 +62,8 @@ Saving cards. Save what will matter in later conversations: the user's preferenc
 corrections, project facts and conventions, decisions with their reasons, procedures that worked. \
 Don't save the state of the current task or anything easily re-derived from the files. `search` \
 before creating a card, and update an existing one rather than adding a near-duplicate. Keep one \
-topic per card, grouped with related cards under a shared directory.\n\n\
+topic per card, grouped with related cards under a shared directory. Name ids with short \
+English kebab-case segments, such as `user/profile` or `user/dev-environment`.\n\n\
 Every card's frontmatter has a `title`, a one-sentence `description` (shown in the catalog) and \
 `keywords:` — the terms that should bring it to mind, as a YAML list (`keywords: [deploy, \
 production]`); keywords, title, description and body are what message matching scores. Give \
