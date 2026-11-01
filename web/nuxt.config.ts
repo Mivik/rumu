@@ -17,7 +17,7 @@ export default defineNuxtConfig({
   components: { dirs: [] },
 
   css: [
-    '@fontsource-variable/nunito',
+    '@fontsource-variable/red-hat-text',
     '@fontsource-variable/literata/opsz.css',
     '@fontsource-variable/jetbrains-mono',
     '~/assets/css/main.css',

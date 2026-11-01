@@ -11,7 +11,7 @@
  * cleared: only the names below exist (bg-surface, text-ink-2, text-meta,
  * rounded-card, shadow-soft …), which keeps one-off values out of components.
  *
- * Type: Nunito for UI and body text; Literata for knowledge headings,
+ * Type: Red Hat Text for UI and body text; Literata for knowledge headings,
  * paths and inline references; JetBrains Mono for code and tool I/O.
  *
  * Motifs: paper on a grainy desk, the coral dot (rumu's
@@ -131,10 +131,10 @@
   --radius-*: initial;
   --shadow-*: initial;
 
-  /* Nunito for UI and body text; Literata for knowledge headings and paths;
-   * JetBrains Mono for code & tool I/O. CJK uses the system han faces. */
+  /* Red Hat Text for UI and body text; Literata for knowledge headings and
+   * paths; JetBrains Mono for code & tool I/O. CJK uses the system han faces. */
   --font-sans:
-    'Nunito Variable', 'PingFang SC', 'HarmonyOS Sans SC', 'Source Han Sans SC', 'Noto Sans CJK SC',
+    'Red Hat Text Variable', 'PingFang SC', 'HarmonyOS Sans SC', 'Source Han Sans SC', 'Noto Sans CJK SC',
     'Microsoft YaHei', system-ui, sans-serif;
   --font-card:
     'Literata Variable', 'Source Han Serif SC', 'Noto Serif CJK SC', 'Songti SC', 'SimSun', Georgia, serif;
