@@ -27,8 +27,8 @@ export function closeCatalog(): void {
   state.catalogOpen = false
 }
 
-export function openDrawer(cardId: string, useNodeId?: string): void {
-  state.drawer = { cardId, useNodeId }
+export function openDrawer(cardId: string, useRef?: string): void {
+  state.drawer = { cardId, useRef }
 }
 
 export function closeDrawer(): void {

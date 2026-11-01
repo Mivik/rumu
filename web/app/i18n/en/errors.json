@@ -1,5 +1,6 @@
 {
   "listingSessions": "Couldn't load sessions",
+  "listingCards": "Couldn't refresh cards",
   "loadingSession": "Couldn't open session",
   "listingTasks": "Couldn't load tasks",
   "killing": "Couldn't kill {id}",

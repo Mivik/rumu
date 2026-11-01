@@ -1,5 +1,6 @@
 {
   "listingSessions": "加载会话列表失败",
+  "listingCards": "刷新卡片失败",
   "loadingSession": "打开会话失败",
   "listingTasks": "加载任务失败",
   "killing": "终止 {id} 失败",

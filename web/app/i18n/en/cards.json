@@ -21,14 +21,15 @@
     "label": "knowledge card",
     "close": "Close (Esc)",
     "closeAria": "Close",
-    "deleted": "This card was deleted; below is the version this conversation saw.",
-    "asSeen": "As seen here",
+    "deleted": "This card was deleted.",
+    "deletedSeen": "This card was deleted; below is the version seen at the time.",
+    "asSeen": "Seen then",
     "current": "Current",
     "details": "Details",
     "scope": "Scope",
     "path": "Path",
     "revision": "Revision",
-    "olderSeen": "This conversation saw an earlier version."
+    "olderSeen": "The version seen then is not the latest."
   },
   "library": {
     "title": "Card library"

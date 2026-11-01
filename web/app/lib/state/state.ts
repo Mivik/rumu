@@ -132,8 +132,9 @@ const initial = {
 
   /** The card catalog (the whole library) is open over the chat. */
   catalogOpen: false,
-  /** Card drawer (opened by any card chip): card ref (library-qualified) + optional use node. */
-  drawer: null as { cardId: string; useNodeId?: string } | null,
+  /** Card drawer (opened by any card chip): card id + the use it was opened
+   * from (a note node id or a tool call id; absent for the library). */
+  drawer: null as { cardId: string; useRef?: string } | null,
   /** The image shown full-size (opened by any thumbnail). */
   lightbox: null as LightboxImage | null,
 }

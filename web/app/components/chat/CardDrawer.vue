@@ -2,7 +2,8 @@
 // A content-sized reader. Historical text never borrows live metadata.
 import { computed, nextTick, onBeforeUnmount, ref, watch } from 'vue'
 import { t } from '../../i18n'
-import { cardById, cardUsesOnPath, useIsCurrent } from '../../lib/cards'
+import { cardById, cardUsesOnPath, parseCardView, useIsCurrent } from '../../lib/cards'
+import type { CardUse, CardView } from '../../lib/cards'
 import { closeDrawer, state } from '../../lib/store'
 import { renderMarkdown } from '../../lib/markdown'
 import Icon from '../ui/Icon.vue'
@@ -13,9 +14,11 @@ const reader = ref<HTMLElement | null>(null)
 const drawer = ref(state.drawer)
 const path = computed(() => drawer.value?.cardId ?? '')
 const card = computed(() => cardById.value.get(path.value) ?? null)
-const selectedUse = computed(() => {
+const selectedUse = computed<CardUse | null>(() => {
+  const refId = drawer.value?.useRef
+  if (!refId) return null // a library open: always the live card
   const uses = cardUsesOnPath.value.get(path.value) ?? []
-  return uses.find((u) => u.node.id === drawer.value?.useNodeId) ?? uses.at(-1) ?? null
+  return uses.find((u) => u.callId === refId || u.node.id === refId) ?? null
 })
 const changed = computed(
   () => !!card.value && !!selectedUse.value && !useIsCurrent(card.value, selectedUse.value),
@@ -26,21 +29,33 @@ watch(
   (d) => {
     if (!d) return
     drawer.value = d
-    tab.value = d.useNodeId ? 'snapshot' : 'current'
+    tab.value = d.useRef ? 'snapshot' : 'current'
     reader.value?.scrollTo(0, 0)
   },
   { immediate: true },
 )
 const snapshot = computed(() => !card.value || (changed.value && tab.value === 'snapshot'))
-const title = computed(
-  () =>
-    (snapshot.value ? selectedUse.value?.snapshot.match(/^#\s+([^\n]+)/)?.[1] : card.value?.title) ||
-    path.value.split('/').at(-1) ||
-    path.value,
-)
-const description = computed(() => (snapshot.value ? null : card.value?.description))
-const keywords = computed(() => (snapshot.value ? [] : (card.value?.keywords ?? [])))
-const meta = computed(() => (snapshot.value ? {} : (card.value?.meta ?? {})))
+const EMPTY_VIEW: CardView = { title: null, description: null, keywords: [], meta: {}, body: '' }
+const view = computed<CardView>(() => {
+  if (snapshot.value) {
+    const use = selectedUse.value
+    return use ? parseCardView(use.snapshot, use.kind === 'import') : EMPTY_VIEW
+  }
+  const c = card.value
+  return c
+    ? {
+        title: c.title ?? null,
+        description: c.description ?? null,
+        keywords: c.keywords ?? [],
+        meta: c.meta ?? {},
+        body: c.body,
+      }
+    : EMPTY_VIEW
+})
+const title = computed(() => view.value.title || path.value.split('/').at(-1) || path.value)
+const description = computed(() => view.value.description)
+const keywords = computed(() => view.value.keywords)
+const meta = computed(() => view.value.meta)
 const scope = computed(() => {
   const value = meta.value.scope
   return typeof value === 'string'
@@ -53,14 +68,7 @@ const fields = computed(() =>
   Object.entries(meta.value).filter(([key]) => !['title', 'description', 'keywords', 'scope'].includes(key)),
 )
 const revision = computed(() => (snapshot.value ? selectedUse.value?.rev : card.value?.revision))
-const shownHtml = computed(() =>
-  renderMarkdown(
-    snapshot.value
-      ? (selectedUse.value?.snapshot ?? '').replace(/^#\s+[^\n]*\n?/, '')
-      : (card.value?.body ?? ''),
-    { breaks: false, cardId: path.value },
-  ),
-)
+const shownHtml = computed(() => renderMarkdown(view.value.body, { breaks: false, cardId: path.value }))
 const formatValue = (value: unknown): string =>
   typeof value === 'string' ? value : JSON.stringify(value, null, 2)
 
@@ -119,7 +127,9 @@ function onBackdrop(e: MouseEvent): void {
             <span v-for="(entry, i) in scope" :key="i" class="font-mono">{{ entry }}</span>
           </div>
         </header>
-        <p v-if="!card" class="mt-4 text-meta text-ink-3">{{ t('cards.drawer.deleted') }}</p>
+        <p v-if="!card" class="mt-4 text-meta text-ink-3">
+          {{ t(selectedUse ? 'cards.drawer.deletedSeen' : 'cards.drawer.deleted') }}
+        </p>
         <div v-else-if="changed" class="mt-4 flex flex-wrap items-center gap-2 text-meta text-ink-3">
           <span>{{ t('cards.drawer.olderSeen') }}</span>
           <button

@@ -11,6 +11,7 @@
 // It mirrors the derivation in crates/rumu-cards/src/usage.rs.
 
 import { computed } from 'vue'
+import { parse as parseYaml } from 'yaml'
 import type { Card, CardImport, CardUpdate, CardUse as CardUseRecord, Content, Node } from './types'
 import { callsOnPath, pathNodes, state } from './store'
 
@@ -54,6 +55,81 @@ export function revertOf(content: Content | null | undefined): { lesson: string 
 /** The current render of a card (`# {title||id}\n{body}`). */
 export function renderCard(card: Pick<Card, 'id' | 'title' | 'body'>): string {
   return `# ${card.title || card.id}\n${card.body}`
+}
+
+/** A card's editable view split into the fields its reader shows. */
+export interface CardView {
+  title: string | null
+  description: string | null
+  keywords: string[]
+  meta: Record<string, unknown>
+  body: string
+}
+
+/** Split leading `---\n…\n---\n` YAML frontmatter off a card view. Mirrors
+ * `split_frontmatter` in crates/rumu-cards/src/card.rs. */
+function splitFrontmatter(text: string): { yaml: string; body: string } | null {
+  if (!text.startsWith('---\n')) return null
+  const rest = text.slice(4)
+  let start = 0
+  while (start <= rest.length) {
+    const end = rest.indexOf('\n', start)
+    const line = end < 0 ? rest.slice(start) : rest.slice(start, end)
+    if (line.trimEnd() === '---') {
+      return { yaml: rest.slice(0, start), body: end < 0 ? '' : rest.slice(end + 1) }
+    }
+    if (end < 0) break
+    start = end + 1
+  }
+  return null
+}
+
+/** Frontmatter `keywords:` — an array, or one comma-separated string. */
+function keywordsOf(value: unknown): string[] {
+  const list = typeof value === 'string' ? value.split(/[,，]/) : Array.isArray(value) ? value : []
+  return list
+    .filter((k): k is string => typeof k === 'string')
+    .map((k) => k.trim())
+    .filter(Boolean)
+}
+
+/**
+ * Parse one recorded card snapshot. Tool read/write snapshots are the
+ * editable view (YAML frontmatter + body); an auto-import snapshot is the
+ * rendered `# Title\nbody` form (`rendered`).
+ */
+export function parseCardView(text: string, rendered = false): CardView {
+  const empty: CardView = { title: null, description: null, keywords: [], meta: {}, body: text }
+  const split = splitFrontmatter(text)
+  let meta: Record<string, unknown> = {}
+  let body = text
+  if (split) {
+    body = split.body
+    try {
+      const parsed: unknown = parseYaml(split.yaml)
+      if (parsed && typeof parsed === 'object' && !Array.isArray(parsed)) {
+        meta = parsed as Record<string, unknown>
+      }
+    } catch {
+      return empty // a malformed historical view: show it as written
+    }
+  }
+  let title = typeof meta.title === 'string' ? meta.title : null
+  if (rendered) {
+    const nl = body.indexOf('\n')
+    const heading = /^#\s+(.+?)\s*$/.exec(nl < 0 ? body : body.slice(0, nl))
+    if (heading) {
+      title ??= heading[1]!
+      body = nl < 0 ? '' : body.slice(nl + 1)
+    }
+  }
+  return {
+    title,
+    description: typeof meta.description === 'string' ? meta.description : null,
+    keywords: keywordsOf(meta.keywords),
+    meta,
+    body,
+  }
 }
 
 /** Does a use still match the current card content? */

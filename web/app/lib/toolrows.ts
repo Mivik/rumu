@@ -32,6 +32,8 @@ export interface ToolRowView {
   statusLabel: string
   /** Card id from a card read/write call, for the row's CardChip. */
   toolCardId: string | null
+  /** The call id of that card use (the drawer opens its exact snapshot). */
+  cardUseRef: string | null
   agentChild: Branch | null
   /** `agent` rows: the sub-agent asks for a clean context. */
   agentNoContext: boolean
@@ -296,6 +298,7 @@ export function toolRowView(row: ToolRowInfo): ToolRowView {
           ? t('tools.row.status.error')
           : t('tools.row.status.ok'),
     toolCardId,
+    cardUseRef: toolCardId && callId ? callId : null,
     agentChild,
     agentNoContext: name === 'agent' && agentNoContext(args),
     agentScope: name === 'agent' ? agentScope(args) : null,

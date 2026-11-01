@@ -4,13 +4,13 @@
 import type { Card } from '../../lib/types'
 import { openDrawer } from '../../lib/store'
 
-const props = withDefaults(defineProps<{ card: Card; useNodeId?: string; title?: string }>(), {
-  useNodeId: undefined,
+const props = withDefaults(defineProps<{ card: Card; useRef?: string; title?: string }>(), {
+  useRef: undefined,
   title: undefined,
 })
 
 function onClick(): void {
-  openDrawer(props.card.id, props.useNodeId)
+  openDrawer(props.card.id, props.useRef)
 }
 
 function tooltip(): string {

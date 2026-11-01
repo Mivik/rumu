@@ -21,6 +21,33 @@ export async function refreshLists(): Promise<void> {
   }
 }
 
+/** In-flight `card.list` refresh, so a burst of writes costs one request. */
+let cardsRefresh: Promise<void> | null = null
+let cardsDirty = false
+
+/** A card was written or changed behind the live card list: re-read it, so
+ * the drawer's "latest version" is actually the latest. A write landing
+ * while a refresh is in flight marks it dirty and runs one more pass. */
+export function refreshCards(): Promise<void> {
+  if (cardsRefresh) {
+    cardsDirty = true
+    return cardsRefresh
+  }
+  cardsRefresh = (async () => {
+    try {
+      do {
+        cardsDirty = false
+        state.cards = await rumu.request<Card[]>('card.list')
+      } while (cardsDirty)
+    } catch (err) {
+      toast('error', t('errors.listingCards'), (err as Error).message)
+    } finally {
+      cardsRefresh = null
+    }
+  })()
+  return cardsRefresh
+}
+
 /** Open a session. `history` decides what happens to the address bar: a pick
  * pushes `/s/<id>`, boot and popstate leave it alone, a failed boot replaces
  * its stale URL with the landing page. */

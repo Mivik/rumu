@@ -146,7 +146,7 @@ function liveTaskOutput(id: string | null): string {
           <CardChip
             v-if="v.toolCardId && cardsMap.get(v.toolCardId)"
             :card="cardsMap.get(v.toolCardId)!"
-            :use-node-id="v.row.result.id"
+            :use-ref="v.cardUseRef ?? undefined"
           />
           <span
             v-if="v.status === 'blocked'"

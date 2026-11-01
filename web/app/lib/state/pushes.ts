@@ -9,6 +9,7 @@ import type {
   CodeCallPush,
   HookFiredPush,
   LlmDeltaPush,
+  Node,
   NodeAppendedPush,
   PromptBlockedPush,
   PromptQueuedPush,
@@ -23,7 +24,7 @@ import type {
   WarningPush,
 } from '../types'
 import { MAX_DELTA_CHARS, MAX_TRACE, state } from './state'
-import { closeSession, openSession, refreshLists } from './sessions'
+import { closeSession, openSession, refreshCards, refreshLists } from './sessions'
 import { loadPath } from './tree'
 import { toast } from './ui'
 
@@ -33,8 +34,22 @@ let queuedSeq = 1
 /** Live tool/task output kept in memory (chars). */
 const MAX_LIVE_OUTPUT = 1_000_000
 
+/** Did this node change the card library on disk? A write/edit records a
+ * `card_use`; the memory hook records `card_update` notices for cards that
+ * changed elsewhere. Both make `state.cards` stale until re-read. */
+function cardChanged(node: Node): boolean {
+  if (node.body.type !== 'note') return false
+  const data = node.body.content.data
+  if (!data) return false
+  if (data.tag === 'memory.card_update') return true
+  if (data.tag !== 'card_use') return false
+  const op = (data.data as { op?: unknown }).op
+  return op === 'write' || op === 'edit'
+}
+
 function onNodeAppended(p: NodeAppendedPush): void {
   const { branch, node } = p
+  if (cardChanged(node)) void refreshCards()
   if (state.sessionId && node.session === state.sessionId) {
     state.nodes[node.id] = node
     // If the node extends the active branch's head, the path grows live.
