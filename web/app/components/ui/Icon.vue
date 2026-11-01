@@ -36,7 +36,7 @@ const paths: Record<string, string> = {
   down: '<path d="M6.5 9.5l5.5 5.5 5.5-5.5"/>',
   gauge:
     '<path d="M4.2 16.5a8 8 0 1 1 15.6 0"/><path d="M12 15l3.6-4.2"/><circle cx="12" cy="15.5" r="1.2"/>',
-  plus: '<path d="M12 5.5v13M5.5 12h13"/>',
+  plus: '<path d="M12 4v16M4 12h16"/>',
   send: '<path d="M12 19V5.5"/><path d="M6.5 11L12 5.5l5.5 5.5"/>',
   image:
     '<rect x="3.5" y="4.5" width="17" height="15" rx="2"/><circle cx="9" cy="9.5" r="1.5"/><path d="M5.5 16.8l4-4.2 3.2 3.2 2.8-2.8 3 3"/>',
