@@ -8,6 +8,7 @@ use rumu_cards::{card, library, usage};
 use rumu_core::{Cx, Effect, ToolError, ToolOutput, ToolResult};
 
 use super::WorkspacePlugin;
+use super::patch;
 use super::tools::{card_load_err, invalid_card_id, no_card_err, slice_lines};
 
 impl WorkspacePlugin {
@@ -85,10 +86,16 @@ impl WorkspacePlugin {
         let view = card::view_of(&new_card);
         let view_rev = card::view_rev_of(&view);
         let effect = record_card_use(cx, id, &new_card.revision, &view_rev, op);
+        // The UI diff is view → view: what the model read against what it wrote.
+        let patch = match &existing {
+            Some(cur) => patch::update(card::view_of(cur), view).await,
+            None => patch::create(),
+        };
         Ok(ToolOutput::ok(format!(
             "wrote cards/{id}.md (rev {}, view rev {view_rev})",
             new_card.revision
         ))
+        .with_data(&patch)
         .with_effect(effect))
     }
 

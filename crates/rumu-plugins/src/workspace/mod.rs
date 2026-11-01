@@ -16,11 +16,13 @@
 //!
 //! Layout: [`tools`] (the model-facing tools), [`cards`] (`@rumu:/cards`),
 //! [`session`] (`@rumu:/sessions`), [`agents`] (AGENTS.md injection),
-//! [`backend`] (local + ssh primitives).
+//! [`backend`] (local + ssh primitives), [`patch`] (the UI diff payload of
+//! `write`/`edit`).
 
 mod agents;
 pub(crate) mod backend;
 mod cards;
+mod patch;
 mod session;
 mod task;
 mod time;

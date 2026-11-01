@@ -16,7 +16,8 @@ use schemars::JsonSchema;
 use serde::Deserialize;
 use serde_json::{Value, json};
 
-use super::backend::{BackendError, ExecOutput, probe_uname};
+use super::backend::{BackendError, ExecOutput, is_not_found, probe_uname};
+use super::patch;
 use super::{WorkspacePlugin, usable_ctl_dir};
 use crate::Result;
 use rumu_core::Cx;
@@ -535,12 +536,24 @@ impl WorkspacePlugin {
                     return Err(e.with_effects(effects));
                 }
                 let backend = self.backend_for(&ws);
+                // The UI diff payload: a create when the file is absent, an
+                // update diffed against the previous content. Best effort —
+                // a read failure or non-UTF-8 bytes leave it undiffed.
+                let patch = match backend.read_bytes(&abs).await {
+                    Ok(previous) => match String::from_utf8(previous) {
+                        Ok(old) => patch::update(old, args.content.clone()).await,
+                        Err(_) => patch::undiffed(),
+                    },
+                    Err(e) if is_not_found(&e) => patch::create(),
+                    Err(_) => patch::undiffed(),
+                };
                 match backend.write_bytes(&abs, args.content.as_bytes()).await {
                     Ok(()) => Ok(ToolOutput::ok(format!(
                         "wrote {} ({} bytes)",
                         display(&ws, &abs),
                         args.content.len()
                     ))
+                    .with_data(&patch)
                     .with_effects(effects)),
                     Err(e) => {
                         Err(backend_err("write", Some(display(&ws, &abs)), e).with_effects(effects))
@@ -595,12 +608,16 @@ impl WorkspacePlugin {
                     }
                 };
                 match backend.write_bytes(&abs, new_text.as_bytes()).await {
-                    Ok(()) => Ok(ToolOutput::ok(format!(
-                        "edited {} ({n} replacement{})",
-                        display(&ws, &abs),
-                        if n == 1 { "" } else { "s" }
-                    ))
-                    .with_effects(effects)),
+                    Ok(()) => {
+                        let patch = patch::update(text, new_text).await;
+                        Ok(ToolOutput::ok(format!(
+                            "edited {} ({n} replacement{})",
+                            display(&ws, &abs),
+                            if n == 1 { "" } else { "s" }
+                        ))
+                        .with_data(&patch)
+                        .with_effects(effects))
+                    }
                     Err(e) => {
                         Err(backend_err("edit", Some(display(&ws, &abs)), e).with_effects(effects))
                     }
@@ -631,16 +648,17 @@ impl WorkspacePlugin {
                     Ok(x) => x,
                     Err(e) => return Err(ToolError::model(e)),
                 };
-                let out = self.card_write(id, &new_view, CardOp::Edit, cx).await?;
+                let mut out = self.card_write(id, &new_view, CardOp::Edit, cx).await?;
                 if out.is_error {
                     return Ok(out);
                 }
-                Ok(ToolOutput::ok(format!(
+                // Keep the write's diff payload; only the text is edit-specific.
+                out.content.text = format!(
                     "edited card `{}` ({n} replacement{})",
                     rumu_cards::card_uri(id),
                     if n == 1 { "" } else { "s" }
-                ))
-                .with_effects(out.effects))
+                );
+                Ok(out)
             }
         }
     }

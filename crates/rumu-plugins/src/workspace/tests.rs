@@ -247,6 +247,56 @@ async fn edit_refuses_non_utf8_files() {
     assert_eq!(std::fs::read(&path).unwrap(), [0xff, 0x00, 0x01]);
 }
 
+/// `write`/`edit` results carry the UI's diff payload; failures never do.
+#[tokio::test]
+async fn write_and_edit_carry_the_ui_patch() {
+    let dir = tempfile::tempdir().unwrap();
+    let (plugin, _host, cx, _home) = setup(dir.path(), false);
+
+    // A write to a new file is a create: no hunks (the UI renders the args).
+    let out = plugin
+        .call_tool("write", json!({ "path": "a.txt", "content": "one\ntwo\n" }), &cx)
+        .await
+        .unwrap();
+    let patch = out.content.decode::<patch::FilePatch>().unwrap();
+    assert_eq!(patch.kind, patch::PatchKind::Create);
+    assert!(patch.hunks.is_none());
+
+    // An overwrite is an update diffed against the previous content.
+    let out = plugin
+        .call_tool("write", json!({ "path": "a.txt", "content": "one\nTWO\n" }), &cx)
+        .await
+        .unwrap();
+    let patch = out.content.decode::<patch::FilePatch>().unwrap();
+    assert_eq!(patch.kind, patch::PatchKind::Update);
+    assert_eq!(patch.hunks.unwrap()[0].lines, [" one", "-two", "+TWO"]);
+
+    // An edit diffs its before/after texts.
+    let out = plugin
+        .call_tool(
+            "edit",
+            json!({ "path": "a.txt", "old_string": "one", "new_string": "ONE\n1" }),
+            &cx,
+        )
+        .await
+        .unwrap();
+    let patch = out.content.decode::<patch::FilePatch>().unwrap();
+    assert_eq!(patch.kind, patch::PatchKind::Update);
+    assert_eq!(patch.hunks.unwrap()[0].lines, ["-one", "+ONE", "+1", " TWO"]);
+
+    // A failed call never gets one.
+    let out = plugin
+        .call_tool(
+            "edit",
+            json!({ "path": "a.txt", "old_string": "nope", "new_string": "x" }),
+            &cx,
+        )
+        .await
+        .unwrap();
+    assert!(out.is_error);
+    assert!(out.content.data.is_none());
+}
+
 #[tokio::test]
 async fn read_write_edit_list_roundtrip() {
     let dir = tempfile::tempdir().unwrap();
@@ -1085,6 +1135,12 @@ async fn card_tools_read_write_validate_and_list() {
             .unwrap()
             .contains("v3")
     );
+    // A card edit carries its view diff for the UI, like a file edit.
+    let patch = out.content.decode::<patch::FilePatch>().unwrap();
+    assert_eq!(patch.kind, patch::PatchKind::Update);
+    let lines = &patch.hunks.unwrap()[0].lines;
+    assert!(lines.contains(&"-body v2".to_owned()), "{lines:?}");
+    assert!(lines.contains(&"+body v3".to_owned()), "{lines:?}");
 
     // Someone edits the file behind our back → mismatch error.
     std::fs::write(
@@ -1123,6 +1179,8 @@ async fn card_tools_read_write_validate_and_list() {
         .unwrap();
     assert!(!out.is_error, "{}", out.content.text);
     assert!(home.path().join("cards/new/card.md").is_file());
+    let patch = out.content.decode::<patch::FilePatch>().unwrap();
+    assert_eq!(patch.kind, patch::PatchKind::Create);
 
     let home = card_home();
     std::fs::write(
