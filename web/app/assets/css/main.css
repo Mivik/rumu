@@ -974,6 +974,77 @@
     background: none;
   }
 
+  /* ---- syntax highlighting (highlight.js token classes). The palette is
+   * the semantic set — coral keywords, pine strings, violet numbers, teal
+   * titles, blue attributes, grey comments — so dark mode needs no extra
+   * rules. ---- */
+
+  .md .hljs-comment,
+  .md .hljs-quote {
+    color: var(--ink-3);
+    font-style: italic;
+  }
+
+  .md .hljs-keyword,
+  .md .hljs-built_in,
+  .md .hljs-type,
+  .md .hljs-selector-tag,
+  .md .hljs-selector-class,
+  .md .hljs-selector-id,
+  .md .hljs-doctag,
+  .md .hljs-name {
+    color: var(--brand-strong);
+  }
+
+  .md .hljs-string,
+  .md .hljs-regexp,
+  .md .hljs-addition {
+    color: var(--pine);
+  }
+
+  .md .hljs-number,
+  .md .hljs-literal,
+  .md .hljs-symbol,
+  .md .hljs-bullet {
+    color: var(--memory);
+  }
+
+  .md .hljs-title,
+  .md .hljs-section,
+  .md .hljs-function {
+    color: var(--agent);
+  }
+
+  .md .hljs-attr,
+  .md .hljs-attribute,
+  .md .hljs-variable,
+  .md .hljs-template-variable,
+  .md .hljs-property,
+  .md .hljs-selector-attr,
+  .md .hljs-selector-pseudo {
+    color: var(--tool);
+  }
+
+  .md .hljs-meta,
+  .md .hljs-tag,
+  .md .hljs-punctuation,
+  .md .hljs-params,
+  .md .hljs-operator {
+    color: var(--ink-2);
+  }
+
+  .md .hljs-deletion {
+    color: var(--danger);
+  }
+
+  .md .hljs-strong {
+    font-weight: 700;
+  }
+
+  .md .hljs-emphasis {
+    font-style: italic;
+  }
+
   .md blockquote {
     padding: 0 12px;
     border-left: 3px solid color-mix(in srgb, var(--brand) 35%, var(--line));
