@@ -9,7 +9,6 @@
     "changed": "已变更",
     "workspace": "默认 {names}",
     "task": "任务 {id} · {status}",
-    "reverted": "已回退 · {text}",
     "moreCards": "{names}（{count} 张）",
     "catalogTitles": {
       "root": "卡片目录",

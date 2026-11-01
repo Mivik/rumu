@@ -247,9 +247,9 @@ watch(
   { flush: 'pre', immediate: true },
 )
 
-// A branch switch (the branch panel, the inline variant switcher) keeps the
-// sheet and your place in it: the path before the fork is not remounted, and
-// the swapped tail renders as history — an instant swap, no fade, no jump.
+// A variant switch (the inline switcher) keeps the sheet and your place in
+// it: the path before the fork is not remounted, and the swapped tail renders
+// as history — an instant swap, no fade, no jump.
 watch(() => state.activeBranch, resetView, { flush: 'pre' })
 
 /** Node id for data-node-id (entry keys and the anchored-prompt measurement). */
@@ -334,7 +334,6 @@ function jumpTo(i: number): void {
           {{ state.session?.title || (state.sessionId ? t('common.untitled') : '') }}
         </span>
       </Transition>
-      <SessionBar v-if="state.sessionId" part="branch" />
       <span class="ml-auto flex min-w-0 flex-none items-center gap-2">
         <Transition
           enter-active-class="transition duration-200 ease-soft"
@@ -350,7 +349,7 @@ function jumpTo(i: number): void {
             <span class="hidden sm:inline">{{ t('chat.header.running') }}</span>
           </span>
         </Transition>
-        <SessionBar v-if="state.sessionId" part="tools" />
+        <SessionBar v-if="state.sessionId" />
       </span>
     </header>
 

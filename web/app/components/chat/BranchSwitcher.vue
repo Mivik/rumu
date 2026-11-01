@@ -1,9 +1,7 @@
 <script setup lang="ts">
-// Inline ‹ i/n › over the sibling subtrees of a message's parent. Replaced
-// variants (abandoned branches) are hidden from the branch panel and reached
-// from here; picking one swaps to it — the branch being left is abandoned
-// only when it, too, was a replaced variant, so deliberate forks stay in the
-// panel.
+// Inline ‹ i/n › over the sibling subtrees of a message's parent: the
+// replaced variants of a turn live here, not on the conversation line.
+// Picking one swaps the session's active branch to it.
 import { computed } from 'vue'
 import { t } from '../../i18n'
 import { isBusy, selectBranch, siblingAlternatives, state } from '../../lib/store'
@@ -21,7 +19,7 @@ function pick(index: number): void {
   if (isBusy.value) return
   const target = alternatives.value[index]
   if (!target || target.current || target.branch === state.activeBranch) return
-  void selectBranch(target.branch, true)
+  void selectBranch(target.branch)
 }
 
 function step(delta: number): void {

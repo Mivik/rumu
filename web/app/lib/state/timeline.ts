@@ -103,7 +103,7 @@ export interface TimelineGroup {
   kind: 'group'
   items: GroupItem[]
   assistants: Node[]
-  /** Last assistant node that is a safe fork/revert point, if any. */
+  /** Last assistant node that is a safe fork point, if any. */
   safeNode: Node | null
 }
 export interface TimelineUserEntry {

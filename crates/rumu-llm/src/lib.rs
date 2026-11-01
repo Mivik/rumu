@@ -885,8 +885,8 @@ mod tests {
     #[test]
     fn notes_project_only_their_frozen_text() {
         // The structured payload is UI-only; the model sees `content.text`.
-        let payload = rumu_core::RevertLesson {
-            lesson: "hidden payload".into(),
+        let payload = rumu_core::TurnError {
+            message: "hidden payload".into(),
         };
         let frozen = "frozen text — [Bar](@rumu:/cards/foo/bar)";
         let nodes = vec![node(NodeBody::Note {

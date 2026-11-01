@@ -50,11 +50,8 @@ export async function loadPath(branch: BranchId): Promise<void> {
   }
 }
 
-/** Switch to `branch`. `abandon` picks among replaced variants: the server
- * abandons the branch being left only when the target was itself abandoned,
- * so a deliberate fork is switched to without anything being hidden from the
- * branch panel. */
-export async function selectBranch(id: BranchId, abandon = false): Promise<void> {
+/** Switch to `branch`: the message variant switcher's pick. */
+export async function selectBranch(id: BranchId): Promise<void> {
   state.activeBranch = id
   const b = state.branches[id]
   if (b) {
@@ -64,7 +61,7 @@ export async function selectBranch(id: BranchId, abandon = false): Promise<void>
     state.pathState = null
   }
   try {
-    await rumu.request('branch.activate', { branch: id, abandon })
+    await rumu.request('branch.activate', { branch: id })
   } catch (err) {
     toast('error', t('errors.activate'), (err as Error).message)
   }
@@ -72,16 +69,14 @@ export async function selectBranch(id: BranchId, abandon = false): Promise<void>
 }
 
 /**
- * Fork a new branch at `nodeId` and make it active. `label` names the action
- * in the error toast (fork / edit / regenerate); `abandon` replaces the
- * branch being left (an edit) instead of adding a sibling next to it.
+ * Fork a new branch at `nodeId` and make it active — how an edited prompt
+ * steps away from the turn it replaces. `label` names the action in the
+ * error toast (edit); the branch left behind stays reachable from the
+ * message's variant switcher.
  */
-export async function forkAt(nodeId: NodeId, label = 'fork', abandon = false): Promise<Branch | null> {
+export async function forkAt(nodeId: NodeId, label = 'edit'): Promise<Branch | null> {
   try {
-    const res = await rumu.request<{ branch: Branch }>('branch.fork', {
-      node: nodeId,
-      abandon,
-    })
+    const res = await rumu.request<{ branch: Branch }>('branch.fork', { node: nodeId })
     await resyncTree()
     state.activeBranch = res.branch.id
     if (state.session) state.session.active_branch = res.branch.id
@@ -140,8 +135,8 @@ export async function retryBranch(): Promise<boolean> {
 /**
  * The sub-agent branch spawned by the direct `agent` tool call `callId`
  * (recorded on the branch as `kind.call_id`). Prefers a child of the active
- * branch (the common case); falls back to any match (e.g. after a revert the
- * parent branch is no longer active).
+ * branch (the common case); falls back to any match (e.g. on a variant the
+ * call's parent branch is no longer active).
  */
 export function findAgentChild(callId: string): Branch | null {
   if (!callId) return null

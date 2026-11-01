@@ -2,8 +2,7 @@
  *
  * Brand: warm & friendly, light-first. A cream canvas, white
  * "paper" surfaces, one coral brand color, pine green as the quiet
- * secondary, and a small semantic set: memory / tool / danger / agent /
- * revert.
+ * secondary, and a small semantic set: memory / tool / danger / agent.
  *
  * Every color is a CSS var that flips with prefers-color-scheme, and
  * `@theme inline` maps them to Tailwind names — so templates never use
@@ -61,8 +60,6 @@
   --danger-soft: #fbe7ea;
   --agent: #0c7f84;
   --agent-soft: #ddf1f1;
-  --revert: #9a640c;
-  --revert-soft: #faefd9;
 
   /* the desk: paper grain + a faint warm light from the top-left corner */
   --grain: url("data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' width='180' height='180'%3E%3Cfilter id='n'%3E%3CfeTurbulence type='fractalNoise' baseFrequency='.85' numOctaves='3' stitchTiles='stitch'/%3E%3CfeColorMatrix values='0 0 0 0 .35 0 0 0 0 .24 0 0 0 0 .14 0 0 0 .07 0'/%3E%3C/filter%3E%3Crect width='100%25' height='100%25' filter='url(%23n)'/%3E%3C/svg%3E");
@@ -112,8 +109,6 @@
     --danger-soft: #3d1f25;
     --agent: #5cc8ce;
     --agent-soft: #173031;
-    --revert: #e0a64a;
-    --revert-soft: #372b17;
 
     --grain: url("data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' width='180' height='180'%3E%3Cfilter id='n'%3E%3CfeTurbulence type='fractalNoise' baseFrequency='.85' numOctaves='3' stitchTiles='stitch'/%3E%3CfeColorMatrix values='0 0 0 0 1 0 0 0 0 .92 0 0 0 0 .82 0 0 0 .045 0'/%3E%3C/filter%3E%3Crect width='100%25' height='100%25' filter='url(%23n)'/%3E%3C/svg%3E");
     --lamp: color-mix(in srgb, var(--brand) 6%, transparent);
@@ -192,8 +187,6 @@
   --color-danger-soft: var(--danger-soft);
   --color-agent: var(--agent);
   --color-agent-soft: var(--agent-soft);
-  --color-revert: var(--revert);
-  --color-revert-soft: var(--revert-soft);
   --color-scrim: var(--scrim);
 
   --shadow-soft: var(--shadow-soft-v);
@@ -383,9 +376,6 @@
   }
   .tone-agent {
     --tone: var(--agent);
-  }
-  .tone-revert {
-    --tone: var(--revert);
   }
 
   /* The one pill (ui/Chip.vue). Tints mix with transparent so a chip reads

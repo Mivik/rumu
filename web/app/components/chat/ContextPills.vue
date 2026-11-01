@@ -1,11 +1,11 @@
 <script setup lang="ts">
 // One "context" row: consecutive Notes/Markers collapsed into compact,
-// tinted pills — "recalled [A] [B]" as card stubs, "reverted · lesson",
-// "card A changed". Same-kind items share one pill; card names are clickable
-// and open the CardDrawer. Each pill carries node ids so the Context panel can
-// jump to the injection point. Pills pop in when they happen live; a recalled
-// memory fades in and underlines its cards one by one. It lines up with the
-// content column's left edge and puts no node on the thread (only messages do).
+// tinted pills — "recalled [A] [B]" as card stubs, "card A changed". Same-kind
+// items share one pill; card names are clickable and open the CardDrawer.
+// Each pill carries node ids so the Context panel can jump to the injection
+// point. Pills pop in when they happen live; a recalled memory fades in and
+// underlines its cards one by one. It lines up with the content column's left
+// edge and puts no node on the thread (only messages do).
 import { computed, ref } from 'vue'
 import { t } from '../../i18n'
 import type { Content, Node, TaskDone, TaskStatus } from '../../lib/types'
@@ -14,7 +14,6 @@ import Chip from '../ui/Chip.vue'
 import Icon from '../ui/Icon.vue'
 import {
   agentsOf,
-  revertOf,
   cardForImport,
   importOf,
   noteTitleFromText,
@@ -45,7 +44,7 @@ function taskDoneOf(content: Content): TaskDone | null {
 
 interface PillSpec {
   key: string
-  kind: 'memory' | 'update' | 'workspace' | 'agents' | 'revert' | 'note' | 'task'
+  kind: 'memory' | 'update' | 'workspace' | 'agents' | 'note' | 'task'
   title: string
   cards?: CardItem[]
   names?: string[]
@@ -99,7 +98,6 @@ const pills = computed<PillSpec[]>(() => {
       const imp = importOf(b.content)
       const agents = agentsOf(b.content)
       const wsUse = workspaceUseOf(b.content)
-      const revert = b.source === 'system' ? revertOf(b.content) : null
       if (task) {
         // A background-task completion: one pill per task, opening the live /
         // buffered output in the tasks panel.
@@ -141,9 +139,6 @@ const pills = computed<PillSpec[]>(() => {
         const name = `${agents.ws}/${doc || agents.file}`
         const p = ensure('agents', 'agents', '', { names: [] })
         if (!p.names!.includes(name)) p.names!.push(name)
-      } else if (revert) {
-        const p = ensure(`revert:${n.id}`, 'revert', revert.lesson, { texts: [] })
-        p.texts!.push(revert.lesson)
       } else if (wsUse) {
         const p = ensure('workspace', 'workspace', '', { names: [] })
         if (!p.names!.includes(wsUse.name)) p.names!.push(wsUse.name)
@@ -263,13 +258,6 @@ function label(names: string[]): string {
         :label="t('cards.pills.task', { id: p.taskId, status: taskStatusWord(p.taskStatus ?? 'done') })"
         :title="p.title"
         @click="openTaskDetail(p.taskId!)"
-      />
-      <Chip
-        v-else-if="p.kind === 'revert'"
-        icon="revert"
-        tone="revert"
-        :label="t('cards.pills.reverted', { text: preview(p.texts?.[0] ?? '', 40) })"
-        :title="p.title"
       />
       <Chip
         v-else

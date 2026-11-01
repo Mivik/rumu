@@ -3,7 +3,16 @@
 import { rumu } from '../api'
 import { t } from '../../i18n'
 import { routeSession } from '../router'
-import type { Card, Node, SessionId, SessionInfo, SessionTreeResult, TaskId, TaskInfo } from '../types'
+import type {
+  Card,
+  Node,
+  NodeId,
+  SessionId,
+  SessionInfo,
+  SessionTreeResult,
+  TaskId,
+  TaskInfo,
+} from '../types'
 import { state } from './state'
 import { forkAt, loadPath, replaceTree } from './tree'
 import { toast } from './ui'
@@ -151,6 +160,20 @@ export async function newSession(): Promise<boolean> {
   }
 }
 
+/**
+ * Fork the conversation up to `node` into a new session and open it. The
+ * source session is untouched; sub-agent branches stay behind (their call
+ * rows keep the results they produced).
+ */
+export async function forkSession(node: NodeId): Promise<void> {
+  try {
+    const res = await rumu.request<{ session: SessionInfo }>('session.fork', { node })
+    await openSession(res.session.id)
+  } catch (err) {
+    toast('error', t('errors.forkSession'), (err as Error).message)
+  }
+}
+
 /** A session is gone (deleted here or in another tab): drop it from the list
  * and, when it was the open one, land on the home page. The address entry is
  * replaced so Back cannot reopen a dead session. */
@@ -212,11 +235,11 @@ export async function stopTurn(): Promise<void> {
 }
 
 /**
- * Edit a sent prompt: fork from just before it and send the new text there.
- * The branch holding the original message and reply is abandoned; its
- * alternative stays reachable from the user message's switcher. An edited
- * message resends its attachments unchanged — the edited text's anchors say
- * where they sit.
+ * Edit a sent prompt: fork from just before it and send the new text there,
+ * replacing the branch that held the original message and reply — its
+ * alternative stays reachable from the user message's variant switcher. An
+ * edited message resends its attachments unchanged — the edited text's
+ * anchors say where they sit.
  */
 export async function editPrompt(
   node: Node,
@@ -230,6 +253,6 @@ export async function editPrompt(
     toast('error', t('errors.editFirst'))
     return false
   }
-  if (!(await forkAt(before, 'edit', true))) return false
+  if (!(await forkAt(before, 'edit'))) return false
   return sendPrompt(next, attachments)
 }

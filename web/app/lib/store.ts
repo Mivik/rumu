@@ -15,12 +15,10 @@ export type { DeltaBuffer, HookTraceEntry, RetryState, Toast, TurnCache } from '
 export {
   activeDelta,
   branchTasks,
-  branchTree,
   cacheTotal,
   cacheTurns,
   callsOnPath,
   connected,
-  currentBranch,
   hookTraceForSession,
   isBusy,
   owedReply,
@@ -30,7 +28,7 @@ export {
   siblingAlternatives,
   sortedSessions,
 } from './state/derived'
-export type { BranchTreeNode, OwedReply, SiblingAlternative } from './state/derived'
+export type { OwedReply, SiblingAlternative } from './state/derived'
 
 export { timeline } from './state/timeline'
 export type {
@@ -65,6 +63,7 @@ export {
   closeSession,
   deleteSession,
   editPrompt,
+  forkSession,
   forgetSession,
   goHome,
   killTask,

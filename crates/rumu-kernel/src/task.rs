@@ -6,8 +6,7 @@
 //! [`Inner::tasks`](crate::Inner); the buffer keeps the last
 //! [`TASK_OUTPUT_LIMIT`] bytes of `Progress::Append` text plus the latest
 //! `Progress::Data`. Nothing is persisted: a kernel restart loses every
-//! running task (and [`Kernel::new`] closes out their agent branches as
-//! abandoned).
+//! running task (and [`Kernel::new`] closes out their agent branches).
 
 use std::sync::Arc;
 use std::time::{Duration, Instant};

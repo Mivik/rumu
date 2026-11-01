@@ -20,7 +20,6 @@ pub mod kind {
     /// payload: `{ "source": .., "effects": [..], "wake": bool }` — interceptable
     pub const POST: &str = "post";
     pub const BRANCH_FORK: &str = "branch.fork";
-    pub const BRANCH_REVERT: &str = "branch.revert";
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]

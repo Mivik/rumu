@@ -15,8 +15,7 @@
   "regenerate": "重新生成失败",
   "retry": "重试回复失败",
   "labels": {
-    "fork": "分叉",
-    "edit": "编辑",
-    "regenerate": "重新生成"
-  }
+    "edit": "编辑"
+  },
+  "forkSession": "分叉会话失败"
 }

@@ -4,7 +4,7 @@
 //! queueing, out-of-band posts/wakes, abort, steering and internal plugin
 //! calls (caller isolation, denied tools, traces).
 
-use std::collections::VecDeque;
+use std::collections::{HashMap, HashSet, VecDeque};
 use std::sync::atomic::{AtomicUsize, Ordering};
 use std::sync::{Arc, Mutex};
 use std::time::Duration;
@@ -12,9 +12,10 @@ use std::time::Duration;
 use async_trait::async_trait;
 use rumu_core::kind;
 use rumu_core::{
-    Attachment, BranchId, BranchStatus, Content, Cx, Decision, Event, HookOutput, HookSpec, Inbox,
-    Manifest, Node, NodeBody, PathState, Plugin, Post, Progress, SessionId, Tagged, TaskDone,
-    TaskKind, TaskStatus, ToolCall, ToolOutput, ToolSpec, Workspace, WorkspaceCatalog, WorkspaceUse,
+    Attachment, BranchId, BranchStatus, CodeCall, Content, Cx, Decision, Event, HookOutput,
+    HookSpec, Inbox, Manifest, Node, NodeBody, PathState, Plugin, Post, Progress, SessionId,
+    Tagged, TaskDone, TaskKind, TaskStatus, ToolCall, ToolOutput, ToolSpec, Workspace,
+    WorkspaceCatalog, WorkspaceUse,
 };
 use rumu_kernel::{Delta, Kernel, Llm, LlmError, LlmResponse, OnDelta, ScriptedLlm};
 use rumu_store::Store;
@@ -2848,7 +2849,7 @@ async fn regenerate_forks_at_the_prompt_and_does_not_duplicate_it() {
     let mut rx = kernel.tap_pushes();
     let regenerated = kernel.regenerate(&prompt).await.unwrap();
     assert_eq!(regenerated.forked_from.as_ref(), Some(&prompt));
-    assert!(matches!(regenerated.kind, rumu_core::BranchKind::Fork));
+    assert!(matches!(regenerated.kind, rumu_core::BranchKind::Main));
     wait_turn(&mut rx, Some(regenerated.id.0.as_str())).await;
 
     let (path, _) = kernel.branch_path(&regenerated.id).unwrap();
@@ -2879,10 +2880,11 @@ async fn regenerate_forks_at_the_prompt_and_does_not_duplicate_it() {
     assert_eq!(body_kinds(&old), vec!["marker[root]", "user", "assistant"]);
 }
 
-/// Regenerating replaces the branch it regenerates: the old active branch is
-/// abandoned and the new one active.
+/// Regenerating replaces the branch it regenerates: the session's active
+/// branch is the new one; the old keeps its nodes and stays reachable as a
+/// variant.
 #[tokio::test]
-async fn regenerate_abandons_the_active_branch() {
+async fn regenerate_switches_the_active_branch() {
     let (kernel, _llm, session, branch) = setup(
         vec![],
         vec![
@@ -2913,13 +2915,14 @@ async fn regenerate_abandons_the_active_branch() {
             .status
     };
     assert_eq!(info.active_branch, regenerated.id);
-    assert_eq!(status(&branch), BranchStatus::Abandoned);
+    assert_eq!(status(&branch), BranchStatus::Active);
     assert_eq!(status(&regenerated.id), BranchStatus::Active);
 }
 
-/// A manual fork is not a replacement: the branch it forked from stays active.
+/// A plain fork becomes the session's active branch; the one it forked from
+/// is left exactly as it was.
 #[tokio::test]
-async fn plain_fork_keeps_the_old_branch_active() {
+async fn plain_fork_activates_without_disturbing_the_old_branch() {
     let (kernel, _llm, session, branch) =
         setup(vec![], vec![LlmResponse::text("reply")]).await;
 
@@ -2931,7 +2934,7 @@ async fn plain_fork_keeps_the_old_branch_active() {
         .id
         .clone();
 
-    let forked = kernel.fork(&prompt, false).await.unwrap();
+    let forked = kernel.fork(&prompt).await.unwrap();
 
     let (info, _, branches) = kernel.session_tree(&session).unwrap();
     let status = |id: &BranchId| {
@@ -2946,12 +2949,10 @@ async fn plain_fork_keeps_the_old_branch_active() {
     assert_eq!(status(&forked.id), BranchStatus::Active);
 }
 
-/// `branch.activate` with abandonment only swaps replaced variants: an
-/// abandoned target is revived and the branch left behind abandoned, a
-/// deliberate fork (never abandoned) is a plain activation that abandons
-/// nothing, and a sub-agent branch is refused before anything changes.
+/// `branch.activate` refuses a sub-agent branch before anything changes, and
+/// otherwise is a plain switch of the session's active branch.
 #[tokio::test]
-async fn activate_with_abandon_only_swaps_replaced_variants() {
+async fn activate_refuses_agent_branches_and_switches_variants() {
     let plugin = Arc::new(plugin_with(
         "branch",
         &["agent"],
@@ -2965,7 +2966,6 @@ async fn activate_with_abandon_only_swaps_replaced_variants() {
             LlmResponse::calls(vec![ToolCall::new("e1", "agent", json!({"task": "dig"}))]),
             LlmResponse::text("child summary"),
             LlmResponse::text("parent done"),
-            LlmResponse::text("regenerated"),
         ],
     )
     .await;
@@ -2996,7 +2996,7 @@ async fn activate_with_abandon_only_swaps_replaced_variants() {
         .expect("agent branch exists")
         .id
         .clone();
-    let err = kernel.activate_branch(&child, true).unwrap_err();
+    let err = kernel.activate_branch(&child).unwrap_err();
     assert!(
         matches!(err, rumu_kernel::Error::AgentBranchNotActivatable(_)),
         "{err:#}"
@@ -3005,23 +3005,169 @@ async fn activate_with_abandon_only_swaps_replaced_variants() {
     assert_eq!(status(&main), BranchStatus::Active);
     assert_eq!(status(&child), BranchStatus::Done);
 
-    // Switching between deliberate forks abandons neither.
-    let fork1 = kernel.fork(&prompt, false).await.unwrap();
-    let fork2 = kernel.fork(&prompt, false).await.unwrap();
-    kernel.activate_branch(&fork1.id, true).unwrap();
+    // Switching between forks moves the active branch and disturbs nothing.
+    let fork1 = kernel.fork(&prompt).await.unwrap();
+    let fork2 = kernel.fork(&prompt).await.unwrap();
+    kernel.activate_branch(&fork1.id).unwrap();
     assert_eq!(active(), fork1.id);
     assert_eq!(status(&fork1.id), BranchStatus::Active);
     assert_eq!(status(&fork2.id), BranchStatus::Active);
+    kernel.activate_branch(&fork2.id).unwrap();
+    assert_eq!(active(), fork2.id);
+}
 
-    // A branch a regenerate abandoned is revived; the one left behind goes.
-    let mut rx = kernel.tap_pushes();
-    let regenerated = kernel.regenerate(&prompt).await.unwrap();
-    wait_turn(&mut rx, Some(regenerated.id.0.as_str())).await;
-    assert_eq!(status(&fork1.id), BranchStatus::Abandoned);
-    kernel.activate_branch(&fork1.id, true).unwrap();
-    assert_eq!(active(), fork1.id);
-    assert_eq!(status(&fork1.id), BranchStatus::Active);
-    assert_eq!(status(&regenerated.id), BranchStatus::Abandoned);
+/// `session.fork` copies the root→node path into a new session: fresh node
+/// ids with parents remapped and bodies unchanged, `code` calls under tool
+/// calls on the path carried over to the new branch, sub-agent branches left
+/// behind, and the source session untouched. An assistant node whose tool
+/// calls have no safe point is refused.
+#[tokio::test]
+async fn fork_session_copies_the_path_into_a_new_session() {
+    let plugin = Arc::new(plugin_with(
+        "calc",
+        &["plus"],
+        vec![],
+        noop_hooks(),
+        plus_tool(),
+    ));
+    let store = Arc::new(Store::in_memory());
+    let kernel = Kernel::new(
+        store.clone(),
+        Arc::new(FakeLlm::new(vec![
+            LlmResponse::calls(vec![ToolCall::new("c1", "plus", json!({"a": 2, "b": 3}))]),
+            LlmResponse::text("done"),
+        ])),
+        vec![plugin],
+        WorkspaceCatalog::default(),
+    )
+    .unwrap();
+    let (session, _) = kernel.create_session(None).await.unwrap();
+    let branch = BranchId::from(session.active_branch.0.as_str());
+    let (_, nodes, _) = run_turn_on(&kernel, &branch, "hello").await;
+    let result = nodes
+        .iter()
+        .find(|n| matches!(n.body, NodeBody::ToolResult { .. }))
+        .expect("the turn appended a tool result")
+        .id
+        .clone();
+    let upto = nodes.iter().position(|n| n.id == result).unwrap();
+    let path = &nodes[..=upto];
+    assert_eq!(path.len(), 4, "root, user, assistant+calls, tool result");
+
+    // An internal `code` call under the on-path tool call, and one under a
+    // call no copied node made; plus a sub-agent branch that must not carry.
+    let code = CodeCall {
+        branch: branch.clone(),
+        parent_call: "c1".into(),
+        seq: 1,
+        name: "plus".into(),
+        args: json!({"a": 2, "b": 3}),
+        output: "5".into(),
+        is_error: false,
+        blocked: None,
+        dur_ms: 3,
+        at: 9,
+    };
+    store.insert_code_call(&session.id, &code).unwrap();
+    store
+        .insert_code_call(
+            &session.id,
+            &CodeCall {
+                parent_call: "zz".into(),
+                ..code.clone()
+            },
+        )
+        .unwrap();
+    let main = store.get_branch(&session.active_branch).unwrap().unwrap();
+    store
+        .insert_branch(&rumu_core::Branch {
+            id: BranchId::new(),
+            session: session.id.clone(),
+            head: main.head.clone(),
+            forked_from: Some(main.head.clone()),
+            kind: rumu_core::BranchKind::Agent {
+                task: "work".into(),
+                parent_branch: main.id.clone(),
+                call_id: "c1".into(),
+                via_plugin: false,
+                inherit: Default::default(),
+            },
+            status: BranchStatus::Done,
+            created_at: rumu_core::now(),
+        })
+        .unwrap();
+
+    let forked = kernel.fork_session(&result).unwrap();
+    assert_ne!(forked.id, session.id);
+    assert_eq!(forked.title, "hello", "the source session's title");
+
+    // The copied path: same bodies and timestamps, fresh ids, parents
+    // remapped into a single chain rooted at the copy of the root.
+    // (`session_tree` orders by `at`, ambiguous within one millisecond, so
+    // the new path is walked head→root like everywhere else.)
+    let (info, new_nodes, new_branches) = kernel.session_tree(&forked.id).unwrap();
+    assert_eq!(new_nodes.len(), path.len());
+    let by_id: HashMap<&str, &Node> = new_nodes.iter().map(|n| (n.id.0.as_str(), n)).collect();
+    let old_ids: HashSet<&str> = nodes.iter().map(|n| n.id.0.as_str()).collect();
+    assert!(
+        new_nodes.iter().all(|n| !old_ids.contains(n.id.0.as_str())),
+        "every copied node has a fresh id"
+    );
+    assert_eq!(new_branches.len(), 1);
+    let new_branch = &new_branches[0];
+    let mut chain: Vec<&Node> = vec![];
+    let mut cur = Some(new_branch.head.0.as_str());
+    while let Some(id) = cur {
+        let n = by_id[id];
+        cur = n.parent.as_ref().map(|p| p.0.as_str());
+        chain.push(n);
+    }
+    chain.reverse();
+    for (i, n) in chain.iter().enumerate() {
+        assert_eq!(n.session, forked.id);
+        assert_eq!(
+            serde_json::to_value(&n.body).unwrap(),
+            serde_json::to_value(&path[i].body).unwrap()
+        );
+        assert_eq!(n.at, path[i].at);
+        assert_eq!(n.dur_ms, path[i].dur_ms);
+        assert_eq!(
+            n.parent.as_ref(),
+            i.checked_sub(1).map(|j| chain[j].id.clone()).as_ref()
+        );
+    }
+    // One plain branch heading at the copied node; the agent branch stayed.
+    assert!(matches!(new_branch.kind, rumu_core::BranchKind::Main));
+    assert_eq!(new_branch.head, chain.last().unwrap().id);
+    assert_eq!(info.active_branch, new_branch.id);
+
+    // Only the code call under an on-path tool call rode along.
+    let calls = kernel.code_calls(&forked.id).unwrap();
+    assert_eq!(calls.len(), 1);
+    assert_eq!(calls[0].parent_call, "c1");
+    assert_eq!(calls[0].branch, new_branch.id);
+    assert_eq!(calls[0].args, code.args);
+    assert_eq!(calls[0].output, "5");
+
+    // The source session is untouched.
+    let (src_info, src_nodes, src_branches) = kernel.session_tree(&session.id).unwrap();
+    assert_eq!(src_info.active_branch, session.active_branch);
+    assert_eq!(src_nodes.len(), nodes.len());
+    assert_eq!(src_branches.len(), 2);
+    assert_eq!(kernel.code_calls(&session.id).unwrap().len(), 2);
+
+    // Forking at an assistant node with tool calls is refused.
+    let with_calls = nodes
+        .iter()
+        .find(|n| matches!(&n.body, NodeBody::Assistant { tool_calls, .. } if !tool_calls.is_empty()))
+        .expect("the turn made a tool call")
+        .id
+        .clone();
+    let err = kernel.fork_session(&with_calls).unwrap_err();
+    assert!(
+        matches!(err, rumu_kernel::Error::UnsafeBranchPoint),
+        "{err:#}"
+    );
 }
 
 // ---------- out-of-band posts ----------
@@ -4193,7 +4339,7 @@ async fn sub_agent_waits_for_its_own_background_task() {
 /// A kernel restart closes out agent branches that were still active: their
 /// in-flight tasks are gone and they are never resumed.
 #[tokio::test]
-async fn kernel_start_abandons_active_agent_branches() {
+async fn kernel_start_closes_out_active_agent_branches() {
     let store = Arc::new(Store::in_memory());
     let kernel = Kernel::new(
         store.clone(),
@@ -4229,7 +4375,7 @@ async fn kernel_start_abandons_active_agent_branches() {
     )
     .unwrap();
     let got = store.get_branch(&child.id).unwrap().unwrap();
-    assert_eq!(got.status, BranchStatus::Abandoned);
+    assert_eq!(got.status, BranchStatus::Done);
 }
 
 /// Effects returned by a background tool are posted under the plugin's own

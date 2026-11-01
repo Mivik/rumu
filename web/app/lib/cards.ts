@@ -47,11 +47,6 @@ export function agentsOf(content: Content | null | undefined): import('./types')
   return payload(content, 'workspace.agents', 1)
 }
 
-/** The `kernel.revert` payload carried by a revert lesson note. */
-export function revertOf(content: Content | null | undefined): { lesson: string } | null {
-  return payload<{ lesson: string }>(content, 'kernel.revert', 1)
-}
-
 /** The current render of a card (`# {title||id}\n{body}`). */
 export function renderCard(card: Pick<Card, 'id' | 'title' | 'body'>): string {
   return `# ${card.title || card.id}\n${card.body}`

@@ -27,9 +27,9 @@ use crate::host::KernelRuntime;
 use rumu_core::kind;
 use rumu_core::{
     Branch, BranchId, BranchKind, BranchStatus, Content, Effect, Event, HookSpec, Inbox, Node,
-    NodeBody, NodeId, PathState, Plugin, Post, RevertLesson, Runtime, SYSTEM_SOURCE, SessionId,
-    SessionInfo, SessionRoot, TaskId, ToolCall, ToolSpec, TurnError, WorkspaceCatalog, WorkspaceUse,
-    now, tool_schema,
+    NodeBody, NodeId, PathState, Plugin, Post, Runtime, SYSTEM_SOURCE, SessionId, SessionInfo,
+    SessionRoot, TaskId, ToolCall, ToolSpec, TurnError, WorkspaceCatalog, WorkspaceUse, now,
+    tool_schema,
 };
 use rumu_store::Store;
 use serde_json::{Value, json};
@@ -233,7 +233,7 @@ impl Kernel {
                 if matches!(branch.kind, BranchKind::Agent { .. })
                     && branch.status == BranchStatus::Active
                 {
-                    branch.status = BranchStatus::Abandoned;
+                    branch.status = BranchStatus::Done;
                     store.update_branch(&branch)?;
                 }
             }
@@ -482,7 +482,7 @@ impl Kernel {
     /// safe point, as provisional tail nodes. Plugins and hooks read this
     /// view so a marker recorded earlier in a tool batch (`workspace.use`,
     /// `card_use`) is already in effect for the batch's later calls; the
-    /// stored path (UI, projection, revert) stays the committed one.
+    /// stored path (UI, projection) stays the committed one.
     pub(crate) fn pending_path_nodes(&self, branch: &BranchId) -> Result<Vec<Node>> {
         let mut path = self.path_nodes(branch)?;
         let inner = self.inner.lock().unwrap();
@@ -638,7 +638,7 @@ impl Kernel {
     }
 
     /// Record a default-workspace switch: a `workspace.use` marker. Branch
-    /// state, so forks inherit it and reverts undo it.
+    /// state, so forks inherit it.
     pub(crate) async fn workspace_use(
         self: &Arc<Self>,
         branch: &BranchId,
@@ -656,31 +656,22 @@ impl Kernel {
         Ok(())
     }
 
-    /// Make `branch` the session's active one. With `abandon_active` this is
-    /// the switcher's pick among replaced variants: an abandoned target is
-    /// revived and the branch left behind is abandoned. A target that was
-    /// never abandoned (a deliberate fork) is a plain activation — nothing
-    /// is abandoned, so the fork stays in the branch panel. Sub-agent
+    /// Make `branch` the session's active one — the message variant
+    /// switcher's pick among the branches that share a parent. Sub-agent
     /// branches are refused: they belong to their parent's tool call, not
     /// the user.
-    pub fn activate_branch(&self, branch: &BranchId, abandon_active: bool) -> Result<()> {
+    pub fn activate_branch(&self, branch: &BranchId) -> Result<()> {
         let b = self
             .store
             .get_branch(branch)?
             .ok_or_else(|| Error::BranchNotFound(branch.clone()))?;
+        if matches!(b.kind, BranchKind::Agent { .. }) {
+            return Err(Error::AgentBranchNotActivatable(b.id.clone()));
+        }
         let mut session = self
             .store
             .get_session(&b.session)?
             .ok_or_else(|| Error::SessionNotFound(b.session.clone()))?;
-        if abandon_active && session.active_branch != b.id {
-            if matches!(b.kind, BranchKind::Agent { .. }) {
-                return Err(Error::AgentBranchNotActivatable(b.id.clone()));
-            }
-            if b.status == BranchStatus::Abandoned {
-                self.abandon_branch(&session.active_branch)?;
-                self.set_branch_status(&b.id, BranchStatus::Active);
-            }
-        }
         session.active_branch = b.id.clone();
         session.updated_at = now();
         self.store.update_session(&session)?;
@@ -1119,65 +1110,139 @@ impl Kernel {
 
     // ---- UI tree ops ----
 
-    /// `branch.fork` WS method: a new branch at `node`. Replacing the active
-    /// branch (`abandon_active`) is how an edited prompt steps away from the
-    /// turn it replaces.
-    pub async fn fork(self: &Arc<Self>, node: &NodeId, abandon_active: bool) -> Result<Branch> {
+    /// `branch.fork` WS method: a new branch at `node`, made the session's
+    /// active one — how an edited prompt or a regenerate steps away from the
+    /// turn it replaces. The branch left behind keeps its nodes and stays
+    /// reachable through the message variant switcher. Refused while the
+    /// session's active branch is running, so nothing is forked out from
+    /// under a live turn.
+    pub async fn fork(self: &Arc<Self>, node: &NodeId) -> Result<Branch> {
         let n = self
             .store
             .get_node(node)?
             .ok_or_else(|| Error::NodeNotFound(node.clone()))?;
         Self::check_safe_point(&n)?;
-        self.new_branch_at(&n, BranchKind::Fork, abandon_active)
-            .await
-    }
-
-    pub async fn revert(self: &Arc<Self>, node: &NodeId, lesson: &str) -> Result<Branch> {
-        let n = self
+        let mut session = self
             .store
-            .get_node(node)?
-            .ok_or_else(|| Error::NodeNotFound(node.clone()))?;
-        Self::check_safe_point(&n)?;
-        let b = self
-            .new_branch_at(
-                &n,
-                BranchKind::Revert {
-                    lesson: lesson.to_owned(),
-                },
-                true,
-            )
-            .await?;
-        if !lesson.is_empty() {
-            self.append_lesson_note(&b.id, lesson).await?;
+            .get_session(&n.session)?
+            .ok_or_else(|| Error::SessionNotFound(n.session.clone()))?;
+        if self
+            .inner
+            .lock()
+            .unwrap()
+            .running
+            .contains_key(&session.active_branch)
+        {
+            return Err(Error::ActiveBranchBusy);
         }
+        let b = Self::make_branch(&n.session, n.id.clone(), BranchKind::Main);
+        self.store.insert_branch(&b)?;
+        session.active_branch = b.id.clone();
+        session.updated_at = now();
+        self.store.update_session(&session)?;
+        self.push("session.updated", json!({ "session": session }));
+        self.push("branch.updated", json!({ "branch": b.clone() }));
+
+        let mut ev = self.make_event(
+            kind::BRANCH_FORK,
+            n.session.clone(),
+            b.id.clone(),
+            json!({ "from": n.id }),
+        )?;
+        self.dispatch(&mut ev, false).await?;
         Ok(b)
     }
 
-    /// The revert lesson note shared by the `revert` op and the `Revert`
-    /// control.
-    pub(crate) async fn append_lesson_note(
-        self: &Arc<Self>,
-        branch: &BranchId,
-        lesson: &str,
-    ) -> Result<()> {
-        if lesson.is_empty() {
-            return Ok(());
+    /// `session.fork` WS method: copy the root→`node` path into a new
+    /// session and return it. Each node is copied with a fresh id, its
+    /// parent remapped and `session` pointed at the new id; everything else
+    /// (body, timestamps) is unchanged. Internal `code` calls made under a
+    /// tool call on the path ride along; sub-agent branches do not — their
+    /// `agent` call rows simply keep the result they produced. The source
+    /// session is untouched.
+    pub fn fork_session(&self, node: &NodeId) -> Result<SessionInfo> {
+        let n = self
+            .store
+            .get_node(node)?
+            .ok_or_else(|| Error::NodeNotFound(node.clone()))?;
+        Self::check_safe_point(&n)?;
+        let src = self
+            .store
+            .get_session(&n.session)?
+            .ok_or_else(|| Error::SessionNotFound(n.session.clone()))?;
+        // The root→node path (`path_nodes`, but for an arbitrary node).
+        let all = self.store.nodes_of_session(&n.session)?;
+        let by_id: HashMap<&NodeId, &Node> = all.iter().map(|n| (&n.id, n)).collect();
+        let mut path = vec![];
+        let mut cur = Some(n.id.clone());
+        while let Some(id) = cur {
+            let old = by_id
+                .get(&id)
+                .ok_or_else(|| Error::NodeNotFound(id.clone()))?;
+            cur = old.parent.clone();
+            path.push((*old).clone());
         }
-        self.append_body(
-            branch,
-            NodeBody::Note {
-                source: SYSTEM_SOURCE.into(),
-                content: Content::note_with(
-                    lesson,
-                    &RevertLesson {
-                        lesson: lesson.to_owned(),
-                    },
-                ),
-            },
-            None,
-        )
-        .await?;
-        Ok(())
+        path.reverse();
+
+        // Fresh ids for the copies, parents remapped onto them.
+        let ids: HashMap<NodeId, NodeId> = path
+            .iter()
+            .map(|old| (old.id.clone(), NodeId::new()))
+            .collect();
+        let session = SessionId::new();
+        let at = now();
+        let branch = Branch {
+            id: BranchId::new(),
+            session: session.clone(),
+            head: ids[&n.id].clone(),
+            forked_from: None,
+            kind: BranchKind::Main,
+            status: BranchStatus::Active,
+            created_at: at,
+        };
+        let info = SessionInfo {
+            id: session.clone(),
+            title: src.title.clone(),
+            active_branch: branch.id.clone(),
+            created_at: at,
+            updated_at: at,
+        };
+        // The session row first: the store drops writes for unknown sessions.
+        self.store.insert_session(&info)?;
+        for old in &path {
+            self.store.insert_node(&Node {
+                id: ids[&old.id].clone(),
+                parent: old.parent.as_ref().map(|p| ids[p].clone()),
+                session: session.clone(),
+                at: old.at,
+                dur_ms: old.dur_ms,
+                body: old.body.clone(),
+            })?;
+        }
+        self.store.insert_branch(&branch)?;
+
+        // Code calls whose parent tool call is on the copied path; the call
+        // ids they hang off ride along unchanged inside the copied bodies.
+        let on_path: HashSet<&str> = path
+            .iter()
+            .filter_map(|old| match &old.body {
+                NodeBody::Assistant { tool_calls, .. } => {
+                    Some(tool_calls.iter().map(|c| c.call_id.as_str()))
+                }
+                _ => None,
+            })
+            .flatten()
+            .collect();
+        for mut call in self.store.code_calls_of_session(&n.session)? {
+            if on_path.contains(call.parent_call.as_str()) {
+                call.branch = branch.id.clone();
+                self.store.insert_code_call(&session, &call)?;
+            }
+        }
+
+        self.push("session.updated", json!({ "session": info.clone() }));
+        self.push("branch.updated", json!({ "branch": branch }));
+        Ok(info)
     }
 
     /// A new active branch at `head` (not yet stored or announced).
@@ -1200,55 +1265,6 @@ impl Kernel {
             return Err(Error::UnsafeBranchPoint);
         }
         Ok(())
-    }
-
-    /// Mark `branch` abandoned because an operation replaced it. Refused
-    /// while it is running, so nothing is silently stopped.
-    fn abandon_branch(&self, branch: &BranchId) -> Result<()> {
-        if self.inner.lock().unwrap().running.contains_key(branch) {
-            return Err(Error::ActiveBranchBusy);
-        }
-        if let Some(mut old) = self.store.get_branch(branch)? {
-            old.status = BranchStatus::Abandoned;
-            self.store.update_branch(&old)?;
-            self.push("branch.updated", json!({ "branch": old }));
-        }
-        Ok(())
-    }
-
-    async fn new_branch_at(
-        self: &Arc<Self>,
-        n: &Node,
-        kind: BranchKind,
-        abandon_active: bool,
-    ) -> Result<Branch> {
-        let mut session = self
-            .store
-            .get_session(&n.session)?
-            .ok_or_else(|| Error::SessionNotFound(n.session.clone()))?;
-        if abandon_active {
-            self.abandon_branch(&session.active_branch)?;
-        }
-        let b = Self::make_branch(&n.session, n.id.clone(), kind);
-        self.store.insert_branch(&b)?;
-        session.active_branch = b.id.clone();
-        session.updated_at = now();
-        self.store.update_session(&session)?;
-        self.push("session.updated", json!({ "session": session }));
-        self.push("branch.updated", json!({ "branch": b.clone() }));
-
-        let event_kind = match &b.kind {
-            BranchKind::Revert { .. } => kind::BRANCH_REVERT,
-            _ => kind::BRANCH_FORK,
-        };
-        let mut ev = self.make_event(
-            event_kind,
-            n.session.clone(),
-            b.id.clone(),
-            json!({ "from": n.id }),
-        )?;
-        self.dispatch(&mut ev, false).await?;
-        Ok(b)
     }
 }
 

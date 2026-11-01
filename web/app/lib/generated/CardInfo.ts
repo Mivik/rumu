@@ -4,11 +4,11 @@ import type { JsonValue } from "./serde_json/JsonValue";
 /**
  * A card as shown to the UI (`card.list`) and used internally.
  */
-export type CardInfo = { id: string, title?: string | null, description?: string | null,
+export type CardInfo = { id: string, title?: string | null, description?: string | null, 
 /**
  * Frontmatter `keywords:` — the terms that should bring the card to mind.
  */
-keywords?: Array<string>, body: string, revision: string,
+keywords?: Array<string>, body: string, revision: string, 
 /**
  * Parsed frontmatter, including scope and user-defined fields.
  */

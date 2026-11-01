@@ -331,7 +331,7 @@ pub enum NodeBody {
         is_error: bool,
     },
     /// Plugin-written context (memory cards, workspace info, reminders,
-    /// revert lessons, the card catalog). Non-empty `content.text` projects as
+    /// the card catalog). Non-empty `content.text` projects as
     /// a user-side `<note source="..">` fragment; empty text means a marker —
     /// not projected to the model, visible only through `content.data`.
     Note {
@@ -377,17 +377,6 @@ pub struct SessionRoot {}
 
 impl Structured for SessionRoot {
     const TAG: &'static str = "root";
-    const V: u32 = 1;
-}
-
-/// Payload of a revert lesson note (v1); the note text is the lesson itself.
-#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
-pub struct RevertLesson {
-    pub lesson: String,
-}
-
-impl Structured for RevertLesson {
-    const TAG: &'static str = "kernel.revert";
     const V: u32 = 1;
 }
 
@@ -453,8 +442,10 @@ pub struct Branch {
 #[serde(tag = "type", rename_all = "snake_case")]
 #[ts(export)]
 pub enum BranchKind {
+    /// The session's one user-visible conversation line. Every edit or
+    /// regenerate forks a new one and activates it; the branch it replaces
+    /// stays reachable through the message variant switcher.
     Main,
-    Fork,
     Agent {
         task: String,
         parent_branch: BranchId,
@@ -469,9 +460,6 @@ pub enum BranchKind {
         /// The resolved `inherit` argument the sub-agent was started with.
         #[serde(default)]
         inherit: Inherit,
-    },
-    Revert {
-        lesson: String,
     },
 }
 
@@ -506,7 +494,6 @@ pub enum InheritContext {
 pub enum BranchStatus {
     Active,
     Done,
-    Abandoned,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize, ts_rs::TS)]

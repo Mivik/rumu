@@ -22,21 +22,5 @@
   },
   "hooks": {
     "title": "钩子调用"
-  },
-  "branches": {
-    "title": "分支",
-    "noContext": " · 无上下文",
-    "scope": " · 范围 {names}",
-    "status": {
-      "active": "活跃",
-      "done": "完成",
-      "abandoned": "已放弃"
-    },
-    "kind": {
-      "main": "主线",
-      "fork": "分叉",
-      "agent": "子代理",
-      "revert": "回退"
-    }
   }
 }

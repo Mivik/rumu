@@ -9,7 +9,6 @@
     "changed": "changed",
     "workspace": "default {names}",
     "task": "task {id} · {status}",
-    "reverted": "reverted · {text}",
     "moreCards": "{names} ({count})",
     "catalogTitles": {
       "root": "Card catalog",

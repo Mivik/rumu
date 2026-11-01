@@ -22,21 +22,5 @@
   },
   "hooks": {
     "title": "Hook trace"
-  },
-  "branches": {
-    "title": "Branches",
-    "noContext": " · no context",
-    "scope": " · scope {names}",
-    "status": {
-      "active": "active",
-      "done": "done",
-      "abandoned": "abandoned"
-    },
-    "kind": {
-      "main": "main",
-      "fork": "fork",
-      "agent": "agent",
-      "revert": "revert"
-    }
   }
 }

@@ -42,7 +42,7 @@
     "editTitle": "编辑并重新发送",
     "copyTitle": "复制消息",
     "regenerate": "重新生成回复",
-    "forkTitle": "从这里分叉",
+    "forkTitle": "分叉为新会话",
     "cancel": "取消",
     "resend": "重新发送",
     "copied": "已复制消息"
@@ -53,7 +53,7 @@
     "copy": "复制回复",
     "regenerate": "重新生成回复",
     "noPrompt": "没有可重新生成的提问",
-    "fork": "从这一轮分叉",
+    "fork": "分叉为新会话",
     "noSafePoint": "工具调用未完成",
     "copied": "已复制回复",
     "reasoningReset": "之前的思考已丢弃"

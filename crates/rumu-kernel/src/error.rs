@@ -59,7 +59,7 @@ pub enum Error {
     #[error("no running turn on branch {branch}")]
     NoRunningTurn { branch: BranchId },
 
-    /// A branch fork/revert point has pending tool calls.
+    /// A branch fork point has pending tool calls.
     #[error("cannot branch at an assistant node with pending tool calls (unsafe point)")]
     UnsafeBranchPoint,
 

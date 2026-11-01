@@ -2,7 +2,7 @@
 import type { BranchId } from "./BranchId";
 import type { Inherit } from "./Inherit";
 
-export type BranchKind = { "type": "main" } | { "type": "fork" } | { "type": "agent", task: string, parent_branch: BranchId, 
+export type BranchKind = { "type": "main" } | { "type": "agent", task: string, parent_branch: BranchId, 
 /**
  * The `agent` tool call that started this branch: the model's call
  * id, or the internal call id (`"{parent_call}.{seq}"`) when issued
@@ -17,4 +17,4 @@ via_plugin: boolean,
 /**
  * The resolved `inherit` argument the sub-agent was started with.
  */
-inherit: Inherit, } | { "type": "revert", lesson: string, };
+inherit: Inherit, };

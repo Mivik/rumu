@@ -42,7 +42,7 @@
     "editTitle": "Edit and resend",
     "copyTitle": "Copy message",
     "regenerate": "Regenerate reply",
-    "forkTitle": "Fork from here",
+    "forkTitle": "Fork into new session",
     "cancel": "Cancel",
     "resend": "Resend",
     "copied": "Copied message"
@@ -53,7 +53,7 @@
     "copy": "Copy reply",
     "regenerate": "Regenerate reply",
     "noPrompt": "No prompt to regenerate from",
-    "fork": "Fork from this turn",
+    "fork": "Fork into new session",
     "noSafePoint": "Tool calls unfinished",
     "copied": "Copied reply",
     "reasoningReset": "Earlier reasoning dropped"

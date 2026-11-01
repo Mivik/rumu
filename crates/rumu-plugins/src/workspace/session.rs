@@ -548,14 +548,11 @@ fn render_overview(info: &SessionInfo, nodes: &[Node], branches: &[Branch]) -> S
     for b in sorted {
         let kind = match &b.kind {
             BranchKind::Main => "main",
-            BranchKind::Fork => "fork",
             BranchKind::Agent { .. } => "agent",
-            BranchKind::Revert { .. } => "revert",
         };
         let status = match b.status {
             rumu_core::BranchStatus::Active => "active",
             rumu_core::BranchStatus::Done => "done",
-            rumu_core::BranchStatus::Abandoned => "abandoned",
         };
         let first = first_own_node(nodes, b)
             .map(|n| view.short(&n.id.0))
@@ -565,14 +562,8 @@ fn render_overview(info: &SessionInfo, nodes: &[Node], branches: &[Branch]) -> S
             info.id,
             view.short(&b.head.0)
         );
-        match &b.kind {
-            BranchKind::Agent { task, .. } => {
-                line.push_str(&format!("  task: {}", clip(task, 80)));
-            }
-            BranchKind::Revert { lesson } => {
-                line.push_str(&format!("  lesson: {}", clip(lesson, 80)));
-            }
-            _ => {}
+        if let BranchKind::Agent { task, .. } = &b.kind {
+            line.push_str(&format!("  task: {}", clip(task, 80)));
         }
         out.push('\n');
         out.push_str(&line);

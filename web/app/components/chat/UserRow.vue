@@ -5,7 +5,7 @@
 // hover. Editing swaps the bubble for a textarea and resends the prompt on a
 // branch forked from just before it; regenerate asks the same question again
 // (same op as the assistant side's regenerate — the reply is replaced); fork
-// branches here silently, without starting a turn.
+// copies the conversation up to here into a new session.
 //
 // Images lead the message as thumbnails, the way the web composer sends them
 // (`withLeadingAnchors`); the text below is what was typed. An anchor placed
@@ -15,7 +15,7 @@ import { computed, nextTick, ref } from 'vue'
 import { t } from '../../i18n'
 import type { Node } from '../../lib/types'
 import type { PromptAttachment } from '../../lib/store'
-import { editPrompt, forkAt, isBusy, regenerateFrom } from '../../lib/store'
+import { editPrompt, forkSession, isBusy, regenerateFrom } from '../../lib/store'
 import { renderMarkdown } from '../../lib/markdown'
 import { renderedContent, typedText, withLeadingAnchors } from '../../lib/attachments'
 import { copyText } from '../../lib/util'
@@ -115,7 +115,7 @@ async function onRegenerate(): Promise<void> {
 }
 
 function onFork(): void {
-  void forkAt(props.node.id)
+  void forkSession(props.node.id)
 }
 </script>
 

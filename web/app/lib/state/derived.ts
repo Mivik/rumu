@@ -118,84 +118,6 @@ export const cacheTotal = computed(() => {
   return { prompt, cached, creation, completion, turns }
 })
 
-/** Full root→head node id list per branch (used for fork-parent inference). */
-const branchPaths = computed(() => {
-  const map: Record<BranchId, NodeId[]> = {}
-  for (const b of Object.values(state.branches)) {
-    const ids: NodeId[] = []
-    let cur: NodeId | null | undefined = b.head
-    let guard = 0
-    while (cur && state.nodes[cur] && guard++ < 10_000) {
-      ids.push(cur)
-      cur = state.nodes[cur].parent
-    }
-    map[b.id] = ids
-  }
-  return map
-})
-
-function parentBranchOf(b: Branch): BranchId | null {
-  if (b.kind.type === 'main') return null
-  if (b.kind.type === 'agent') return b.kind.parent_branch
-  const ff = b.forked_from
-  if (!ff) return null
-  // The fork parent is the branch whose path contained `ff` when we forked.
-  // Among current branches containing it, the shortest path is the closest.
-  let best: Branch | null = null
-  let bestLen = Infinity
-  for (const other of Object.values(state.branches)) {
-    if (other.id === b.id) continue
-    const ids = branchPaths.value[other.id]
-    if (!ids || !ids.includes(ff)) continue
-    if (ids.length < bestLen) {
-      best = other
-      bestLen = ids.length
-    }
-  }
-  return best ? best.id : null
-}
-
-export interface BranchTreeNode {
-  branch: Branch
-  children: BranchTreeNode[]
-}
-
-/** Abandoned branches are replaced variants: hidden here, reachable through
- * the message switcher instead. A sub-agent goes with the branch it ran on
- * (its home is that branch's tool row). Other descendants of a hidden branch
- * hang off the nearest visible ancestor (or the root). */
-export const branchTree = computed<BranchTreeNode[]>(() => {
-  const all = Object.values(state.branches).sort((a, b) => a.created_at - b.created_at)
-  const byId = new Map(all.map((b) => [b.id, b]))
-  const hidden = (b: Branch, depth = 0): boolean => {
-    if (b.status === 'abandoned') return true
-    if (b.kind.type !== 'agent' || depth >= 10_000) return false
-    const parent = byId.get(b.kind.parent_branch)
-    return !!parent && hidden(parent, depth + 1)
-  }
-  const nearestVisible = (id: BranchId | null): BranchId | null => {
-    let cur = id
-    let guard = 0
-    while (cur && guard++ < 10_000) {
-      const b = byId.get(cur)
-      if (!b) return null
-      if (!hidden(b)) return b.id
-      cur = parentBranchOf(b)
-    }
-    return null
-  }
-  const kids = new Map<BranchId | null, Branch[]>()
-  for (const b of all) {
-    if (hidden(b)) continue
-    const p = nearestVisible(parentBranchOf(b))
-    if (!kids.has(p)) kids.set(p, [])
-    kids.get(p)!.push(b)
-  }
-  const build = (parent: BranchId | null): BranchTreeNode[] =>
-    (kids.get(parent) ?? []).map((branch) => ({ branch, children: build(branch.id) }))
-  return build(null)
-})
-
 export interface SiblingAlternative {
   /** Branch to activate when it is picked. */
   branch: BranchId
@@ -241,12 +163,9 @@ const siblingIndex = computed<Map<NodeId, SiblingAlternative[]>>(() => {
       cur = state.nodes[cur].parent
     }
   }
+  // The branch to activate for a child subtree: its most recent one.
   const pick = (branches: Branch[]): Branch =>
-    branches.reduce((best, b) => {
-      const live = b.status !== 'abandoned'
-      if (live !== (best.status !== 'abandoned')) return live ? b : best
-      return b.created_at > best.created_at ? b : best
-    })
+    branches.reduce((best, b) => (b.created_at > best.created_at ? b : best))
   const index = new Map<NodeId, SiblingAlternative[]>()
   for (const [parentId, children] of byChild) {
     if (children.size < 2) continue
@@ -266,9 +185,8 @@ const siblingIndex = computed<Map<NodeId, SiblingAlternative[]>>(() => {
 
 /**
  * The alternatives at a message: one per child subtree of `parentId` that
- * holds a non-agent branch head. Abandoned branches still count (this is how
- * they are reached); subtrees that only lead to agent branches (an
- * `inherit: full` fork at an assistant node) do not.
+ * holds a non-agent branch head. Subtrees that only lead to agent branches
+ * (an `inherit: full` fork at an assistant node) do not.
  */
 export function siblingAlternatives(parentId: NodeId | null): SiblingAlternative[] {
   if (!parentId) return []

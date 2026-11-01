@@ -11,7 +11,7 @@ import { computed, onBeforeUnmount, ref, watch } from 'vue'
 import { t } from '../../i18n'
 import type { Node } from '../../lib/types'
 import type { TimelineGroup } from '../../lib/store'
-import { activeDelta, forkAt, regenerateFrom, state } from '../../lib/store'
+import { activeDelta, forkSession, regenerateFrom, state } from '../../lib/store'
 import type { CatState } from '../../lib/cat'
 import { renderMarkdown } from '../../lib/markdown'
 import { contentText, copyText } from '../../lib/util'
@@ -69,7 +69,7 @@ const answerText = computed(() =>
 const forkTarget = computed(() => props.group.safeNode)
 function onFork(): void {
   const n = forkTarget.value
-  if (n) void forkAt(n.id)
+  if (n) void forkSession(n.id)
 }
 
 const regenerating = ref(false)

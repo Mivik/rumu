@@ -15,8 +15,7 @@
   "regenerate": "Couldn't regenerate reply",
   "retry": "Couldn't retry the reply",
   "labels": {
-    "fork": "fork",
-    "edit": "edit",
-    "regenerate": "regenerate"
-  }
+    "edit": "edit"
+  },
+  "forkSession": "Couldn't fork the session"
 }
