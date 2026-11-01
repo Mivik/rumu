@@ -5,10 +5,10 @@
 use rumu_cards::store::FsCardStore;
 use rumu_cards::usage::CardOp;
 use rumu_cards::{card, library, usage};
-use rumu_core::{Cx, Effect, RUMU_WORKSPACE, ToolError, ToolOutput, ToolResult};
+use rumu_core::{Cx, Effect, ToolError, ToolOutput, ToolResult};
 
 use super::WorkspacePlugin;
-use super::tools::{card_load_err, invalid_card_id, no_card_err, prefixed, slice_lines};
+use super::tools::{card_load_err, invalid_card_id, no_card_err, slice_lines};
 
 impl WorkspacePlugin {
     /// The home card library behind `@rumu:/cards`.
@@ -40,19 +40,14 @@ impl WorkspacePlugin {
         let effect = record_card_use(cx, id, &existing.revision, &view_rev, CardOp::Read);
         match slice_lines(view, offset, limit) {
             Ok(text) => Ok(ToolOutput::ok(text).with_effect(effect)),
-            Err(e) => Err(ToolError::model(prefixed(RUMU_WORKSPACE, e)).with_effect(effect)),
+            Err(e) => Err(ToolError::model(e).with_effect(effect)),
         }
     }
 
     /// The `list @rumu:/cards[/<prefix>]` output: one
     /// `@rumu:/cards/<id> — title — summary` line per card.
     pub(super) async fn card_list(&self, prefix: &str) -> ToolResult<ToolOutput> {
-        let out = rumu_cards::list_text(&self.card_store(), prefix, super::tools::LIST_LIMIT)?;
-        Ok(ToolOutput {
-            content: rumu_core::Content::text(format!("[{RUMU_WORKSPACE}] {}", out.content.text)),
-            is_error: out.is_error,
-            ..Default::default()
-        })
+        rumu_cards::list_text(&self.card_store(), prefix, super::tools::LIST_LIMIT)
     }
 
     /// Write (or apply an already-replaced edit to) a card's editable view.
@@ -82,19 +77,16 @@ impl WorkspacePlugin {
         // Post-validator: nothing touches disk until the view parses clean.
         let new_card = match card::card_from_view(id, view_text) {
             Ok(c) => c,
-            Err(e) => return Err(ToolError::model(prefixed(RUMU_WORKSPACE, e))),
+            Err(e) => return Err(ToolError::model(e)),
         };
         if let Err(e) = library::write_card(&store, &new_card) {
-            return Err(ToolError::model(prefixed(
-                RUMU_WORKSPACE,
-                format!("write failed: {e}"),
-            )));
+            return Err(ToolError::model(format!("write failed: {e}")));
         }
         let view = card::view_of(&new_card);
         let view_rev = card::view_rev_of(&view);
         let effect = record_card_use(cx, id, &new_card.revision, &view_rev, op);
         Ok(ToolOutput::ok(format!(
-            "[{RUMU_WORKSPACE}] wrote cards/{id}.md (rev {}, view rev {view_rev})",
+            "wrote cards/{id}.md (rev {}, view rev {view_rev})",
             new_card.revision
         ))
         .with_effect(effect))
@@ -118,11 +110,11 @@ impl WorkspacePlugin {
             .and_then(|u| u.view_rev);
         let message = match seen {
             None => format!(
-                "[{RUMU_WORKSPACE}] card `{shown}` exists; read it first \
+                "card `{shown}` exists; read it first \
                  (`read {shown}`) before writing"
             ),
             Some(v) if v != on_disk => format!(
-                "[{RUMU_WORKSPACE}] card `{shown}` changed since you last read it \
+                "card `{shown}` changed since you last read it \
                  (you saw view rev {v}, on disk {on_disk}); re-read it and merge \
                  your edit"
             ),

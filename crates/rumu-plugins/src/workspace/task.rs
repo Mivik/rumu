@@ -14,7 +14,7 @@ use rumu_core::{
 
 use super::WorkspacePlugin;
 use super::time::iso_local;
-use super::tools::{prefixed, slice_lines, unknown_rumu_path};
+use super::tools::{slice_lines, unknown_rumu_path};
 
 /// The `@rumu` result prefix.
 const WS: &str = RUMU_WORKSPACE;
@@ -40,10 +40,10 @@ impl WorkspacePlugin {
         }
         let id = TaskId::from(id);
         let Some((info, output)) = cx.history().task(&id)? else {
-            return Err(ToolError::model(format!("[{WS}] no task `{id}`")));
+            return Err(ToolError::model(format!("no task `{id}`")));
         };
         let mut text = format!(
-            "[{WS}] task {} · {} · {} · started {}\nowner branch {} · call {}",
+            "task {} · {} · {} · started {}\nowner branch {} · call {}",
             info.id,
             info.status.label(),
             info.label(),
@@ -71,7 +71,7 @@ impl WorkspacePlugin {
         }
         let text = match slice_lines(text, offset, limit) {
             Ok(t) => t,
-            Err(e) => return Err(ToolError::model(prefixed(WS, e))),
+            Err(e) => return Err(ToolError::model(e)),
         };
         Ok(ToolOutput::ok(capped_view(text)))
     }
@@ -79,7 +79,7 @@ impl WorkspacePlugin {
     fn task_listing(&self, cx: &Cx) -> ToolResult<ToolOutput> {
         let tasks = cx.history().tasks(&cx.session)?;
         if tasks.is_empty() {
-            return Ok(format!("[{WS}] no tasks in session {}", cx.session).into());
+            return Ok(format!("no tasks in session {}", cx.session).into());
         }
         let lines: Vec<String> = tasks
             .iter()
@@ -93,7 +93,7 @@ impl WorkspacePlugin {
                 )
             })
             .collect();
-        Ok(format!("[{WS}] tasks ({}):\n{}", cx.session, lines.join("\n")).into())
+        Ok(format!("tasks ({}):\n{}", cx.session, lines.join("\n")).into())
     }
 }
 

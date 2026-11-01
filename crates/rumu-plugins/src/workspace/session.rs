@@ -29,7 +29,7 @@ use serde_json::Value;
 
 use super::WorkspacePlugin;
 use super::time::iso_local;
-use super::tools::{prefixed, slice_lines, unknown_rumu_path};
+use super::tools::{slice_lines, unknown_rumu_path};
 
 /// The `@rumu` result prefix.
 const WS: &str = RUMU_WORKSPACE;
@@ -86,7 +86,7 @@ impl WorkspacePlugin {
         };
         let (info, nodes, branches) = match cx.history().session_tree(&SessionId::from(sid)) {
             Ok(t) => t,
-            Err(e) => return Err(ToolError::model(format!("[{WS}] no session `{sid}`: {e}"))),
+            Err(e) => return Err(ToolError::model(format!("no session `{sid}`: {e}"))),
         };
         let text = match what {
             // The overview.
@@ -104,7 +104,7 @@ impl WorkspacePlugin {
                     let Some(parent) = cur.parent.as_ref().and_then(|p| node_by_id(&nodes, &p.0))
                     else {
                         return Err(ToolError::model(format!(
-                            "[{WS}] cannot read `{WS}:/sessions/{sid}/{node}`: \
+                            "cannot read `{WS}:/sessions/{sid}/{node}`: \
                              `{a}` is not `{b}` or an ancestor of it"
                         )));
                     };
@@ -121,7 +121,7 @@ impl WorkspacePlugin {
         };
         let text = match slice_lines(text, offset, limit) {
             Ok(t) => t,
-            Err(e) => return Err(ToolError::model(prefixed(WS, e))),
+            Err(e) => return Err(ToolError::model(e)),
         };
         Ok(text.into())
     }
@@ -131,7 +131,7 @@ impl WorkspacePlugin {
         let mut sessions = cx.history().sessions()?;
         sessions.sort_by_key(|s| Reverse(s.updated_at));
         if sessions.is_empty() {
-            return Ok(format!("[{WS}] no sessions yet").into());
+            return Ok("no sessions yet".into());
         }
         let lines: Vec<String> = sessions
             .iter()
@@ -144,7 +144,7 @@ impl WorkspacePlugin {
                 )
             })
             .collect();
-        Ok(format!("[{WS}] {}", lines.join("\n")).into())
+        Ok(lines.join("\n").into())
     }
 
     /// The session half of `search`: BM25-ranked nodes over user text,
@@ -270,7 +270,7 @@ fn searchable_text(body: &NodeBody) -> Option<(&'static str, String)> {
 }
 
 fn no_node_err(sid: &str, node: &str) -> ToolError {
-    ToolError::model(format!("[{WS}] no node `{node}` on session `{sid}`"))
+    ToolError::model(format!("no node `{node}` on session `{sid}`"))
 }
 
 /// Resolve a node address: the full id, else a unique prefix of at least
@@ -288,7 +288,7 @@ fn find_node<'a>(nodes: &'a [Node], id: &str, sid: &str) -> ToolResult<&'a Node>
         0 => Err(no_node_err(sid, id)),
         1 => Ok(matches[0]),
         _ => Err(ToolError::model(format!(
-            "[{WS}] node prefix `{id}` is ambiguous on session `{sid}`: {}",
+            "node prefix `{id}` is ambiguous on session `{sid}`: {}",
             matches
                 .iter()
                 .map(|n| n.id.0.as_str())
@@ -537,7 +537,7 @@ fn abbreviate(id: &str, len: usize) -> String {
 fn render_overview(info: &SessionInfo, nodes: &[Node], branches: &[Branch]) -> String {
     let view = SessionView::new(&info.id.0, nodes);
     let mut out = format!(
-        "[{WS}] session {} — \"{}\" · updated {}",
+        "session {} — \"{}\" · updated {}",
         info.id,
         info.title,
         iso_local(info.updated_at)

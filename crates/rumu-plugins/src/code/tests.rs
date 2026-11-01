@@ -184,7 +184,7 @@ async fn internal_images_forward_to_the_code_result() {
         height: 600,
         size: 1234,
     };
-    let header = "[proj] image proj:a.png (800×600, 1234 bytes stored)";
+    let header = "image proj:a.png (800×600, 1234 bytes stored)";
     let host = FakeRuntime::arc();
     queue(
         &host,

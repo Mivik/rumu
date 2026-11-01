@@ -41,7 +41,6 @@ impl From<&str> for ToolInputError {
 /// A finished `bash` call: exit status, combined output and the effects it
 /// produced. `is_error` follows the exit status.
 struct BashOutcome {
-    tool: String,
     code: i32,
     output: String,
     effects: Vec<Effect>,
@@ -51,8 +50,8 @@ impl From<BashOutcome> for ToolOutput {
     fn from(outcome: BashOutcome) -> Self {
         ToolOutput {
             content: rumu_core::Content::text(format!(
-                "[{}] exit code: {}\n{}",
-                outcome.tool, outcome.code, outcome.output
+                "exit code: {}\n{}",
+                outcome.code, outcome.output
             )),
             is_error: outcome.code != 0,
             effects: outcome.effects,
@@ -248,67 +247,50 @@ enum Target {
     },
 }
 
-/// `[{prefix}] {message}` — the prefix every tool/workspace failure carries.
-pub(super) fn prefixed(prefix: &str, message: impl std::fmt::Display) -> String {
-    format!("[{prefix}] {message}")
-}
-
-/// A backend operation failure: `[{tool}] {op} {path}: {source}`, or
-/// `[{tool}] {op}: {source}` without a path.
-fn backend_err(
-    tool: &str,
-    op: &str,
-    path: Option<String>,
-    source: impl std::fmt::Display,
-) -> ToolError {
+/// A backend operation failure: `{op} {path}: {source}`, or
+/// `{op}: {source}` without a path.
+fn backend_err(op: &str, path: Option<String>, source: impl std::fmt::Display) -> ToolError {
     let at = path.map(|path| format!(" {path}")).unwrap_or_default();
-    ToolError::model(prefixed(tool, format!("{op}{at}: {source}")))
+    ToolError::model(format!("{op}{at}: {source}"))
 }
 
 /// The read-only refusal shared by the write/edit/bash tools.
-pub(super) fn read_only_err(name: &str, ws: &Workspace, action: &str) -> ToolError {
-    ToolError::model(prefixed(
-        name,
-        format!("workspace `{}` is read-only; {action}", ws.name),
-    ))
+pub(super) fn read_only_err(ws: &Workspace, action: &str) -> ToolError {
+    ToolError::model(format!("workspace `{}` is read-only; {action}", ws.name))
 }
 
 /// Reject a malformed card id before it becomes a path.
 pub(super) fn invalid_card_id(id: &str) -> Option<ToolError> {
     (!rumu_cards::valid_card_id(id)).then(|| {
-        ToolError::model(prefixed(
-            RUMU_WORKSPACE,
-            format!(
-                "invalid card id `{id}`: use `/`-separated segments of \
+        ToolError::model(format!(
+            "invalid card id `{id}`: use `/`-separated segments of \
                  [A-Za-z0-9._-], no leading dots, max depth 8"
-            ),
         ))
     })
 }
 
-/// `[@rumu] no card `<uri>``, plus near matches when there are any.
+/// `no card `<uri>``, plus near matches when there are any.
 pub(super) fn no_card_err(id: &str, known: &[String]) -> ToolError {
     let mut message = format!("no card `{}`", rumu_cards::card_uri(id));
     let suggestions = rumu_cards::suggest_ids(known, id);
     if !suggestions.is_empty() {
         message.push_str(&format!(" (did you mean: {}?)", suggestions.join(", ")));
     }
-    ToolError::model(prefixed(RUMU_WORKSPACE, message))
+    ToolError::model(message)
 }
 
-/// `[@rumu] loading card `<uri>`: {source}`.
+/// `loading card `<uri>`: {source}`.
 pub(super) fn card_load_err(id: &str, source: impl std::fmt::Display) -> ToolError {
-    ToolError::model(prefixed(
-        RUMU_WORKSPACE,
-        format!("loading card `{}`: {source}", rumu_cards::card_uri(id)),
+    ToolError::model(format!(
+        "loading card `{}`: {source}",
+        rumu_cards::card_uri(id)
     ))
 }
 
-/// `[@rumu] unknown path ...`.
+/// `unknown path ...`.
 pub(super) fn unknown_rumu_path(abs: &Utf8UnixPath) -> ToolError {
-    ToolError::model(prefixed(
-        RUMU_WORKSPACE,
-        format!("unknown path `{RUMU_WORKSPACE}:{abs}` (roots: /cards, /sessions, /task)"),
+    ToolError::model(format!(
+        "unknown path `{RUMU_WORKSPACE}:{abs}` (roots: /cards, /sessions, /task)"
     ))
 }
 
@@ -476,7 +458,6 @@ impl WorkspacePlugin {
         match target {
             Target::Real { ws, abs } => {
                 let effects = self.maybe_inject_agents(cx, &ws).await;
-                let name = ws.name.clone();
                 let backend = self.backend_for(&ws);
                 match backend.read_bytes(&abs).await {
                     Ok(bytes) if rumu_blob::is_image(&bytes) => {
@@ -491,13 +472,12 @@ impl WorkspacePlugin {
                         let text = String::from_utf8_lossy(&bytes).into_owned();
                         match slice_lines(text, offset, limit) {
                             Ok(s) => Ok(ToolOutput::ok(s).with_effects(effects)),
-                            Err(e) => {
-                                Err(ToolError::model(prefixed(&name, e)).with_effects(effects))
-                            }
+                            Err(e) => Err(ToolError::model(e).with_effects(effects)),
                         }
                     }
-                    Err(e) => Err(backend_err(&name, "read", Some(display(&ws, &abs)), e)
-                        .with_effects(effects)),
+                    Err(e) => {
+                        Err(backend_err("read", Some(display(&ws, &abs)), e).with_effects(effects))
+                    }
                 }
             }
             Target::Rumu { abs } => self.rumu_read(&abs, offset, limit, cx).await,
@@ -517,34 +497,32 @@ impl WorkspacePlugin {
         limit: Option<u64>,
     ) -> ToolResult<ToolOutput> {
         if offset.is_some() || limit.is_some() {
-            return Err(ToolError::model(prefixed(
-                &ws.name,
+            return Err(ToolError::model(
                 "`offset`/`limit` do not apply to image reads",
-            )));
+            ));
         }
         let blobs = self
             .blobs()
-            .map_err(|e| backend_err(&ws.name, "read", Some(display(ws, abs)), e))?;
+            .map_err(|e| backend_err("read", Some(display(ws, abs)), e))?;
         let file_name = abs.file_name().map(str::to_owned);
         let at = display(ws, abs);
-        let name = ws.name.clone();
         let attachment = tokio::task::spawn_blocking(move || blobs.ingest_image(&bytes, file_name))
             .await
-            .map_err(|e| ToolError::model(prefixed(&name, format!("reading image: {e}"))))?
-            .map_err(|e| backend_err(&name, "read", Some(at.clone()), e))?;
+            .map_err(|e| ToolError::model(format!("reading image: {e}")))?
+            .map_err(|e| backend_err("read", Some(at.clone()), e))?;
         Ok(ToolOutput::ok(format!(
-            "[{name}] image {at} ({}×{}, {} bytes stored)",
+            "image {at} ({}×{}, {} bytes stored)",
             attachment.width, attachment.height, attachment.size
         ))
         .with_attachments([attachment]))
     }
 
     /// Shared write preflight for real workspaces: the read-only check.
-    fn write_target(&self, ws: &Workspace) -> ToolResult<String> {
+    fn write_target(&self, ws: &Workspace) -> ToolResult<()> {
         if ws.read_only {
-            return Err(read_only_err(&ws.name, ws, "writes are refused"));
+            return Err(read_only_err(ws, "writes are refused"));
         }
-        Ok(ws.name.clone())
+        Ok(())
     }
 
     async fn tool_write(&self, state: &PathState, args: &Value, cx: &Cx) -> ToolResult<ToolOutput> {
@@ -553,20 +531,20 @@ impl WorkspacePlugin {
         match target {
             Target::Real { ws, abs } => {
                 let effects = self.maybe_inject_agents(cx, &ws).await;
-                let name = match self.write_target(&ws) {
-                    Ok(n) => n,
-                    Err(e) => return Err(e.with_effects(effects)),
-                };
+                if let Err(e) = self.write_target(&ws) {
+                    return Err(e.with_effects(effects));
+                }
                 let backend = self.backend_for(&ws);
                 match backend.write_bytes(&abs, args.content.as_bytes()).await {
                     Ok(()) => Ok(ToolOutput::ok(format!(
-                        "[{name}] wrote {} ({} bytes)",
+                        "wrote {} ({} bytes)",
                         display(&ws, &abs),
                         args.content.len()
                     ))
                     .with_effects(effects)),
-                    Err(e) => Err(backend_err(&name, "write", Some(display(&ws, &abs)), e)
-                        .with_effects(effects)),
+                    Err(e) => {
+                        Err(backend_err("write", Some(display(&ws, &abs)), e).with_effects(effects))
+                    }
                 }
             }
             Target::Rumu { abs } => {
@@ -584,28 +562,25 @@ impl WorkspacePlugin {
         match target {
             Target::Real { ws, abs } => {
                 let effects = self.maybe_inject_agents(cx, &ws).await;
-                let name = match self.write_target(&ws) {
-                    Ok(n) => n,
-                    Err(e) => return Err(e.with_effects(effects)),
-                };
+                if let Err(e) = self.write_target(&ws) {
+                    return Err(e.with_effects(effects));
+                }
                 let backend = self.backend_for(&ws);
                 let text = match backend.read_bytes(&abs).await {
                     Ok(bytes) => match String::from_utf8(bytes) {
                         Ok(text) => text,
                         Err(_) => {
-                            return Err(ToolError::model(prefixed(
-                                &name,
-                                format!(
-                                    "edit {}: not a UTF-8 text file; use bash",
-                                    display(&ws, &abs)
-                                ),
+                            return Err(ToolError::model(format!(
+                                "edit {}: not a UTF-8 text file; use bash",
+                                display(&ws, &abs)
                             ))
                             .with_effects(effects));
                         }
                     },
                     Err(e) => {
-                        return Err(backend_err(&name, "edit", Some(display(&ws, &abs)), e)
-                            .with_effects(effects));
+                        return Err(
+                            backend_err("edit", Some(display(&ws, &abs)), e).with_effects(effects)
+                        );
                     }
                 };
                 let (new_text, n) = match replace_occurrences(
@@ -616,18 +591,19 @@ impl WorkspacePlugin {
                 ) {
                     Ok(x) => x,
                     Err(e) => {
-                        return Err(ToolError::model(prefixed(&name, e)).with_effects(effects));
+                        return Err(ToolError::model(e).with_effects(effects));
                     }
                 };
                 match backend.write_bytes(&abs, new_text.as_bytes()).await {
                     Ok(()) => Ok(ToolOutput::ok(format!(
-                        "[{name}] edited {} ({n} replacement{})",
+                        "edited {} ({n} replacement{})",
                         display(&ws, &abs),
                         if n == 1 { "" } else { "s" }
                     ))
                     .with_effects(effects)),
-                    Err(e) => Err(backend_err(&name, "edit", Some(display(&ws, &abs)), e)
-                        .with_effects(effects)),
+                    Err(e) => {
+                        Err(backend_err("edit", Some(display(&ws, &abs)), e).with_effects(effects))
+                    }
                 }
             }
             Target::Rumu { abs } => {
@@ -653,14 +629,14 @@ impl WorkspacePlugin {
                     args.replace_all.unwrap_or(false),
                 ) {
                     Ok(x) => x,
-                    Err(e) => return Err(ToolError::model(prefixed(RUMU_WORKSPACE, e))),
+                    Err(e) => return Err(ToolError::model(e)),
                 };
                 let out = self.card_write(id, &new_view, CardOp::Edit, cx).await?;
                 if out.is_error {
                     return Ok(out);
                 }
                 Ok(ToolOutput::ok(format!(
-                    "[{RUMU_WORKSPACE}] edited card `{}` ({n} replacement{})",
+                    "edited card `{}` ({n} replacement{})",
                     rumu_cards::card_uri(id),
                     if n == 1 { "" } else { "s" }
                 ))
@@ -677,7 +653,6 @@ impl WorkspacePlugin {
         match target {
             Target::Real { ws, abs } => {
                 let effects = self.maybe_inject_agents(cx, &ws).await;
-                let name = ws.name.clone();
                 let backend = self.backend_for(&ws);
                 match backend.list_dir(&abs).await {
                     Ok(entries) => {
@@ -690,10 +665,11 @@ impl WorkspacePlugin {
                         } else {
                             lines.join("\n")
                         };
-                        Ok(ToolOutput::ok(format!("[{name}] {body}")).with_effects(effects))
+                        Ok(ToolOutput::ok(body).with_effects(effects))
                     }
-                    Err(e) => Err(backend_err(&name, "list", Some(display(&ws, &abs)), e)
-                        .with_effects(effects)),
+                    Err(e) => {
+                        Err(backend_err("list", Some(display(&ws, &abs)), e).with_effects(effects))
+                    }
                 }
             }
             Target::Rumu { abs } => self.rumu_list(&abs, cx).await,
@@ -708,10 +684,9 @@ impl WorkspacePlugin {
             .clamp(1, BASH_TIMEOUT_MAX);
         let ws = bash_target(state, args.workspace.as_deref())?;
         if ws.read_only {
-            return Err(read_only_err(&ws.name, &ws, "bash is disabled"));
+            return Err(read_only_err(&ws, "bash is disabled"));
         }
         let effects = self.maybe_inject_agents(cx, &ws).await;
-        let name = ws.name.clone();
         let backend = self.backend_for(&ws);
         // Stream every chunk to the UI (tool.progress) / the task buffer
         // (task.progress). Background bash has no timeout of its own: it ends
@@ -730,7 +705,7 @@ impl WorkspacePlugin {
                     Ok(r) => r,
                     Err(_) => {
                         return Err(ToolError::model(format!(
-                            "[{name}] `{}` timed out after {timeout}s",
+                            "`{}` timed out after {timeout}s",
                             args.command
                         ))
                         .with_effects(effects));
@@ -739,12 +714,11 @@ impl WorkspacePlugin {
             };
         match exec {
             Ok(out) => Ok(BashOutcome {
-                tool: name,
                 code: out.code,
                 output: out.combined,
                 effects,
             }),
-            Err(e) => Err(backend_err(&name, "bash", None, e).with_effects(effects)),
+            Err(e) => Err(backend_err("bash", None, e).with_effects(effects)),
         }
     }
 
@@ -767,7 +741,7 @@ impl WorkspacePlugin {
         let mut after = state.clone();
         after.default_workspace = Some(name.clone());
         Ok(ToolOutput::ok(format!(
-            "[{name}] default workspace set; workspaces:\n{}",
+            "default workspace set; workspaces:\n{}",
             self.listing(&after).await
         ))
         .with_effects(effects))
@@ -863,7 +837,7 @@ impl WorkspacePlugin {
     /// `list` inside the `@rumu` workspace.
     async fn rumu_list(&self, abs: &Utf8UnixPath, cx: &Cx) -> ToolResult<ToolOutput> {
         match abs.as_str() {
-            "/" => Ok(format!("[{RUMU_WORKSPACE}] cards/\nsessions/\ntask/").into()),
+            "/" => Ok("cards/\nsessions/\ntask/".into()),
             "/cards" => self.card_list("").await,
             _ if abs.starts_with("/cards") => {
                 let prefix = abs

@@ -262,9 +262,7 @@ async fn read_write_edit_list_roundtrip() {
         .unwrap();
     assert!(!out.is_error, "{}", out.content.text);
     assert!(
-        out.content
-            .text
-            .starts_with("[proj] wrote proj:a/b.txt (9 bytes)"),
+        out.content.text.starts_with("wrote proj:a/b.txt (9 bytes)"),
         "{}",
         out.content.text
     );
@@ -367,24 +365,24 @@ async fn read_write_edit_list_roundtrip() {
 
     // list: dirs trailing /, prefixed output; `proj:` (empty rest) = root.
     let out = plugin.call_tool("list", json!({}), &cx).await.unwrap();
-    assert_eq!(out.content.text, "[proj] a/");
+    assert_eq!(out.content.text, "a/");
     let out = plugin
         .call_tool("list", json!({ "path": "proj:" }), &cx)
         .await
         .unwrap();
-    assert_eq!(out.content.text, "[proj] a/");
+    assert_eq!(out.content.text, "a/");
     let out = plugin
         .call_tool("list", json!({ "path": "a" }), &cx)
         .await
         .unwrap();
-    assert_eq!(out.content.text, "[proj] b.txt");
+    assert_eq!(out.content.text, "b.txt");
 
     let out = plugin
         .call_tool("read", json!({ "path": "missing.txt" }), &cx)
         .await
         .unwrap();
     assert!(
-        out.is_error && out.content.text.starts_with("[proj] "),
+        out.is_error && out.content.text.starts_with("read proj:missing.txt: "),
         "{}",
         out.content.text
     );
@@ -415,7 +413,7 @@ async fn image_read_ingests_and_attaches() {
     assert!(
         out.content
             .text
-            .starts_with("[proj] image proj:img/demo.png (40×30, ")
+            .starts_with("image proj:img/demo.png (40×30, ")
             && out.content.text.ends_with(" bytes stored)"),
         "{}",
         out.content.text
@@ -448,9 +446,7 @@ async fn image_read_ingests_and_attaches() {
         .unwrap();
     assert!(out.is_error, "{}", out.content.text);
     assert!(
-        out.content
-            .text
-            .starts_with("[proj] read proj:img/broken.png: "),
+        out.content.text.starts_with("read proj:img/broken.png: "),
         "{}",
         out.content.text
     );
@@ -511,7 +507,7 @@ async fn read_only_and_bash_behaviour() {
         .unwrap();
     assert!(!out.is_error, "{}", out.content.text);
     assert!(
-        out.content.text.starts_with("[proj] exit code: 0\n"),
+        out.content.text.starts_with("exit code: 0\n"),
         "{}",
         out.content.text
     );
@@ -640,7 +636,7 @@ async fn workspace_use_lists_and_switches() {
         .unwrap();
     assert!(!out.is_error, "{}", out.content.text);
     assert!(
-        out.content.text.starts_with("[prod] default workspace set"),
+        out.content.text.starts_with("default workspace set"),
         "{}",
         out.content.text
     );
@@ -862,7 +858,7 @@ async fn rumu_workspace_edges() {
 
     // `list @rumu:` shows the roots.
     let out = plugin.call_tool("list", json!({}), &cx).await.unwrap();
-    assert_eq!(out.content.text, "[@rumu] cards/\nsessions/\ntask/");
+    assert_eq!(out.content.text, "cards/\nsessions/\ntask/");
 
     // Unknown paths name the roots.
     for tool in ["read", "write", "edit", "list"] {
@@ -935,7 +931,7 @@ async fn rumu_workspace_edges() {
             .await
             .unwrap();
         assert!(
-            !out.is_error && out.content.text.contains("[@rumu] no sessions yet"),
+            !out.is_error && out.content.text.contains("no sessions yet"),
             "{}",
             out.content.text
         );
@@ -1067,7 +1063,7 @@ async fn card_tools_read_write_validate_and_list() {
         out.content.text
     );
     assert!(
-        out.content.text.starts_with("[@rumu] wrote cards/c.md"),
+        out.content.text.starts_with("wrote cards/c.md"),
         "{}",
         out.content.text
     );
@@ -1247,11 +1243,6 @@ async fn card_tools_read_write_validate_and_list() {
         .call_tool("list", json!({ "path": "@rumu:/cards" }), &cx)
         .await
         .unwrap();
-    assert!(
-        out.content.text.starts_with("[@rumu] "),
-        "{}",
-        out.content.text
-    );
     assert!(
         out.content.text.contains("@rumu:/cards/dev/y — plain"),
         "{}",
@@ -1635,7 +1626,7 @@ async fn session_listing_and_overview() {
     let mut fields = line.split("  ");
     assert_eq!(
         fields.next(),
-        Some("[@rumu] @rumu:/sessions/01STESTSSESSION0000000000000")
+        Some("@rumu:/sessions/01STESTSSESSION0000000000000")
     );
     assert_stamp(fields.next().unwrap(), 8000);
     assert_eq!(fields.next(), Some("\"config hunting\""), "{line}");
@@ -1655,7 +1646,7 @@ async fn session_listing_and_overview() {
         let header = out.content.text.lines().next().unwrap();
         assert!(
             header.starts_with(
-                "[@rumu] session 01STESTSSESSION0000000000000 — \"config hunting\" · updated "
+                "session 01STESTSSESSION0000000000000 — \"config hunting\" · updated "
             ),
             "{header}"
         );
@@ -1840,10 +1831,8 @@ async fn session_nodes_show_image_placeholders() {
             "T1",
             NodeBody::ToolResult {
                 call_id: "c1".into(),
-                content: rumu_core::Content::text(
-                    "[proj] image proj:a.png (800×600, 9 bytes stored)",
-                )
-                .with_attachments([image]),
+                content: rumu_core::Content::text("image proj:a.png (800×600, 9 bytes stored)")
+                    .with_attachments([image]),
                 is_error: false,
             },
         ),
@@ -1882,9 +1871,9 @@ async fn session_nodes_show_image_placeholders() {
         .await
         .unwrap();
     assert!(
-        out.content.text.contains(
-            "[proj] image proj:a.png (800×600, 9 bytes stored)\n[image: shot.png 800×600]"
-        ),
+        out.content
+            .text
+            .contains("image proj:a.png (800×600, 9 bytes stored)\n[image: shot.png 800×600]"),
         "{}",
         out.content.text
     );
