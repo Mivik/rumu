@@ -3,6 +3,12 @@
     "home": "首页",
     "close": "关闭会话列表",
     "new": "开始会话",
+    "delete": "删除会话",
+    "deleteConfirm": "删除",
+    "deletePrompt": "删除这个会话？",
+    "deleteWarning": "此操作无法撤销。",
+    "lastActive": "上次活跃 {at}",
+    "actions": "会话操作",
     "today": "今天",
     "earlier": "更早"
   },

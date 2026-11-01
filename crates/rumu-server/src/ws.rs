@@ -348,6 +348,12 @@ async fn dispatch(state: &AppState, method: &str, p: &Value) -> Result<Value> {
             }))
         }
 
+        "session.delete" => {
+            let session: SessionId = str_param(p, "session")?.into();
+            kernel.delete_session(&session)?;
+            Ok(json!({}))
+        }
+
         "branch.path" => {
             let branch: BranchId = str_param(p, "branch")?.into();
             let (nodes, state) = kernel.branch_path(&branch)?;

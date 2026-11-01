@@ -13,6 +13,7 @@ import type {
   NodeAppendedPush,
   PromptBlockedPush,
   PromptQueuedPush,
+  SessionDeletedPush,
   SessionId,
   SessionUpdatedPush,
   TaskInfoPush,
@@ -24,7 +25,7 @@ import type {
   WarningPush,
 } from '../types'
 import { MAX_DELTA_CHARS, MAX_TRACE, state } from './state'
-import { closeSession, openSession, refreshCards, refreshLists } from './sessions'
+import { closeSession, forgetSession, openSession, refreshCards, refreshLists } from './sessions'
 import { loadPath } from './tree'
 import { toast } from './ui'
 
@@ -153,6 +154,11 @@ function onSessionUpdated(p: SessionUpdatedPush): void {
   }
 }
 
+/** Another tab deleted a session; this one drops it (and leaves it if open). */
+function onSessionDeleted(p: SessionDeletedPush): void {
+  forgetSession(p.session.id)
+}
+
 function onTurnStarted(p: TurnPush): void {
   state.busy[p.branch] = true
   delete state.retrying[p.branch]
@@ -264,6 +270,7 @@ export function startApp(): void {
   rumu.onPush('llm.delta', (p) => onLlmDelta(p as unknown as LlmDeltaPush))
   rumu.onPush('branch.updated', (p) => onBranchUpdated(p as unknown as BranchUpdatedPush))
   rumu.onPush('session.updated', (p) => onSessionUpdated(p as unknown as SessionUpdatedPush))
+  rumu.onPush('session.deleted', (p) => onSessionDeleted(p as unknown as SessionDeletedPush))
   rumu.onPush('hook.fired', (p) => onHookFired(p as unknown as HookFiredPush))
   rumu.onPush('code.call', (p) => onCodeCall(p as unknown as CodeCallPush))
   rumu.onPush('tool.progress', (p) => onToolProgress(p as unknown as ToolProgressPush))

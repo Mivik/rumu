@@ -239,11 +239,45 @@ impl Store {
         Ok(())
     }
 
+    /// Delete a session: its journal file and every in-memory record and
+    /// index entry. A missing session is a no-op. A torn write racing the
+    /// delete cannot resurrect the file: later appends to an unknown session
+    /// are dropped (see the insert methods below).
+    pub fn delete_session(&self, id: &SessionId) -> Result<()> {
+        let mut st = self.state.lock().unwrap();
+        if !st.sessions.contains_key(id) {
+            return Ok(());
+        }
+        if let Some(root) = &self.root {
+            let path = root.join(format!("{id}.jsonl"));
+            match std::fs::remove_file(&path) {
+                Ok(()) => {}
+                // Already gone (e.g. an in-memory-only session's file was
+                // removed by hand): the state is what matters now.
+                Err(e) if e.kind() == std::io::ErrorKind::NotFound => {}
+                Err(e) => return Err(IoError::at("removing", &path)(e).into()),
+            }
+        }
+        if let Some(Entry::Loaded(s)) = st.sessions.remove(id) {
+            for branch in s.branches.keys() {
+                st.branch_owner.remove(branch);
+            }
+            for node in s.nodes.keys() {
+                st.node_owner.remove(node);
+            }
+        }
+        Ok(())
+    }
+
     // ---- branches ----
 
     pub fn insert_branch(&self, b: &Branch) -> Result<()> {
         let mut st = self.state.lock().unwrap();
-        st.loaded(&b.session)?;
+        // The session was deleted while this write was in flight: drop it
+        // rather than recreate the file.
+        if st.loaded(&b.session)?.is_none() {
+            return Ok(());
+        }
         let rec = Record::Branch(b.clone());
         self.append(&b.session, &rec)?;
         st.apply(&b.session, rec);
@@ -301,7 +335,10 @@ impl Store {
 
     pub fn insert_node(&self, n: &Node) -> Result<()> {
         let mut st = self.state.lock().unwrap();
-        st.loaded(&n.session)?;
+        // See `insert_branch`: a deleted session stays deleted.
+        if st.loaded(&n.session)?.is_none() {
+            return Ok(());
+        }
         let rec = Record::Node(Box::new(n.clone()));
         self.append(&n.session, &rec)?;
         st.apply(&n.session, rec);
@@ -341,7 +378,10 @@ impl Store {
     /// `(parent_call, seq)` replaces this one.
     pub fn insert_code_call(&self, session: &SessionId, c: &CodeCall) -> Result<()> {
         let mut st = self.state.lock().unwrap();
-        st.loaded(session)?;
+        // See `insert_branch`: a deleted session stays deleted.
+        if st.loaded(session)?.is_none() {
+            return Ok(());
+        }
         let rec = Record::CodeCall(c.clone());
         self.append(session, &rec)?;
         st.apply(session, rec);
@@ -762,6 +802,46 @@ mod tests {
         }
         let store = Store::open(&dir).unwrap();
         assert_eq!(store.list_sessions().unwrap().len(), 1);
+        std::fs::remove_dir_all(&dir).ok();
+    }
+
+    #[test]
+    fn delete_removes_the_journal_and_indexes() {
+        let dir = temp_dir("delete");
+        {
+            let store = Store::open(&dir).unwrap();
+            let (session, branch, root) = mk_session(&store);
+            let path = dir.join(format!("{}.jsonl", session.id));
+            assert!(path.exists());
+
+            store.delete_session(&session.id).unwrap();
+            assert!(store.list_sessions().unwrap().is_empty());
+            assert!(store.get_session(&session.id).unwrap().is_none());
+            assert!(store.get_branch(&branch.id).unwrap().is_none());
+            assert!(store.get_node(&root.id).unwrap().is_none());
+            assert!(!path.exists());
+
+            // Idempotent, and a late write from a cancelled turn is dropped
+            // instead of recreating the file.
+            store.delete_session(&session.id).unwrap();
+            store
+                .insert_node(&Node {
+                    id: NodeId::new(),
+                    parent: Some(root.id.clone()),
+                    session: session.id.clone(),
+                    at: now(),
+                    dur_ms: None,
+                    body: NodeBody::Note {
+                        source: "system".into(),
+                        content: rumu_core::Content::text("late"),
+                    },
+                })
+                .unwrap();
+            assert!(!path.exists());
+        }
+        // Reopening the directory finds nothing left behind.
+        let store = Store::open(&dir).unwrap();
+        assert!(store.list_sessions().unwrap().is_empty());
         std::fs::remove_dir_all(&dir).ok();
     }
 

@@ -2201,6 +2201,33 @@ async fn session_default_workspace_is_branch_state() {
     );
 }
 
+#[tokio::test]
+async fn delete_session_removes_the_tree_and_pushes_it() {
+    let (kernel, _llm, session, branch) = setup(vec![], vec![]).await;
+    // Another session must be untouched.
+    let (keep, _) = kernel.create_session(None).await.unwrap();
+    let mut rx = kernel.tap_pushes();
+
+    kernel.delete_session(&session).unwrap();
+
+    let push = rx.recv().await.unwrap();
+    assert_eq!(push["method"], "session.deleted");
+    assert_eq!(push["params"]["session"]["id"], session.0);
+
+    let list = kernel.list_sessions().unwrap();
+    assert_eq!(list.len(), 1);
+    assert_eq!(list[0].id, keep.id);
+    assert!(kernel.session_tree(&session).is_err());
+    assert!(kernel.branch_path(&branch).is_err());
+    assert!(kernel.code_calls(&session).unwrap().is_empty());
+
+    // An unknown id is a clear error, not a silent success.
+    assert!(matches!(
+        kernel.delete_session(&SessionId::new()),
+        Err(rumu_kernel::Error::SessionNotFound(_))
+    ));
+}
+
 /// Fail-fast: a malformed matcher fails kernel construction instead of
 /// silently never matching. (The three bad shapes themselves are unit-tested
 /// in `predicate::compile_rejects_bad_matchers`; here we only check that the

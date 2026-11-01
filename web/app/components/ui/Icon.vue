@@ -18,6 +18,8 @@ const paths: Record<string, string> = {
   regenerate: '<path d="M20 12a8 8 0 1 1-2.34-5.66"/><path d="M20 4v5h-5"/>',
   copy: '<rect x="9" y="9" width="10.5" height="10.5" rx="2"/><path d="M15 9V6.5A2.5 2.5 0 0 0 12.5 4h-6A2.5 2.5 0 0 0 4 6.5v6A2.5 2.5 0 0 0 6.5 15H9"/>',
   edit: '<path d="M15.5 4.5l4 4L8 20H4v-4L15.5 4.5z"/><path d="M13 7l4 4"/>',
+  trash:
+    '<path d="M4.5 7h15"/><path d="M9.5 7V5.5A1.5 1.5 0 0 1 11 4h2a1.5 1.5 0 0 1 1.5 1.5V7"/><path d="M6.5 7l.8 12a1.5 1.5 0 0 0 1.5 1.4h6.4a1.5 1.5 0 0 0 1.5-1.4L17.5 7"/><path d="M10.5 11v5.5M13.5 11v5.5"/>',
   agent: '<circle cx="12" cy="12" r="8.5"/><path d="M15 9l-2 4-4 2 2-4 4-2z"/>',
   fork: '<circle cx="6.5" cy="5.5" r="2.2"/><circle cx="6.5" cy="18.5" r="2.2"/><circle cx="17.5" cy="5.5" r="2.2"/><path d="M6.5 7.7v8.6"/><path d="M17.5 7.7v1.8a5 5 0 0 1-5 5H9"/>',
   blocked: '<circle cx="12" cy="12" r="8.5"/><path d="M6.5 6.5l11 11"/>',
@@ -28,6 +30,7 @@ const paths: Record<string, string> = {
   external: '<path d="M7 17L17 7"/><path d="M9.5 7H17v7.5"/>',
   close: '<path d="M6.5 6.5l11 11M17.5 6.5l-11 11"/>',
   menu: '<path d="M4 7h16M4 12h16M4 17h16"/>',
+  more: '<circle cx="6" cy="12" r="1.4" fill="currentColor" stroke="none"/><circle cx="12" cy="12" r="1.4" fill="currentColor" stroke="none"/><circle cx="18" cy="12" r="1.4" fill="currentColor" stroke="none"/>',
   panel: '<rect x="3.5" y="4.5" width="17" height="15" rx="2"/><path d="M15 4.5v15"/>',
   chevron: '<path d="M9 6l6 6-6 6"/>',
   down: '<path d="M6.5 9.5l5.5 5.5 5.5-5.5"/>',

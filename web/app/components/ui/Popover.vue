@@ -10,10 +10,23 @@ import type { Ref } from 'vue'
 import { autoUpdate, flip, offset, shift, useFloating } from '@floating-ui/vue'
 import type { Placement } from '@floating-ui/vue'
 
-const props = withDefaults(defineProps<{ placement?: Placement; label: string; wide?: boolean }>(), {
-  placement: 'bottom-end',
-  wide: false,
-})
+const props = withDefaults(
+  defineProps<{
+    placement?: Placement
+    label: string
+    wide?: boolean
+    /** A compact action menu (tight padding, narrow panel). */
+    menu?: boolean
+    /** The panel's ARIA role; `menu` for an action menu. */
+    role?: 'dialog' | 'menu'
+  }>(),
+  {
+    placement: 'bottom-end',
+    wide: false,
+    menu: false,
+    role: 'dialog',
+  },
+)
 
 const open = ref(false)
 const anchor = ref<HTMLElement | null>(null)
@@ -47,7 +60,10 @@ function onPointer(e: PointerEvent): void {
   if (!anchor.value?.contains(target) && !panel.value?.contains(target)) close()
 }
 function onKey(e: KeyboardEvent): void {
-  if (e.key === 'Escape') close()
+  if (e.key !== 'Escape') return
+  close()
+  // Put focus back on the trigger that opened the panel.
+  anchor.value?.querySelector<HTMLElement>('button, [href], [tabindex]')?.focus()
 }
 
 watch(open, (v) => {
@@ -77,11 +93,17 @@ onBeforeUnmount(close)
       <div
         v-if="open"
         ref="panel"
-        role="dialog"
+        :role="role"
         :aria-label="label"
         :style="{ ...floatingStyles, visibility: isPositioned ? 'visible' : 'hidden' }"
-        class="z-50 max-h-[min(70vh,560px)] overflow-y-auto rounded-card border border-line-soft bg-surface p-3 shadow-pop"
-        :class="wide ? 'w-[min(440px,calc(100vw-1rem))]' : 'w-[min(360px,calc(100vw-1rem))]'"
+        class="z-50 max-h-[min(70vh,560px)] overflow-y-auto rounded-card border border-line-soft bg-surface shadow-pop"
+        :class="
+          menu
+            ? 'w-[min(220px,calc(100vw-1rem))] p-1'
+            : wide
+              ? 'w-[min(440px,calc(100vw-1rem))] p-3'
+              : 'w-[min(360px,calc(100vw-1rem))] p-3'
+        "
       >
         <slot :close="close" />
       </div>

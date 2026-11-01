@@ -5,6 +5,7 @@
   "listingTasks": "加载任务失败",
   "killing": "终止 {id} 失败",
   "newSession": "开始会话失败",
+  "deleteSession": "删除会话失败",
   "prompt": "发送消息失败",
   "abort": "停止失败",
   "editFirst": "无法编辑第一条消息",

@@ -151,6 +151,26 @@ export async function newSession(): Promise<boolean> {
   }
 }
 
+/** A session is gone (deleted here or in another tab): drop it from the list
+ * and, when it was the open one, land on the home page. The address entry is
+ * replaced so Back cannot reopen a dead session. */
+export function forgetSession(id: SessionId): void {
+  state.sessions = state.sessions.filter((s) => s.id !== id)
+  if (state.sessionId !== id) return
+  closeSession()
+  routeSession(null, 'replace')
+}
+
+/** Delete a session and its stored history for good. */
+export async function deleteSession(id: SessionId): Promise<void> {
+  try {
+    await rumu.request('session.delete', { session: id })
+    forgetSession(id)
+  } catch (err) {
+    toast('error', t('errors.deleteSession'), (err as Error).message)
+  }
+}
+
 /** An attachment sent with a prompt: the uploaded blob, plus the name it was
  * attached under. */
 export interface PromptAttachment {

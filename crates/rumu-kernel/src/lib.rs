@@ -599,6 +599,44 @@ impl Kernel {
             .map(|info| (info, branch))
     }
 
+    /// Delete a session: cancel every loop and background task it owns, then
+    /// remove its journal and in-memory tree. Writes already in flight are
+    /// dropped by the store, so a cancelled turn cannot resurrect the file.
+    pub fn delete_session(&self, session: &SessionId) -> Result<()> {
+        let info = self
+            .store
+            .get_session(session)?
+            .ok_or_else(|| Error::SessionNotFound(session.clone()))?;
+        let branches = self.store.branches_of_session(session)?;
+        {
+            let mut inner = self.inner.lock().unwrap();
+            for b in &branches {
+                if let Some(token) = inner.running.remove(&b.id) {
+                    token.cancel();
+                }
+                inner.queue.remove(&b.id);
+                inner.wake_pending.remove(&b.id);
+                inner.storm.remove(&b.id);
+            }
+            // Tasks are runtime-only; dropping their rows means an in-flight
+            // task reports nowhere when it ends (no completion note, no push).
+            let tasks: Vec<TaskId> = inner
+                .tasks
+                .iter()
+                .filter(|(_, e)| &e.info.session == session)
+                .map(|(id, _)| id.clone())
+                .collect();
+            for id in tasks {
+                if let Some(entry) = inner.tasks.remove(&id) {
+                    entry.token.cancel();
+                }
+            }
+        }
+        self.store.delete_session(session)?;
+        self.push("session.deleted", json!({ "session": info }));
+        Ok(())
+    }
+
     /// Record a default-workspace switch: a `workspace.use` marker. Branch
     /// state, so forks inherit it and reverts undo it.
     pub(crate) async fn workspace_use(
@@ -938,6 +976,12 @@ impl Kernel {
     /// prompts never reach this: they push `turn.error` directly (a refusal,
     /// with nothing to record).
     pub(crate) async fn finish_turn(self: &Arc<Self>, branch: BranchId, error: Option<Error>) {
+        // The branch is gone (its session was deleted while the turn was being
+        // cancelled): there is nothing left to record or report.
+        if self.store.get_branch(&branch).ok().flatten().is_none() {
+            self.end_loop(&branch).await;
+            return;
+        }
         let failure = match error {
             Some(e) => {
                 tracing::warn!(%branch, error = %e, "turn failed");
@@ -1031,7 +1075,12 @@ impl Kernel {
 
     /// Dispatch and deliver one out-of-band post.
     async fn process_post(self: &Arc<Self>, req: PostRequest) -> Result<()> {
-        let session = self.session_of(&req.branch)?;
+        // A post already in flight when its session was deleted has nowhere
+        // to land; drop it quietly instead of warning.
+        let Some(branch) = self.store.get_branch(&req.branch)? else {
+            return Ok(());
+        };
+        let session = branch.session;
         let mut ev = self.make_event(
             kind::POST,
             session,

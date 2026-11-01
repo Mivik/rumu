@@ -5,6 +5,7 @@
   "listingTasks": "Couldn't load tasks",
   "killing": "Couldn't kill {id}",
   "newSession": "Couldn't start session",
+  "deleteSession": "Couldn't delete session",
   "prompt": "Couldn't send message",
   "abort": "Couldn't stop rumu",
   "editFirst": "Can't edit the first message",

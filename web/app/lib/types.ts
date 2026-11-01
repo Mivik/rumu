@@ -136,6 +136,11 @@ export interface SessionUpdatedPush {
   session: SessionInfo
 }
 
+/** `session.deleted` push: the session and its whole tree are gone. */
+export interface SessionDeletedPush {
+  session: SessionInfo
+}
+
 export interface HookFiredPush {
   branch: BranchId
   event: string

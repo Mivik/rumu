@@ -63,7 +63,9 @@ export { findAgentChild, forkAt, regenerateFrom, retryBranch, selectBranch } fro
 export type { OpenHistory, PromptAttachment } from './state/sessions'
 export {
   closeSession,
+  deleteSession,
   editPrompt,
+  forgetSession,
   goHome,
   killTask,
   newSession,

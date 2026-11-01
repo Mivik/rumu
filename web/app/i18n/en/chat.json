@@ -3,6 +3,12 @@
     "home": "Home",
     "close": "Close sessions",
     "new": "Start session",
+    "delete": "Delete session",
+    "deleteConfirm": "Delete",
+    "deletePrompt": "Delete this session?",
+    "deleteWarning": "This can't be undone.",
+    "lastActive": "Last active {at}",
+    "actions": "Session actions",
     "today": "Today",
     "earlier": "Earlier"
   },

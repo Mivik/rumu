@@ -12,14 +12,24 @@
 // landing page, as does the new-session button — the first prompt typed there
 // starts the session. The open session is a bordered sheet of paper on this
 // one; the rest are plain lines with their last activity time.
-import { computed } from 'vue'
+import { computed, ref } from 'vue'
 import { LOCALE_LABELS, SUPPORTED_LOCALES, locale, setLocale, t } from '../i18n'
 import type { Locale } from '../i18n'
-import { connected, goHome, isBusy, openCatalog, openSession, sortedSessions, state } from '../lib/store'
+import {
+  connected,
+  deleteSession,
+  goHome,
+  isBusy,
+  openCatalog,
+  openSession,
+  sortedSessions,
+  state,
+} from '../lib/store'
 import type { SessionInfo } from '../lib/types'
 import { layout } from '../lib/layout'
 import RumuMark from './brand/RumuMark.vue'
 import Icon from './ui/Icon.vue'
+import Popover from './ui/Popover.vue'
 
 /** The wordmark and the new-session button are both the way home; they close
  * the drawer too on narrow screens. */
@@ -38,6 +48,37 @@ function pickSession(id: string): void {
   layout.sidebarOpen = false
 }
 
+/** The session whose action menu is asking for delete confirmation. The menu
+ * opens on its action list every time, so a reopened menu never starts on the
+ * destructive step. */
+const pendingDelete = ref<string | null>(null)
+
+function toggleMenu(toggle: () => void): void {
+  pendingDelete.value = null
+  toggle()
+}
+
+function askDelete(id: string): void {
+  pendingDelete.value = id
+}
+
+function cancelDelete(): void {
+  pendingDelete.value = null
+}
+
+/** Confirmed from a row's menu: delete it (landing home when it was open). */
+function removeSession(id: string): void {
+  if (id === state.sessionId) layout.sidebarOpen = false
+  void deleteSession(id)
+}
+
+/** The confirm step's Delete button: delete, then close the menu. */
+function confirmRemove(id: string, close: () => void): void {
+  pendingDelete.value = null
+  removeSession(id)
+  close()
+}
+
 const presence = computed(() => {
   if (!connected.value)
     return { live: false, offline: true, title: t('common.offlineReconnecting'), dot: 'bg-danger' }
@@ -54,7 +95,7 @@ const otherLocale = computed<Locale>(
 /** Flat list with group headers mixed in, so one TransitionGroup animates both. */
 type Row =
   | { kind: 'head'; key: string; label: string }
-  | { kind: 'session'; key: string; s: SessionInfo; when: string }
+  | { kind: 'session'; key: string; s: SessionInfo; last: string }
 
 const rows = computed<Row[]>(() => {
   const midnight = new Date().setHours(0, 0, 0, 0)
@@ -68,10 +109,16 @@ const rows = computed<Row[]>(() => {
       group = g
     }
     const at = new Date(s.updated_at)
-    const when = today
-      ? at.toLocaleTimeString(locale.value, { hour: '2-digit', minute: '2-digit' })
-      : at.toLocaleDateString(locale.value, { month: 'short', day: 'numeric' })
-    out.push({ kind: 'session', key: s.id, s, when })
+    const last = today
+      ? at.toLocaleTimeString(locale.value, { hour: '2-digit', minute: '2-digit', hourCycle: 'h23' })
+      : at.toLocaleString(locale.value, {
+          month: 'short',
+          day: 'numeric',
+          hour: '2-digit',
+          minute: '2-digit',
+          hourCycle: 'h23',
+        })
+    out.push({ kind: 'session', key: s.id, s, last })
   }
   return out
 })
@@ -141,25 +188,87 @@ const rows = computed<Row[]>(() => {
         <div v-if="r.kind === 'head'" class="px-3 pt-3 pb-1 text-micro font-bold text-ink-3">
           {{ r.label }}
         </div>
-        <button
+        <div
           v-else
-          class="flex w-full min-w-0 items-center gap-2 rounded-control border py-2 pl-3 pr-1.5 text-left text-secondary transition-[background-color,border-color,color,box-shadow] duration-200 lg:pr-3"
+          class="group flex w-full min-w-0 items-center rounded-control border text-left text-secondary transition-[background-color,border-color,color,box-shadow] duration-200 has-[[aria-expanded=true]]:bg-surface-2/60 has-[:focus-visible]:ring-2 has-[:focus-visible]:ring-brand/25"
           :class="
             r.s.id === state.sessionId
               ? 'border-line bg-surface-2 font-bold text-ink shadow-soft'
               : 'border-transparent text-ink-2 hover:bg-surface-2/60 hover:text-ink'
           "
-          :aria-current="r.s.id === state.sessionId ? 'page' : undefined"
-          @click="pickSession(r.s.id)"
         >
-          <span class="min-w-0 flex-1 truncate">{{ r.s.title || t('common.untitled') }}</span>
-          <span
-            v-if="r.s.id === state.sessionId && isBusy"
-            class="dot-live size-1.5 flex-none rounded-full bg-brand"
-            :title="t('common.working')"
-          />
-          <span v-else class="flex-none text-micro font-normal text-ink-3 tabular-nums">{{ r.when }}</span>
-        </button>
+          <button
+            class="flex min-w-0 flex-1 items-center gap-2 py-2 pr-1 pl-3 text-left outline-none"
+            :aria-current="r.s.id === state.sessionId ? 'page' : undefined"
+            @click="pickSession(r.s.id)"
+          >
+            <span class="min-w-0 flex-1 truncate">{{ r.s.title || t('common.untitled') }}</span>
+            <span
+              v-if="r.s.id === state.sessionId && isBusy"
+              class="dot-live size-1.5 flex-none rounded-full bg-brand"
+              :title="t('common.working')"
+            />
+          </button>
+          <Popover
+            class="mr-1.5 flex-none"
+            :label="pendingDelete === r.s.id ? t('chat.sidebar.delete') : t('chat.sidebar.actions')"
+            placement="bottom-end"
+            menu
+            :role="pendingDelete === r.s.id ? 'dialog' : 'menu'"
+          >
+            <template #trigger="{ open, toggle }">
+              <button
+                class="icon-btn relative size-6 flex-none opacity-60 transition-opacity duration-150 before:absolute before:-inset-1.5 hover:bg-line-soft/70 hover:text-ink group-hover:opacity-100 focus-visible:opacity-100 aria-expanded:opacity-100"
+                :aria-label="t('chat.sidebar.actions')"
+                :title="t('chat.sidebar.actions')"
+                aria-haspopup="menu"
+                :aria-expanded="open"
+                @click.stop="toggleMenu(toggle)"
+              >
+                <Icon name="more" :size="14" />
+              </button>
+            </template>
+            <template #default="{ close }">
+              <!-- stage one: last activity + the action list -->
+              <template v-if="pendingDelete !== r.s.id">
+                <p class="px-2.5 pt-1.5 pb-1 text-micro text-ink-3">
+                  {{ t('chat.sidebar.lastActive', { at: r.last }) }}
+                </p>
+                <div class="mx-1 mb-1 h-px bg-line-soft/70" />
+                <button
+                  type="button"
+                  role="menuitem"
+                  class="flex w-full items-center gap-2 rounded-control px-2.5 py-1.5 text-left text-secondary text-ink-2 transition-colors duration-150 hover:bg-danger-soft hover:text-danger focus-visible:bg-danger-soft focus-visible:text-danger"
+                  @click="askDelete(r.s.id)"
+                >
+                  <Icon name="trash" :size="13" />
+                  {{ t('chat.sidebar.delete') }}
+                </button>
+              </template>
+              <!-- stage two: confirmation, in place -->
+              <div v-else class="px-2.5 py-2">
+                <p class="text-secondary text-ink-2">{{ t('chat.sidebar.deletePrompt') }}</p>
+                <p class="mt-1 text-micro text-ink-3">{{ t('chat.sidebar.deleteWarning') }}</p>
+                <div class="mt-2 flex items-center justify-end gap-3">
+                  <button
+                    type="button"
+                    class="text-micro font-semibold text-ink-2 transition-colors hover:text-ink"
+                    @click="cancelDelete"
+                  >
+                    {{ t('common.cancel') }}
+                  </button>
+                  <button
+                    type="button"
+                    class="text-micro font-semibold text-danger transition-colors hover:underline"
+                    @click="confirmRemove(r.s.id, close)"
+                  >
+                    {{ t('chat.sidebar.deleteConfirm') }}
+                  </button>
+                </div>
+              </div>
+            </template>
+          </Popover>
+        </div>
       </template>
     </TransitionGroup>
 
