@@ -1,5 +1,4 @@
 ---
-title: Dangerous commands
 description: Why rm -rf rooted at / is blocked unconditionally, and what to do instead.
 ---
 Commands like `rm -rf /` (or any rm -rf rooted at `/`) can brick the machine —

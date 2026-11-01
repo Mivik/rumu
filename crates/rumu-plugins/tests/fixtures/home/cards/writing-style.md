@@ -1,5 +1,4 @@
 ---
-title: Writing style
 description: Technical and direct; conclusion first, short paragraphs, consistent terminology.
 ---
 - Technical and direct; no marketing filler, no hedging.

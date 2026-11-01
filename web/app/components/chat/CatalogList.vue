@@ -45,7 +45,7 @@ function foldedLabel(names: string[]): string {
     <ul class="flex flex-col gap-0.5">
       <li v-for="(e, i) in catalog.entries" :key="e.id">
         <button type="button" class="card-ref" :style="{ '--i': i }" @click="openDrawer(e.id)">
-          {{ e.title }}
+          {{ e.id }}
         </button>
         <span v-if="e.summary" class="text-ink-3"> — {{ e.summary }}</span>
       </li>

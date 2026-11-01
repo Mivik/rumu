@@ -1,5 +1,4 @@
 ---
-title: User preferences
 description: Sample preferences — concise, direct answers; code over prose.
 ---
 - Prefers concise, direct answers; show code over prose.

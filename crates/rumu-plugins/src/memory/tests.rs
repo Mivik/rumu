@@ -156,14 +156,10 @@ async fn recall_inlines_the_matching_card() {
     let home = recall_home(&[
         (
             "deploy",
-            "title: Deploying\ndescription: k8s rollout\nkeywords: [deploy, rollout]",
+            "description: k8s rollout\nkeywords: [deploy, rollout]",
             "the card body\n",
         ),
-        (
-            "other",
-            "title: Other\nkeywords: [unrelated]",
-            "other body\n",
-        ),
+        ("other", "keywords: [unrelated]", "other body\n"),
     ]);
     let plugin = MemoryPlugin::new(home.path());
     let host = FakeRuntime::arc();
@@ -174,7 +170,7 @@ async fn recall_inlines_the_matching_card() {
         .await
         .unwrap();
     assert_eq!(out.effects.len(), 1, "{:?}", out.effects);
-    assert_eq!(out.effects[0].text, "# Deploying\nthe card body\n");
+    assert_eq!(out.effects[0].text, "# deploy\nthe card body\n");
     let import: usage::CardImport = out.effects[0].decode().expect("memory.import payload");
     assert_eq!(import.id, "deploy");
 
@@ -223,11 +219,7 @@ async fn recall_skips_bodies_over_the_budget() {
 fn card_home(body: &str) -> tempfile::TempDir {
     let dir = tempfile::tempdir().unwrap();
     std::fs::create_dir_all(dir.path().join("cards")).unwrap();
-    std::fs::write(
-        dir.path().join("cards/x.md"),
-        format!("---\ntitle: X\n---\n{body}"),
-    )
-    .unwrap();
+    std::fs::write(dir.path().join("cards/x.md"), body).unwrap();
     dir
 }
 
@@ -252,7 +244,7 @@ async fn update_notices() {
     assert!(out.effects.is_empty(), "{:?}", out.effects);
 
     // New revision → one-line notice, no body, key carries the new revision.
-    std::fs::write(home.path().join("cards/x.md"), "---\ntitle: X\n---\nv2\n").unwrap();
+    std::fs::write(home.path().join("cards/x.md"), "v2\n").unwrap();
     let v2 = library::load_card(&FsCardStore::home(home.path()), "x")
         .unwrap()
         .unwrap()
@@ -267,7 +259,7 @@ async fn update_notices() {
         assert_eq!(update.id, "x");
         assert_eq!(update.rev, v2);
         assert!(
-            content.text.contains(&format!("Card `@rumu:/cards/x` (\"X\") changed since this branch last read it (rev {} → {v2}). Re-read it if it is still relevant.", card.revision)),
+            content.text.contains(&format!("Card `@rumu:/cards/x` changed since this branch last read it (rev {} → {v2}). Re-read it if it is still relevant.", card.revision)),
             "text shows old → new rev: {}",
             content.text
         );
@@ -321,7 +313,6 @@ async fn catalog_root_note_injected_once() {
         assert_eq!(catalog.scope, CatalogScope::Root);
         assert_eq!(catalog.entries.len(), 1);
         assert_eq!(catalog.entries[0].id, "x");
-        assert_eq!(catalog.entries[0].title, "X");
         assert_eq!(
             catalog.entries[0].summary.as_deref(),
             Some("the body summary")
@@ -333,7 +324,7 @@ async fn catalog_root_note_injected_once() {
             content.text
         );
         assert!(
-            content.text.contains("[X](@rumu:/cards/x)"),
+            content.text.contains("[x](@rumu:/cards/x)"),
             "{}",
             content.text
         );

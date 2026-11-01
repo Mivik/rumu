@@ -1,5 +1,4 @@
 ---
-title: ssh-agent setup
 description: Fixing 'Permission denied (publickey)' — agent check, keys, agent service.
 ---
 When git over ssh fails with "Permission denied (publickey)":

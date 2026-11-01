@@ -1,7 +1,7 @@
 //! BM25F ranking: [`rank_docs`] ranks weighted documents, and [`rank`] is the
 //! card-library wrapper used for prompt recall.
 //!
-//! A card's frontmatter `keywords:` (weight 3) outweigh its title (2), its
+//! A card's frontmatter `keywords:` (weight 3) outweigh its id (2), its
 //! description (1.5) and its body (1), so a card that names its own trigger
 //! terms is found even when its prose never repeats them. Text is tokenized
 //! into lowercase words in any alphabet and CJK bigrams (fullwidth ASCII
@@ -22,7 +22,7 @@ use std::collections::{BTreeMap, BTreeSet};
 
 use crate::Card;
 
-/// Per-field card weights: keywords, title, description, body.
+/// Per-field card weights: keywords, id, description, body.
 const WEIGHTS: [f64; 4] = [3.0, 2.0, 1.5, 1.0];
 /// BM25 term-frequency saturation and length normalization.
 const K1: f64 = 1.2;
@@ -183,9 +183,13 @@ fn ranked<'a>(
         .iter()
         .map(|card| {
             let kw = card.keywords().join(" ");
-            let title = card.title.as_deref().unwrap_or(&card.id);
             let desc = card.summary().unwrap_or_default();
-            let fields = [kw.as_str(), title, desc.as_str(), card.body.as_str()];
+            let fields = [
+                kw.as_str(),
+                card.id.as_str(),
+                desc.as_str(),
+                card.body.as_str(),
+            ];
             Doc::new(fields.into_iter().zip(WEIGHTS), 1.0)
         })
         .collect();
@@ -304,21 +308,18 @@ mod tests {
     }
 
     #[test]
-    fn keywords_outrank_title_description_and_body() {
+    fn keywords_outrank_id_description_and_body() {
         // The same word in each field, nothing else to tilt the lengths.
         let cards = cards(&[
             ("kw", "---\nkeywords: [deploy]\n---\nx\n"),
-            ("title", "---\ntitle: deploy\n---\nx\n"),
+            ("ops/deploy", "---\n---\nx\n"),
             ("desc", "---\ndescription: deploy\n---\nx\n"),
-            (
-                "body",
-                "---\ntitle: other\ndescription: unrelated\n---\ndeploy\n",
-            ),
-            ("none", "---\ntitle: other\n---\nx\n"),
+            ("body", "---\ndescription: unrelated\n---\ndeploy\n"),
+            ("none", "---\ndescription: other\n---\nx\n"),
         ]);
         assert_eq!(
             ids(rank(&cards, "deploy", 10)),
-            ["kw", "title", "desc", "body"]
+            ["kw", "ops/deploy", "desc", "body"]
         );
     }
 
@@ -327,7 +328,7 @@ mod tests {
         let cards = cards(&[
             ("one", "---\nkeywords: k8s\n---\nbody\n"),
             ("many", "---\nkeywords: [k8s, cluster]\n---\nbody\n"),
-            ("other", "---\ntitle: something\n---\nbody\n"),
+            ("other", "---\ndescription: something\n---\nbody\n"),
         ]);
         assert_eq!(rank(&cards, "k8s", 10).len(), 2);
         // `cluster` only names `many`.
@@ -336,7 +337,7 @@ mod tests {
 
     #[test]
     fn cjk_runs_match_by_bigram() {
-        let cards = cards(&[("proxy", "---\ntitle: 代理服务器配置\n---\n正文\n")]);
+        let cards = cards(&[("proxy", "---\ndescription: 代理服务器配置\n---\n正文\n")]);
         assert_eq!(ids(rank(&cards, "代理怎么配", 10)), ["proxy"]);
         // Recall ignores one-char query terms: a reply like `服` or `好` must
         // not recall every card containing the char.
@@ -364,7 +365,7 @@ mod tests {
     fn other_alphabets_join_words_and_fullwidth_folds() {
         let cards = cards(&[(
             "words",
-            "---\ntitle: naïve Привет\n---\nＡＢＣ ２０２４ 第3章\n",
+            "---\ndescription: naïve Привет\n---\nＡＢＣ ２０２４ 第3章\n",
         )]);
         assert_eq!(ids(search(&cards, "naïve", 10)), ["words"]);
         assert_eq!(ids(search(&cards, "привет", 10)), ["words"]);
@@ -380,7 +381,7 @@ mod tests {
     #[test]
     fn word_thresholds_count_chars_not_bytes() {
         // `ж` is 2 bytes but 1 char, so it is no term on either side.
-        let cards = cards(&[("zh", "---\ntitle: ж\n---\nж\n")]);
+        let cards = cards(&[("zh", "---\ndescription: ж\n---\nж\n")]);
         assert!(search(&cards, "ж", 10).is_empty());
     }
 

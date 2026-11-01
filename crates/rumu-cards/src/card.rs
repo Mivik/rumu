@@ -1,7 +1,7 @@
 //! The card content model.
 //!
 //! A card is a markdown file under `cards/` with optional YAML frontmatter
-//! (`title`, `description`; every other key, `scope:` included, is kept
+//! (`description`; every other key, `scope:` included, is kept
 //! verbatim in [`Card::meta`]). Its id is the file path relative to the card root without `.md`. The revision is a
 //! deterministic hash of the exact text shown to the model, so metadata-only
 //! edits never look like content updates.
@@ -17,8 +17,6 @@ use crate::{CardViewError, yaml};
 #[ts(export)]
 pub struct CardInfo {
     pub id: String,
-    #[serde(default, skip_serializing_if = "Option::is_none")]
-    pub title: Option<String>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub description: Option<String>,
     /// Frontmatter `keywords:` — the terms that should bring the card to mind.
@@ -36,7 +34,6 @@ pub struct CardInfo {
 #[derive(Debug, Clone)]
 pub struct Card {
     pub id: String,
-    pub title: Option<String>,
     pub description: Option<String>,
     pub body: String,
     /// Revision of [`render`] — see [`revision_of`].
@@ -49,7 +46,7 @@ impl Card {
     /// The exact text handed to the model. [`revision_of`] hashes exactly
     /// this.
     pub fn render(&self) -> String {
-        render(&self.id, &self.title, &self.body)
+        render(&self.id, &self.body)
     }
 
     /// A one-line summary: the non-empty `description`, else
@@ -104,9 +101,9 @@ pub fn fallback_description(body: &str) -> Option<String> {
     None
 }
 
-/// `# {title or id}\n{body}` — the model-facing rendering of a card.
-pub fn render(id: &str, title: &Option<String>, body: &str) -> String {
-    format!("# {}\n{}", title.as_deref().unwrap_or(id), body)
+/// `# {id}\n{body}` — the model-facing rendering of a card.
+pub fn render(id: &str, body: &str) -> String {
+    format!("# {id}\n{body}")
 }
 
 /// Revision = first 4 bytes of SHA-256 of the rendered text, as 8 hex chars.
@@ -126,21 +123,18 @@ fn yaml_block(m: Map<String, Value>) -> String {
 }
 
 /// The editable view of a card (what `read` returns and `write`/`edit`
-/// accept for `workspace: card`): YAML frontmatter holding `title`,
-/// `description`, and every other key, followed by the body. The frontmatter block is omitted when it would be
+/// accept for `workspace: card`): YAML frontmatter holding
+/// `description` first, then every other key, followed by the body. The frontmatter block is omitted when it would be
 /// empty.
 pub fn view_of(card: &Card) -> String {
     let ystr = |s: &str| Value::String(s.to_owned());
     let mut m = Map::new();
-    if let Some(t) = &card.title {
-        m.insert("title".into(), ystr(t));
-    }
     if let Some(d) = &card.description {
         m.insert("description".into(), ystr(d));
     }
     // Unknown keys ride along in their original order.
     for (k, v) in &card.meta {
-        if matches!(k.as_str(), "title" | "description") {
+        if k == "description" {
             continue;
         }
         m.insert(k.clone(), v.clone());
@@ -166,7 +160,6 @@ pub fn view_rev_of(view: &str) -> String {
 pub fn card_from_view(id: &str, view: &str) -> Result<Card, CardViewError> {
     let (yaml, body) = split_frontmatter(view);
     let mut meta = Map::new();
-    let mut title = None;
     let mut description = None;
 
     if let Some(yaml) = yaml {
@@ -180,15 +173,9 @@ pub fn card_from_view(id: &str, view: &str) -> Result<Card, CardViewError> {
         };
         for (key, v) in map {
             match key.as_str() {
-                "title" | "description" => match v {
+                "description" => match v {
                     Value::Null => {}
-                    Value::String(s) => {
-                        if key == "title" {
-                            title = Some(s);
-                        } else {
-                            description = Some(s);
-                        }
-                    }
+                    Value::String(s) => description = Some(s),
                     _ => return Err(CardViewError::FieldNotString { field: key }),
                 },
                 // Unknown keys pass through.
@@ -210,7 +197,6 @@ pub fn card_from_view(id: &str, view: &str) -> Result<Card, CardViewError> {
     };
     let mut card = Card {
         id: id.to_owned(),
-        title,
         description,
         body,
         revision: String::new(),
@@ -242,11 +228,9 @@ pub fn parse_card(id: &str, text: &str) -> Card {
     };
 
     let body = body.trim_start_matches('\n').to_owned();
-    let title = get_str("title");
-    let revision = revision_of(&render(id, &title, &body));
+    let revision = revision_of(&render(id, &body));
     Card {
         id: id.to_owned(),
-        title,
         description: get_str("description"),
         body,
         revision,
@@ -267,7 +251,6 @@ pub fn card_content(card: &Card) -> String {
             m.remove(key);
         }
     };
-    set(&mut m, "title", card.title.as_deref().map(ystr));
     set(&mut m, "description", card.description.as_deref().map(ystr));
 
     let mut content = yaml_block(m);
@@ -381,17 +364,16 @@ mod tests {
 
         let card = parse_card(
             "m",
-            "---\ntitle: Old\ndescription: d\ntags: [a, b]\nmatch:\n  event: prompt\nowner: test\n---\nbody\n",
+            "---\ndescription: d\ntags: [a, b]\nmatch:\n  event: prompt\nowner: test\n---\nbody\n",
         );
-        assert_eq!(card.title.as_deref(), Some("Old"));
         assert_eq!(card.description.as_deref(), Some("d"));
         // `tags:` is an ordinary unknown key: kept verbatim.
         assert_eq!(card.meta.get("tags"), Some(&serde_json::json!(["a", "b"])));
         // Metadata-only changes do not move the revision.
-        assert_eq!(card.render(), "# Old\nbody\n");
-        assert_eq!(card.revision, revision_of("# Old\nbody\n"));
+        assert_eq!(card.render(), "# m\nbody\n");
+        assert_eq!(card.revision, revision_of("# m\nbody\n"));
         let content = card_content(&card);
-        assert!(content.contains("title: Old"), "{content}");
+        assert!(content.contains("description: d"), "{content}");
         assert!(content.contains("owner: test"), "{content}");
         assert!(content.contains("tags"), "{content}");
         assert!(content.contains("match:"), "{content}");
@@ -400,7 +382,6 @@ mod tests {
 
         // Re-parse: same known fields and revision.
         let again = parse_card("m", &content);
-        assert_eq!(again.title, card.title);
         assert_eq!(again.description, card.description);
         assert_eq!(again.body, "body\n");
         assert_eq!(again.revision, card.revision);
@@ -435,13 +416,11 @@ mod tests {
     fn view_roundtrip_empty_frontmatter_and_rev() {
         let card = parse_card(
             "m",
-            "---\ntitle: Old\ndescription: d\ntags: [a, b]\nmatch:\n  event: prompt\nscope: [proj]\nowner: test\n---\nbody\n",
+            "---\ndescription: d\ntags: [a, b]\nmatch:\n  event: prompt\nscope: [proj]\nowner: test\n---\nbody\n",
         );
         let view = view_of(&card);
         assert!(
-            view.contains("title: Old")
-                && view.contains("description: d")
-                && view.contains("owner: test"),
+            view.contains("description: d") && view.contains("owner: test"),
             "{view}"
         );
         assert!(view.contains("match:\n  event: prompt"), "{view}");
@@ -452,7 +431,7 @@ mod tests {
         // Parsing the view back keeps every frontmatter key; the written
         // file carries them unchanged.
         let back = card_from_view("m", &view).unwrap();
-        assert_eq!(back.title.as_deref(), Some("Old"));
+        assert_eq!(back.description.as_deref(), Some("d"));
         assert_eq!(back.body, "body\n");
         for key in ["owner", "match", "scope", "tags"] {
             assert_eq!(back.meta.get(key), card.meta.get(key), "{key}");
@@ -478,17 +457,15 @@ mod tests {
 
     #[test]
     fn card_from_view_validates_named_fields() {
-        let err = card_from_view("x", "---\ntitle: [a, b]\n---\nbody\n").unwrap_err();
-        let err = err.to_string();
-        assert!(err.contains("`title`"), "{err}");
         let err = card_from_view("x", "---\ndescription: 3\n---\nbody\n").unwrap_err();
         let err = err.to_string();
         assert!(err.contains("`description`"), "{err}");
         let err = card_from_view("x", "---\n- just\n- a\n- list\n---\nbody\n").unwrap_err();
         assert!(err.to_string().contains("mapping"), "{err}");
-        // Null title clears it; unknown keys (tags included) pass through.
-        let card = card_from_view("x", "---\ntitle: null\ntags: not-a-list\n---\nbody\n").unwrap();
-        assert_eq!(card.title, None);
+        // Null description clears it; unknown keys (tags included) pass through.
+        let card =
+            card_from_view("x", "---\ndescription: null\ntags: not-a-list\n---\nbody\n").unwrap();
+        assert_eq!(card.description, None);
         assert_eq!(
             card.meta.get("tags"),
             Some(&Value::String("not-a-list".into()))
@@ -496,7 +473,7 @@ mod tests {
         assert!(card_content(&card).contains("tags"));
         // No frontmatter at all: metadata-less card.
         let card = card_from_view("x", "body only\n").unwrap();
-        assert_eq!((card.title, card.description), (None, None));
+        assert_eq!(card.description, None);
         assert_eq!(card.body, "body only\n");
     }
 

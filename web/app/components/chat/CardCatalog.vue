@@ -13,9 +13,7 @@ const shown = computed(() => {
   const q = query.value.trim().toLowerCase()
   if (!q) return state.cards
   return state.cards.filter((c) =>
-    [c.id, c.title ?? '', c.description ?? '', ...(c.keywords ?? [])].some((s) =>
-      s.toLowerCase().includes(q),
-    ),
+    [c.id, c.description ?? '', ...(c.keywords ?? [])].some((s) => s.toLowerCase().includes(q)),
   )
 })
 

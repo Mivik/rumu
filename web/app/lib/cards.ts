@@ -47,14 +47,13 @@ export function agentsOf(content: Content | null | undefined): import('./types')
   return payload(content, 'workspace.agents', 1)
 }
 
-/** The current render of a card (`# {title||id}\n{body}`). */
-export function renderCard(card: Pick<Card, 'id' | 'title' | 'body'>): string {
-  return `# ${card.title || card.id}\n${card.body}`
+/** The current render of a card (`# {id}\n{body}`). */
+export function renderCard(card: Pick<Card, 'id' | 'body'>): string {
+  return `# ${card.id}\n${card.body}`
 }
 
 /** A card's editable view split into the fields its reader shows. */
 export interface CardView {
-  title: string | null
   description: string | null
   keywords: string[]
   meta: Record<string, unknown>
@@ -91,10 +90,10 @@ function keywordsOf(value: unknown): string[] {
 /**
  * Parse one recorded card snapshot. Tool read/write snapshots are the
  * editable view (YAML frontmatter + body); an auto-import snapshot is the
- * rendered `# Title\nbody` form (`rendered`).
+ * rendered `# id\nbody` form (`rendered`); its heading is dropped.
  */
 export function parseCardView(text: string, rendered = false): CardView {
-  const empty: CardView = { title: null, description: null, keywords: [], meta: {}, body: text }
+  const empty: CardView = { description: null, keywords: [], meta: {}, body: text }
   const split = splitFrontmatter(text)
   let meta: Record<string, unknown> = {}
   let body = text
@@ -109,17 +108,11 @@ export function parseCardView(text: string, rendered = false): CardView {
       return empty // a malformed historical view: show it as written
     }
   }
-  let title = typeof meta.title === 'string' ? meta.title : null
   if (rendered) {
     const nl = body.indexOf('\n')
-    const heading = /^#\s+(.+?)\s*$/.exec(nl < 0 ? body : body.slice(0, nl))
-    if (heading) {
-      title ??= heading[1]!
-      body = nl < 0 ? '' : body.slice(nl + 1)
-    }
+    if (/^#\s+.+$/.test(nl < 0 ? body : body.slice(0, nl))) body = nl < 0 ? '' : body.slice(nl + 1)
   }
   return {
-    title,
     description: typeof meta.description === 'string' ? meta.description : null,
     keywords: keywordsOf(meta.keywords),
     meta,
@@ -213,12 +206,6 @@ export const updateNotesByCard = computed(() => {
   }
   return m
 })
-
-/** Fallback title parsed from an injected note text ('# Title\nbody'). */
-export function noteTitleFromText(text: string): string {
-  const line = text.split('\n')[0] ?? ''
-  return line.replace(/^#\s*/, '').trim()
-}
 
 /** Look up a card for an import payload; null if none. */
 export function cardForImport(imp: CardImport | null): Card | null {

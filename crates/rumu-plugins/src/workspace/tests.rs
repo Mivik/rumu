@@ -1158,11 +1158,7 @@ async fn card_tools_read_write_validate_and_list() {
     flush_output(&host, "call-1", &out);
 
     // Bad types name the offending field.
-    for bad in [
-        "---\ntitle: [x]\n---\nb\n",
-        "---\ndescription: [x]\n---\nb\n",
-        "---\n- a\n- b\n---\nb\n",
-    ] {
+    for bad in ["---\ndescription: [x]\n---\nb\n", "---\n- a\n- b\n---\nb\n"] {
         let out = plugin
             .call_tool(
                 "write",
@@ -1174,7 +1170,7 @@ async fn card_tools_read_write_validate_and_list() {
         assert!(out.is_error, "{bad}");
     }
 
-    // A clean write keeps the `match:` the view carries. A title change moves
+    // A clean write keeps the `match:` the view carries. A body change moves
     // `rev` (it is part of the render).
     let before = library::load_card(&FsCardStore::home(home.path()), "m")
         .unwrap()
@@ -1182,21 +1178,21 @@ async fn card_tools_read_write_validate_and_list() {
     let out = plugin
         .call_tool(
             "write",
-            json!({ "path": "@rumu:/cards/m", "content": "---\ntitle: New\nmatch:\n  event: prompt\n---\nnew body\n" }),
+            json!({ "path": "@rumu:/cards/m", "content": "---\nowner: me\nmatch:\n  event: prompt\n---\nnew body\n" }),
             &cx,
         )
         .await
         .unwrap();
     assert!(!out.is_error, "{}", out.content.text);
     let text = std::fs::read_to_string(home.path().join("cards/m.md")).unwrap();
-    assert!(text.contains("title: New"), "{text}");
+    assert!(text.contains("owner: me"), "{text}");
     assert!(text.contains("match:"), "{text}");
     assert!(text.contains("event: prompt"), "{text}");
     assert!(!text.contains("scope:"), "omitted keys are dropped: {text}");
     let after = library::load_card(&FsCardStore::home(home.path()), "m")
         .unwrap()
         .unwrap();
-    assert_ne!(before.revision, after.revision, "title is in the render");
+    assert_ne!(before.revision, after.revision, "the body is in the render");
     flush_output(&host, "call-1", &out);
 
     // A description-only edit keeps `rev` (metadata is invisible to the
@@ -1204,7 +1200,7 @@ async fn card_tools_read_write_validate_and_list() {
     let out = plugin
         .call_tool(
             "edit",
-            json!({ "path": "@rumu:/cards/m", "old_string": "title: New", "new_string": "title: New\ndescription: added" }),
+            json!({ "path": "@rumu:/cards/m", "old_string": "owner: me", "new_string": "owner: me\ndescription: added" }),
             &cx,
         )
         .await
@@ -1228,7 +1224,7 @@ async fn card_tools_read_write_validate_and_list() {
     let out = plugin
         .call_tool(
             "write",
-            json!({ "path": "@rumu:/cards/m", "content": "---\ntitle: New\n---\nplain\n" }),
+            json!({ "path": "@rumu:/cards/m", "content": "---\nowner: me\n---\nplain\n" }),
             &cx,
         )
         .await
@@ -1241,7 +1237,7 @@ async fn card_tools_read_write_validate_and_list() {
     std::fs::create_dir_all(home.path().join("cards/dev")).unwrap();
     std::fs::write(
         home.path().join("cards/x.md"),
-        "---\ntitle: X\ndescription: dx\n---\nsecret body\n",
+        "---\ndescription: dx\n---\nsecret body\n",
     )
     .unwrap();
     std::fs::write(home.path().join("cards/dev/y.md"), "plain\n").unwrap();
@@ -1257,12 +1253,12 @@ async fn card_tools_read_write_validate_and_list() {
         out.content.text
     );
     assert!(
-        out.content.text.contains("@rumu:/cards/dev/y — dev/y"),
+        out.content.text.contains("@rumu:/cards/dev/y — plain"),
         "{}",
         out.content.text
     );
     assert!(
-        out.content.text.contains("@rumu:/cards/x — X — dx"),
+        out.content.text.contains("@rumu:/cards/x — dx"),
         "{}",
         out.content.text
     );

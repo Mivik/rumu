@@ -1,5 +1,4 @@
 ---
-title: Service notes
 description: A sample service card with config path, restart and logs.
 ---
 The example service runs on host `service`.

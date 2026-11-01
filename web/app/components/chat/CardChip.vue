@@ -25,6 +25,6 @@ function tooltip(): string {
     :title="title ?? tooltip()"
     @click.stop="onClick"
   >
-    <span class="truncate">{{ card.title || card.id }}</span>
+    <span class="truncate">{{ card.id }}</span>
   </button>
 </template>

@@ -1,5 +1,4 @@
 ---
-title: infrastructure
 description: Infrastructure notes — service setup, ssh setup, dangerous-command guardrails.
 ---
 Infrastructure notes: service setup, ssh agent setup, and the guardrail

@@ -12,7 +12,7 @@
 //! - [`usage`] — card use records derived from a branch path;
 //! - [`scope`] — which cards a card's frontmatter `scope:` relates to a
 //!   workspace / file touch;
-//! - [`recall`] — BM25F over `keywords:`, title, description and body: the
+//! - [`recall`] — BM25F over `keywords:`, id, description and body: the
 //!   cards whose text best matches a prompt (recall) or a search query;
 //! - [`search_text`] / [`list_text`] — the discovery outputs the workspace
 //!   plugin's `search` / `list` tools render (addresses are `@rumu:/cards/<id>`).
@@ -42,7 +42,7 @@ pub use error::{CardViewError, Error, Result};
 pub use store::FsCardStore;
 
 /// Run a card search over the home library and render its output text: hits
-/// are BM25F-ranked like recall (`keywords:`, title, description, body), any
+/// are BM25F-ranked like recall (`keywords:`, id, description, body), any
 /// term matches, and each is shown as `@rumu:/cards/<id>` plus a short snippet
 /// — never the full text.
 pub fn search_text(store: &FsCardStore, query: &str, args: &Value) -> ToolResult<ToolOutput> {
@@ -87,7 +87,7 @@ pub fn card_uri(id: &str) -> String {
 }
 
 /// Render the `list @rumu:/cards[/<prefix>]` output: one
-/// `@rumu:/cards/<id> — title — summary` line per card, never full text.
+/// `@rumu:/cards/<id> — summary` line per card, never full text.
 pub fn list_text(store: &FsCardStore, prefix: &str, limit: usize) -> ToolResult<ToolOutput> {
     let prefix = card::normalize_prefix(prefix);
     let cards = library::cards_under(store, &prefix)?;
@@ -108,10 +108,9 @@ pub fn list_text(store: &FsCardStore, prefix: &str, limit: usize) -> ToolResult<
     Ok(text.into())
 }
 
-/// One list line: `@rumu:/cards/<id> — title — summary`.
+/// One list line: `@rumu:/cards/<id> — summary`.
 pub fn card_line(id: &str, c: &Card) -> String {
-    let title = c.title.clone().unwrap_or_else(|| id.to_owned());
-    let mut line = format!("{} — {title}", card_uri(id));
+    let mut line = card_uri(id);
     if let Some(d) = c.summary() {
         line.push_str(&format!(" — {d}"));
     }
@@ -172,22 +171,22 @@ mod tests {
         std::fs::create_dir_all(dir.path().join("cards")).unwrap();
         std::fs::write(
             dir.path().join("cards/x.md"),
-            "---\ntitle: X\n---\nthe kernel crate implements the agent loop\nSECRET SECOND LINE\n",
+            "---\n---\nthe kernel crate implements the agent loop\nSECRET SECOND LINE\n",
         )
         .unwrap();
         std::fs::write(
             dir.path().join("cards/y.md"),
-            "---\ntitle: Why\n---\nnothing here\n",
+            "---\ndescription: why\n---\nnothing here\n",
         )
         .unwrap();
         std::fs::write(
             dir.path().join("cards/t.md"),
-            "---\ntitle: agent loop notes\ndescription: about the loop\n---\nfiller\n",
+            "---\ndescription: about the loop\nkeywords: [agent loop]\n---\nfiller\n",
         )
         .unwrap();
         let store = FsCardStore::home(dir.path());
 
-        // Body hit ranks below title hits; addresses, snippets, never full text.
+        // Body hit ranks below keyword hits; addresses, snippets, never full text.
         let out = search_text(&store, "agent loop", &serde_json::json!({})).unwrap();
         let first = out
             .content
@@ -199,7 +198,7 @@ mod tests {
         assert_eq!(
             first.trim(),
             "@rumu:/cards/t",
-            "title hit ranks first: {}",
+            "keyword hit ranks first: {}",
             out.content.text
         );
         assert!(
@@ -237,21 +236,14 @@ mod tests {
         // Prefix scoping and limits.
         let out = list_text(&store, "x", 100).unwrap();
         assert!(
-            out.content.text.contains("@rumu:/cards/x — X"),
-            "{}",
-            out.content.text
-        );
-        // The fallback summary is the body's first line (bodies get one-line
-        // summaries, never full text).
-        assert!(
             out.content
                 .text
-                .contains("— X — the kernel crate implements the agent loop"),
+                .contains("@rumu:/cards/x — the kernel crate implements the agent loop"),
             "{}",
             out.content.text
         );
         assert!(
-            !out.content.text.contains("@rumu:/cards/y — Why"),
+            !out.content.text.contains("@rumu:/cards/y"),
             "{}",
             out.content.text
         );

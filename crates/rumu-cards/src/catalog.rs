@@ -26,7 +26,6 @@ use crate::usage::{self, CardOp, CardUse};
 #[ts(export)]
 pub struct CatalogEntry {
     pub id: String,
-    pub title: String,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub summary: Option<String>,
 }
@@ -84,7 +83,7 @@ impl CatalogNote {
         for e in &self.entries {
             let mut line = format!(
                 "- [{}]({RUMU_WORKSPACE}:/cards/{})",
-                escape_link_text(&e.title),
+                escape_link_text(&e.id),
                 e.id
             );
             if let Some(s) = &e.summary {
@@ -368,7 +367,6 @@ pub fn root_catalog_note(cards: &BTreeMap<String, Card>, plan: &RootCatalog) -> 
 fn entry(id: &str, c: &Card) -> CatalogEntry {
     CatalogEntry {
         id: id.to_owned(),
-        title: c.title.clone().unwrap_or_else(|| id.to_owned()),
         summary: c.summary(),
     }
 }

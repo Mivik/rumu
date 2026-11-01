@@ -52,7 +52,7 @@ const RECALL_BUDGET: usize = 10_000;
 
 const INSTRUCTIONS: &str = "Cards are your memory across conversations: markdown notes at \
 `@rumu:/cards/<id>`, where the id is a slash path such as `dev/rumu/kernel`.\n\n\
-Finding cards. A catalog note lists cards by title and description; its folded directories unfold \
+Finding cards. A catalog note lists cards by id and description; its folded directories unfold \
 in later notes once you touch a card under them or switch to a related workspace. Some cards \
 arrive on their own, in full, as notes: those whose text matches the user's message, and those \
 whose `scope:` covers a workspace or file you use — don't re-read them. For any other card that \
@@ -64,9 +64,11 @@ Don't save the state of the current task or anything easily re-derived from the 
 before creating a card, and update an existing one rather than adding a near-duplicate. Keep one \
 topic per card, grouped with related cards under a shared directory. Name ids with short \
 English kebab-case segments, such as `user/profile` or `user/dev-environment`.\n\n\
-Every card's frontmatter has a `title`, a one-sentence `description` (shown in the catalog) and \
+Every card's frontmatter has a one-sentence `description` (shown in the catalog) and \
 `keywords:` — the terms that should bring it to mind, as a YAML list (`keywords: [deploy, \
-production]`); keywords, title, description and body are what message matching scores. Give \
+production]`); keywords, description and body are what message matching scores. Write a card's \
+description and body in the language of the conversation. Give `keywords` both the words the user \
+actually uses for the topic, in their language, and their English equivalents. Give \
 project-specific cards a `scope:` — a workspace name (`proj`) or a workspace-relative glob \
 (`proj:src/net/**`), one or a list — so they arrive when that workspace or those files are used. \
 Link other cards as `@rumu:/cards/<id>`.";
@@ -250,9 +252,8 @@ impl MemoryPlugin {
                 Some(c) => (
                     c.revision.clone(),
                     format!(
-                        "Card `{RUMU_WORKSPACE}:/cards/{id}` (\"{}\") changed since this branch last read \
+                        "Card `{RUMU_WORKSPACE}:/cards/{id}` changed since this branch last read \
                          it (rev {} → {}). Re-read it if it is still relevant.",
-                        c.title.as_deref().unwrap_or(id),
                         u.rev.as_deref().unwrap_or("?"),
                         c.revision,
                     ),

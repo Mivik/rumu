@@ -12,14 +12,7 @@ import type { Content, Node, TaskDone, TaskStatus } from '../../lib/types'
 import { CATALOG_TAG, TASK_TAG, TASK_VERSION } from '../../lib/types'
 import Chip from '../ui/Chip.vue'
 import Icon from '../ui/Icon.vue'
-import {
-  agentsOf,
-  cardForImport,
-  importOf,
-  noteTitleFromText,
-  updateOf,
-  workspaceUseOf,
-} from '../../lib/cards'
+import { agentsOf, cardForImport, importOf, updateOf, workspaceUseOf } from '../../lib/cards'
 import { preview } from '../../lib/util'
 import { openDrawer, openTaskDetail } from '../../lib/store'
 import { taskStatusWord } from '../../lib/tasks'
@@ -117,14 +110,14 @@ const pills = computed<PillSpec[]>(() => {
           p.cards!.push({
             node: n,
             cardId: card.id,
-            title: card.title || card.id,
+            title: card.id,
             hover: `#${card.id}${card.description ? ` — ${card.description}` : ''}`,
           })
         } else {
           p.cards!.push({
             node: n,
             cardId: imp.id,
-            title: noteTitleFromText(b.content.text) || imp.id,
+            title: imp.id,
             hover: b.content.text,
           })
         }

@@ -3,4 +3,4 @@
 /**
  * One card entry in a structured catalog note.
  */
-export type CatalogEntry = { id: string, title: string, summary?: string | null, };
+export type CatalogEntry = { id: string, summary?: string | null, };

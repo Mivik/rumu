@@ -1,6 +1,5 @@
 ---
 keywords: [preferences, answers, style]
-title: User preferences
 description: Sample preferences — concise, direct answers; code over prose.
 ---
 

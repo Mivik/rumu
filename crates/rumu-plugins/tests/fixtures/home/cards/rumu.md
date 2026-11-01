@@ -1,5 +1,4 @@
 ---
-title: The rumu project
 description: Overview of the rumu agent framework, crate layout, and core invariants.
 scope: [proj]
 ---

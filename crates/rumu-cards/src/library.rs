@@ -52,7 +52,6 @@ pub fn card_infos(store: &FsCardStore) -> Result<Vec<CardInfo>> {
             let keywords = c.keywords().into_iter().map(str::to_owned).collect();
             CardInfo {
                 id: c.id,
-                title: c.title,
                 description,
                 keywords,
                 body: c.body,
@@ -114,7 +113,7 @@ mod tests {
         write_card(&store, &card).unwrap();
         assert!(home.join("cards/dev/rumu/new.md").is_file());
         let back = load_card(&store, "dev/rumu/new").unwrap().unwrap();
-        assert_eq!(back.title.as_deref(), Some("New"));
+        assert_eq!(back.meta.get("title"), Some(&serde_json::json!("New")));
         assert_eq!(back.body, "body\n");
 
         // Ids are validated before they become paths.

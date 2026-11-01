@@ -1,5 +1,4 @@
 ---
-title: rumu kernel
 description: The agent loop, hook dispatch and projection in crates/rumu-kernel.
 ---
 

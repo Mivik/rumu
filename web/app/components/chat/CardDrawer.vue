@@ -35,7 +35,7 @@ watch(
   { immediate: true },
 )
 const snapshot = computed(() => !card.value || (changed.value && tab.value === 'snapshot'))
-const EMPTY_VIEW: CardView = { title: null, description: null, keywords: [], meta: {}, body: '' }
+const EMPTY_VIEW: CardView = { description: null, keywords: [], meta: {}, body: '' }
 const view = computed<CardView>(() => {
   if (snapshot.value) {
     const use = selectedUse.value
@@ -44,7 +44,6 @@ const view = computed<CardView>(() => {
   const c = card.value
   return c
     ? {
-        title: c.title ?? null,
         description: c.description ?? null,
         keywords: c.keywords ?? [],
         meta: c.meta ?? {},
@@ -52,7 +51,7 @@ const view = computed<CardView>(() => {
       }
     : EMPTY_VIEW
 })
-const title = computed(() => view.value.title || path.value.split('/').at(-1) || path.value)
+const title = computed(() => path.value.split('/').at(-1) || path.value)
 const description = computed(() => view.value.description)
 const keywords = computed(() => view.value.keywords)
 const meta = computed(() => view.value.meta)
@@ -65,7 +64,7 @@ const scope = computed(() => {
       : []
 })
 const fields = computed(() =>
-  Object.entries(meta.value).filter(([key]) => !['title', 'description', 'keywords', 'scope'].includes(key)),
+  Object.entries(meta.value).filter(([key]) => !['description', 'keywords', 'scope'].includes(key)),
 )
 const revision = computed(() => (snapshot.value ? selectedUse.value?.rev : card.value?.revision))
 const shownHtml = computed(() => renderMarkdown(view.value.body, { breaks: false, cardId: path.value }))
