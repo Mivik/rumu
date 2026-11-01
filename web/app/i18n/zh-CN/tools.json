@@ -36,8 +36,7 @@
   },
   "count": {
     "entries": "{count} 个条目",
-    "lines": "{count} 行",
-    "edits": "{count} 处编辑"
+    "lines": "{count} 行"
   },
   "result": {
     "empty": "空",
@@ -74,6 +73,10 @@
     "liveOutput": "任务输出",
     "runningTag": "· 运行中",
     "hookTrace": "工具调用记录 · {count}"
+  },
+  "diff": {
+    "moreLines": "还有 {count} 行",
+    "unavailable": "差异不可用 — 文件过大或非文本"
   },
   "tasks": {
     "label": "任务",

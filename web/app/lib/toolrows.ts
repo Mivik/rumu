@@ -4,13 +4,14 @@
 // activity run folds them into. Shared by ToolList (the rows) and
 // ActivityRun (the summary line).
 
-import type { Attachment, Branch, Node, TaskStatus } from './types'
+import type { Attachment, Branch, FilePatch, Node, TaskStatus } from './types'
 import { INTERNAL_WORKSPACE } from './types'
 import type { ToolRowInfo } from './store'
 import { findAgentChild, state } from './store'
 import { taskIdOf, taskLabel } from './tasks'
 import { argSummary, preview } from './util'
 import { renderedContent } from './attachments'
+import { diffCounts as foldCounts, diffLines, type DiffCounts, filePatchOf } from './diff'
 import { i18n, t } from '../i18n'
 import type { MessageKey } from '../i18n'
 
@@ -28,6 +29,10 @@ export interface ToolRowView {
   output: string
   /** Image attachments of the result (e.g. `read` on an image file). */
   attachments: Attachment[]
+  /** The `workspace.file_patch` payload of a write/edit result, if any. */
+  patch: FilePatch | null
+  /** `+N −M` counts for a write/edit row (null when there is no diff). */
+  diff: DiffCounts | null
   status: ToolStatus
   statusLabel: string
   /** Card id from a card read/write call, for the row's CardChip. */
@@ -70,16 +75,11 @@ function baseName(path: string): string {
   return trimmed.slice(trimmed.lastIndexOf('/') + 1) || path
 }
 
-function fmtBytes(n: number): string {
-  if (n < 1024) return `${n} B`
-  if (n < 1024 * 1024) return `${(n / 1024).toFixed(1).replace(/\.0$/, '')} KB`
-  return `${(n / 1024 / 1024).toFixed(1).replace(/\.0$/, '')} MB`
-}
-
 type Args = Record<string, unknown> | null
 type Call = { name: string; args: unknown } | null
 
-function argsOf(call: { args: unknown } | null): Args {
+/** A call's args as a record, if they are an object. */
+export function argsOf(call: { args: unknown } | null): Args {
   return call?.args && typeof call.args === 'object' && !Array.isArray(call.args)
     ? (call.args as Record<string, unknown>)
     : null
@@ -177,8 +177,35 @@ function agentScope(args: Args): string[] | null {
   return names.length ? names : null
 }
 
+/** `+N −M` counts for a write/edit row: from the result's hunks, or — for
+ * results older than the payload — a browser diff of the call's strings. */
+function diffOf(name: string, patch: FilePatch | null, args: Args): DiffCounts | null {
+  if (name !== 'write' && name !== 'edit') return null
+  if (patch?.hunks) {
+    let added = 0
+    let removed = 0
+    for (const hunk of patch.hunks) {
+      for (const line of hunk.lines) {
+        if (line.startsWith('+')) added++
+        else if (line.startsWith('-')) removed++
+      }
+    }
+    return added + removed ? { added, removed } : null
+  }
+  // An update whose hunks were dropped (too big, non-UTF-8): nothing to count.
+  if (patch?.kind === 'update') return null
+  // No payload: a legacy edit diffs its strings, a legacy write / a create
+  // counts its content as all-added.
+  const str = (key: string): string => (typeof args?.[key] === 'string' ? (args[key] as string) : '')
+  const counts =
+    name === 'edit'
+      ? foldCounts(diffLines(str('old_string'), str('new_string')))
+      : { added: lineCount(str('content')), removed: 0 }
+  return counts.added + counts.removed ? counts : null
+}
+
 /** What the call produced, as a count or a word (empty when the call line says it). */
-function resultShort(name: string, output: string): string {
+function resultShort(name: string, output: string, diff: DiffCounts | null): string {
   if (!output) return ''
   switch (name) {
     case 'workspace_use':
@@ -189,15 +216,10 @@ function resultShort(name: string, output: string): string {
     }
     case 'read':
       return t('tools.count.lines', { count: lineCount(output) })
-    case 'write': {
-      const m = /\((\d+) bytes?\)/.exec(output)
-      return m ? fmtBytes(Number(m[1])) : ''
-    }
-    case 'edit': {
-      // one replacement is the norm; only a multi-site edit is worth a word
-      const m = /\((\d+) replacements?\)/.exec(output)
-      return m && Number(m[1]) > 1 ? t('tools.count.edits', { count: Number(m[1]) }) : ''
-    }
+    case 'write':
+    case 'edit':
+      // the row shows these colored; the plain form serves the tooltip
+      return diff ? (diff.removed ? `+${diff.added} −${diff.removed}` : `+${diff.added}`) : ''
     case 'bash': {
       // a clean exit is the norm; say the exit code only when it isn't 0
       const m = /exit code:\s*(-?\d+)/.exec(output)
@@ -219,6 +241,7 @@ interface ParsedRow {
   callShort: string
   callFull: string
   result: string
+  diff: DiffCounts | null
 }
 
 /** Parsed summaries per immutable result node (the timeline recomputes on deltas). */
@@ -256,12 +279,15 @@ export function toolRowView(row: ToolRowInfo): ToolRowView {
   // The result node is immutable: parse its output once, not on every delta.
   // The translated result text is rebuilt when the locale changes.
   const locale = i18n.global.locale.value
+  const patch = filePatchOf(content)
   let parsed = parsedCache.get(row.result)
   if (!parsed || parsed.locale !== locale) {
+    const diff = diffOf(name, patch, args)
     parsed = {
       locale,
       callShort: callShort(name, row.call),
       callFull: callFull(name, row.call),
+      diff,
       // A blocked row is already explained by its stamp; an error keeps a
       // clipped first line so the row hints at what went wrong.
       result:
@@ -269,7 +295,7 @@ export function toolRowView(row: ToolRowInfo): ToolRowView {
           ? ''
           : isError
             ? preview(nonEmptyLines(output)[0] ?? '', 40)
-            : resultShort(name, output),
+            : resultShort(name, output, diff),
     }
     parsedCache.set(row.result, parsed)
   }
@@ -290,6 +316,8 @@ export function toolRowView(row: ToolRowInfo): ToolRowView {
     callFull: parsed.callFull,
     output: blocked ?? output,
     attachments,
+    patch,
+    diff: parsed.diff,
     status: blocked !== null ? 'blocked' : isError ? 'error' : 'ok',
     statusLabel:
       blocked !== null

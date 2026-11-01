@@ -133,22 +133,35 @@ function codeBlock(body: string, language?: string): string {
   )
 }
 
-function renderCode(text: string, info: string | undefined): string {
+/** One line (or a whole block) highlighted to HTML for a known grammar;
+ * plain escaped text otherwise, with the grammar load kicked off so a
+ * re-render (via `grammarVersion`) picks it up. */
+export function highlightLine(text: string, lang: string): string {
   void grammarVersion.value // tracked: re-render when a grammar lands
+  if (!lang || !hljs.getLanguage(lang)) {
+    loadGrammar(lang)
+    return escapeHtml(text)
+  }
+  try {
+    return hljs.highlight(text, { language: lang, ignoreIllegals: true }).value
+  } catch {
+    return escapeHtml(text)
+  }
+}
 
+/** The grammar name a file path's extension (or extensionless basename,
+ * e.g. `Makefile`) maps to — "" when nothing matches. */
+export function langForPath(path: string): string {
+  const name = path.slice(path.lastIndexOf('/') + 1)
+  const ext = (name.includes('.') ? name.slice(name.lastIndexOf('.') + 1) : name).toLowerCase()
+  return ALIASES[ext] ?? ext
+}
+
+function renderCode(text: string, info: string | undefined): string {
   // `rust title="…"`, `ts{1,5}` → the leading word.
   const raw = info?.trim().split(/\s+/)[0]?.replace(/\{.*$/, '').toLowerCase() ?? ''
   const name = ALIASES[raw] ?? raw
-  if (!name || !hljs.getLanguage(name)) {
-    loadGrammar(name)
-    return codeBlock(escapeHtml(text))
-  }
-  try {
-    const body = hljs.highlight(text, { language: name, ignoreIllegals: true }).value
-    return codeBlock(body, name)
-  } catch {
-    return codeBlock(escapeHtml(text))
-  }
+  return codeBlock(highlightLine(text, name), name)
 }
 
 marked.setOptions({ gfm: true })

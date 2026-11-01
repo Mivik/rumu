@@ -16,7 +16,7 @@ import type { ToolRowInfo } from '../../lib/store'
 import { openTaskDetail, selectBranch, state } from '../../lib/store'
 import { cardById } from '../../lib/cards'
 import type { ToolRowView, ToolStatus } from '../../lib/toolrows'
-import { toolRowTitle, toolRowView } from '../../lib/toolrows'
+import { argsOf, toolRowTitle, toolRowView } from '../../lib/toolrows'
 import { taskStatusWord } from '../../lib/tasks'
 import { shortId } from '../../lib/util'
 import { prettyJson } from '../../lib/markdown'
@@ -25,6 +25,7 @@ import Icon from '../ui/Icon.vue'
 import Chip from '../ui/Chip.vue'
 import CardChip from './CardChip.vue'
 import CodeCalls from './CodeCalls.vue'
+import FileDiff from './FileDiff.vue'
 import ImageThumb from './ImageThumb.vue'
 
 const props = defineProps<{ rows: ToolRowInfo[] }>()
@@ -49,6 +50,12 @@ function isOpen(v: ToolRowView): boolean {
 /** The script text of a `code` call, for the expanded row's script block. */
 function callScript(args: unknown): string {
   return String((args as Record<string, unknown> | null)?.code ?? '')
+}
+
+/** A write/edit that succeeded shows its diff expanded; failures keep the
+ * args/output view. */
+function isDiffRow(v: ToolRowView): boolean {
+  return v.status === 'ok' && (v.name === 'write' || v.name === 'edit') && !!v.row.call
 }
 
 function toggle(v: ToolRowView): void {
@@ -119,7 +126,11 @@ function liveTaskOutput(id: string | null): string {
           class="flex-none rounded-xs border border-agent/40 px-1 font-mono text-micro text-agent"
           >{{ t('tools.row.scope', { names: v.agentScope.join(', ') }) }}</span
         >
-        <span v-if="v.resultText" class="max-w-[40%] flex-none truncate text-micro text-ink-3">
+        <span v-if="v.diff" class="max-w-[40%] flex-none truncate text-micro text-ink-3">
+          · <span class="font-medium text-pine">+{{ v.diff.added }}</span>
+          <span v-if="v.diff.removed" class="font-medium text-danger">−{{ v.diff.removed }}</span>
+        </span>
+        <span v-else-if="v.resultText" class="max-w-[40%] flex-none truncate text-micro text-ink-3">
           · {{ v.resultText }}
         </span>
         <span
@@ -183,7 +194,15 @@ function liveTaskOutput(id: string | null): string {
         {{ t('tools.row.openSubAgent') }}
       </Chip>
 
-      <div v-if="isOpen(v)" class="reveal flex flex-col gap-2 pt-1 pr-2.5 pb-2.5 pl-[30px]">
+      <!-- a diff fills the expanded row edge to edge -->
+      <FileDiff
+        v-if="isOpen(v) && isDiffRow(v)"
+        class="reveal"
+        :patch="v.patch"
+        :path="v.toolCardId ? 'card.md' : v.callFull"
+        :args="argsOf(v.row.call)"
+      />
+      <div v-else-if="isOpen(v)" class="reveal flex flex-col gap-2 pt-1 pr-2.5 pb-2.5 pl-[30px]">
         <div v-if="v.row.call && v.name === 'code'">
           <div class="mb-1 text-micro font-semibold text-ink-3">{{ t('tools.detail.script') }}</div>
           <pre class="code">{{ callScript(v.row.call.args) }}</pre>

@@ -36,8 +36,7 @@
   },
   "count": {
     "entries": "{count} entry | {count} entries",
-    "lines": "{count} line | {count} lines",
-    "edits": "{count} edit | {count} edits"
+    "lines": "{count} line | {count} lines"
   },
   "result": {
     "empty": "empty",
@@ -74,6 +73,10 @@
     "liveOutput": "Task output",
     "runningTag": "· running",
     "hookTrace": "hook trace · {count}"
+  },
+  "diff": {
+    "moreLines": "{count} more line | {count} more lines",
+    "unavailable": "diff unavailable — file too large or not text"
   },
   "tasks": {
     "label": "tasks",

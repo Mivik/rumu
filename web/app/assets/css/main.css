@@ -1039,69 +1039,69 @@
    * titles, blue attributes, grey comments — so dark mode needs no extra
    * rules. ---- */
 
-  .md .hljs-comment,
-  .md .hljs-quote {
+  :is(.md, .fdiff) .hljs-comment,
+  :is(.md, .fdiff) .hljs-quote {
     color: var(--ink-3);
     font-style: italic;
   }
 
-  .md .hljs-keyword,
-  .md .hljs-built_in,
-  .md .hljs-type,
-  .md .hljs-selector-tag,
-  .md .hljs-selector-class,
-  .md .hljs-selector-id,
-  .md .hljs-doctag,
-  .md .hljs-name {
+  :is(.md, .fdiff) .hljs-keyword,
+  :is(.md, .fdiff) .hljs-built_in,
+  :is(.md, .fdiff) .hljs-type,
+  :is(.md, .fdiff) .hljs-selector-tag,
+  :is(.md, .fdiff) .hljs-selector-class,
+  :is(.md, .fdiff) .hljs-selector-id,
+  :is(.md, .fdiff) .hljs-doctag,
+  :is(.md, .fdiff) .hljs-name {
     color: var(--brand-strong);
   }
 
-  .md .hljs-string,
-  .md .hljs-regexp,
-  .md .hljs-addition {
+  :is(.md, .fdiff) .hljs-string,
+  :is(.md, .fdiff) .hljs-regexp,
+  :is(.md, .fdiff) .hljs-addition {
     color: var(--pine);
   }
 
-  .md .hljs-number,
-  .md .hljs-literal,
-  .md .hljs-symbol,
-  .md .hljs-bullet {
+  :is(.md, .fdiff) .hljs-number,
+  :is(.md, .fdiff) .hljs-literal,
+  :is(.md, .fdiff) .hljs-symbol,
+  :is(.md, .fdiff) .hljs-bullet {
     color: var(--memory);
   }
 
-  .md .hljs-title,
-  .md .hljs-section,
-  .md .hljs-function {
+  :is(.md, .fdiff) .hljs-title,
+  :is(.md, .fdiff) .hljs-section,
+  :is(.md, .fdiff) .hljs-function {
     color: var(--agent);
   }
 
-  .md .hljs-attr,
-  .md .hljs-attribute,
-  .md .hljs-variable,
-  .md .hljs-template-variable,
-  .md .hljs-property,
-  .md .hljs-selector-attr,
-  .md .hljs-selector-pseudo {
+  :is(.md, .fdiff) .hljs-attr,
+  :is(.md, .fdiff) .hljs-attribute,
+  :is(.md, .fdiff) .hljs-variable,
+  :is(.md, .fdiff) .hljs-template-variable,
+  :is(.md, .fdiff) .hljs-property,
+  :is(.md, .fdiff) .hljs-selector-attr,
+  :is(.md, .fdiff) .hljs-selector-pseudo {
     color: var(--tool);
   }
 
-  .md .hljs-meta,
-  .md .hljs-tag,
-  .md .hljs-punctuation,
-  .md .hljs-params,
-  .md .hljs-operator {
+  :is(.md, .fdiff) .hljs-meta,
+  :is(.md, .fdiff) .hljs-tag,
+  :is(.md, .fdiff) .hljs-punctuation,
+  :is(.md, .fdiff) .hljs-params,
+  :is(.md, .fdiff) .hljs-operator {
     color: var(--ink-2);
   }
 
-  .md .hljs-deletion {
+  :is(.md, .fdiff) .hljs-deletion {
     color: var(--danger);
   }
 
-  .md .hljs-strong {
+  :is(.md, .fdiff) .hljs-strong {
     font-weight: 700;
   }
 
-  .md .hljs-emphasis {
+  :is(.md, .fdiff) .hljs-emphasis {
     font-style: italic;
   }
 
