@@ -2562,6 +2562,21 @@ async fn session_prefix_resolution_and_abbreviations() {
 
 // ---------- search ----------
 /// Two sessions with distinct node text; the older one updated first.
+/// Full node addresses of a session-search output, in output order: each
+/// indented node line joined to the group header above it.
+fn hit_addrs(text: &str) -> Vec<String> {
+    let mut session = "";
+    let mut out = Vec::new();
+    for line in text.lines() {
+        if line.starts_with("@rumu:/sessions/") {
+            session = line.split("  ").next().unwrap();
+        } else if let Some(rest) = line.strip_prefix("  ") {
+            out.push(format!("{session}/{}", rest.split("  ").next().unwrap()));
+        }
+    }
+    out
+}
+
 fn search_sessions() -> std::sync::Arc<FakeRuntime> {
     let mk = |sid: &str, nid: &str, parent: Option<&str>, at: i64, body: NodeBody| Node {
         id: rumu_core::NodeId::from(nid),
@@ -2739,27 +2754,31 @@ async fn search_sessions_and_cards_by_scope() {
         .await
         .unwrap();
     assert!(!out.is_error, "{}", out.content.text);
-    let lines: Vec<&str> = out.content.text.lines().collect();
-    let addrs: Vec<&str> = lines
-        .iter()
-        .filter(|l| l.starts_with("@rumu:/sessions/"))
-        .map(|l| l.split("  ").next().unwrap())
-        .collect();
+    // Hits group by session (best hit first), ranked within a group.
     assert_eq!(
-        addrs,
-        vec![
-            format!("@rumu:/sessions/{s1}/N1").as_str(),
-            format!("@rumu:/sessions/{s1}/U1").as_str(),
-            format!("@rumu:/sessions/{s2}/U2").as_str(),
-            format!("@rumu:/sessions/{s1}/A1").as_str(),
-            format!("@rumu:/sessions/{s1}/T1").as_str(),
+        hit_addrs(&out.content.text),
+        [
+            format!("@rumu:/sessions/{s1}/N1"),
+            format!("@rumu:/sessions/{s1}/U1"),
+            format!("@rumu:/sessions/{s1}/A1"),
+            format!("@rumu:/sessions/{s1}/T1"),
+            format!("@rumu:/sessions/{s2}/U2"),
         ],
         "{}",
         out.content.text
     );
+    // One header per session with its quoted title; node lines carry kind,
+    // time and a quoted snippet.
     assert!(
-        lines.iter().any(|l| l.starts_with("  match: ")),
-        "snippets: {}",
+        out.content
+            .text
+            .starts_with(&format!("@rumu:/sessions/{s1}  \"ssh setup\"\n  N1  note ")),
+        "{}",
+        out.content.text
+    );
+    assert!(
+        out.content.text.contains("  \"ssh-agent notes\""),
+        "{}",
         out.content.text
     );
 
@@ -2773,21 +2792,15 @@ async fn search_sessions_and_cards_by_scope() {
         )
         .await
         .unwrap();
-    let addrs: Vec<&str> = out
-        .content
-        .text
-        .lines()
-        .filter(|l| l.starts_with("@rumu:/sessions/"))
-        .map(|l| l.split("  ").next().unwrap())
-        .collect();
+    let addrs = hit_addrs(&out.content.text);
     assert_eq!(
-        addrs.first().copied(),
-        Some(format!("@rumu:/sessions/{s1}/U1").as_str()),
+        addrs.first(),
+        Some(&format!("@rumu:/sessions/{s1}/U1")),
         "{}",
         out.content.text
     );
     assert!(
-        addrs.contains(&format!("@rumu:/sessions/{s2}/U2").as_str()),
+        addrs.contains(&format!("@rumu:/sessions/{s2}/U2")),
         "{}",
         out.content.text
     );
@@ -2801,9 +2814,7 @@ async fn search_sessions_and_cards_by_scope() {
         .await
         .unwrap();
     assert!(
-        out.content
-            .text
-            .contains(&format!("@rumu:/sessions/{s1}/A1")),
+        hit_addrs(&out.content.text).contains(&format!("@rumu:/sessions/{s1}/A1")),
         "{}",
         out.content.text
     );
@@ -2818,10 +2829,7 @@ async fn search_sessions_and_cards_by_scope() {
         .await
         .unwrap();
     assert!(
-        out.content
-            .text
-            .contains(&format!("@rumu:/sessions/{s2}/U2"))
-            && !out.content.text.contains(&format!("@rumu:/sessions/{s1}/")),
+        hit_addrs(&out.content.text) == [format!("@rumu:/sessions/{s2}/U2")],
         "{}",
         out.content.text
     );
@@ -2875,7 +2883,7 @@ async fn search_sessions_and_cards_by_scope() {
     }
 }
 
-/// A spaceless CJK query still prints `match:` lines (snippet terms come
+/// A spaceless CJK query still prints snippets (snippet terms come
 /// from the ranker's tokenizer, not `split_whitespace`), and a one-char
 /// query hits: explicit search indexes a run's chars.
 #[tokio::test]
@@ -2924,14 +2932,12 @@ async fn search_sessions_snippet_cjk_queries() {
         .unwrap();
     assert!(!out.is_error, "{}", out.content.text);
     assert!(
-        out.content
-            .text
-            .contains(&format!("@rumu:/sessions/{sid}/U1")),
+        hit_addrs(&out.content.text).contains(&format!("@rumu:/sessions/{sid}/U1")),
         "{}",
         out.content.text
     );
     assert!(
-        out.content.text.contains("\n  match: "),
+        out.content.text.contains("  \"帮我配置代理服务器\""),
         "a spaceless CJK query still prints a snippet: {}",
         out.content.text
     );
@@ -2945,9 +2951,7 @@ async fn search_sessions_snippet_cjk_queries() {
         .await
         .unwrap();
     assert!(
-        out.content
-            .text
-            .contains(&format!("@rumu:/sessions/{sid}/U1")),
+        hit_addrs(&out.content.text).contains(&format!("@rumu:/sessions/{sid}/U1")),
         "{}",
         out.content.text
     );
@@ -2961,7 +2965,7 @@ async fn search_downweights_tool_results_and_breaks_ties_by_time() {
     let sid = rumu_core::SessionId::from("01SSESSIONTOOLS00000000000000");
     let info = rumu_core::SessionInfo {
         id: sid.clone(),
-        title: "widgets".into(),
+        title: "line one \"quoted\"\nline two, long enough to be cut off here".into(),
         active_branch: rumu_core::BranchId::from("B"),
         created_at: 1,
         updated_at: 1,
@@ -2994,6 +2998,23 @@ async fn search_downweights_tool_results_and_breaks_ties_by_time() {
                 },
             ),
             mk(
+                "LOOK",
+                250,
+                NodeBody::Assistant {
+                    content: rumu_core::Content::text(""),
+                    reasoning: vec![],
+                    reason_ms: None,
+                    reasoning_reset: false,
+                    tool_calls: vec![rumu_core::ToolCall {
+                        call_id: "c0".into(),
+                        name: "search".into(),
+                        args: json!({ "query": "widget" }),
+                    }],
+                    model: "fake".into(),
+                    usage: Default::default(),
+                },
+            ),
+            mk(
                 "TOOL",
                 300,
                 NodeBody::ToolResult {
@@ -3016,23 +3037,26 @@ async fn search_downweights_tool_results_and_breaks_ties_by_time() {
         )
         .await
         .unwrap();
-    let addrs: Vec<&str> = out
-        .content
-        .text
-        .lines()
-        .filter(|l| l.starts_with("@rumu:/sessions/"))
-        .map(|l| l.split("  ").next().unwrap())
-        .collect();
+    let text = &out.content.text;
     assert_eq!(
-        addrs,
-        vec![
-            format!("@rumu:/sessions/{sid}/UNEW").as_str(),
-            format!("@rumu:/sessions/{sid}/UOLD").as_str(),
-            format!("@rumu:/sessions/{sid}/TOOL").as_str(),
+        hit_addrs(text),
+        [
+            format!("@rumu:/sessions/{sid}/UNEW"),
+            format!("@rumu:/sessions/{sid}/UOLD"),
+            format!("@rumu:/sessions/{sid}/TOOL"),
         ],
-        "{}",
-        out.content.text
+        "lookup-tool args are not indexed: {text}"
     );
+    // The title is a JSON literal cut to 48 chars, `…` outside the quotes.
+    assert!(
+        text.starts_with(&format!(
+            "@rumu:/sessions/{sid}  \"line one \\\"quoted\\\"\\nline two, long enough to be cu\"…\n"
+        )),
+        "{text}"
+    );
+    // A repeated snippet points back at its first node.
+    assert!(text.contains("  \"widget\""), "{text}");
+    assert_eq!(text.matches("(same as UNEW)").count(), 2, "{text}");
 }
 
 // ---------- bash progress + background ----------

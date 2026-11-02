@@ -43,8 +43,9 @@ pub use store::FsCardStore;
 
 /// Run a card search over the home library and render its output text: hits
 /// are BM25F-ranked like recall (`keywords:`, id, description, body), any
-/// term matches, and each is shown as `@rumu:/cards/<id>` plus a short snippet
-/// — never the full text.
+/// term matches. Each hit is an `@rumu:/cards/<id>  "<summary>"` line, then an
+/// indented `"<snippet>"` line around the first body match — never the full
+/// text. Summary and snippet are JSON string literals (see [`json_quote`]).
 pub fn search_text(store: &FsCardStore, query: &str, args: &Value) -> ToolResult<ToolOutput> {
     if query.trim().is_empty() {
         return Err(ToolError::model("search: empty query"));
@@ -67,10 +68,10 @@ pub fn search_text(store: &FsCardStore, query: &str, args: &Value) -> ToolResult
     for hit in hits.iter().take(limit) {
         let mut block = card_uri(&hit.card.id);
         if let Some(m) = hit.card.summary() {
-            block.push_str(&format!("\n  {m}"));
+            block.push_str(&format!("  {}", json_quote(&m, SUMMARY_CHARS)));
         }
         if let Some(s) = body_snippet(&hit.card.body, &terms) {
-            block.push_str(&format!("\n  match: {s}"));
+            block.push_str(&format!("\n  {}", json_quote(&s, usize::MAX)));
         }
         out.push(block);
     }
@@ -79,6 +80,21 @@ pub fn search_text(store: &FsCardStore, query: &str, args: &Value) -> ToolResult
         text.push_str(&format!("\n(+{} more hits)", hits.len() - limit));
     }
     Ok(text.into())
+}
+
+/// Summary chars shown on a card-search hit line.
+const SUMMARY_CHARS: usize = 80;
+
+/// `s` cut to `max` chars, as a JSON string literal; a cut appends `…`
+/// outside the quotes so the literal stays the text's exact prefix. The
+/// quoting of titles, summaries and snippets in `search` output.
+pub fn json_quote(s: &str, max: usize) -> String {
+    let cut: String = s.chars().take(max).collect();
+    let mut q = serde_json::to_string(&cut).unwrap_or_default();
+    if cut.len() < s.len() {
+        q.push('…');
+    }
+    q
 }
 
 /// `@rumu:/cards/<id>` — the canonical address of a home card.
@@ -196,8 +212,7 @@ mod tests {
             .unwrap_or_default()
             .to_owned();
         assert_eq!(
-            first.trim(),
-            "@rumu:/cards/t",
+            first, "@rumu:/cards/t  \"about the loop\"",
             "keyword hit ranks first: {}",
             out.content.text
         );
@@ -206,7 +221,13 @@ mod tests {
             "{}",
             out.content.text
         );
-        assert!(out.content.text.contains("match: "), "{}", out.content.text);
+        assert!(
+            out.content.text.contains(
+                "@rumu:/cards/x  \"the kernel crate implements the agent loop\"\n  \"the kernel"
+            ),
+            "summary line, then the quoted snippet: {}",
+            out.content.text
+        );
         assert!(
             !out.content.text.contains("filler"),
             "no unrelated body text: {}",
@@ -258,5 +279,12 @@ mod tests {
             "{}",
             out.content.text
         );
+    }
+
+    #[test]
+    fn json_quote_escapes_and_cuts_outside_the_quotes() {
+        assert_eq!(json_quote("a \"b\"\nc", 10), r#""a \"b\"\nc""#);
+        assert_eq!(json_quote("什么都可以", 3), "\"什么都\"…");
+        assert_eq!(json_quote("abc", 3), "\"abc\"");
     }
 }

@@ -20,6 +20,7 @@
 use std::cmp::Reverse;
 use std::collections::HashSet;
 
+use rumu_cards::json_quote;
 use rumu_cards::recall::{self, Doc};
 use rumu_core::{
     Branch, BranchKind, Cx, Node, NodeBody, RUMU_WORKSPACE, SessionId, SessionInfo, ToolCall,
@@ -159,7 +160,7 @@ impl WorkspacePlugin {
         cx: &Cx,
     ) -> ToolResult<ToolOutput> {
         // Snippet terms need the ranker's tokenization, not whitespace: a
-        // spaceless CJK query would otherwise never print a `match:` line.
+        // spaceless CJK query would otherwise never print a snippet.
         let terms: Vec<String> = recall::tokens(query);
         if query.trim().is_empty() {
             return Err(ToolError::model("search: empty query"));
@@ -168,14 +169,14 @@ impl WorkspacePlugin {
         sessions.sort_by_key(|s| Reverse(s.updated_at));
 
         struct Candidate {
-            addr: String,
+            session: usize,
+            node: String,
             at: rumu_core::Timestamp,
-            title: String,
             kind: &'static str,
             text: String,
         }
         let mut candidates = Vec::new();
-        for info in &sessions {
+        for (si, info) in sessions.iter().enumerate() {
             if !only.is_empty() && info.id.0 != only {
                 continue;
             }
@@ -188,9 +189,9 @@ impl WorkspacePlugin {
                     continue;
                 };
                 candidates.push(Candidate {
-                    addr: format!("{WS}:/sessions/{}/{}", info.id, view.short(&n.id.0)),
+                    session: si,
+                    node: view.short(&n.id.0),
                     at: n.at,
-                    title: info.title.clone(),
                     kind,
                     text,
                 });
@@ -216,20 +217,41 @@ impl WorkspacePlugin {
         if hits.is_empty() {
             return Ok(format!("no conversation nodes match `{query}`").into());
         }
-        let mut out = Vec::new();
+        // Group the shown hits by session, sessions ordered by their best hit
+        // and nodes by rank within one; a snippet repeated in the same session
+        // points back at its first node.
+        let mut groups: Vec<(usize, Vec<usize>)> = Vec::new();
         for &(i, _) in hits.iter().take(limit) {
-            let c = &candidates[i];
-            let mut block = format!(
-                "{}  {}  \"{}\"  {}",
-                c.addr,
-                iso_local(c.at),
-                c.title,
-                c.kind
-            );
-            if let Some(s) = rumu_cards::body_snippet(&c.text, &terms) {
-                block.push_str(&format!("\n  match: {s}"));
+            let si = candidates[i].session;
+            match groups.iter_mut().find(|(s, _)| *s == si) {
+                Some((_, g)) => g.push(i),
+                None => groups.push((si, vec![i])),
             }
-            out.push(block);
+        }
+        let mut out = Vec::new();
+        for (si, group) in groups {
+            let info = &sessions[si];
+            out.push(format!(
+                "{WS}:/sessions/{}  {}",
+                info.id,
+                json_quote(&info.title, TITLE_CHARS)
+            ));
+            let mut seen: Vec<(String, &str)> = Vec::new();
+            for i in group {
+                let c = &candidates[i];
+                let mut line = format!("  {}  {:<11}  {}", c.node, c.kind, iso_local(c.at));
+                if let Some(s) = rumu_cards::body_snippet(&c.text, &terms) {
+                    match seen.iter().find(|(prev, _)| *prev == s) {
+                        Some((_, first)) => line.push_str(&format!("  (same as {first})")),
+                        None => {
+                            line.push_str("  ");
+                            line.push_str(&json_quote(&s, usize::MAX));
+                            seen.push((s, &c.node));
+                        }
+                    }
+                }
+                out.push(line);
+            }
         }
         let mut text = out.join("\n");
         if hits.len() > limit {
@@ -239,8 +261,16 @@ impl WorkspacePlugin {
     }
 }
 
+/// Title chars shown in a session-search group header.
+const TITLE_CHARS: usize = 48;
+
+/// Tools whose call args are not indexed: they only look things up, so their
+/// args just echo earlier queries and paths back as noise hits.
+const LOOKUP_TOOLS: [&str; 3] = ["read", "list", "search"];
+
 /// The text a session-search term matches against, with the node kind label:
-/// user text, assistant text + tool-call args, tool-result text, note text —
+/// user text, assistant text + tool-call args (bar [`LOOKUP_TOOLS`]),
+/// tool-result text, note text —
 /// images as their `[image: …]` placeholder. Markers carry nothing
 /// searchable.
 fn searchable_text(body: &NodeBody) -> Option<(&'static str, String)> {
@@ -253,6 +283,9 @@ fn searchable_text(body: &NodeBody) -> Option<(&'static str, String)> {
         } => {
             let mut text = content.rendered();
             for call in tool_calls {
+                if LOOKUP_TOOLS.contains(&call.name.as_str()) {
+                    continue;
+                }
                 text.push('\n');
                 text.push_str(&call.name);
                 text.push(' ');
