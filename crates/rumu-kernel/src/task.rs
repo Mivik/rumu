@@ -229,7 +229,7 @@ impl Kernel {
             {
                 Ok(AgentRun::Summary { text, child }) => {
                     kernel.set_task_child(&task_id, &child);
-                    TaskOutcome::Result(Ok(ToolOutput::ok(text).cap()))
+                    TaskOutcome::Result(Ok(ToolOutput::ok(text)))
                 }
                 Ok(AgentRun::Aborted) => TaskOutcome::Cancelled,
                 Ok(AgentRun::Refused(message)) => TaskOutcome::Result(Ok(ToolOutput::err(message))),
@@ -378,16 +378,20 @@ impl Kernel {
             }
             let (status, content, effects, is_error) = match outcome {
                 TaskOutcome::Cancelled => (TaskStatus::Cancelled, Content::text(""), vec![], false),
-                TaskOutcome::Result(Ok(out)) => (
-                    if out.is_error {
-                        TaskStatus::Failed
-                    } else {
-                        TaskStatus::Done
-                    },
-                    out.content,
-                    out.effects,
-                    out.is_error,
-                ),
+                TaskOutcome::Result(Ok(out)) => {
+                    // The completion note reaches the model: the boundary cap.
+                    let out = out.cap();
+                    (
+                        if out.is_error {
+                            TaskStatus::Failed
+                        } else {
+                            TaskStatus::Done
+                        },
+                        out.content,
+                        out.effects,
+                        out.is_error,
+                    )
+                }
                 TaskOutcome::Result(Err(e)) => (
                     TaskStatus::Failed,
                     Content::text(format!("{e}")),

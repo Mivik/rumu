@@ -78,10 +78,26 @@ pub struct Content {
     pub data: Option<Tagged>,
 }
 
-/// A reference to a normalized image in the blob store.
+/// What kind of media an [`Attachment`] holds. These are the primitives a
+/// model can consume directly; video is not one (it is frames, optionally
+/// with an audio track), and documents are compiled by the harness into page
+/// images plus text.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Default, Serialize, Deserialize, ts_rs::TS)]
+#[serde(rename_all = "lowercase")]
+#[ts(export)]
+pub enum AttachmentKind {
+    #[default]
+    Image,
+    Audio,
+}
+
+/// A reference to normalized media in the blob store.
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, ts_rs::TS)]
 #[ts(export)]
 pub struct Attachment {
+    /// The media kind; absent in records written before it existed (image).
+    #[serde(default)]
+    pub kind: AttachmentKind,
     /// Lowercase hex SHA-256 of the stored bytes; the blob's file name.
     pub hash: String,
     /// MIME type of the stored bytes (`image/png`, `image/jpeg`).
@@ -96,12 +112,16 @@ pub struct Attachment {
 }
 
 impl Attachment {
-    /// The stand-in text for readers that cannot show the image (transcripts,
+    /// The stand-in text for readers that cannot show the media (transcripts,
     /// search, a blob gone missing): `[image: name 800×600]`.
     pub fn placeholder(&self) -> String {
-        match &self.name {
-            Some(name) => format!("[image: {name} {}×{}]", self.width, self.height),
-            None => format!("[image: {}×{}]", self.width, self.height),
+        let at = match &self.name {
+            Some(name) => format!("{name} {}×{}", self.width, self.height),
+            None => format!("{}×{}", self.width, self.height),
+        };
+        match self.kind {
+            AttachmentKind::Image => format!("[image: {at}]"),
+            AttachmentKind::Audio => format!("[audio: {at}]"),
         }
     }
 }
@@ -534,6 +554,7 @@ mod tests {
 
     fn image(name: &str) -> Attachment {
         Attachment {
+            kind: AttachmentKind::Image,
             hash: "0".repeat(64),
             mime: "image/png".into(),
             name: Some(name.into()),

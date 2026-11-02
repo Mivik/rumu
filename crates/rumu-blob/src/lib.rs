@@ -60,6 +60,7 @@ impl Blobs {
         let image = normalize::normalize(bytes)?;
         let hash = self.put(&image.bytes)?;
         Ok(Attachment {
+            kind: rumu_core::AttachmentKind::Image,
             hash,
             mime: image.mime.to_owned(),
             name,
@@ -124,6 +125,7 @@ impl Blobs {
         let bytes = self.get(hash)?;
         let (mime, width, height) = normalize::probe(&bytes)?;
         Ok(Attachment {
+            kind: rumu_core::AttachmentKind::Image,
             hash: hash.to_owned(),
             mime: mime.to_owned(),
             name,

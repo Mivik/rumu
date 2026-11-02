@@ -255,7 +255,11 @@ async fn write_and_edit_carry_the_ui_patch() {
 
     // A write to a new file is a create: no hunks (the UI renders the args).
     let out = plugin
-        .call_tool("write", json!({ "path": "a.txt", "content": "one\ntwo\n" }), &cx)
+        .call_tool(
+            "write",
+            json!({ "path": "a.txt", "content": "one\ntwo\n" }),
+            &cx,
+        )
         .await
         .unwrap();
     let patch = out.content.decode::<patch::FilePatch>().unwrap();
@@ -264,7 +268,11 @@ async fn write_and_edit_carry_the_ui_patch() {
 
     // An overwrite is an update diffed against the previous content.
     let out = plugin
-        .call_tool("write", json!({ "path": "a.txt", "content": "one\nTWO\n" }), &cx)
+        .call_tool(
+            "write",
+            json!({ "path": "a.txt", "content": "one\nTWO\n" }),
+            &cx,
+        )
         .await
         .unwrap();
     let patch = out.content.decode::<patch::FilePatch>().unwrap();
@@ -282,7 +290,10 @@ async fn write_and_edit_carry_the_ui_patch() {
         .unwrap();
     let patch = out.content.decode::<patch::FilePatch>().unwrap();
     assert_eq!(patch.kind, patch::PatchKind::Update);
-    assert_eq!(patch.hunks.unwrap()[0].lines, ["-one", "+ONE", "+1", " TWO"]);
+    assert_eq!(
+        patch.hunks.unwrap()[0].lines,
+        ["-one", "+ONE", "+1", " TWO"]
+    );
 
     // A failed call never gets one.
     let out = plugin
@@ -578,17 +589,19 @@ async fn read_only_and_bash_behaviour() {
         out.content.text
     );
 
-    // Output truncation around ~20k chars.
+    // The tool returns its whole output; the kernel caps what the model sees.
     let out = plugin
         .call_tool("bash", json!({ "command": "seq 1 8000" }), &cx)
         .await
         .unwrap();
     assert!(
-        out.content.text.contains("[truncated"),
+        out.content.text.ends_with("8000\n"),
         "{} chars",
         out.content.text.len()
     );
-    assert!(out.content.text.chars().count() < 22_000);
+    let capped = out.cap();
+    assert!(capped.content.text.contains("[truncated"));
+    assert!(capped.content.text.chars().count() < 22_000);
 
     // Timeout: capped `timeout` argument applies.
     let out = plugin
@@ -1862,6 +1875,7 @@ async fn session_node_and_range_reads() {
 async fn session_nodes_show_image_placeholders() {
     let sid = rumu_core::SessionId::from("01STESTSSESSION0000000000000");
     let image = rumu_core::Attachment {
+        kind: rumu_core::AttachmentKind::Image,
         hash: "0".repeat(64),
         mime: "image/png".into(),
         name: Some("shot.png".into()),

@@ -58,9 +58,17 @@ pub(super) enum ScriptOutcome {
     Interrupted,
 }
 
+/// One `text()` / `attach()` output item, in call order.
+pub(super) enum Item {
+    Text(String),
+    /// The hash of an attachment a call returned.
+    Attachment(String),
+}
+
 pub(super) struct EngineOutcome {
     pub outcome: ScriptOutcome,
     pub console: String,
+    pub items: Vec<Item>,
 }
 
 /// Spawn the engine thread. The thread owns its channel ends and the runtime;
@@ -174,11 +182,18 @@ fn run_ctx(
         Ok(f) => f,
         Err(e) => return plain_error(format!("could not initialize the script API: {e}")),
     };
-    let logs: Function = match prelude.get("logs") {
+    let (logs, items): (Function, Function) = match prelude
+        .get("logs")
+        .and_then(|l| Ok((l, prelude.get("items")?)))
+    {
         Ok(f) => f,
         Err(e) => return plain_error(format!("could not initialize the script API: {e}")),
     };
-    let console = || logs.call::<_, String>(()).unwrap_or_default();
+    let finish = |outcome| EngineOutcome {
+        outcome,
+        console: logs.call::<_, String>(()).unwrap_or_default(),
+        items: parse_items(&items.call::<_, String>(()).unwrap_or_default()),
+    };
 
     let promise: Promise = match ctx.eval(source(code)) {
         Ok(p) => p,
@@ -196,10 +211,7 @@ fn run_ctx(
                     stack,
                 }
             };
-            return EngineOutcome {
-                outcome,
-                console: console(),
-            };
+            return finish(outcome);
         }
     };
 
@@ -260,10 +272,7 @@ fn run_ctx(
         }
     };
 
-    EngineOutcome {
-        outcome,
-        console: console(),
-    }
+    finish(outcome)
 }
 
 fn interrupted(cancel: &AtomicBool, deadline: Instant) -> bool {
@@ -278,7 +287,20 @@ fn plain_error(message: String) -> EngineOutcome {
             stack: String::new(),
         },
         console: String::new(),
+        items: Vec::new(),
     }
+}
+
+fn parse_items(json: &str) -> Vec<Item> {
+    let items: Vec<Value> = serde_json::from_str(json).unwrap_or_default();
+    items
+        .iter()
+        .filter_map(|v| match (v.get("text"), v.get("attachment")) {
+            (Some(Value::String(s)), _) => Some(Item::Text(s.clone())),
+            (_, Some(Value::String(h))) => Some(Item::Attachment(h.clone())),
+            _ => None,
+        })
+        .collect()
 }
 
 fn parse_result(json: &str) -> ScriptOutcome {
@@ -375,6 +397,14 @@ const PRELUDE: &str = r#"(() => {
   globalThis.ToolError = ToolError;
   globalThis.BlockedError = BlockedError;
 
+  const fmtJson = (v) => {
+    try {
+      const s = JSON.stringify(v, null, 2);
+      return s === undefined ? String(v) : s;
+    } catch (_) {
+      return String(v);
+    }
+  };
   const fmt = (v) => {
     if (typeof v === "string") return v;
     try {
@@ -393,6 +423,30 @@ const PRELUDE: &str = r#"(() => {
     logChars += add.length + 1;
     if (add.length < line.length) logs.push("… [console truncated]");
   };
+  // `text()` / `attach()` output items; `attachments` holds every attachment
+  // a call returned (by hash), the only ones `attach()` accepts.
+  const items = [];
+  let itemChars = 0;
+  const MAX_ITEM_CHARS = 4 * 1024 * 1024;
+  const attachments = new Map();
+  globalThis.text = (v) => {
+    const s = typeof v === "string" ? v : fmtJson(v);
+    itemChars += s.length;
+    if (itemChars > MAX_ITEM_CHARS) {
+      throw new Error("script output limit exceeded; filter or aggregate before text()");
+    }
+    items.push({ text: s });
+  };
+  globalThis.attach = (v) => {
+    const list = Array.isArray(v) ? v : v && Array.isArray(v.attachments) ? v.attachments : [v];
+    for (const a of list) {
+      if (!a || typeof a !== "object" || !attachments.has(a.hash)) {
+        throw new TypeError("attach(): pass an attachment returned by a tool call in this script");
+      }
+      items.push({ attachment: a.hash });
+    }
+  };
+
   globalThis.console = {
     log: (...a) => log(a),
     info: (...a) => log(a),
@@ -467,12 +521,20 @@ const PRELUDE: &str = r#"(() => {
       p.reject(e);
       return;
     }
-    if (r.ok) p.resolve(r.text);
-    else if (r.blocked) p.reject(new BlockedError(r.text, p.tool));
-    else p.reject(new ToolError(r.text, p.tool));
+    if (r.blocked) p.reject(new BlockedError(r.text, p.tool));
+    else if (!r.ok) p.reject(new ToolError(r.text, p.tool));
+    else if (r.value !== undefined) p.resolve(r.value);
+    else if (r.attachments) {
+      for (const a of r.attachments) attachments.set(a.hash, true);
+      p.resolve({ text: r.text, attachments: r.attachments });
+    } else p.resolve(r.text);
   };
 
-  return { settle, logs: () => logs.join("\n") };
+  return {
+    settle,
+    logs: () => logs.join("\n"),
+    items: () => JSON.stringify(items),
+  };
 })()"#;
 
 #[cfg(test)]

@@ -975,6 +975,7 @@ mod tests {
 
     fn attachment(hash: &str) -> rumu_core::Attachment {
         rumu_core::Attachment {
+            kind: rumu_core::AttachmentKind::Image,
             hash: hash.to_owned(),
             mime: "image/png".into(),
             name: Some(format!("{hash}.png")),

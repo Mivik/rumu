@@ -24,6 +24,8 @@ impl Plugin for OtherPlugin {
                 description: "test tool".into(),
                 schema: json!({ "type": "object", "properties": {} }),
                 background: false,
+                output_schema: None,
+                parallel: false,
             }],
             hooks: vec![],
             ..Default::default()

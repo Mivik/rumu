@@ -40,6 +40,15 @@ pub struct ToolSpec {
     /// schema it sends to the model and strips it before calling the plugin.
     #[serde(default)]
     pub background: bool,
+    /// JSON Schema of the structured result a `code` script receives instead
+    /// of the text. A tool that sets it attaches that value as its output's
+    /// [`Content::data`] when invoked by a plugin (see [`Call::parent`]).
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub output_schema: Option<Value>,
+    /// Safe to run concurrently with other calls of the same `code` script
+    /// (read-only tools, `agent`). Other calls run one at a time, in order.
+    #[serde(default)]
+    pub parallel: bool,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -112,12 +121,20 @@ impl ToolOutput {
     /// unanchored, and [`Content::segments`] places unanchored images after
     /// the text — attachments always survive the cap.
     ///
-    /// Tool boundaries apply this automatically ([`ToolResultExt::finish`]
-    /// for plugin tools; the plugin host for stdio plugins), so tool bodies
-    /// only call it when handing a `ToolOutput` onward without other
-    /// processing.
+    /// The kernel applies this where an output reaches the model (tool
+    /// results and task completions); a plugin invoke gets
+    /// [`ToolOutput::cap_invoke`] instead, so tool bodies never call it.
     pub fn cap(mut self) -> Self {
         self.content.text = crate::truncate_output(std::mem::take(&mut self.content.text));
+        self
+    }
+
+    /// The plugin-facing cap: [`crate::INVOKE_OUTPUT_LIMIT`], cut in the middle.
+    pub fn cap_invoke(mut self) -> Self {
+        self.content.text = crate::truncate_middle(
+            std::mem::take(&mut self.content.text),
+            crate::INVOKE_OUTPUT_LIMIT,
+        );
         self
     }
 }
@@ -231,18 +248,17 @@ impl From<Error> for ToolError {
 /// Close a [`ToolResult`] at the `Plugin::call_tool` boundary.
 pub trait ToolResultExt {
     /// Success values become the output; model-facing failures become
-    /// `is_error` outputs; fatal failures surface as plugin errors. The
-    /// model-facing text is capped with [`ToolOutput::cap`].
+    /// `is_error` outputs; fatal failures surface as plugin errors.
     fn finish(self) -> Result<ToolOutput>;
 }
 
 impl<T: Into<ToolOutput>> ToolResultExt for ToolResult<T> {
     fn finish(self) -> Result<ToolOutput> {
         match self {
-            Ok(output) => Ok(output.into().cap()),
+            Ok(output) => Ok(output.into()),
             Err(ToolError::Model(mut output)) => {
                 output.is_error = true;
-                Ok((*output).cap())
+                Ok(*output)
             }
             Err(ToolError::Fatal(error)) => Err(error),
         }
@@ -306,9 +322,9 @@ mod tests {
     }
 
     #[test]
-    fn finish_caps_the_model_facing_text() {
+    fn cap_bounds_the_model_facing_text() {
         let long = "x".repeat(crate::OUTPUT_LIMIT + 10);
-        let out = ToolResult::<String>::Ok(long).finish().unwrap();
+        let out = ToolOutput::ok(long).cap();
         assert!(out.content.text.contains("[truncated"));
         assert!(out.content.text.chars().count() < crate::OUTPUT_LIMIT + 100);
     }
@@ -316,6 +332,7 @@ mod tests {
     #[test]
     fn cap_keeps_attachments_even_when_the_cut_takes_their_anchor() {
         let image = Attachment {
+            kind: crate::AttachmentKind::Image,
             hash: "0".repeat(64),
             mime: "image/png".into(),
             name: Some("a.png".into()),
@@ -424,6 +441,9 @@ pub trait Runtime: History {
         name: &str,
         args: Value,
     ) -> Result<InnerCall>;
+    /// Cancel every internal call of `parent_call` that is still running;
+    /// later invokes under it are cancelled at once.
+    fn cancel_invokes(&self, _branch: &BranchId, _parent_call: &str) {}
 }
 
 /// Where a tool call's progress goes, chosen by the kernel when it builds the
@@ -556,6 +576,15 @@ impl Cx {
         self.runtime
             .invoke(&self.branch, caller, parent, self.depth + 1, tool, args)
             .await
+    }
+
+    /// Cancel this call's still-running [`Cx::invoke`]s (a script that ended
+    /// without awaiting them). Sub-agents unwind as aborted.
+    pub fn cancel_invokes(&self) {
+        if let Some(call) = &self.call {
+            let parent = call.parent.as_deref().unwrap_or(&call.id);
+            self.runtime.cancel_invokes(&self.branch, parent);
+        }
     }
 
     /// Push a progress update for this tool call. A no-op outside a tool call.

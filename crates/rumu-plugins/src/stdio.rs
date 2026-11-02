@@ -589,7 +589,7 @@ impl Plugin for StdioPlugin {
             }),
             Err(err) => ToolOutput::err(format!("plugin `{}`: {err}", self.inner.name)),
         };
-        Ok(out.cap())
+        Ok(out)
     }
 }
 

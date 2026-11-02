@@ -716,12 +716,16 @@ mod tests {
                 description: "z".into(),
                 schema: json!({"type": "object"}),
                 background: false,
+                output_schema: None,
+                parallel: false,
             },
             ToolSpec {
                 name: "alpha".into(),
                 description: "a".into(),
                 schema: json!({"type": "object"}),
                 background: false,
+                output_schema: None,
+                parallel: false,
             },
         ];
         let req = project("SYSTEM", &tools, &nodes, None);
@@ -912,6 +916,7 @@ mod tests {
             .map(|&bytes| {
                 blobs.put(bytes).unwrap();
                 Attachment {
+                    kind: rumu_core::AttachmentKind::Image,
                     hash: rumu_blob::hash_of(bytes),
                     mime: "image/png".into(),
                     name: Some(format!("{}.png", String::from_utf8_lossy(bytes))),
@@ -1075,6 +1080,7 @@ mod tests {
     #[test]
     fn a_missing_blob_projects_its_placeholder() {
         let gone = Attachment {
+            kind: rumu_core::AttachmentKind::Image,
             hash: "f".repeat(64),
             mime: "image/png".into(),
             name: Some("gone.png".into()),

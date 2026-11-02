@@ -94,6 +94,8 @@ open-ended work whose details don't need to stay here."
             .into(),
         schema: tool_schema::<turn::AgentArgs>(),
         background: false,
+        output_schema: None,
+        parallel: true,
     }
 }
 
@@ -106,6 +108,8 @@ descendants) and return its final status."
             .into(),
         schema: tool_schema::<task::TaskKillArgs>(),
         background: false,
+        output_schema: None,
+        parallel: false,
     }
 }
 
@@ -155,6 +159,9 @@ pub(crate) struct Inner {
     /// Next internal call sequence number per enclosing model call id
     /// (`"{parent_call}.{seq}"`, cleaned up when the outer call ends).
     pub inner_seq: HashMap<String, u32>,
+    /// Cancellation scope of the internal calls per enclosing model call id
+    /// (a child of the branch's token; same lifetime as `inner_seq`).
+    pub inner_scope: HashMap<String, CancellationToken>,
     /// Timeout for hook calls.
     pub hook_timeout: Duration,
     /// Coalescing window for wake-ups.
@@ -177,6 +184,7 @@ impl Default for Inner {
             wake_pending: HashMap::new(),
             storm: HashMap::new(),
             inner_seq: HashMap::new(),
+            inner_scope: HashMap::new(),
             hook_timeout: HOOK_TIMEOUT,
             wake_debounce: WAKE_DEBOUNCE,
             agent_depth: MAX_AGENT_DEPTH,
@@ -1012,7 +1020,8 @@ impl Kernel {
             .map(|n| &n.body)
             && !tool_calls.is_empty()
         {
-            self.fail_open_calls(branch, tool_calls, "turn failed").await?;
+            self.fail_open_calls(branch, tool_calls, "turn failed")
+                .await?;
         }
         self.append_body(
             branch,
@@ -1430,15 +1439,19 @@ mod tests {
         let c3: Vec<_> = nodes
             .iter()
             .filter_map(|n| match &n.body {
-                NodeBody::ToolResult { call_id, is_error, .. } if call_id == "c3" => Some(*is_error),
+                NodeBody::ToolResult {
+                    call_id, is_error, ..
+                } if call_id == "c3" => Some(*is_error),
                 _ => None,
             })
             .collect();
         assert_eq!(c3, vec![false], "an answered call is left alone");
         let markers = nodes
             .iter()
-            .filter(|n| matches!(&n.body, NodeBody::Note { content, .. }
-                if content.decode::<TurnError>().is_some()))
+            .filter(|n| {
+                matches!(&n.body, NodeBody::Note { content, .. }
+                if content.decode::<TurnError>().is_some())
+            })
             .count();
         assert_eq!(markers, 2);
     }
@@ -1489,7 +1502,10 @@ mod tests {
             .await
             .unwrap();
 
-        kernel.record_turn_error(&branch.id, "llm request failed: boom").await.unwrap();
+        kernel
+            .record_turn_error(&branch.id, "llm request failed: boom")
+            .await
+            .unwrap();
 
         let (nodes, _) = kernel.branch_path(&branch.id).unwrap();
         let mut kinds = Vec::new();
@@ -1502,9 +1518,15 @@ mod tests {
                         kinds.push("marker[root]".to_owned());
                     }
                 }
-                NodeBody::ToolResult { call_id, is_error, .. } => {
+                NodeBody::ToolResult {
+                    call_id, is_error, ..
+                } => {
                     // c1 keeps its real result; only c2 is repaired.
-                    assert_eq!(*is_error, call_id == "c2", "unexpected result for {call_id}");
+                    assert_eq!(
+                        *is_error,
+                        call_id == "c2",
+                        "unexpected result for {call_id}"
+                    );
                     kinds.push(format!("tool_result[{call_id}]"));
                 }
                 _ => kinds.push("other".to_owned()),

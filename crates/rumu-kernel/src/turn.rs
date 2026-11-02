@@ -10,7 +10,7 @@ use rumu_core::{
     Branch, BranchId, BranchKind, BranchStatus, CODE_DENIED_TOOLS, Call, CodeCall, Content, Cx,
     Inherit, InheritContext, InnerCall, NodeBody, NodeId, Plugin, RUMU_WORKSPACE, SYSTEM_SOURCE,
     SessionId, ToolCall, ToolError, ToolOutput, ToolResultExt, TurnError, WorkspaceScope,
-    WorkspaceUse, now, parse_args, truncate_chars,
+    WorkspaceUse, now, parse_args, truncate_chars, truncate_output,
 };
 use schemars::JsonSchema;
 use serde::Deserialize;
@@ -125,11 +125,17 @@ impl Kernel {
         if let Some(reason) = self.dispatch(&mut ev, true).await? {
             // The running turn keeps going, so this must not look like a
             // turn end: a plain prompt.blocked toast.
-            self.push("prompt.blocked", json!({ "branch": branch, "message": reason }));
+            self.push(
+                "prompt.blocked",
+                json!({ "branch": branch, "message": reason }),
+            );
             return Ok(());
         }
         let content = rewritten(&ev, content);
-        self.push("prompt.queued", json!({ "branch": branch, "text": content.text }));
+        self.push(
+            "prompt.queued",
+            json!({ "branch": branch, "text": content.text }),
+        );
         self.deliver(
             branch,
             NodeId::new(),
@@ -197,9 +203,7 @@ impl Kernel {
                 }
                 _ => true,
             })
-            .is_some_and(|n| {
-                matches!(n.body, NodeBody::User { .. } | NodeBody::ToolResult { .. })
-            });
+            .is_some_and(|n| matches!(n.body, NodeBody::User { .. } | NodeBody::ToolResult { .. }));
         if !owes || !recorded_failure {
             return Err(Error::NothingToRetry);
         }
@@ -260,7 +264,10 @@ impl Kernel {
                 }
             }
             TurnKind::Regenerate(content) => {
-                if self.open_turn(&branch, content, false, "regenerate").await? {
+                if self
+                    .open_turn(&branch, content, false, "regenerate")
+                    .await?
+                {
                     return Ok(());
                 }
             }
@@ -358,19 +365,17 @@ impl Kernel {
                 let k = self.clone();
                 let dbranch = branch.clone();
                 let streamed = streamed.clone();
-                Some(
-                    Arc::new(move |d: Delta| {
-                        streamed.store(true, Ordering::Relaxed);
-                        match d {
-                            Delta::Text(t) => {
-                                k.push("llm.delta", json!({ "branch": dbranch, "text": t }))
-                            }
-                            Delta::Reasoning(r) => {
-                                k.push("llm.delta", json!({ "branch": dbranch, "reasoning": r }))
-                            }
+                Some(Arc::new(move |d: Delta| {
+                    streamed.store(true, Ordering::Relaxed);
+                    match d {
+                        Delta::Text(t) => {
+                            k.push("llm.delta", json!({ "branch": dbranch, "text": t }))
                         }
-                    }) as crate::OnDelta,
-                )
+                        Delta::Reasoning(r) => {
+                            k.push("llm.delta", json!({ "branch": dbranch, "reasoning": r }))
+                        }
+                    }
+                }) as crate::OnDelta)
             };
             // Restarted per attempt: the node's duration is the call that
             // produced it, not the backoff waits before it.
@@ -619,9 +624,7 @@ impl Kernel {
                                 ))
                                 .await
                                 {
-                                    Ok(AgentRun::Summary { text, .. }) => {
-                                        ToolOutput::ok(text).cap()
-                                    }
+                                    Ok(AgentRun::Summary { text, .. }) => ToolOutput::ok(text),
                                     Ok(AgentRun::Aborted) => ToolOutput::err("aborted"),
                                     Ok(AgentRun::Refused(message)) => ToolOutput::err(message),
                                     Err(e) => ToolOutput::err(format!("agent failed: {e}")),
@@ -698,9 +701,17 @@ impl Kernel {
         }
         // The enclosing `code` call owns the per-parent seq counter; drop it
         // once that outer call is completely finished (all inner calls done).
-        if matches!(caller, Caller::Model) {
-            self.inner.lock().unwrap().inner_seq.remove(&call.call_id);
-        }
+        // The model sees the boundary cap; a plugin invoke gets a much larger
+        // one, since the plugin (a `code` script) filters before the model.
+        let out = match caller {
+            Caller::Model => {
+                let mut inner = self.inner.lock().unwrap();
+                inner.inner_seq.remove(&call.call_id);
+                inner.inner_scope.remove(&call.call_id);
+                out.cap()
+            }
+            Caller::Plugin { .. } => out.cap_invoke(),
+        };
         Ok(Some(ExecutedTool {
             out,
             payload: ev.payload,
@@ -746,21 +757,24 @@ impl Kernel {
             });
         }
         let session = self.session_of(branch)?;
-        let token = self
-            .inner
-            .lock()
-            .unwrap()
-            .running
-            .get(branch)
-            .cloned()
-            .ok_or_else(|| Error::NoRunningTurn {
-                branch: branch.clone(),
-            })?;
-        let (seq, call_id) = {
+        let (token, seq, call_id) = {
             let mut inner = self.inner.lock().unwrap();
+            let running =
+                inner
+                    .running
+                    .get(branch)
+                    .cloned()
+                    .ok_or_else(|| Error::NoRunningTurn {
+                        branch: branch.clone(),
+                    })?;
+            let token = inner
+                .inner_scope
+                .entry(parent_call.to_owned())
+                .or_insert_with(|| running.child_token())
+                .clone();
             let n = inner.inner_seq.entry(parent_call.to_owned()).or_insert(0);
             *n += 1;
-            (*n, format!("{parent_call}.{n}"))
+            (token, *n, format!("{parent_call}.{n}"))
         };
         let call = ToolCall {
             call_id,
@@ -805,7 +819,9 @@ impl Kernel {
             seq,
             name: effective_name,
             args: effective_args,
-            output: out.content.text.clone(),
+            // The script may see up to `INVOKE_OUTPUT_LIMIT`; the trace keeps
+            // what the model would have seen for a direct call.
+            output: truncate_output(out.content.text.clone()),
             is_error: out.is_error,
             blocked: blocked.clone(),
             dur_ms,
@@ -815,8 +831,7 @@ impl Kernel {
         // reload can always reproduce what the live UI saw.
         self.store.insert_code_call(&session, &record)?;
         let mut pushed = serde_json::to_value(&record)?;
-        // The live push is display-sized; the stored trace keeps the
-        // boundary-capped output.
+        // The live push is display-sized.
         pushed["output"] = json!(truncate_chars(
             out.content.text.clone(),
             CODE_CALL_PUSH_LIMIT

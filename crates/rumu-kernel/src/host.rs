@@ -61,6 +61,18 @@ impl Runtime for KernelRuntime {
             .await
             .map_err(Into::into)
     }
+
+    fn cancel_invokes(&self, _branch: &BranchId, parent_call: &str) {
+        let mut inner = self.0.inner.lock().unwrap();
+        if let Some(token) = inner.inner_scope.get(parent_call) {
+            token.cancel();
+        } else {
+            // Nothing ran yet: later invokes start cancelled.
+            let token = tokio_util::sync::CancellationToken::new();
+            token.cancel();
+            inner.inner_scope.insert(parent_call.to_owned(), token);
+        }
+    }
 }
 
 impl Kernel {

@@ -410,7 +410,8 @@ impl Plugin for TestPlugin {
                             "name": name,
                             "ok": !r.output.is_error,
                             "blocked": r.blocked,
-                            "text": r.output.content.text,
+                            "len": r.output.content.text.chars().count(),
+                            "text": r.output.content.text.chars().take(200).collect::<String>(),
                             "dur_ms": r.dur_ms,
                         })),
                         Err(e) => results.push(json!({
@@ -464,6 +465,23 @@ impl Plugin for TestPlugin {
                 }
                 return Ok(ToolOutput::ok(texts.join("|")));
             }
+            "big" => return Ok(ToolOutput::ok("x".repeat(50_000))),
+            // Starts a long internal call, then cancels it without awaiting
+            // (a `code` script that ended early).
+            "orphan" => {
+                let inner = cx.clone();
+                let h =
+                    tokio::spawn(async move { inner.invoke("nap", json!({ "ms": 30_000 })).await });
+                tokio::time::sleep(Duration::from_millis(50)).await;
+                cx.cancel_invokes();
+                let r = tokio::time::timeout(Duration::from_secs(5), h).await;
+                let text = match r {
+                    Ok(Ok(Err(e))) => format!("cancelled: {e}"),
+                    Ok(Ok(Ok(r))) => format!("finished: {}", r.output.content.text),
+                    _ => "hung".into(),
+                };
+                return Ok(ToolOutput::ok(text));
+            }
             "append_note" => {
                 return Ok(ToolOutput::ok("noted").with_effect(Content::text("direct note")));
             }
@@ -481,6 +499,8 @@ fn tool_spec(name: &str) -> ToolSpec {
         description: format!("test tool {name}"),
         schema: json!({ "type": "object", "properties": {} }),
         background: false,
+        output_schema: None,
+        parallel: false,
     }
 }
 
@@ -556,6 +576,8 @@ fn background_plugin(
             .iter()
             .map(|t| ToolSpec {
                 background: true,
+                output_schema: None,
+                parallel: false,
                 ..tool_spec(t)
             })
             .collect(),
@@ -865,6 +887,7 @@ async fn tool_error_results() {
 
 fn attachment(hash: &str) -> Attachment {
     Attachment {
+        kind: rumu_core::AttachmentKind::Image,
         hash: hash.to_owned(),
         mime: "image/png".into(),
         name: Some(format!("{hash}.png")),
@@ -879,9 +902,7 @@ fn content_where(nodes: &[Node], f: impl Fn(&Content) -> bool) -> &Content {
     nodes
         .iter()
         .find_map(|n| match &n.body {
-            NodeBody::User { content } | NodeBody::ToolResult { content, .. }
-                if f(content) =>
-            {
+            NodeBody::User { content } | NodeBody::ToolResult { content, .. } if f(content) => {
                 Some(content)
             }
             _ => None,
@@ -1048,18 +1069,29 @@ async fn transient_failure_is_retried_to_success() {
     let (done, seen) = collect_turn(&mut rx, &branch.0).await;
     assert_eq!(done["method"], "turn.done", "{done}");
 
-    let retrying: Vec<&Value> = seen.iter().filter(|v| v["method"] == "turn.retrying").collect();
+    let retrying: Vec<&Value> = seen
+        .iter()
+        .filter(|v| v["method"] == "turn.retrying")
+        .collect();
     assert_eq!(retrying.len(), 1, "{seen:?}");
     assert_eq!(retrying[0]["params"]["branch"], branch.0);
     assert_eq!(retrying[0]["params"]["attempt"], 1);
     assert_eq!(retrying[0]["params"]["max"], rumu_kernel::MAX_LLM_RETRIES);
     let ms = retrying[0]["params"]["retry_in_ms"].as_u64().unwrap();
     assert!((600..=1400).contains(&ms), "jittered first backoff: {ms}");
-    assert!(retrying[0]["params"]["message"].as_str().unwrap().contains("503"));
+    assert!(
+        retrying[0]["params"]["message"]
+            .as_str()
+            .unwrap()
+            .contains("503")
+    );
 
     assert_eq!(llm.calls(), 2, "exactly one replay");
     let (nodes, _) = kernel.branch_path(&branch).unwrap();
-    assert_eq!(body_kinds(&nodes), vec!["marker[root]", "user", "assistant"]);
+    assert_eq!(
+        body_kinds(&nodes),
+        vec!["marker[root]", "user", "assistant"]
+    );
 }
 
 /// A transient failure that never clears exhausts the budget, and the turn is
@@ -1091,7 +1123,9 @@ async fn persistent_transient_failure_records_a_marker() {
     let NodeBody::Note { content, .. } = &marker.body else {
         panic!("the marker is a note");
     };
-    let payload = content.decode::<rumu_core::TurnError>().expect("turn.error marker");
+    let payload = content
+        .decode::<rumu_core::TurnError>()
+        .expect("turn.error marker");
     assert!(payload.message.contains("503"), "{}", payload.message);
 }
 
@@ -1141,9 +1175,10 @@ async fn failure_after_a_delta_is_not_retried() {
         !seen.iter().any(|v| v["method"] == "turn.retrying"),
         "{seen:?}"
     );
-    assert!(seen.iter().any(|v| {
-        v["method"] == "llm.delta" && v["params"]["text"] == "partial answer"
-    }));
+    assert!(
+        seen.iter()
+            .any(|v| { v["method"] == "llm.delta" && v["params"]["text"] == "partial answer" })
+    );
     assert_eq!(llm.calls(), 1, "no replay");
 
     let (nodes, _) = kernel.branch_path(&branch).unwrap();
@@ -1175,8 +1210,12 @@ async fn abort_during_backoff_ends_the_turn() {
 /// announces itself with reason "retry".
 #[tokio::test(start_paused = true)]
 async fn retry_after_failure_appends_after_the_marker() {
-    let (kernel, llm, branch) =
-        flaky_setup(vec![LlmResponse::text("recovered")], usize::MAX, TRANSIENT_503).await;
+    let (kernel, llm, branch) = flaky_setup(
+        vec![LlmResponse::text("recovered")],
+        usize::MAX,
+        TRANSIENT_503,
+    )
+    .await;
     let mut rx = kernel.tap_pushes();
 
     kernel.prompt(&branch, "hello").await.unwrap();
@@ -2923,8 +2962,7 @@ async fn regenerate_switches_the_active_branch() {
 /// is left exactly as it was.
 #[tokio::test]
 async fn plain_fork_activates_without_disturbing_the_old_branch() {
-    let (kernel, _llm, session, branch) =
-        setup(vec![], vec![LlmResponse::text("reply")]).await;
+    let (kernel, _llm, session, branch) = setup(vec![], vec![LlmResponse::text("reply")]).await;
 
     let (_, nodes, _) = run_turn(&kernel, &branch, "hello").await;
     let prompt = nodes
@@ -3159,7 +3197,9 @@ async fn fork_session_copies_the_path_into_a_new_session() {
     // Forking at an assistant node with tool calls is refused.
     let with_calls = nodes
         .iter()
-        .find(|n| matches!(&n.body, NodeBody::Assistant { tool_calls, .. } if !tool_calls.is_empty()))
+        .find(
+            |n| matches!(&n.body, NodeBody::Assistant { tool_calls, .. } if !tool_calls.is_empty()),
+        )
         .expect("the turn made a tool call")
         .id
         .clone();
@@ -4430,4 +4470,54 @@ async fn background_task_effects_keep_their_plugin_source() {
             NodeBody::Note { source, content } if source == "system" && content.decode::<TaskDone>().is_some()))
         .expect("the completion note");
     assert!(effect < note, "effects land before the completion note");
+}
+
+/// The model sees a tool output capped to `OUTPUT_LIMIT`; a plugin invoke
+/// gets the whole output (up to `INVOKE_OUTPUT_LIMIT`).
+#[tokio::test]
+async fn invoke_outputs_are_not_capped_to_the_model_limit() {
+    let plugin = Arc::new(script_host(&["big"], vec![], noop_hooks(), noop_tools()));
+    let (kernel, _llm, session, branch) = setup(
+        vec![plugin],
+        vec![
+            LlmResponse::calls(vec![
+                ToolCall::new("c1", "big", json!({})),
+                ToolCall::new("c2", "script", json!({ "calls": [{ "name": "big" }] })),
+            ]),
+            LlmResponse::text("done"),
+        ],
+    )
+    .await;
+    let (_, nodes, _) = run_turn(&kernel, &branch, "go").await;
+    let (direct, _) = result_text(&nodes, "c1");
+    assert!(direct.contains("[truncated"), "{} chars", direct.len());
+    assert!(direct.chars().count() < rumu_core::OUTPUT_LIMIT + 100);
+    let (inner, _) = result_text(&nodes, "c2");
+    let rows: Value = serde_json::from_str(&inner).unwrap();
+    assert_eq!(rows[0]["len"], 50_000);
+    // The stored trace keeps the model-sized output.
+    let stored = kernel.code_calls(&session).unwrap();
+    assert!(stored[0].output.contains("[truncated"));
+}
+
+/// `Cx::cancel_invokes` ends a plugin's still-running internal calls.
+#[tokio::test]
+async fn cancel_invokes_ends_running_internal_calls() {
+    let plugin = Arc::new(script_host(
+        &["orphan", "nap"],
+        vec![],
+        noop_hooks(),
+        noop_tools(),
+    ));
+    let (kernel, _llm, _session, branch) = setup(
+        vec![plugin],
+        vec![
+            LlmResponse::calls(vec![ToolCall::new("c1", "orphan", json!({}))]),
+            LlmResponse::text("done"),
+        ],
+    )
+    .await;
+    let (_, nodes, _) = run_turn(&kernel, &branch, "go").await;
+    let (text, _) = result_text(&nodes, "c1");
+    assert!(text.starts_with("cancelled:"), "{text}");
 }

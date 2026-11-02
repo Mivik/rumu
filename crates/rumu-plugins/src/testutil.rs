@@ -21,6 +21,10 @@ pub(crate) struct ScriptedInner {
     pub dur_ms: u64,
     /// Attachments carried by the answer's output.
     pub attachments: Vec<rumu_core::Attachment>,
+    /// Structured payload carried by the answer's output.
+    pub data: Option<rumu_core::Tagged>,
+    /// How long the call takes (real time).
+    pub delay: std::time::Duration,
 }
 
 impl ScriptedInner {
@@ -49,6 +53,22 @@ impl ScriptedInner {
         }
     }
 
+    /// Attach a structured payload to the answer's output.
+    pub fn with_data(mut self, tag: &str, data: Value) -> Self {
+        self.data = Some(rumu_core::Tagged {
+            tag: tag.into(),
+            v: 1,
+            data,
+        });
+        self
+    }
+
+    /// Make the call take `ms` milliseconds.
+    pub fn with_delay(mut self, ms: u64) -> Self {
+        self.delay = std::time::Duration::from_millis(ms);
+        self
+    }
+
     /// Attach images to the answer's output.
     pub fn with_attachments(mut self, attachments: Vec<rumu_core::Attachment>) -> Self {
         self.attachments = attachments;
@@ -68,6 +88,14 @@ pub(crate) struct FakeRuntime {
     pub inner_specs: Mutex<VecDeque<ScriptedInner>>,
     /// Every internal call received: (branch, parent_call, name, args).
     pub inner_calls: Mutex<Vec<(BranchId, String, String, Value)>>,
+    /// Internal calls currently running.
+    pub inner_running: std::sync::atomic::AtomicUsize,
+    /// Most internal calls ever running at once.
+    pub inner_peak: std::sync::atomic::AtomicUsize,
+    /// Parent call ids passed to `cancel_invokes`.
+    pub cancelled: Mutex<Vec<String>>,
+    /// Internal calls that ended by cancellation.
+    pub inner_aborted: std::sync::atomic::AtomicUsize,
     /// Sessions returned by `sessions` (already in display order).
     pub sessions: Mutex<Vec<SessionInfo>>,
     /// Session trees returned by `session_tree`, keyed by session id.
@@ -214,15 +242,48 @@ impl Runtime for FakeRuntime {
             .unwrap()
             .pop_front()
             .unwrap_or_default();
+        use std::sync::atomic::Ordering::SeqCst;
+        let now = self.inner_running.fetch_add(1, SeqCst) + 1;
+        self.inner_peak.fetch_max(now, SeqCst);
+        if !spec.delay.is_zero() {
+            // Poll so `cancel_invokes` ends the call early, like the kernel's
+            // scope token would.
+            let until = std::time::Instant::now() + spec.delay;
+            while std::time::Instant::now() < until {
+                if self
+                    .cancelled
+                    .lock()
+                    .unwrap()
+                    .iter()
+                    .any(|p| p == parent_call)
+                {
+                    self.inner_running.fetch_sub(1, SeqCst);
+                    self.inner_aborted.fetch_add(1, SeqCst);
+                    return Ok(InnerCall {
+                        output: ToolOutput::err("aborted"),
+                        blocked: None,
+                        dur_ms: 0,
+                    });
+                }
+                tokio::time::sleep(std::time::Duration::from_millis(5)).await;
+            }
+        }
+        self.inner_running.fetch_sub(1, SeqCst);
+        let mut content = Content::text(spec.text).with_attachments(spec.attachments);
+        content.data = spec.data;
         Ok(InnerCall {
             output: ToolOutput {
-                content: Content::text(spec.text).with_attachments(spec.attachments),
+                content,
                 is_error: spec.is_error,
                 ..Default::default()
             },
             blocked: spec.blocked,
             dur_ms: spec.dur_ms,
         })
+    }
+
+    fn cancel_invokes(&self, _branch: &BranchId, parent_call: &str) {
+        self.cancelled.lock().unwrap().push(parent_call.to_owned());
     }
 }
 

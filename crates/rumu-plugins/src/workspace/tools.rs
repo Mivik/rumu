@@ -8,9 +8,10 @@ use std::time::Duration;
 use rumu_cards::usage::CardOp;
 use rumu_cards::{card, library};
 use rumu_core::{
-    Effect, Manifest, PathState, Progress, RUMU_WORKSPACE, ToolError, ToolOutput, ToolResult,
-    ToolResultExt, ToolSpec, Utf8TypedPathBuf, Utf8UnixPath, Utf8UnixPathBuf, Workspace,
-    WorkspaceUse, parse_args, resolve_state, tool_schema,
+    Effect, INVOKE_OUTPUT_LIMIT, Manifest, PathState, Progress, RUMU_WORKSPACE, Structured,
+    ToolError, ToolOutput, ToolResult, ToolResultExt, ToolSpec, Utf8TypedPathBuf, Utf8UnixPath,
+    Utf8UnixPathBuf, Workspace, WorkspaceUse, parse_args, resolve_state, tool_schema,
+    truncate_middle,
 };
 use schemars::JsonSchema;
 use serde::Deserialize;
@@ -40,20 +41,46 @@ impl From<&str> for ToolInputError {
 }
 
 /// A finished `bash` call: exit status, combined output and the effects it
-/// produced. `is_error` follows the exit status.
+/// produced. `is_error` follows the exit status. `structured` is set for a
+/// plugin invoke (a `code` script), which then gets a [`BashResult`].
 struct BashOutcome {
     code: i32,
     output: String,
     effects: Vec<Effect>,
+    structured: bool,
+}
+
+/// What a `code` script's `rumu.bash()` resolves to (also for a non-zero
+/// exit code). The `output` keeps its start and end within
+/// [`INVOKE_OUTPUT_LIMIT`].
+#[derive(Debug, serde::Serialize, Deserialize, JsonSchema)]
+struct BashResult {
+    exit_code: i32,
+    /// combined stdout+stderr
+    output: String,
+    /// whether the middle of `output` was cut
+    truncated: bool,
+}
+
+impl Structured for BashResult {
+    const TAG: &'static str = "bash.result";
+    const V: u32 = 1;
 }
 
 impl From<BashOutcome> for ToolOutput {
     fn from(outcome: BashOutcome) -> Self {
+        let mut content =
+            rumu_core::Content::text(format!("exit code: {}\n{}", outcome.code, outcome.output));
+        if outcome.structured {
+            let truncated = outcome.output.chars().count() > INVOKE_OUTPUT_LIMIT;
+            content = content.with_data(&BashResult {
+                exit_code: outcome.code,
+                output: truncate_middle(outcome.output, INVOKE_OUTPUT_LIMIT),
+                truncated,
+            });
+        }
         ToolOutput {
-            content: rumu_core::Content::text(format!(
-                "exit code: {}\n{}",
-                outcome.code, outcome.output
-            )),
+            content,
             is_error: outcome.code != 0,
             effects: outcome.effects,
         }
@@ -168,6 +195,8 @@ workspace path (relative to the workspace root, absolute on its machine, or \
                     .into(),
                 schema: tool_schema::<ReadArgs>(),
                 background: false,
+                output_schema: None,
+                parallel: true,
             },
             ToolSpec {
                 name: "write".into(),
@@ -177,6 +206,8 @@ content is the editable view — frontmatter + body."
                     .into(),
                 schema: tool_schema::<WriteArgs>(),
                 background: false,
+                output_schema: None,
+                parallel: false,
             },
             ToolSpec {
                 name: "edit".into(),
@@ -186,6 +217,8 @@ workspaces."
                     .into(),
                 schema: tool_schema::<EditArgs>(),
                 background: false,
+                output_schema: None,
+                parallel: false,
             },
             ToolSpec {
                 name: "list".into(),
@@ -196,6 +229,8 @@ workspace, lists cards."
                     .into(),
                 schema: tool_schema::<ListArgs>(),
                 background: false,
+                output_schema: None,
+                parallel: true,
             },
             ToolSpec {
                 name: "bash".into(),
@@ -206,6 +241,8 @@ stdout+stderr (truncated to ~20k chars) and the exit code. Default timeout 60s (
                     .into(),
                 schema: tool_schema::<BashArgs>(),
                 background: true,
+                output_schema: Some(tool_schema::<BashResult>()),
+                parallel: false,
             },
             ToolSpec {
                 name: "search".into(),
@@ -216,6 +253,8 @@ Returns addresses with short snippets, never full text — follow up with `read`
                     .into(),
                 schema: tool_schema::<SearchArgs>(),
                 background: false,
+                output_schema: None,
+                parallel: true,
             },
             ToolSpec {
                 name: "workspace_use".into(),
@@ -225,6 +264,8 @@ Returns addresses with short snippets, never full text — follow up with `read`
                     .into(),
                 schema: tool_schema::<WorkspaceUseArgs>(),
                 background: false,
+                output_schema: None,
+                parallel: false,
             },
         ],
         hooks: vec![],
@@ -735,6 +776,7 @@ impl WorkspacePlugin {
                 code: out.code,
                 output: out.combined,
                 effects,
+                structured: cx.call().is_some_and(|c| c.parent.is_some()),
             }),
             Err(e) => Err(backend_err("bash", None, e).with_effects(effects)),
         }

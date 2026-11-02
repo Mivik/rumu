@@ -1,8 +1,9 @@
 //! The deterministic API stub embedded in the `code` tool description.
 //!
 //! Hybrid mode keeps every tool in the model's tool list, so the stub repeats
-//! only the *signatures*: one TypeScript-style line per tool plus a one-line
-//! comment taken from the tool description. The same plugin set must produce
+//! only the *signatures*: one TypeScript-style line per tool (returning the
+//! tool's output schema, or `string`) plus a one-line comment taken from the
+//! tool description, marked `(parallel)` for concurrent tools. The same plugin set must produce
 //! byte-identical text every startup (cache contract).
 //!
 //! `serde_json` is built with `preserve_order` (enabled explicitly in this
@@ -25,7 +26,11 @@ pub(super) fn render(tools: &[ToolSpec]) -> String {
     out.push_str("rumu.call(name: string, args?: Record<string, unknown>): Promise<string>\n");
     for tool in tools {
         out.push('\n');
-        out.push_str(&format!("/** {} */\n", comment(&tool.description)));
+        let parallel = if tool.parallel { " (parallel)" } else { "" };
+        out.push_str(&format!(
+            "/** {}{parallel} */\n",
+            comment(&tool.description)
+        ));
         out.push_str(&signature(tool));
         out.push('\n');
     }
@@ -34,12 +39,16 @@ pub(super) fn render(tools: &[ToolSpec]) -> String {
 
 fn signature(tool: &ToolSpec) -> String {
     let args = ts_type(&tool.schema);
+    let ret = tool
+        .output_schema
+        .as_ref()
+        .map_or_else(|| "string".into(), ts_type);
     if is_js_ident(&tool.name) {
-        format!("rumu.{}(args: {args}): Promise<string>", tool.name)
+        format!("rumu.{}(args: {args}): Promise<{ret}>", tool.name)
     } else {
         // Quote the name: `rumu.weird-name` is not valid JS.
         format!(
-            "rumu.call({}, args: {args}): Promise<string>",
+            "rumu.call({}, args: {args}): Promise<{ret}>",
             serde_json::to_string(&tool.name).unwrap_or_else(|_| "\"?\"".into())
         )
     }
@@ -131,6 +140,8 @@ mod tests {
             description: description.into(),
             schema,
             background: false,
+            output_schema: None,
+            parallel: false,
         }
     }
 

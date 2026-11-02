@@ -89,7 +89,8 @@ export function contentSegments(content: Content): ContentSegment[] {
 /** An attachment as plain text — the form text-only readers (previews, the
  *  clipboard) see it in. */
 export function attachmentPlaceholder(a: Attachment): string {
-  return a.name ? `[image: ${a.name} ${a.width}×${a.height}]` : `[image: ${a.width}×${a.height}]`
+  const at = a.name ? `${a.name} ${a.width}×${a.height}` : `${a.width}×${a.height}`
+  return `[${a.kind ?? 'image'}: ${at}]`
 }
 
 /** The content with every image as its placeholder — `Content::rendered`. */
