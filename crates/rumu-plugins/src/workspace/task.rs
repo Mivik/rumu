@@ -1,8 +1,8 @@
-//! The `@rumu:/task` part of the `@rumu` workspace: the kernel's runtime task
+//! The `@rumu:/tasks` part of the `@rumu` workspace: the kernel's runtime task
 //! table, read-only.
 //!
-//! - `read /task` — every task of the current session;
-//! - `read /task/<id>` — one task's status plus its buffered output, pageable
+//! - `read /tasks` — every task of the current session;
+//! - `read /tasks/<id>` — one task's status plus its buffered output, pageable
 //!   with `offset` / `limit`.
 //!
 //! Tasks are runtime-only: a kernel restart loses running tasks, and their
@@ -27,11 +27,11 @@ impl WorkspacePlugin {
         limit: Option<u64>,
         cx: &Cx,
     ) -> ToolResult<ToolOutput> {
-        if abs.as_str() == "/task" {
+        if abs.as_str() == "/tasks" {
             return self.task_listing(cx);
         }
         let id = abs
-            .strip_prefix("/task")
+            .strip_prefix("/tasks")
             .ok()
             .map(Utf8UnixPath::as_str)
             .unwrap_or("");
@@ -85,7 +85,7 @@ impl WorkspacePlugin {
             .iter()
             .map(|t| {
                 format!(
-                    "{WS}:/task/{}  {:<9} {}  ({})",
+                    "{WS}:/tasks/{}  {:<9} {}  ({})",
                     t.id,
                     t.status.label(),
                     t.label(),

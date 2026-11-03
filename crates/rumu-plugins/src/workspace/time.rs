@@ -5,7 +5,7 @@ use jiff::tz::TimeZone;
 use rumu_core::Timestamp as Millis;
 
 /// `YYYY-MM-DDTHH:MM:SS±HH:MM` in the system time zone — the display form
-/// of timestamps in `@rumu:/sessions` and `@rumu:/task` output.
+/// of timestamps in `@rumu:/sessions` and `@rumu:/tasks` output.
 ///
 /// The numeric offset keeps the string unambiguous and lets the model line
 /// these times up with what `date`/`git log` report on the same machine.

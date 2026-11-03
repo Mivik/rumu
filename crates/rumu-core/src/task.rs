@@ -96,7 +96,7 @@ impl TaskStatus {
         matches!(self, Self::Running)
     }
 
-    /// The word used in completion notes and `@rumu:/task` views.
+    /// The word used in completion notes and `@rumu:/tasks` views.
     pub fn label(self) -> &'static str {
         match self {
             Self::Running => "running",
@@ -164,8 +164,8 @@ impl Structured for TaskDone {
 }
 
 /// The line appended with a task's result when it was truncated: the buffered
-/// output stays readable through `@rumu:/task/<id>`, paging with `offset` /
+/// output stays readable through `@rumu:/tasks/<id>`, paging with `offset` /
 /// `limit` when it exceeds the tool-output cap.
 pub fn task_output_hint(id: &TaskId) -> String {
-    format!("read {RUMU_WORKSPACE}:/task/{id} to inspect the output (page with `offset`/`limit`)")
+    format!("read {RUMU_WORKSPACE}:/tasks/{id} to inspect the output (page with `offset`/`limit`)")
 }

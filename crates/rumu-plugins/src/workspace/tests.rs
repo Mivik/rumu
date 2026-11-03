@@ -1,7 +1,7 @@
 //! Tests for the workspace plugin: `<ws>:<path>` resolution, the file/bash
 //! tools over local backends (absolute paths included), `workspace_use`, the
 //! `@rumu` virtual workspace (`/cards` reads/writes with validation and
-//! read-before-write, `/sessions` views, `/task` reads, unknown roots), AGENTS.md
+//! read-before-write, `/sessions` views, `/tasks` reads, unknown roots), AGENTS.md
 //! injection and the config.yaml loader. The ssh backend's command construction
 //! is tested in `backend.rs` (no real ssh).
 
@@ -921,7 +921,9 @@ async fn rumu_workspace_edges() {
 
     // `list @rumu:` shows the roots.
     let out = plugin.call_tool("list", json!({}), &cx).await.unwrap();
-    assert_eq!(out.content.text, "cards/\nsessions/\ntask/");
+    assert_eq!(out.content.text, "cards/
+sessions/
+tasks/");
 
     // Unknown paths name the roots.
     for tool in ["read", "write", "edit", "list"] {
@@ -3134,7 +3136,7 @@ async fn background_bash_is_killed_when_dropped() {
     assert!(gone, "process {pid} survived the dropped bash future");
 }
 
-/// `read @rumu:/task/<id>` renders the task's status and buffered output.
+/// `read @rumu:/tasks/<id>` renders the task's status and buffered output.
 #[tokio::test]
 async fn task_read_renders_status_and_output() {
     use rumu_core::{Content, TaskId, TaskInfo, TaskKind, TaskStatus};
@@ -3166,7 +3168,7 @@ async fn task_read_renders_status_and_output() {
         .push((info, "partial\nmore output\n".into()));
 
     let out = plugin
-        .call_tool("read", json!({ "path": "@rumu:/task/t1" }), &cx)
+        .call_tool("read", json!({ "path": "@rumu:/tasks/t1" }), &cx)
         .await
         .unwrap();
     assert!(!out.is_error, "{}", out.content.text);
@@ -3175,9 +3177,9 @@ async fn task_read_renders_status_and_output() {
     assert!(out.content.text.contains("--- result ---\nignored"));
 
     let listing = plugin
-        .call_tool("read", json!({ "path": "@rumu:/task" }), &cx)
+        .call_tool("read", json!({ "path": "@rumu:/tasks" }), &cx)
         .await
         .unwrap();
     assert!(!listing.is_error, "{}", listing.content.text);
-    assert!(listing.content.text.contains("@rumu:/task/t1"));
+    assert!(listing.content.text.contains("@rumu:/tasks/t1"));
 }

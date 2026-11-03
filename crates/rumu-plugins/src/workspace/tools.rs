@@ -332,7 +332,7 @@ pub(super) fn card_load_err(id: &str, source: impl std::fmt::Display) -> ToolErr
 /// `unknown path ...`.
 pub(super) fn unknown_rumu_path(abs: &Utf8UnixPath) -> ToolError {
     ToolError::model(format!(
-        "unknown path `{RUMU_WORKSPACE}:{abs}` (roots: /cards, /sessions, /task)"
+        "unknown path `{RUMU_WORKSPACE}:{abs}` (roots: /cards, /sessions, /tasks)"
     ))
 }
 
@@ -878,7 +878,7 @@ impl WorkspacePlugin {
         if abs.starts_with("/sessions") {
             return self.session_read(abs, offset, limit, cx).await;
         }
-        if abs.starts_with("/task") {
+        if abs.starts_with("/tasks") {
             return self.task_read(abs, offset, limit, cx).await;
         }
         Err(unknown_rumu_path(abs))
@@ -897,7 +897,9 @@ impl WorkspacePlugin {
     /// `list` inside the `@rumu` workspace.
     async fn rumu_list(&self, abs: &Utf8UnixPath, cx: &Cx) -> ToolResult<ToolOutput> {
         match abs.as_str() {
-            "/" => Ok("cards/\nsessions/\ntask/".into()),
+            "/" => Ok("cards/
+sessions/
+tasks/".into()),
             "/cards" => self.card_list("").await,
             _ if abs.starts_with("/cards") => {
                 let prefix = abs
@@ -907,7 +909,7 @@ impl WorkspacePlugin {
                 self.card_list(prefix).await
             }
             _ if abs.starts_with("/sessions") => self.session_list(abs, cx).await,
-            _ if abs.starts_with("/task") => self.task_read(abs, None, None, cx).await,
+            _ if abs.starts_with("/tasks") => self.task_read(abs, None, None, cx).await,
             _ => Err(unknown_rumu_path(abs)),
         }
     }

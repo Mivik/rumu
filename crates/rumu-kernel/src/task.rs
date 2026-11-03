@@ -23,7 +23,7 @@ use tokio_util::sync::CancellationToken;
 use crate::host::KernelRuntime;
 
 /// One task's runtime row. Tasks stay in the table after they end so the UI
-/// and `@rumu:/task/<id>` can still show the result.
+/// and `@rumu:/tasks/<id>` can still show the result.
 pub(crate) struct TaskEntry {
     pub info: TaskInfo,
     /// Buffered `Progress::Append` text, capped to the last `TASK_OUTPUT_LIMIT`
@@ -190,7 +190,7 @@ impl Kernel {
 
         Ok(ToolOutput::ok(format!(
             "started task {id} ({label}) — you will be notified when it finishes; \
-             use task_kill / read {RUMU_WORKSPACE}:/task/{id}"
+             use task_kill / read {RUMU_WORKSPACE}:/tasks/{id}"
         )))
     }
 
@@ -240,7 +240,7 @@ impl Kernel {
 
         Ok(ToolOutput::ok(format!(
             "started task {id} ({label}) — you will be notified when it finishes; \
-             use task_kill / read {RUMU_WORKSPACE}:/task/{id}"
+             use task_kill / read {RUMU_WORKSPACE}:/tasks/{id}"
         )))
     }
 
