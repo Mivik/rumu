@@ -56,7 +56,10 @@ body: `await rumu.<tool>(args)` calls a tool (`await rumu.call(name, args)` for 
 Intermediate results stay inside the script — only its output comes back: `text(value)` and the \
 `return` value (strings as-is, other values as JSON), `attach(img)`, and \
 `console.log/info/warn/error` lines. Use it for loops, filtering/aggregating large outputs, or \
-multi-step work where only the conclusion matters; for one-off work call the tool directly.\n\n\
+multi-step work where only the conclusion matters.\n\n\
+Do not use it unless it clearly pays off: ordinary calls — reading a file, one search, one \
+command, one edit, or a few independent calls — go directly to the tool, never wrapped in a \
+script.\n\n\
 A call resolves to the tool's text output (up to ~1M chars with the middle cut — far more than a \
 direct call shows), to the value its signature names (e.g. `bash` → `{ exit_code, output, \
 truncated }`, also for a non-zero exit), or to `{ text, attachments }` when the tool returned media. \
