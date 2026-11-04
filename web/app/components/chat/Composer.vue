@@ -15,7 +15,7 @@
 // upload keeps its tile (the server's word arrived as a toast) until retried
 // or removed. The writing stays plain text: like the Claude and ChatGPT web
 // apps, the sent message leads with its images (`withLeadingAnchors`).
-import { computed, onBeforeUnmount, reactive, ref } from 'vue'
+import { computed, nextTick, onBeforeUnmount, onMounted, reactive, ref, watch } from 'vue'
 import { t } from '../../i18n'
 import { isBusy, pathNodes, sendPrompt, state, stopTurn } from '../../lib/store'
 import type { PromptAttachment } from '../../lib/store'
@@ -180,6 +180,26 @@ function onKeydown(e: KeyboardEvent): void {
     submit()
   }
 }
+
+/** Opening the landing page or a session puts the caret in the composer, the
+ *  one thing to touch on either. Touch keyboards pop up on focus, so there it
+ *  waits for a tap. The caret goes to the end of whatever draft is already
+ *  there, so typing continues the thought. */
+function focusComposer(): void {
+  if (matchMedia('(pointer: coarse)').matches) return
+  const el = textareaEl.value
+  if (!el || document.activeElement === el) return
+  el.focus()
+  el.setSelectionRange(el.value.length, el.value.length)
+}
+
+onMounted(() => void nextTick(focusComposer))
+// Landing → chat mounts a fresh composer, but switching between open sessions
+// keeps this one mounted, so session changes focus it too.
+watch(
+  () => state.sessionId,
+  () => void nextTick(focusComposer),
+)
 
 const placeholder = computed(() => {
   return isBusy.value ? t('chat.composer.steerPlaceholder') : t('chat.composer.placeholder')
