@@ -1530,11 +1530,12 @@
   }
 }
 
-/* On phones and in portrait the conversation is the page itself, not a card
- * on the desk: the sheet meets every edge — no inset, square corners, no edge
- * line or shadow. Unlayered so it overrides the margin / radius utilities on
- * the sheet regardless of class order. The desk's right gutter goes with it. */
-@media (width < 64rem), (orientation: portrait) {
+/* Below lg the conversation is the page itself, not a card on the desk: the
+ * sheet meets every edge — no inset, square corners, no edge line or shadow.
+ * The breakpoint is the layout's (`lg` in app.vue), so both sheets switch
+ * together. Unlayered so it overrides the margin / radius utilities on the
+ * sheet regardless of class order. The desk's right gutter goes with it. */
+@media (width < 64rem) {
   .sheet {
     margin: 0;
     border-radius: 0;
