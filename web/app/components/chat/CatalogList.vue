@@ -3,14 +3,15 @@
 // offered the model, each opening in the CardDrawer, and the folded
 // directories as one line each. Shown inside an opened activity run
 // (ActivityRun), folded under a heading that names the deck's mount point. It
-// only mounts when its run opens, so its cards' underlines draw in each time
-// (.underline-cascade).
+// only mounts when its run opens; v-play-once keeps the cards' underlines
+// from drawing again once they have been seen.
 import { computed, ref } from 'vue'
 import { t } from '../../i18n'
 import { cardLabel } from '../../lib/cards'
 import type { CatalogNote, Node } from '../../lib/types'
 import { CATALOG_TAG, CATALOG_VERSION } from '../../lib/types'
 import { openDrawer } from '../../lib/store'
+import { vPlayOnce } from '../../lib/motion'
 import Icon from '../ui/Icon.vue'
 
 const props = defineProps<{ node: Node }>()
@@ -61,10 +62,16 @@ function foldedLabel(names: string[]): string {
       <span class="min-w-0 truncate">{{ heading }}</span>
       <Icon name="chevron" :size="10" class="reason-chevron flex-none" :class="{ 'rotate-90': open }" />
     </button>
-    <div v-if="open" class="underline-cascade reveal mt-1">
+    <div v-if="open" class="reveal mt-1">
       <ul class="flex flex-col gap-0.5">
         <li v-for="(e, i) in catalog.entries" :key="e.id">
-          <button type="button" class="card-ref" :style="{ '--i': i }" @click="openDrawer(e.id)">
+          <button
+            v-play-once="{ key: `card:${e.id}` }"
+            type="button"
+            class="card-ref"
+            :style="{ '--i': i }"
+            @click="openDrawer(e.id)"
+          >
             {{ cardLabel(e.id) }}
           </button>
           <span v-if="e.summary" class="text-ink-3"> — {{ e.summary }}</span>

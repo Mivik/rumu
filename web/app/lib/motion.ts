@@ -35,3 +35,19 @@ export const vEnter: Directive<HTMLElement, string | false | undefined> = {
     el.classList.add(cls)
   },
 }
+
+/** Keys whose reveal has already played in this page load. */
+const played = new Set<string>()
+
+/** `v-play-once="{ key, cls }"`: add `cls` (default `.line-in`) the first
+ * time `key` is seen; a later mount shows it already drawn. For content that
+ * remounts whenever its fold or popover is reopened — an opened catalog, a
+ * revisited cache panel — where a fresh mount isn't news. */
+export const vPlayOnce: Directive<HTMLElement, { key: string; cls?: string }> = {
+  mounted(el, binding) {
+    const { key, cls = 'line-in' } = binding.value
+    if (played.has(key)) return
+    played.add(key)
+    el.classList.add(cls)
+  },
+}

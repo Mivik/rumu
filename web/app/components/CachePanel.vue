@@ -2,38 +2,16 @@
 // Cache hit-rate meters: one thin bar per assistant turn on the active path,
 // plus a session-total headline. Single hue on a neutral track; every bar is
 // directly labeled (text tokens), so color is never the sole carrier.
-// The bars grow in and the headline counts up when the drawer opens.
-import { computed, onBeforeUnmount, ref, watch } from 'vue'
+// The bars grow in the first time a turn is seen (v-play-once); reopening the
+// panel leaves them at rest.
+import { computed } from 'vue'
 import { t } from '../i18n'
 import { cacheTotal, cacheTurns } from '../lib/store'
+import { vPlayOnce } from '../lib/motion'
 
 const totalPct = computed(() =>
   cacheTotal.value.prompt > 0 ? Math.round((cacheTotal.value.cached * 100) / cacheTotal.value.prompt) : 0,
 )
-
-/** The headline as shown: eases towards totalPct (instantly under reduced motion). */
-const shownPct = ref(0)
-let frame = 0
-
-function countTo(target: number): void {
-  cancelAnimationFrame(frame)
-  const reduce = window.matchMedia('(prefers-reduced-motion: reduce)').matches
-  const from = shownPct.value
-  if (reduce || from === target) {
-    shownPct.value = target
-    return
-  }
-  const t0 = performance.now()
-  const step = (now: number): void => {
-    const k = Math.min(1, (now - t0) / 700)
-    shownPct.value = Math.round(from + (target - from) * (1 - (1 - k) ** 3))
-    if (k < 1) frame = requestAnimationFrame(step)
-  }
-  frame = requestAnimationFrame(step)
-}
-
-watch(totalPct, countTo, { immediate: true })
-onBeforeUnmount(() => cancelAnimationFrame(frame))
 
 const totalSub = computed(() => {
   const c = cacheTotal.value
@@ -60,7 +38,7 @@ const turns = computed(() => [...cacheTurns.value].reverse())
 <template>
   <div>
     <div class="rounded-card bg-surface px-3 py-3 shadow-soft">
-      <div class="text-display font-bold tabular-nums text-ink">{{ shownPct }}%</div>
+      <div class="text-display font-bold tabular-nums text-ink">{{ totalPct }}%</div>
       <div class="text-micro text-ink-3">{{ t('panels.cache.hitRate') }}</div>
       <div class="mt-0.5 font-mono text-micro text-ink-3">{{ totalSub }}</div>
     </div>
@@ -82,7 +60,11 @@ const turns = computed(() => [...cacheTurns.value].reverse())
           aria-valuemax="100"
           :aria-label="t('panels.cache.meterLabel', { n: turn.index, pct: pct(turn) })"
         >
-          <div class="bar-grow h-full rounded-full bg-brand" :style="{ width: width(turn), '--i': i }" />
+          <div
+            v-play-once="{ key: `cache:${turn.nodeId}`, cls: 'bar-grow' }"
+            class="h-full rounded-full bg-brand"
+            :style="{ width: width(turn), '--i': i }"
+          />
         </div>
       </div>
     </div>

@@ -1281,7 +1281,7 @@
  *   enter-pop    context pill                enter-recall recalled memory
  *   enter-stamp  "blocked" verdict           reveal       disclosed detail
  *   view-in      session switch              cascade      panel contents
- *   dot-live     the coral dot, working     underline-cascade  card catalog
+ *   dot-live     the coral dot, working     line-in    a card's underline
  */
 
 @layer components {
@@ -1306,17 +1306,18 @@
     animation: pop 0.34s var(--ease-spring) 0.12s both;
   }
 
-  /* the row fades in, then its cards' underlines draw (.underline-cascade);
-   * the row's own animation outlasts them, since v-enter drops the class
-   * once the row's animation ends */
+  /* the row fades in, then its cards' underlines draw; the row's own
+   * animation outlasts them, since v-enter drops the class once the row's
+   * animation ends */
   .enter-recall {
     animation: recall 0.9s ease-out both;
   }
 
   /* card titles whose underlines draw one after another (--i), capped so a
-   * long list doesn't trail: a recalled memory, an opened catalog */
+   * long list doesn't trail: a recalled memory, a catalog or cache bar seen
+   * for the first time (.line-in is added once by v-play-once) */
   .enter-recall .card-ref::after,
-  .underline-cascade .card-ref::after {
+  .card-ref.line-in::after {
     animation: underline 0.45s var(--ease-soft) both;
     animation-delay: calc(min(var(--i, 0), 6) * 70ms + 160ms);
   }
