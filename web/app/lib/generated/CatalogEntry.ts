@@ -3,4 +3,16 @@
 /**
  * One card entry in a structured catalog note.
  */
-export type CatalogEntry = { id: string, summary?: string | null, };
+export type CatalogEntry = { 
+/**
+ * The card's path under its mount point (`self/dev/x`).
+ */
+id: string, summary?: string | null, 
+/**
+ * A link whose target is missing.
+ */
+dangling?: string | null, 
+/**
+ * The last author when it is not the current assistant.
+ */
+author?: string | null, };

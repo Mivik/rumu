@@ -1,14 +1,16 @@
 //! The card content model.
 //!
-//! A card is a markdown file under `cards/` with optional YAML frontmatter
-//! (`description`; every other key, `scope:` included, is kept
-//! verbatim in [`Card::meta`]). Its id is the file path relative to the card root without `.md`. The revision is a
-//! deterministic hash of the exact text shown to the model, so metadata-only
-//! edits never look like content updates.
+//! A card is a markdown file in a deck. Its frontmatter `id:` is its identity
+//! across moves; its path is where it currently lives. The model never sees
+//! the id: [`view_of`] omits it. The revision is a deterministic hash of the
+//! exact text shown to the model, so metadata-only edits never look like
+//! content updates.
 
 use serde::Serialize;
 use serde_json::{Map, Value};
 use sha2::{Digest, Sha256};
+
+use rumu_core::Structured;
 
 use crate::{CardViewError, yaml};
 
@@ -16,7 +18,13 @@ use crate::{CardViewError, yaml};
 #[derive(Debug, Clone, Serialize, ts_rs::TS)]
 #[ts(export)]
 pub struct CardInfo {
+    /// The card's location: the path within its mounted deck.
     pub id: String,
+    /// The id of the deck holding the card file itself (for a link card,
+    /// the link file's deck, not its target's).
+    pub deck: String,
+    /// The deck-local path of the card file itself (no `.md`).
+    pub path: String,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub description: Option<String>,
     /// Frontmatter `keywords:` — the terms that should bring the card to mind.
@@ -24,6 +32,12 @@ pub struct CardInfo {
     pub keywords: Vec<String>,
     pub body: String,
     pub revision: String,
+    /// A pinned card is loaded into context when its deck is mounted.
+    #[serde(default)]
+    pub pinned: bool,
+    /// A link card's target, stored as `<deck-id>:<path>`.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub link: Option<String>,
     /// Parsed frontmatter, including scope and user-defined fields.
     #[serde(default, skip_serializing_if = "Map::is_empty")]
     pub meta: Map<String, Value>,
@@ -33,7 +47,8 @@ pub struct CardInfo {
 /// kept so writes can preserve keys this version does not know about.
 #[derive(Debug, Clone)]
 pub struct Card {
-    pub id: String,
+    /// Location within the deck (no `.md`).
+    pub path: String,
     pub description: Option<String>,
     pub body: String,
     /// Revision of [`render`] — see [`revision_of`].
@@ -43,10 +58,19 @@ pub struct Card {
 }
 
 impl Card {
+    /// Frontmatter `id:` — the card's identity across moves. The model never
+    /// sees it: [`view_of`] omits it.
+    pub fn id(&self) -> Option<&str> {
+        self.meta
+            .get("id")
+            .and_then(Value::as_str)
+            .filter(|id| !id.is_empty())
+    }
+
     /// The exact text handed to the model. [`revision_of`] hashes exactly
     /// this.
     pub fn render(&self) -> String {
-        render(&self.id, &self.body)
+        render(&self.path, &self.body)
     }
 
     /// A one-line summary: the non-empty `description`, else
@@ -72,6 +96,43 @@ impl Card {
             _ => Vec::new(),
         }
     }
+
+    /// `pinned: true` — loaded into context when the deck is mounted.
+    pub fn pinned(&self) -> bool {
+        matches!(self.meta.get("pinned"), Some(Value::Bool(true)))
+    }
+
+    /// `link: <deck-id>:<path>` — a link card; its body is ignored. The
+    /// model writes `@rumu:/cards/<path>` and rumu stores where it resolves.
+    pub fn link(&self) -> Option<&str> {
+        self.meta.get("link").and_then(Value::as_str)
+    }
+
+    /// The deck id and path a stored link points at.
+    pub fn link_target(&self) -> Option<(&str, &str)> {
+        self.link().and_then(|value| value.split_once(':'))
+    }
+}
+
+/// A fresh UUIDv4 identity (deck ids).
+pub fn new_uuid() -> String {
+    uuid::Uuid::new_v4().to_string()
+}
+
+/// The structured header of a card `read`: where its content lives, kept out
+/// of the editable view so read→write round trips are byte-identical.
+#[derive(Debug, Clone, PartialEq, Eq, serde::Serialize, serde::Deserialize, ts_rs::TS)]
+#[ts(export)]
+pub struct CardReadHeader {
+    /// The deck holding the content (a link target's deck for a link).
+    pub deck: String,
+    /// The content's path within that deck.
+    pub path: String,
+}
+
+impl Structured for CardReadHeader {
+    const TAG: &'static str = "card.read";
+    const V: u32 = 1;
 }
 
 /// The body's first usable line as a short description: skips blank lines,
@@ -122,19 +183,20 @@ fn yaml_block(m: Map<String, Value>) -> String {
     format!("---\n{}\n---\n", yaml.trim_end())
 }
 
-/// The editable view of a card (what `read` returns and `write`/`edit`
-/// accept for `workspace: card`): YAML frontmatter holding
-/// `description` first, then every other key, followed by the body. The frontmatter block is omitted when it would be
-/// empty.
+/// The editable view of a card (what `read` returns after its header and
+/// `write`/`edit` accept for `workspace: card`): YAML frontmatter holding
+/// `description` first, then every other key, followed by the body. The
+/// frontmatter block is omitted when it would be empty.
 pub fn view_of(card: &Card) -> String {
     let ystr = |s: &str| Value::String(s.to_owned());
     let mut m = Map::new();
     if let Some(d) = &card.description {
         m.insert("description".into(), ystr(d));
     }
-    // Unknown keys ride along in their original order.
+    // Every other key rides along in its original order. `id` is identity,
+    // not content: the model never sees or edits it.
     for (k, v) in &card.meta {
-        if k == "description" {
+        if k == "description" || k == "id" {
             continue;
         }
         m.insert(k.clone(), v.clone());
@@ -155,18 +217,18 @@ pub fn view_rev_of(view: &str) -> String {
 
 /// Parse editable-view text back into a [`Card`], validating as we go (the
 /// post-validator of the `write`/`edit` tools: nothing touches disk until it
-/// passes). Every frontmatter key is editable. Errors name the offending
-/// field.
-pub fn card_from_view(id: &str, view: &str) -> Result<Card, CardViewError> {
+/// passes). Errors name the offending field.
+pub fn card_from_view(path: &str, view: &str) -> Result<Card, CardViewError> {
     let (yaml, body) = split_frontmatter(view);
     let mut meta = Map::new();
     let mut description = None;
 
     if let Some(yaml) = yaml {
+        let yaml = quote_at_scalars(yaml);
         let parsed: Value = if yaml.trim().is_empty() {
             Value::Object(Map::new())
         } else {
-            yaml::from_str(yaml).map_err(CardViewError::InvalidYaml)?
+            yaml::from_str(&yaml).map_err(CardViewError::InvalidYaml)?
         };
         let Value::Object(map) = parsed else {
             return Err(CardViewError::NotMapping);
@@ -186,6 +248,15 @@ pub fn card_from_view(id: &str, view: &str) -> Result<Card, CardViewError> {
         }
     }
 
+    // A link holds only its target: every other field and the body is
+    // dropped, so nothing of its own can show anywhere.
+    let body = if let Some(link) = meta.remove("link") {
+        meta = Map::from_iter([("link".to_owned(), link)]);
+        description = None;
+        ""
+    } else {
+        body
+    };
     // Normalize the trailing newline the way the file will store it.
     let body = body.trim_start_matches('\n');
     let body = if body.is_empty() {
@@ -196,7 +267,7 @@ pub fn card_from_view(id: &str, view: &str) -> Result<Card, CardViewError> {
         format!("{body}\n")
     };
     let mut card = Card {
-        id: id.to_owned(),
+        path: path.to_owned(),
         description,
         body,
         revision: String::new(),
@@ -207,10 +278,10 @@ pub fn card_from_view(id: &str, view: &str) -> Result<Card, CardViewError> {
 }
 
 /// Parse a loaded card file into a [`Card`] (computes the revision).
-pub fn parse_card(id: &str, text: &str) -> Card {
+pub fn parse_card(path: &str, text: &str) -> Card {
     let (yaml, body) = split_frontmatter(text);
     let meta_mapping: Map<String, Value> = yaml
-        .and_then(|y| yaml::from_str::<Value>(y).ok())
+        .and_then(|y| yaml::from_str::<Value>(&quote_at_scalars(y)).ok())
         .map(|v| match v {
             Value::Object(m) => m,
             other => {
@@ -228,9 +299,9 @@ pub fn parse_card(id: &str, text: &str) -> Card {
     };
 
     let body = body.trim_start_matches('\n').to_owned();
-    let revision = revision_of(&render(id, &body));
+    let revision = revision_of(&render(path, &body));
     Card {
-        id: id.to_owned(),
+        path: path.to_owned(),
         description: get_str("description"),
         body,
         revision,
@@ -261,12 +332,39 @@ pub fn card_content(card: &Card) -> String {
     content
 }
 
+/// YAML treats a leading `@` as a reserved indicator, but the spec writes
+/// link targets as `link: @rumu:/cards/<path>`. Quote that one scalar before
+/// parsing so the model can use the documented spelling.
+fn quote_at_scalars(yaml: &str) -> String {
+    let mut out = String::with_capacity(yaml.len() + 2);
+    for line in yaml.split_inclusive('\n') {
+        let trimmed = line.trim_start();
+        if let Some(rest) = trimmed.strip_prefix("link:") {
+            let value = rest.trim();
+            if value.starts_with('@') {
+                let indent = &line[..line.len() - trimmed.len()];
+                out.push_str(indent);
+                out.push_str("link: ");
+                out.push_str(&serde_json::to_string(value).unwrap_or_default());
+                if line.ends_with('\n') {
+                    out.push('\n');
+                }
+                continue;
+            }
+        }
+        out.push_str(line);
+    }
+    out
+}
+
 /// Split leading `---\n…\n---\n` YAML frontmatter off a card file (or an
 /// editable view).
 pub fn split_frontmatter(text: &str) -> (Option<&str>, &str) {
-    let rest = match text.strip_prefix("---\n") {
-        Some(r) => r,
-        None => return (None, text),
+    let Some(rest) = text
+        .strip_prefix("---\n")
+        .or_else(|| text.strip_prefix("---\r\n"))
+    else {
+        return (None, text);
     };
     let mut offset = 0;
     for line in rest.split_inclusive('\n') {
@@ -280,11 +378,22 @@ pub fn split_frontmatter(text: &str) -> (Option<&str>, &str) {
     (None, text)
 }
 
-/// Card ids are `/`-separated path segments under `cards/`. Each segment is
+/// Does the frontmatter of `text` fail to parse as a mapping?
+pub fn frontmatter_is_broken(text: &str) -> bool {
+    match split_frontmatter(text).0 {
+        Some(yaml) if !yaml.trim().is_empty() => !matches!(
+            yaml::from_str::<Value>(&quote_at_scalars(yaml)),
+            Ok(Value::Object(_))
+        ),
+        _ => false,
+    }
+}
+
+/// Card paths are `/`-separated segments within a deck. Each segment is
 /// non-empty, must not start with `.` and uses `[A-Za-z0-9._-]` only — so `..`
 /// and absolute paths are impossible, and `@` (the key/revision separator)
 /// cannot appear. Max 200 chars, 8 levels deep.
-pub fn valid_card_id(id: &str) -> bool {
+pub fn valid_card_path(id: &str) -> bool {
     if id.is_empty() || id.len() > 200 {
         return false;
     }
@@ -315,9 +424,9 @@ pub(crate) fn under_prefix(id: &str, prefix: &str) -> bool {
 mod tests {
     use super::*;
 
-    /// Card ids follow the id rule; malformed forms are rejected.
+    /// Card paths follow the path rule; malformed forms are rejected.
     #[test]
-    fn ids() {
+    fn paths() {
         for ok in [
             "a",
             "dev",
@@ -327,7 +436,7 @@ mod tests {
             "A-b_9",
             "x.y/z",
         ] {
-            assert!(valid_card_id(ok), "should accept `{ok}`");
+            assert!(valid_card_path(ok), "should accept `{ok}`");
         }
         for bad in [
             "",
@@ -346,11 +455,11 @@ mod tests {
             "@rumu:/cards/x",
             "日本語",
         ] {
-            assert!(!valid_card_id(bad), "should reject `{bad}`");
+            assert!(!valid_card_path(bad), "should reject `{bad}`");
         }
-        assert!(!valid_card_id(&"a".repeat(201)), "too long");
-        assert!(!valid_card_id(&["a"; 9].join("/")), "too deep");
-        assert!(valid_card_id(&["a"; 8].join("/")), "depth 8 ok");
+        assert!(!valid_card_path(&"a".repeat(201)), "too long");
+        assert!(!valid_card_path(&["a"; 9].join("/")), "too deep");
+        assert!(valid_card_path(&["a"; 8].join("/")), "depth 8 ok");
     }
 
     #[test]

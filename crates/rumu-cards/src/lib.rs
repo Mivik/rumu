@@ -1,26 +1,27 @@
-//! rumu-cards: the card library capability.
+//! rumu-cards: decks, cards and their history.
 //!
-//! A card is a markdown knowledge file addressed by a path id
-//! (`dev/rumu/kernel`) in the home library under `RUMU_HOME/cards`
-//! (`@rumu:/cards/<id>`). This crate owns everything card-shaped:
+//! A card is a markdown file in a deck (`RUMU_HOME/decks/<name>/`), a bare git
+//! repository whose `HEAD` tree is the deck's content; it is identified by the
+//! deck id and its path within the deck. A session sees the decks mounted on
+//! its branch under
+//! `@rumu:/cards/<mount>/<path>`; its own deck is `/cards/self`. This crate
+//! owns everything card-shaped:
 //!
 //! - [`card`] — the content model (frontmatter, rendering, revisions, the
-//!   editable view, id validation);
-//! - [`store`] — the storage abstraction behind a library (home = local fs
-//!   with symlink/escape guards);
-//! - [`library`] — card loading/writing over a store;
+//!   editable view);
+//! - [`deck`] — deck identity, loading and git-backed history;
+//! - [`cards`] — the mounted card space (links, dedup, writes);
+//! - [`library`] — the user's view of every deck (the web Library page);
 //! - [`usage`] — card use records derived from a branch path;
+//! - [`usage_index`] — per-deck card use scores (`usage.json`);
 //! - [`scope`] — which cards a card's frontmatter `scope:` relates to a
 //!   workspace / file touch;
-//! - [`recall`] — BM25F over `keywords:`, id, description and body: the
-//!   cards whose text best matches a prompt (recall) or a search query;
+//! - [`recall`] — BM25F over `keywords:`, path, description and body;
 //! - [`search_text`] / [`list_text`] — the discovery outputs the workspace
-//!   plugin's `search` / `list` tools render (addresses are `@rumu:/cards/<id>`).
+//!   plugin's `search` / `list` tools render.
 //!
 //! The `search` tool itself, and memory (the catalog, scope cards, update
-//! notices), live in
-//! rumu-plugins' memory and workspace plugins, which consume this crate:
-//! cards are the content, memory is one strategy for surfacing them.
+//! notices), live in rumu-plugins' memory and workspace plugins.
 
 use std::collections::BTreeMap;
 
@@ -28,26 +29,29 @@ use rumu_core::{RUMU_WORKSPACE, ToolError, ToolOutput, ToolResult};
 use serde_json::Value;
 
 pub mod card;
+pub mod cards;
 pub mod catalog;
+pub mod deck;
 pub mod diff;
 mod error;
+pub mod git;
 pub mod library;
 pub mod recall;
 pub mod scope;
-pub mod store;
 pub mod usage;
+pub mod usage_index;
 pub mod yaml;
 
-pub use card::{Card, CardInfo, valid_card_id};
+pub use card::{Card, CardInfo, valid_card_path};
+pub use cards::Cards;
+pub use deck::{Author, Deck, DeckMeta, DeckMount, Decks, open_deck};
 pub use error::{CardViewError, Error, Result};
-pub use store::FsCardStore;
 
-/// Run a card search over the home library and render its output text: hits
-/// are BM25F-ranked like recall (`keywords:`, id, description, body), any
-/// term matches. Each hit is an `@rumu:/cards/<id>  "<summary>"` line, then an
-/// indented `"<snippet>"` line around the first body match — never the full
-/// text. Summary and snippet are JSON string literals (see [`json_quote`]).
-pub fn search_text(store: &FsCardStore, query: &str, args: &Value) -> ToolResult<ToolOutput> {
+/// Run a card search over the mounted card space: hits are BM25F-ranked like
+/// recall (`keywords:`, path, description, body), any term matches. Each hit
+/// is an `@rumu:/cards/<path>  "<summary>"` line, then an indented
+/// `"<snippet>"` line around the first body match — never the full text.
+pub fn search_text(cards: &Cards, query: &str, args: &Value) -> ToolResult<ToolOutput> {
     if query.trim().is_empty() {
         return Err(ToolError::model("search: empty query"));
     }
@@ -58,16 +62,20 @@ pub fn search_text(store: &FsCardStore, query: &str, args: &Value) -> ToolResult
         .unwrap_or(10)
         .max(1) as usize;
 
-    let cards: BTreeMap<String, Card> = library::cards_under(store, &prefix)?.into_iter().collect();
-    // An unbounded limit keeps the total hit count for the `(+N more)` tail.
-    let hits = recall::search(&cards, query, usize::MAX);
+    let all: BTreeMap<String, Card> = cards
+        .rankable()
+        .map_err(|e| ToolError::Fatal(e.into()))?
+        .into_iter()
+        .filter(|(path, _)| card::under_prefix(path, &prefix))
+        .collect();
+    let hits = recall::search(&all, query, usize::MAX);
     if hits.is_empty() {
         return Ok(format!("no cards match `{query}`").into());
     }
     let terms = recall::tokens(query);
     let mut out = Vec::new();
     for hit in hits.iter().take(limit) {
-        let mut block = card_uri(&hit.card.id);
+        let mut block = card_uri(&hit.card.path);
         if let Some(m) = hit.card.summary() {
             block.push_str(&format!("  {}", json_quote(&m, SUMMARY_CHARS)));
         }
@@ -98,22 +106,27 @@ pub fn json_quote(s: &str, max: usize) -> String {
     q
 }
 
-/// `@rumu:/cards/<id>` — the canonical address of a home card.
-pub fn card_uri(id: &str) -> String {
-    format!("{RUMU_WORKSPACE}:/cards/{id}")
+/// `@rumu:/cards/<path>` — the canonical address of a card in the mounted
+/// space (`<path>` is `self/dev/x`).
+pub fn card_uri(path: &str) -> String {
+    format!("{RUMU_WORKSPACE}:/cards/{}", path.trim_start_matches('/'))
 }
 
 /// Render the `list @rumu:/cards[/<prefix>]` output: one
-/// `@rumu:/cards/<id> — summary` line per card, never full text.
-pub fn list_text(store: &FsCardStore, prefix: &str, limit: usize) -> ToolResult<ToolOutput> {
+/// `@rumu:/cards/<path> — summary` line per card, never full text.
+pub fn list_text(cards: &Cards, prefix: &str, limit: usize) -> ToolResult<ToolOutput> {
     let prefix = card::normalize_prefix(prefix);
-    let cards = library::cards_under(store, &prefix)?;
+    let all = cards.rankable().map_err(|e| ToolError::Fatal(e.into()))?;
+    let cards: Vec<(String, Card)> = all
+        .into_iter()
+        .filter(|(path, _)| card::under_prefix(path, &prefix))
+        .collect();
     if cards.is_empty() {
         return Ok(format!("no cards under `{prefix}`").into());
     }
     let mut lines = Vec::new();
-    for (id, c) in cards.iter().take(limit) {
-        lines.push(card_line(id, c));
+    for (path, c) in cards.iter().take(limit) {
+        lines.push(card_line(path, c));
     }
     let mut text = lines.join("\n");
     if cards.len() > limit {
@@ -125,9 +138,9 @@ pub fn list_text(store: &FsCardStore, prefix: &str, limit: usize) -> ToolResult<
     Ok(text.into())
 }
 
-/// One list line: `@rumu:/cards/<id> — summary`.
-pub fn card_line(id: &str, c: &Card) -> String {
-    let mut line = card_uri(id);
+/// One list line: `@rumu:/cards/<path> — summary`.
+pub fn card_line(path: &str, c: &Card) -> String {
+    let mut line = card_uri(path);
     if let Some(d) = c.summary() {
         line.push_str(&format!(" — {d}"));
     }
@@ -180,28 +193,47 @@ pub fn suggest_ids(ids: &[String], q: &str) -> Vec<String> {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use store::FsCardStore;
+    use rumu_core::CardMount;
+
+    fn cards_home() -> (tempfile::TempDir, Cards) {
+        let dir = tempfile::tempdir().unwrap();
+        let decks = Decks::load(dir.path()).unwrap();
+        let deck = decks
+            .upsert(DeckMeta {
+                id: String::new(),
+                name: "main".into(),
+                assistant: false,
+                workspace: None,
+                mounts: Vec::new(),
+                allow_ask: Vec::new(),
+            })
+            .unwrap();
+        for (path, text) in [
+            (
+                "x",
+                "---\n---\nthe kernel crate implements the agent loop\nSECRET SECOND LINE\n",
+            ),
+            ("y", "---\ndescription: why\n---\nnothing here\n"),
+            (
+                "t",
+                "---\ndescription: about the loop\nkeywords: [agent loop]\n---\nfiller\n",
+            ),
+        ] {
+            deck.write_file(path, text, &Author::user()).unwrap();
+        }
+        let cards = Cards::new(
+            &decks,
+            &[CardMount {
+                deck: deck.id().to_owned(),
+                at: "/cards/self".into(),
+            }],
+        );
+        (dir, cards)
+    }
 
     #[test]
     fn search_ranks_snippets_and_scopes() {
-        let dir = tempfile::tempdir().unwrap();
-        std::fs::create_dir_all(dir.path().join("cards")).unwrap();
-        std::fs::write(
-            dir.path().join("cards/x.md"),
-            "---\n---\nthe kernel crate implements the agent loop\nSECRET SECOND LINE\n",
-        )
-        .unwrap();
-        std::fs::write(
-            dir.path().join("cards/y.md"),
-            "---\ndescription: why\n---\nnothing here\n",
-        )
-        .unwrap();
-        std::fs::write(
-            dir.path().join("cards/t.md"),
-            "---\ndescription: about the loop\nkeywords: [agent loop]\n---\nfiller\n",
-        )
-        .unwrap();
-        let store = FsCardStore::home(dir.path());
+        let (_dir, store) = cards_home();
 
         // Body hit ranks below keyword hits; addresses, snippets, never full text.
         let out = search_text(&store, "agent loop", &serde_json::json!({})).unwrap();
@@ -213,18 +245,18 @@ mod tests {
             .unwrap_or_default()
             .to_owned();
         assert_eq!(
-            first, "@rumu:/cards/t  \"about the loop\"",
+            first, "@rumu:/cards/self/t  \"about the loop\"",
             "keyword hit ranks first: {}",
             out.content.text
         );
         assert!(
-            out.content.text.contains("@rumu:/cards/x"),
+            out.content.text.contains("@rumu:/cards/self/x"),
             "{}",
             out.content.text
         );
         assert!(
             out.content.text.contains(
-                "@rumu:/cards/x  \"the kernel crate implements the agent loop\"\n  \"the kernel"
+                "@rumu:/cards/self/x  \"the kernel crate implements the agent loop\"\n  \"the kernel"
             ),
             "summary line, then the quoted snippet: {}",
             out.content.text
@@ -238,7 +270,7 @@ mod tests {
         // Terms are ORed: a query with one unknown term still matches.
         let out = search_text(&store, "agent loop missing-word", &serde_json::json!({})).unwrap();
         assert!(
-            out.content.text.contains("@rumu:/cards/"),
+            out.content.text.contains("@rumu:/cards/self/"),
             "{}",
             out.content.text
         );
@@ -256,16 +288,16 @@ mod tests {
         );
 
         // Prefix scoping and limits.
-        let out = list_text(&store, "x", 100).unwrap();
+        let out = list_text(&store, "self/x", 100).unwrap();
         assert!(
             out.content
                 .text
-                .contains("@rumu:/cards/x — the kernel crate implements the agent loop"),
+                .contains("@rumu:/cards/self/x — the kernel crate implements the agent loop"),
             "{}",
             out.content.text
         );
         assert!(
-            !out.content.text.contains("@rumu:/cards/y"),
+            !out.content.text.contains("@rumu:/cards/self/y"),
             "{}",
             out.content.text
         );

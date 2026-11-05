@@ -3,6 +3,18 @@ import type { CardOp } from "./CardOp";
 
 /**
  * Payload of the `card_use` marker (v1), recorded by card reads/writes
- * (`read`/`write`/`edit` on `@rumu:/cards/<id>`).
+ * (`read`/`write`/`edit` on `@rumu:/cards/<mount>/<path>`).
  */
-export type CardUse = { id: string, rev: string, view_rev: string, op: CardOp, call_id?: string | null, };
+export type CardUse = { 
+/**
+ * The id of the deck holding the card.
+ */
+deck: string, 
+/**
+ * The card's path within that deck.
+ */
+path: string, rev: string, view_rev: string, 
+/**
+ * The deck `HEAD` commit at read time (CAS).
+ */
+commit?: string | null, op: CardOp, call_id?: string | null, };

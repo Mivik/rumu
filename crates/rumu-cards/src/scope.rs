@@ -24,7 +24,7 @@ pub fn related<'a>(
         .values()
         .filter_map(|c| specificity(c, workspace, paths).map(|s| (s, c)))
         .collect();
-    hits.sort_by(|a, b| b.0.cmp(&a.0).then_with(|| a.1.id.cmp(&b.1.id)));
+    hits.sort_by(|a, b| b.0.cmp(&a.0).then_with(|| a.1.path.cmp(&b.1.path)));
     hits.into_iter().map(|(_, c)| c).collect()
 }
 
@@ -81,7 +81,7 @@ mod tests {
     }
 
     fn ids(cards: Vec<&Card>) -> Vec<&str> {
-        cards.into_iter().map(|c| c.id.as_str()).collect()
+        cards.into_iter().map(|c| c.path.as_str()).collect()
     }
 
     #[test]

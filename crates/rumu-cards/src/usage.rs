@@ -1,13 +1,14 @@
 //! Card usage records derived from a branch path.
 //!
 //! Every way a card's body reaches the model leaves a trace on the path.
-//! Cards are keyed by their plain id (the home library is the only one):
+//! Cards are keyed by their deck id and deck-local path:
 //!
-//! - auto-import: `Note` with `content.data = memory.import {id, rev}` (and
-//!   the card text) — the payload carries the revision, so imports are
+//! - auto-import: `Note` with `content.data = memory.import {deck, path, rev}`
+//!   (and the card text) — the payload carries the revision, so imports are
 //!   per-version;
 //! - tool read/write: a `Note` with empty text and `content.data = card_use
-//!   {id, rev, view_rev, call_id, op}` appended right after the tool batch —
+//!   {deck, path, rev, view_rev, call_id, op}` appended right after the tool
+//!   batch —
 //!   counted only when a successful ToolResult with the same `call_id` exists
 //!   on the path (aborted calls leave stale records behind);
 //!
@@ -27,6 +28,7 @@ use rumu_core::{Content, Node, NodeBody, Structured};
 pub struct Use {
     pub rev: Option<String>,
     pub view_rev: Option<String>,
+    pub commit: Option<String>,
 }
 
 /// What a `card_use` record describes: a tool read, write or edit.
@@ -40,13 +42,19 @@ pub enum CardOp {
 }
 
 /// Payload of the `card_use` marker (v1), recorded by card reads/writes
-/// (`read`/`write`/`edit` on `@rumu:/cards/<id>`).
+/// (`read`/`write`/`edit` on `@rumu:/cards/<mount>/<path>`).
 #[derive(Debug, Clone, PartialEq, Eq, serde::Serialize, serde::Deserialize, ts_rs::TS)]
 #[ts(export)]
 pub struct CardUse {
-    pub id: String,
+    /// The id of the deck holding the card.
+    pub deck: String,
+    /// The card's path within that deck.
+    pub path: String,
     pub rev: String,
     pub view_rev: String,
+    /// The deck `HEAD` commit at read time (CAS).
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub commit: Option<String>,
     #[serde(default = "default_op")]
     pub op: CardOp,
     #[serde(default, skip_serializing_if = "Option::is_none")]
@@ -66,11 +74,21 @@ impl Structured for CardUse {
 pub const CARD_USE: &str = CardUse::TAG;
 
 /// Build the `card_use` marker content for a read/write.
-pub fn card_use(id: &str, rev: &str, view_rev: &str, op: CardOp, call_id: Option<&str>) -> Content {
+pub fn card_use(
+    deck: &str,
+    path: &str,
+    rev: &str,
+    view_rev: &str,
+    commit: Option<&str>,
+    op: CardOp,
+    call_id: Option<&str>,
+) -> Content {
     Content::marker(&CardUse {
-        id: id.to_owned(),
+        deck: deck.to_owned(),
+        path: path.to_owned(),
         rev: rev.to_owned(),
         view_rev: view_rev.to_owned(),
+        commit: commit.map(str::to_owned),
         op,
         call_id: call_id.map(str::to_owned),
     })
@@ -80,7 +98,8 @@ pub fn card_use(id: &str, rev: &str, view_rev: &str, op: CardOp, call_id: Option
 #[derive(Debug, Clone, PartialEq, Eq, serde::Serialize, serde::Deserialize, ts_rs::TS)]
 #[ts(export)]
 pub struct CardImport {
-    pub id: String,
+    pub deck: String,
+    pub path: String,
     pub rev: String,
 }
 
@@ -94,7 +113,8 @@ impl Structured for CardImport {
 #[derive(Debug, Clone, PartialEq, Eq, serde::Serialize, serde::Deserialize, ts_rs::TS)]
 #[ts(export)]
 pub struct CardUpdate {
-    pub id: String,
+    pub deck: String,
+    pub path: String,
     pub rev: String,
 }
 
@@ -118,35 +138,36 @@ pub(crate) fn ok_calls(nodes: &[Node]) -> HashSet<&str> {
         .collect()
 }
 
-/// The latest `card_use` marker record of `id` on the path (validated by a
-/// successful ToolResult). Import notes are ignored — the read-before-write
-/// check of the edit tools needs the tool read's `view_rev`, which only tool
-/// uses carry.
-pub fn latest_tool_use(nodes: &[Node], id: &str) -> Option<Use> {
+/// The latest `card_use` marker record of `(deck, path)` on the path
+/// (validated by a successful ToolResult). Import notes are ignored — the
+/// read-before-write check of the edit tools needs the tool read's `view_rev`,
+/// which only tool uses carry.
+pub fn latest_tool_use(nodes: &[Node], deck: &str, path: &str) -> Option<Use> {
     uses_on_path(nodes)
-        .remove(id)
+        .remove(&(deck.to_owned(), path.to_owned()))
         .filter(|u| u.view_rev.is_some())
 }
 
-/// Build the `id → latest Use` map for a root→head path.
-pub fn uses_on_path(nodes: &[Node]) -> BTreeMap<String, Use> {
+/// Build the `(deck, path) → latest Use` map for a root→head path.
+pub fn uses_on_path(nodes: &[Node]) -> BTreeMap<(String, String), Use> {
     fold_uses(nodes, &ok_calls(nodes))
 }
 
 /// One pass over the path: imports and `card_use` records, latest wins.
 /// `ok_calls` validates the tool uses.
-fn fold_uses(nodes: &[Node], ok_calls: &HashSet<&str>) -> BTreeMap<String, Use> {
-    let mut uses: BTreeMap<String, Use> = BTreeMap::new();
+fn fold_uses(nodes: &[Node], ok_calls: &HashSet<&str>) -> BTreeMap<(String, String), Use> {
+    let mut uses: BTreeMap<(String, String), Use> = BTreeMap::new();
     for n in nodes {
         let NodeBody::Note { content, .. } = &n.body else {
             continue;
         };
         if let Some(import) = content.decode::<CardImport>() {
             uses.insert(
-                import.id,
+                (import.deck, import.path),
                 Use {
                     rev: Some(import.rev),
                     view_rev: None,
+                    commit: None,
                 },
             );
             continue;
@@ -158,10 +179,11 @@ fn fold_uses(nodes: &[Node], ok_calls: &HashSet<&str>) -> BTreeMap<String, Use> 
             continue; // aborted/unanswered call: not a real use
         }
         uses.insert(
-            u.id,
+            (u.deck, u.path),
             Use {
                 rev: Some(u.rev),
                 view_rev: Some(u.view_rev),
+                commit: u.commit,
             },
         );
     }
@@ -174,7 +196,7 @@ mod tests {
     use rumu_core::{NodeId, now};
     use serde_json::json;
 
-    fn import(id: &str, rev: &str, text: &str) -> Node {
+    fn import(path: &str, rev: &str, text: &str) -> Node {
         Node {
             id: NodeId::new(),
             parent: None,
@@ -186,7 +208,8 @@ mod tests {
                 content: Content::note_with(
                     text,
                     &CardImport {
-                        id: id.into(),
+                        deck: "d".into(),
+                        path: path.into(),
                         rev: rev.into(),
                     },
                 ),
@@ -234,14 +257,16 @@ mod tests {
     #[test]
     fn card_payloads_round_trip() {
         let import = CardImport {
-            id: "dev/x".into(),
+            deck: "d".into(),
+            path: "dev/x".into(),
             rev: "a1b2c3d4".into(),
         };
         let content = Content::note_with("body", &import);
         assert_eq!(content.decode::<CardImport>(), Some(import));
         assert_eq!(
             Content::marker(&CardUpdate {
-                id: "dev/x".into(),
+                deck: "d".into(),
+                path: "dev/x".into(),
                 rev: "deleted".into(),
             })
             .decode::<CardUpdate>()
@@ -259,32 +284,38 @@ mod tests {
             result("c1", false),
             result("c2", true),
             use_note(
-                json!({"id": "z", "rev": "ff00ff00", "view_rev": "00ff00ff", "op": "read", "call_id": "c1"}),
+                json!({"deck": "d", "path": "z", "rev": "ff00ff00", "view_rev": "00ff00ff", "op": "read", "call_id": "c1"}),
             ),
             use_note(
-                json!({"id": "w", "rev": "ee00ee00", "view_rev": "00ee00ee", "op": "read", "call_id": "c2"}),
+                json!({"deck": "d", "path": "w", "rev": "ee00ee00", "view_rev": "00ee00ee", "op": "read", "call_id": "c2"}),
             ), // error result
             use_note(
-                json!({"id": "v", "rev": "dd00dd00", "view_rev": "00dd00dd", "op": "read", "call_id": "c9"}),
+                json!({"deck": "d", "path": "v", "rev": "dd00dd00", "view_rev": "00dd00dd", "op": "read", "call_id": "c9"}),
             ), // no result
-            use_note(json!({"id": "u", "rev": "cc00cc00", "op": "read", "call_id": "c1"})), // no view_rev
+            use_note(
+                json!({"deck": "d", "path": "u", "rev": "cc00cc00", "op": "read", "call_id": "c1"}),
+            ), // no view_rev
             import("x", "e5f6a7b8", "# x\nv2"),
         ];
         let uses = uses_on_path(&nodes);
         assert_eq!(uses.len(), 3, "w, v and u are dropped: {uses:?}");
-        assert!(uses["x"].view_rev.is_none()); // import
-        assert_eq!(uses["x"].rev.as_deref(), Some("e5f6a7b8")); // latest wins
-        assert!(uses["y"].view_rev.is_none()); // import
-        assert_eq!(uses["z"].rev.as_deref(), Some("ff00ff00"));
-        assert_eq!(uses["z"].view_rev.as_deref(), Some("00ff00ff"));
+        let key = |p: &str| ("d".to_owned(), p.to_owned());
+        assert!(uses[&key("x")].view_rev.is_none()); // import
+        assert_eq!(uses[&key("x")].rev.as_deref(), Some("e5f6a7b8")); // latest wins
+        assert!(uses[&key("y")].view_rev.is_none()); // import
+        assert_eq!(uses[&key("z")].rev.as_deref(), Some("ff00ff00"));
+        assert_eq!(uses[&key("z")].view_rev.as_deref(), Some("00ff00ff"));
 
-        // latest_tool_use ignores import notes and is id-scoped.
+        // latest_tool_use ignores import notes and is identity-scoped.
         assert_eq!(
-            latest_tool_use(&nodes, "z").unwrap().view_rev.as_deref(),
+            latest_tool_use(&nodes, "d", "z")
+                .unwrap()
+                .view_rev
+                .as_deref(),
             Some("00ff00ff")
         );
-        assert!(latest_tool_use(&nodes, "x").is_none());
+        assert!(latest_tool_use(&nodes, "d", "x").is_none());
         let only_note = vec![import("x", "a1b2c3d4", "# x\nv1")];
-        assert!(latest_tool_use(&only_note, "x").is_none());
+        assert!(latest_tool_use(&only_note, "d", "x").is_none());
     }
 }

@@ -1,7 +1,7 @@
 //! BM25F ranking: [`rank_docs`] ranks weighted documents, and [`rank`] is the
-//! card-library wrapper used for prompt recall.
+//! wrapper over the mounted cards used for prompt recall.
 //!
-//! A card's frontmatter `keywords:` (weight 3) outweigh its id (2), its
+//! A card's frontmatter `keywords:` (weight 3) outweigh its path (2), its
 //! description (1.5) and its body (1), so a card that names its own trigger
 //! terms is found even when its prose never repeats them. Text is tokenized
 //! into lowercase words in any alphabet and CJK bigrams (fullwidth ASCII
@@ -186,7 +186,7 @@ fn ranked<'a>(
             let desc = card.summary().unwrap_or_default();
             let fields = [
                 kw.as_str(),
-                card.id.as_str(),
+                card.path.as_str(),
                 desc.as_str(),
                 card.body.as_str(),
             ];
@@ -304,7 +304,7 @@ mod tests {
     }
 
     fn ids(hits: Vec<Hit<'_>>) -> Vec<String> {
-        hits.into_iter().map(|h| h.card.id.clone()).collect()
+        hits.into_iter().map(|h| h.card.path.clone()).collect()
     }
 
     #[test]

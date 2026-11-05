@@ -24,6 +24,7 @@ axum = { version = "0.8", features = ["ws"] }
 base64 = "0.23"
 futures-util = "0.3"
 genai = "0.7.2"
+gix = { version = "0.90", default-features = false, features = ["index", "sha1"] }
 globset = "0.4"
 imara-diff = { version = "0.2", default-features = false }
 image = { version = "0.25", default-features = false, features = ["png", "jpeg", "gif", "webp"] }

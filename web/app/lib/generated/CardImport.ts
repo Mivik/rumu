@@ -3,4 +3,4 @@
 /**
  * Payload of an auto-import note (`memory.import` v1).
  */
-export type CardImport = { id: string, rev: string, };
+export type CardImport = { deck: string, path: string, rev: string, };

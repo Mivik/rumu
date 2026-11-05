@@ -4,24 +4,40 @@ use std::path::PathBuf;
 
 use rumu_core::IoError;
 
-/// A card-library failure.
+/// A deck or card failure.
 #[derive(Debug, thiserror::Error)]
 pub enum Error {
     /// A filesystem operation under the card root failed.
     #[error(transparent)]
     Io(#[from] IoError),
 
-    /// A card path tried to leave the library root.
-    #[error("card path escapes the card root: {id}")]
-    EscapesRoot { id: String },
+    /// The model tried to write through a link card.
+    #[error("card `{id}` is a link; write its target instead")]
+    LinkWrite { id: String },
 
-    /// A write would go through a symlink.
-    #[error("refusing to write through a symlink: {path}")]
-    Symlink { path: PathBuf },
+    /// A link card cannot point at another link card.
+    #[error("card `{target}` is itself a link; links are one level deep")]
+    LinkToLink { target: String },
 
-    /// A card id is not a valid path id.
-    #[error("invalid card id `{id}`")]
-    InvalidId { id: String },
+    /// A card path is not valid (see `valid_card_path`).
+    #[error("invalid card path `{id}`")]
+    InvalidPath { id: String },
+
+    /// The card changed since the write's base revision was read.
+    #[error("card `{id}` changed since it was read; read it again")]
+    Stale { id: String },
+
+    /// Other cards link to this card, so it cannot become a link itself.
+    #[error("card `{id}` is a link target; links are one level deep")]
+    LinkedTarget { id: String },
+
+    /// A deck file is malformed.
+    #[error("{path}: {message}")]
+    Config { path: PathBuf, message: String },
+
+    /// A git repository operation failed.
+    #[error("git: {message}")]
+    Git { message: String },
 }
 
 /// A result with the card error.

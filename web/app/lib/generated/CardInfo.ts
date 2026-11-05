@@ -4,11 +4,32 @@ import type { JsonValue } from "./serde_json/JsonValue";
 /**
  * A card as shown to the UI (`card.list`) and used internally.
  */
-export type CardInfo = { id: string, description?: string | null, 
+export type CardInfo = { 
+/**
+ * The card's location: the path within its mounted deck.
+ */
+id: string, 
+/**
+ * The id of the deck holding the card file itself (for a link card,
+ * the link file's deck, not its target's).
+ */
+deck: string, 
+/**
+ * The deck-local path of the card file itself (no `.md`).
+ */
+path: string, description?: string | null, 
 /**
  * Frontmatter `keywords:` — the terms that should bring the card to mind.
  */
 keywords?: Array<string>, body: string, revision: string, 
+/**
+ * A pinned card is loaded into context when its deck is mounted.
+ */
+pinned: boolean, 
+/**
+ * A link card's target, stored as `<deck-id>:<path>`.
+ */
+link?: string | null, 
 /**
  * Parsed frontmatter, including scope and user-defined fields.
  */

@@ -4,4 +4,4 @@
  * Payload of a card update notice (`memory.card_update` v1). `rev` is the
  * current revision, or `"deleted"`.
  */
-export type CardUpdate = { id: string, rev: string, };
+export type CardUpdate = { deck: string, path: string, rev: string, };

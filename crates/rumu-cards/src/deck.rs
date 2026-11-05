@@ -1,0 +1,918 @@
+//! Decks: bare git repositories of cards, and the registry that knows them.
+//!
+//! A deck lives at `RUMU_HOME/decks/<name>/`; its identity and defaults are in
+//! `deck.yaml` in the `HEAD` tree. Decks are addressed by the `id` in
+//! `deck.yaml`, never by their name. Which assistant is the default is per
+//! user, in `RUMU_HOME/default-assistant`. rumu is the only writer: a card
+//! write or a UI edit is a commit, so there is no worktree to scan or
+//! reconcile.
+//!
+//! [`Decks`] loads the deck repositories and refreshes its in-memory view
+//! after rumu's own commits. A card's frontmatter `id:` is its identity: it
+//! survives moves, and the usage index is keyed by it.
+
+use std::collections::{BTreeMap, BTreeSet, HashSet};
+use std::path::{Path, PathBuf};
+use std::sync::{Arc, Mutex, MutexGuard, RwLock};
+
+use rumu_core::CardMount;
+use serde::{Deserialize, Serialize};
+use tracing::warn;
+
+use crate::card::{Card, frontmatter_is_broken, new_uuid, parse_card, valid_card_path};
+use crate::cards::{SELF_MOUNT, mount_points_overlap, normalize_mount_point};
+use crate::git::{self, GitAuthor, Repo};
+use crate::{Error, Result};
+
+/// The directory holding every deck under `RUMU_HOME`.
+pub const DECKS_DIR: &str = "decks";
+/// The deck identity/defaults file.
+pub const DECK_FILE: &str = "deck.yaml";
+/// The grants file ("always allow" answers).
+pub const GRANTS_FILE: &str = "grants.json";
+/// The file holding the default assistant's deck id.
+pub const DEFAULT_FILE: &str = "default-assistant";
+/// The author recorded for changes made by the user (UI edits).
+pub const USER: &str = "user";
+
+/// A deck name: `[a-z][a-z0-9-]*`.
+pub fn valid_deck_name(name: &str) -> bool {
+    let mut chars = name.chars();
+    chars.next().is_some_and(|c| c.is_ascii_lowercase())
+        && chars.all(|c| c.is_ascii_lowercase() || c.is_ascii_digit() || c == '-')
+}
+
+/// A deck's default mount entry (`deck.yaml`).
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, ts_rs::TS)]
+#[ts(export)]
+pub struct DeckMount {
+    /// The mounted deck's id.
+    pub deck: String,
+    /// The mount point (`/cards/user`).
+    pub at: String,
+    /// Writes to the deck need no approval.
+    #[serde(default, skip_serializing_if = "std::ops::Not::not")]
+    pub write: bool,
+}
+
+/// What one deck may do to another without asking the user, once a grant
+/// covers it.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, PartialOrd, Ord, Serialize, Deserialize)]
+#[serde(rename_all = "lowercase")]
+pub enum Action {
+    /// Mount the deck, which makes it readable.
+    Mount,
+    /// Write, move or delete the deck's cards.
+    Write,
+    /// Ask the assistant deck a question.
+    Ask,
+    /// Link one of the deck's cards from another deck.
+    Link,
+}
+
+/// How long the user's approval lasts.
+#[derive(Debug, Clone, Copy, Default, PartialEq, Eq, Deserialize)]
+#[serde(rename_all = "lowercase")]
+pub enum Scope {
+    /// This one action.
+    #[default]
+    Once,
+    /// The rest of the session. Kept in memory: after a restart rumu asks again.
+    Session,
+    /// From now on, saved in `grants.json`.
+    Always,
+}
+
+/// `deck.yaml`.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+pub struct DeckMeta {
+    /// UUIDv4, assigned by rumu.
+    pub id: String,
+    /// Display name only; decks are always referred to by id.
+    pub name: String,
+    /// Listed in the roster; sessions can run as it.
+    #[serde(default)]
+    pub assistant: bool,
+    /// Default workspace of its new sessions.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub workspace: Option<String>,
+    /// Mounted at the start of each of its sessions.
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub mounts: Vec<DeckMount>,
+    /// Assistant deck ids that may ask it without a prompt.
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub allow_ask: Vec<String>,
+}
+
+/// One loaded deck.
+#[derive(Debug, Clone)]
+pub struct Deck {
+    pub meta: DeckMeta,
+    /// The deck directory under `<home>/decks/`.
+    pub dir: PathBuf,
+    /// The directory name (where it lives; not an identity).
+    pub name: String,
+}
+
+impl Deck {
+    pub fn repo(&self) -> Repo {
+        git::repo(&self.dir)
+    }
+
+    pub fn id(&self) -> &str {
+        &self.meta.id
+    }
+
+    pub fn assistant(&self) -> bool {
+        self.meta.assistant
+    }
+
+    /// Every card path in the `HEAD` tree, sorted.
+    pub fn walk(&self) -> Result<Vec<String>> {
+        let mut out = Vec::new();
+        for path in self.repo().files()?.keys() {
+            let Some(card) = path.strip_suffix(".md") else {
+                continue;
+            };
+            if valid_card_path(card) {
+                out.push(card.to_owned());
+            }
+        }
+        Ok(out)
+    }
+
+    /// The text of the card at `path` (`<path>.md`) in `HEAD`.
+    pub fn read(&self, path: &str) -> Result<Option<String>> {
+        if !valid_card_path(path) {
+            return Ok(None);
+        }
+        self.repo().read(&format!("{path}.md"))
+    }
+
+    /// The pinned cards of this deck, in path order. A link is never
+    /// pinned: its target's own deck pins it.
+    pub fn pinned(&self) -> Result<Vec<Card>> {
+        let mut out = Vec::new();
+        for path in self.walk()? {
+            if let Some(text) = self.read(&path)? {
+                let card = parse_card(&path, &text);
+                if card.pinned() && card.link().is_none() {
+                    out.push(card);
+                }
+            }
+        }
+        Ok(out)
+    }
+
+    /// The `HEAD` commit, if the repository has one.
+    pub fn head(&self) -> Result<Option<String>> {
+        self.repo().head()
+    }
+
+    /// Commit the new content of the card at `path`.
+    pub fn write_file(&self, path: &str, text: &str, author: &Author) -> Result<Card> {
+        if !valid_card_path(path) {
+            return Err(Error::InvalidPath {
+                id: path.to_owned(),
+            });
+        }
+        if frontmatter_is_broken(text) {
+            return Err(self.config_err(path, "frontmatter does not parse"));
+        }
+        let existing = self.read(path)?;
+        // Identity: an overwrite keeps the card's id; a new card gets one.
+        let id = existing
+            .as_deref()
+            .and_then(|text| parse_card(path, text).id().map(str::to_owned))
+            .or_else(|| parse_card(path, text).id().map(str::to_owned))
+            .unwrap_or_else(new_uuid);
+        let mut card = parse_card(path, text);
+        card.meta.insert("id".into(), serde_json::Value::String(id));
+        let text = crate::card::card_content(&card);
+        let file = format!("{path}.md");
+        let subject = if existing.is_some() {
+            format!("update {path}")
+        } else {
+            format!("create {path}")
+        };
+        self.commit(
+            author,
+            &subject,
+            &BTreeMap::from([(file, Some(text.clone()))]),
+        )?;
+        Ok(parse_card(path, &text))
+    }
+
+    /// Delete the card at `path` in a commit.
+    pub fn remove_file(&self, path: &str, author: &Author) -> Result<()> {
+        if !valid_card_path(path) {
+            return Err(Error::InvalidPath {
+                id: path.to_owned(),
+            });
+        }
+        if self.read(path)?.is_none() {
+            return Ok(());
+        }
+        self.commit(
+            author,
+            &format!("delete {path}"),
+            &BTreeMap::from([(format!("{path}.md"), None)]),
+        )?;
+        Ok(())
+    }
+
+    /// Move the card at `from` to `to` in one commit: a write at the new path
+    /// and a removal of the old one. The frontmatter id, and so the usage
+    /// score, carries over.
+    pub fn move_file(&self, from: &str, to: &str, author: &Author) -> Result<()> {
+        if !valid_card_path(from) || !valid_card_path(to) {
+            return Err(Error::InvalidPath {
+                id: if valid_card_path(from) { to } else { from }.to_owned(),
+            });
+        }
+        if self.read(to)?.is_some() {
+            return Err(self.config_err(to, "the destination already exists"));
+        }
+        let Some(text) = self.read(from)? else {
+            return Err(Error::InvalidPath {
+                id: from.to_owned(),
+            });
+        };
+        let changes = BTreeMap::from([
+            (format!("{from}.md"), None),
+            (format!("{to}.md"), Some(text)),
+        ]);
+        self.commit(author, &format!("move {from} -> {to}"), &changes)?;
+        Ok(())
+    }
+
+    fn config_err(&self, path: &str, message: &str) -> Error {
+        Error::Config {
+            path: self.dir.join(path),
+            message: message.to_owned(),
+        }
+    }
+
+    /// Commit one change set with the deck's git identity.
+    pub fn commit(
+        &self,
+        author: &Author,
+        subject: &str,
+        changes: &BTreeMap<String, Option<String>>,
+    ) -> Result<bool> {
+        // The removed / replaced cards' identities, read before the commit
+        // drops them from `HEAD`.
+        let before: BTreeMap<String, String> = changes
+            .keys()
+            .filter_map(|file| {
+                self.repo()
+                    .show("HEAD", file)
+                    .ok()
+                    .flatten()
+                    .map(|text| (file.clone(), text))
+            })
+            .collect();
+        let made = self.repo().commit(
+            &author.git(),
+            subject,
+            &git::Trailers {
+                changes,
+                session: author.session.as_deref(),
+                node: author.node.as_deref(),
+            },
+        )?;
+        if made {
+            let (written, removed) = changed_ids(changes, &before);
+            crate::usage_index::record_commit(&self.dir, &written, &removed, rumu_core::now());
+        }
+        Ok(made)
+    }
+
+    pub fn commits(&self, limit: usize) -> Result<Vec<git::Commit>> {
+        self.repo().log(limit)
+    }
+
+    pub fn touching(&self, path: &str, since: Option<&str>) -> Result<Vec<git::Commit>> {
+        self.repo().log_touching(path, since)
+    }
+
+    pub fn text_at(&self, commit: &str, path: &str) -> Result<Option<String>> {
+        self.repo().show(commit, path)
+    }
+}
+
+/// The card ids a commit writes and removes.
+fn changed_ids(
+    changes: &BTreeMap<String, Option<String>>,
+    before: &BTreeMap<String, String>,
+) -> (Vec<String>, Vec<String>) {
+    let mut written = Vec::new();
+    let mut removed = Vec::new();
+    for (file, content) in changes {
+        let Some(path) = file.strip_suffix(".md") else {
+            continue;
+        };
+        if !valid_card_path(path) {
+            continue;
+        }
+        let key = |text: &str| parse_card(path, text).id().map(str::to_owned);
+        let old = before.get(file).and_then(|text| key(text));
+        let new = content.as_deref().and_then(key);
+        if let Some(id) = &new
+            && !written.contains(id)
+        {
+            written.push(id.clone());
+        }
+        if let Some(id) = old
+            && new.as_ref() != Some(&id)
+            && !removed.contains(&id)
+        {
+            removed.push(id);
+        }
+    }
+    (written, removed)
+}
+
+/// Who to record as the author of a rumu commit.
+#[derive(Debug, Clone)]
+pub struct Author {
+    /// The session's assistant deck id or `user`.
+    pub id: String,
+    /// The git author name (deck name or `user`).
+    pub name: String,
+    pub session: Option<String>,
+    pub node: Option<String>,
+}
+
+impl Author {
+    pub fn user() -> Self {
+        Self {
+            id: USER.to_owned(),
+            name: USER.to_owned(),
+            session: None,
+            node: None,
+        }
+    }
+
+    pub fn for_deck(deck: &Deck) -> Self {
+        Self {
+            id: deck.meta.id.clone(),
+            name: deck.meta.name.clone(),
+            session: None,
+            node: None,
+        }
+    }
+
+    pub fn git(&self) -> GitAuthor {
+        GitAuthor {
+            name: self.name.clone(),
+            email: format!("{}{}", self.id, git::EMAIL_DOMAIN),
+        }
+    }
+}
+
+/// `grants.json`: action → assistant deck id → the decks it may take that
+/// action on without a prompt.
+type Grants = BTreeMap<Action, BTreeMap<String, BTreeSet<String>>>;
+
+/// The loaded decks and the default assistant's id.
+#[derive(Default)]
+struct Inner {
+    /// Deck id → deck.
+    decks: BTreeMap<String, Deck>,
+    default: String,
+}
+
+/// The deck registry.
+#[derive(Clone)]
+pub struct Decks {
+    home: PathBuf,
+    inner: Arc<RwLock<Inner>>,
+    /// Serializes card writes and their commits, so a commit sees the `HEAD`
+    /// its write was based on. Grants are read-modify-written under it too.
+    write_lock: Arc<Mutex<()>>,
+    /// "Allow for this session" answers: (session id, action, deck id).
+    session_grants: Arc<Mutex<HashSet<(String, Action, String)>>>,
+}
+
+impl Decks {
+    /// Open the deck repositories under `RUMU_HOME`.
+    pub fn load(home: &Path) -> Result<Self> {
+        let decks_dir = home.join(DECKS_DIR);
+        std::fs::create_dir_all(&decks_dir)
+            .map_err(rumu_core::IoError::at("creating", &decks_dir))?;
+        let inner = load_home(home)?;
+        Ok(Self {
+            home: home.to_path_buf(),
+            inner: Arc::new(RwLock::new(inner)),
+            write_lock: Arc::new(Mutex::new(())),
+            session_grants: Arc::default(),
+        })
+    }
+
+    /// Hold the write lock (see [`Decks::write_lock`]).
+    pub(crate) fn lock(&self) -> MutexGuard<'_, ()> {
+        self.write_lock.lock().unwrap_or_else(|e| e.into_inner())
+    }
+
+    pub fn list(&self) -> Vec<Deck> {
+        self.inner.read().unwrap().decks.values().cloned().collect()
+    }
+
+    /// The deck id of the default assistant, the one a session runs as when
+    /// none is named.
+    pub fn default_assistant(&self) -> String {
+        self.inner.read().unwrap().default.clone()
+    }
+
+    /// Make the assistant deck `id` the default.
+    pub fn set_default_assistant(&self, id: &str) -> Result<()> {
+        if !self.get(id).is_some_and(|d| d.assistant()) {
+            return Err(Error::Config {
+                path: self.home.join(DECKS_DIR),
+                message: format!("no assistant deck `{id}`"),
+            });
+        }
+        write_default(&self.home, id)?;
+        self.inner.write().unwrap().default = id.to_owned();
+        Ok(())
+    }
+
+    /// Decks listed in the roster.
+    pub fn assistants(&self) -> Vec<Deck> {
+        self.list()
+            .into_iter()
+            .filter(|d| d.meta.assistant)
+            .collect()
+    }
+
+    /// The deck with this id.
+    pub fn get(&self, id: &str) -> Option<Deck> {
+        self.inner.read().unwrap().decks.get(id).cloned()
+    }
+
+    /// The default mounts of `deck_id`'s sessions (its `deck.yaml` list).
+    /// Entries that cannot be mounted (an unknown deck, a bad or overlapping
+    /// mount point, `/cards/self`) are skipped.
+    pub fn default_mounts(&self, deck_id: &str) -> Vec<CardMount> {
+        let Some(deck) = self.get(deck_id) else {
+            return Vec::new();
+        };
+        let mut out: Vec<CardMount> = Vec::new();
+        for m in deck.meta.mounts {
+            match self.check_mount(&m, &out) {
+                Ok(at) => out.push(CardMount { deck: m.deck, at }),
+                Err(message) => {
+                    warn!(deck = %deck.name, mount = %m.at, "skipping a default mount: {message}")
+                }
+            }
+        }
+        out
+    }
+
+    /// Validate one `deck.yaml` mount against the ones before it; the
+    /// normalized mount point on success.
+    fn check_mount(
+        &self,
+        m: &DeckMount,
+        before: &[CardMount],
+    ) -> std::result::Result<String, String> {
+        let at = normalize_mount_point(&m.at)?;
+        if at == SELF_MOUNT {
+            return Err(format!("`{SELF_MOUNT}` is the session's own deck"));
+        }
+        if self.get(&m.deck).is_none() {
+            return Err(format!("no deck with id `{}`", m.deck));
+        }
+        if let Some(other) = before.iter().find(|o| mount_points_overlap(&o.at, &at)) {
+            return Err(format!("`{at}` overlaps `{}`", other.at));
+        }
+        Ok(at)
+    }
+
+    /// May the assistant deck `from` take `action` on `to` in `session`
+    /// without asking the user? An assistant may do anything with its own
+    /// deck. Otherwise `deck.yaml` grants up front (`from`'s mounts, its
+    /// `write: true` mounts, `to`'s `allow_ask`), and so do the user's earlier
+    /// answers for the session and for always.
+    pub fn allowed(&self, action: Action, session: &str, from: &str, to: &str) -> bool {
+        if from == to {
+            return true;
+        }
+        let mounts = |write: bool| {
+            self.get(from).is_some_and(|d| {
+                d.meta
+                    .mounts
+                    .iter()
+                    .any(|m| m.deck == to && (m.write || !write))
+            })
+        };
+        let configured = match action {
+            Action::Mount => mounts(false),
+            Action::Write => mounts(true),
+            Action::Ask => self
+                .get(to)
+                .is_some_and(|d| d.meta.allow_ask.iter().any(|a| a == from)),
+            Action::Link => false,
+        };
+        configured
+            || self.session_grants.lock().unwrap().contains(&(
+                session.to_owned(),
+                action,
+                to.to_owned(),
+            ))
+            || self
+                .grants()
+                .get(&action)
+                .and_then(|t| t.get(from))
+                .is_some_and(|decks| decks.contains(to))
+    }
+
+    /// Remember that the user allowed `from` to take `action` on `to`, for
+    /// as long as `scope` says.
+    pub fn remember(&self, action: Action, scope: Scope, session: &str, from: &str, to: &str) {
+        match scope {
+            Scope::Once => {}
+            Scope::Session => {
+                self.session_grants.lock().unwrap().insert((
+                    session.to_owned(),
+                    action,
+                    to.to_owned(),
+                ));
+            }
+            Scope::Always => self.update_grants(|g| {
+                g.entry(action)
+                    .or_default()
+                    .entry(from.to_owned())
+                    .or_default()
+                    .insert(to.to_owned());
+            }),
+        }
+    }
+
+    /// The grants as currently on disk (the user revokes by editing the file,
+    /// so it is read on every check). An unreadable file grants nothing.
+    fn grants(&self) -> Grants {
+        read_grants(&self.home.join(GRANTS_FILE)).unwrap_or_default()
+    }
+
+    /// Read-modify-write `grants.json`. An unreadable file is left alone
+    /// rather than replaced, so a typo never wipes the user's grants.
+    fn update_grants(&self, change: impl FnOnce(&mut Grants)) {
+        let _guard = self.lock();
+        let path = self.home.join(GRANTS_FILE);
+        let Ok(mut grants) = read_grants(&path) else {
+            warn!(path = %path.display(), "not saving a grant: the grants file does not parse");
+            return;
+        };
+        change(&mut grants);
+        let text = serde_json::to_string_pretty(&grants).unwrap_or_default();
+        if let Err(e) = std::fs::write(&path, text + "\n") {
+            warn!(path = %path.display(), error = %e, "saving grants failed");
+        }
+    }
+
+    /// Does any card in any deck link to `(deck_id, path)`?
+    pub fn linked_to(&self, deck_id: &str, path: &str) -> bool {
+        self.list().iter().any(|deck| {
+            deck.walk().unwrap_or_default().iter().any(|p| {
+                deck.read(p)
+                    .ok()
+                    .flatten()
+                    .is_some_and(|text| parse_card(p, &text).link_target() == Some((deck_id, path)))
+            })
+        })
+    }
+
+    /// Create (empty `id`) or update a deck's `deck.yaml`. A new deck never
+    /// takes over an existing directory.
+    pub fn upsert(&self, meta: DeckMeta) -> Result<Deck> {
+        let mut meta = meta;
+        let config_err = |message: String| Error::Config {
+            path: self.home.join(DECKS_DIR),
+            message,
+        };
+        if !valid_deck_name(&meta.name) {
+            return Err(config_err(format!(
+                "invalid deck name `{}` (rule: `[a-z][a-z0-9-]*`)",
+                meta.name
+            )));
+        }
+        let mut checked: Vec<CardMount> = Vec::new();
+        for m in &meta.mounts {
+            let at = self.check_mount(m, &checked).map_err(config_err)?;
+            checked.push(CardMount {
+                deck: m.deck.clone(),
+                at,
+            });
+        }
+        for (m, c) in meta.mounts.iter_mut().zip(checked) {
+            m.at = c.at;
+        }
+        let existing = if meta.id.is_empty() {
+            meta.id = new_uuid();
+            None
+        } else {
+            Some(
+                self.get(&meta.id)
+                    .ok_or_else(|| config_err(format!("no deck with id `{}`", meta.id)))?,
+            )
+        };
+        let mut dir = self.home.join(DECKS_DIR).join(
+            existing
+                .as_ref()
+                .map(|d| d.name.clone())
+                .unwrap_or_else(|| meta.name.clone()),
+        );
+        if existing.is_none() && dir.exists() {
+            return Err(Error::Config {
+                path: dir,
+                message: format!("a deck directory `{}` already exists", meta.name),
+            });
+        }
+        // Renaming a deck moves its directory; the id and history stay.
+        if let Some(old) = &existing
+            && old.name != meta.name
+        {
+            let target = self.home.join(DECKS_DIR).join(&meta.name);
+            if target.exists() && target != old.dir {
+                return Err(Error::Config {
+                    path: target,
+                    message: format!("deck directory `{}` already exists", meta.name),
+                });
+            }
+            std::fs::rename(&old.dir, &target)
+                .map_err(rumu_core::IoError::at("renaming", &old.dir))?;
+            dir = target;
+        }
+        let name = existing
+            .as_ref()
+            .map(|old| {
+                if old.name == meta.name {
+                    old.name.clone()
+                } else {
+                    meta.name.clone()
+                }
+            })
+            .unwrap_or_else(|| meta.name.clone());
+        let deck = Deck { meta, dir, name };
+        deck.repo().init()?;
+        let subject = if existing.is_some() {
+            "update deck.yaml"
+        } else {
+            "create deck"
+        };
+        write_deck_meta(&deck, subject)?;
+        let mut inner = self.inner.write().unwrap();
+        inner.decks.insert(deck.meta.id.clone(), deck.clone());
+        Ok(deck)
+    }
+
+    /// Remove a deck from the roster; cards and history are left in place.
+    /// Removing the default assistant moves the default to another one, as
+    /// on load (see [`fallback_default`]).
+    pub fn remove_assistant(&self, id: &str) -> Result<()> {
+        let Some(mut deck) = self.get(id) else {
+            return Err(Error::Config {
+                path: self.home.join(DECKS_DIR),
+                message: format!("unknown deck `{id}`"),
+            });
+        };
+        deck.meta.assistant = false;
+        write_deck_meta(&deck, "update deck.yaml")?;
+        let mut guard = self.inner.write().unwrap();
+        let inner = &mut *guard;
+        let was_default = inner.default == deck.meta.id;
+        inner.decks.insert(deck.meta.id.clone(), deck);
+        if was_default {
+            inner.default = fallback_default(&self.home, &mut inner.decks)?;
+        }
+        Ok(())
+    }
+
+    /// Delete a deck's directory, its history included. An assistant deck and
+    /// a deck another deck mounts are refused: the assistant must be removed,
+    /// or the mount dropped, first.
+    pub fn delete(&self, id: &str) -> Result<()> {
+        let config_err = |message: String| Error::Config {
+            path: self.home.join(DECKS_DIR),
+            message,
+        };
+        let deck = self
+            .get(id)
+            .ok_or_else(|| config_err(format!("unknown deck `{id}`")))?;
+        if deck.meta.assistant {
+            return Err(config_err(format!(
+                "`{}` is an assistant; remove the assistant first",
+                deck.meta.name
+            )));
+        }
+        if let Some(by) = self
+            .list()
+            .into_iter()
+            .find(|other| other.meta.mounts.iter().any(|m| m.deck == id))
+        {
+            return Err(config_err(format!(
+                "`{}` is mounted by `{}`",
+                deck.meta.name, by.meta.name
+            )));
+        }
+        {
+            let _guard = self.lock();
+            std::fs::remove_dir_all(&deck.dir)
+                .map_err(rumu_core::IoError::at("removing", &deck.dir))?;
+        }
+        self.inner.write().unwrap().decks.remove(id);
+        Ok(())
+    }
+}
+
+/// Open one deck by its directory name under `RUMU_HOME`, without loading the
+/// registry.
+pub fn open_deck(home: &Path, name: &str) -> Result<Option<Deck>> {
+    let dir = home.join(DECKS_DIR).join(name);
+    if !dir.join("HEAD").is_file() {
+        return Ok(None);
+    }
+    let Some(text) = git::repo(&dir).read(DECK_FILE)? else {
+        return Ok(None);
+    };
+    let meta = crate::yaml::from_str::<DeckMeta>(&text).map_err(|e| Error::Config {
+        path: dir.join(DECK_FILE),
+        message: format!("parsing deck.yaml: {e}"),
+    })?;
+    Ok(Some(Deck {
+        meta,
+        dir,
+        name: name.to_owned(),
+    }))
+}
+
+/// `grants.json`: empty when missing, `Err` when present but unreadable.
+fn read_grants(path: &Path) -> std::result::Result<Grants, ()> {
+    let text = match std::fs::read_to_string(path) {
+        Ok(text) => text,
+        Err(e) if e.kind() == std::io::ErrorKind::NotFound => return Ok(Grants::default()),
+        Err(e) => {
+            warn!(path = %path.display(), error = %e, "cannot read the grants file");
+            return Err(());
+        }
+    };
+    serde_json::from_str(&text).map_err(|e| {
+        warn!(path = %path.display(), error = %e, "the grants file does not parse; it grants nothing");
+    })
+}
+
+/// Commit `deck.yaml` as `user`.
+fn write_deck_meta(deck: &Deck, subject: &str) -> Result<()> {
+    let text = serde_saphyr::to_string(&deck.meta).map_err(|e| Error::Config {
+        path: deck.dir.join(DECK_FILE),
+        message: format!("serializing deck.yaml: {e}"),
+    })?;
+    deck.commit(
+        &Author::user(),
+        subject,
+        &BTreeMap::from([(DECK_FILE.to_owned(), Some(text))]),
+    )?;
+    Ok(())
+}
+
+fn read_default(home: &Path) -> Result<Option<String>> {
+    let path = home.join(DEFAULT_FILE);
+    match std::fs::read_to_string(&path) {
+        Ok(text) => Ok(Some(text.trim().to_owned()).filter(|id| !id.is_empty())),
+        Err(e) if e.kind() == std::io::ErrorKind::NotFound => Ok(None),
+        Err(source) => Err(rumu_core::IoError::at("reading", &path)(source).into()),
+    }
+}
+
+fn write_default(home: &Path, id: &str) -> Result<()> {
+    let path = home.join(DEFAULT_FILE);
+    std::fs::write(&path, format!("{id}\n")).map_err(rumu_core::IoError::at("writing", &path))?;
+    Ok(())
+}
+
+/// Load `RUMU_HOME`: the decks and the default assistant. When the default
+/// file does not name an assistant deck, the first assistant deck (by
+/// directory) becomes the default; with none, a `default` deck is created.
+fn load_home(home: &Path) -> Result<Inner> {
+    let decks_dir = home.join(DECKS_DIR);
+    std::fs::create_dir_all(&decks_dir).map_err(rumu_core::IoError::at("creating", &decks_dir))?;
+    let mut decks = load_decks(&decks_dir)?;
+    let saved = read_default(home)?;
+    let is_assistant = |id: &str| decks.get(id).is_some_and(|d| d.meta.assistant);
+    let default = match saved.filter(|id| is_assistant(id)) {
+        Some(id) => id,
+        None => fallback_default(home, &mut decks)?,
+    };
+    Ok(Inner { decks, default })
+}
+
+/// A new default assistant, saved as such: the first assistant deck by
+/// directory, or a new `default` deck when there is none.
+fn fallback_default(home: &Path, decks: &mut BTreeMap<String, Deck>) -> Result<String> {
+    let first = decks
+        .values()
+        .filter(|d| d.meta.assistant)
+        .min_by(|a, b| a.name.cmp(&b.name))
+        .map(|d| d.meta.id.clone());
+    let id = match first {
+        Some(id) => id,
+        None => {
+            let deck = create_default_deck(&home.join(DECKS_DIR))?;
+            let id = deck.meta.id.clone();
+            decks.insert(id.clone(), deck);
+            id
+        }
+    };
+    write_default(home, &id)?;
+    Ok(id)
+}
+
+/// A new, empty assistant deck in the first free `decks/default[-N]`.
+fn create_default_deck(decks_dir: &Path) -> Result<Deck> {
+    let name = (0..)
+        .map(|i| match i {
+            0 => "default".to_owned(),
+            i => format!("default-{i}"),
+        })
+        .find(|n| !decks_dir.join(n).exists())
+        .expect("some directory name is free");
+    let dir = decks_dir.join(&name);
+    let mut meta = empty_meta(new_uuid(), name.clone());
+    meta.assistant = true;
+    let repo = git::repo(&dir);
+    repo.init()?;
+    let deck = Deck { meta, dir, name };
+    write_deck_meta(&deck, "create deck")?;
+    Ok(deck)
+}
+
+/// Load every bare deck repository under `decks_dir`, newest view of `HEAD`.
+fn load_decks(decks_dir: &Path) -> Result<BTreeMap<String, Deck>> {
+    let entries =
+        std::fs::read_dir(decks_dir).map_err(rumu_core::IoError::at("reading", decks_dir))?;
+    let mut names: Vec<String> = entries
+        .filter_map(|e| e.ok())
+        .filter(|e| e.file_type().is_ok_and(|t| t.is_dir()))
+        .filter_map(|e| e.file_name().to_str().map(str::to_owned))
+        .filter(|name| !name.starts_with('.'))
+        .filter(|name| {
+            let ok = valid_deck_name(name);
+            if !ok {
+                warn!(name = %name, "skipping a deck directory with an invalid name");
+            }
+            ok
+        })
+        .collect();
+    names.sort();
+
+    let mut inner = BTreeMap::new();
+    for name in names {
+        let dir = decks_dir.join(&name);
+        let repo = git::repo(&dir);
+        let text = match repo.read(DECK_FILE) {
+            Ok(Some(text)) => text,
+            Ok(None) => {
+                warn!(deck = %name, "skipping a directory without deck.yaml in HEAD");
+                continue;
+            }
+            Err(e) => {
+                warn!(deck = %name, error = %e, "skipping a directory that is not a bare deck repository");
+                continue;
+            }
+        };
+        let meta = match crate::yaml::from_str::<DeckMeta>(&text) {
+            Ok(meta) if !meta.id.trim().is_empty() => meta,
+            Ok(_) => {
+                warn!(deck = %name, "skipping a deck without an id");
+                continue;
+            }
+            Err(e) => {
+                warn!(deck = %name, error = %e, "skipping a deck whose deck.yaml does not parse");
+                continue;
+            }
+        };
+        if inner.contains_key(&meta.id) {
+            warn!(deck = %name, id = %meta.id, "skipping a deck with a duplicate id");
+            continue;
+        }
+        inner.insert(meta.id.clone(), Deck { meta, dir, name });
+    }
+
+    Ok(inner)
+}
+
+fn empty_meta(id: String, name: String) -> DeckMeta {
+    DeckMeta {
+        id,
+        name,
+        assistant: false,
+        workspace: None,
+        mounts: Vec::new(),
+        allow_ask: Vec::new(),
+    }
+}
+
+#[cfg(test)]
+mod tests;
