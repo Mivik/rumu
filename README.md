@@ -39,8 +39,10 @@ from the Rust serde types by ts-rs. After changing a wire type, run
 because the web build imports them.
 
 `RUMU_HOME` (default `~/.rumu`) holds `config.yaml` (workspace presets and
-external plugins), `cards/` and `sessions/`. With no config at all,
-the current directory becomes the default workspace, so it runs out of the box.
+external plugins), `decks/` (cards, assistants and their history), `grants.json`
+(remembered mount / ask permissions) and `sessions/`. With no config at all,
+the current directory becomes the default workspace, so it runs out of the
+box.
 
 Workspaces are a named map. Each entry is a root string or a map with `root`
 plus optional `ssh` (a remote `[user@]host`) and `read_only`:
@@ -53,6 +55,35 @@ workspaces:
     root: /srv/app
     read_only: true
 ```
+
+A **deck** is a set of cards about one subject, kept as a bare git repository
+at `RUMU_HOME/decks/<name>/`; see [docs/decks.md](docs/decks.md). Its identity
+and defaults live in `deck.yaml`. rumu is the only writer: every card write is
+a commit, and decks are not edited by hand. Decks are the
+unit of memory, permission and history. A session mounts decks under
+`@rumu:/cards/<mount>/` (its own deck at `/cards/self`) and sees only those
+cards and its own past sessions. An **assistant** is a deck with
+`assistant: true`: its pinned cards are its persona and instructions, and its
+`deck.yaml` names the decks it mounts by default.
+
+```yaml
+# deck.yaml of the deck at RUMU_HOME/decks/ledger
+id: 0193a2f1-7c4e-7b2a-9d01-5e8f3a6b2c10
+name: ledger
+assistant: true
+workspace: proj
+mounts:
+  - { deck: <finance-deck-id>, at: /cards/finance, write: true }
+```
+
+Decks are always referred to by id; the name is for display. Which
+assistant is the default is per user, in `RUMU_HOME/default-assistant`. A
+session starts with its own deck plus these default mounts; `card_mount`
+changes them for the branch. Decks are created by the user (the web UI or by
+hand), never by an assistant; assistants write cards in the decks they mount
+with `write`. Mount, ask and link approvals marked "always allow" are kept in
+`RUMU_HOME/grants.json`. History uses one git repository per deck through
+gitoxide (`gix`); no git binary is needed at runtime.
 
 rumu's own data — knowledge cards and past conversations — lives in the
 reserved `@rumu:/…` workspace. The leading `@` is not a valid preset name, so
