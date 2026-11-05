@@ -444,6 +444,37 @@ pub trait Runtime: History {
     /// Cancel every internal call of `parent_call` that is still running;
     /// later invokes under it are cancelled at once.
     fn cancel_invokes(&self, _branch: &BranchId, _parent_call: &str) {}
+    /// Put `request` to the user on behalf of the tool call `call_id` and
+    /// wait for the answer (see [`Cx::decide`]).
+    async fn decide(&self, _branch: &BranchId, _call_id: &str, _request: Value) -> Result<Value> {
+        Err(Error::msg("this host cannot ask the user"))
+    }
+    /// Run `consult` as a one-turn session of its own (see [`Cx::consult`]).
+    async fn consult(&self, _branch: &BranchId, _consult: Consult) -> Result<ConsultReply> {
+        Err(Error::msg("this host cannot start sessions"))
+    }
+}
+
+/// A one-turn session run on behalf of a tool call (`Cx::consult`).
+#[derive(Debug, Clone)]
+pub struct Consult {
+    /// The assistant deck the session runs as.
+    pub assistant: String,
+    /// Its initial default workspace.
+    pub workspace: Option<String>,
+    /// The asking assistant deck, recorded on the session's root.
+    pub asked_by: String,
+    /// The deck's default mounts (an `ask` session forces them to read).
+    pub mounts: Vec<crate::CardMount>,
+    pub prompt: Content,
+}
+
+/// What a consulted session answered.
+#[derive(Debug, Clone)]
+pub struct ConsultReply {
+    pub session: SessionId,
+    /// The final reply; `None` when the turn ended without one (abort).
+    pub text: Option<String>,
 }
 
 /// Where a tool call's progress goes, chosen by the kernel when it builds the
@@ -585,6 +616,22 @@ impl Cx {
             let parent = call.parent.as_deref().unwrap_or(&call.id);
             self.runtime.cancel_invokes(&self.branch, parent);
         }
+    }
+
+    /// Put `request` to the user and wait for the answer: a `decision.requested`
+    /// push the client answers with `decision.answer`. Aborting the turn
+    /// cancels the wait (an error). Only available within a tool call.
+    pub async fn decide(&self, request: Value) -> Result<Value> {
+        let Some(call) = &self.call else {
+            return Err(Error::NoCallContext);
+        };
+        self.runtime.decide(&self.branch, &call.id, request).await
+    }
+
+    /// Run a one-turn session of its own (another assistant answering a question)
+    /// and wait for its reply. Aborting this turn aborts that one.
+    pub async fn consult(&self, consult: Consult) -> Result<ConsultReply> {
+        self.runtime.consult(&self.branch, consult).await
     }
 
     /// Push a progress update for this tool call. A no-op outside a tool call.

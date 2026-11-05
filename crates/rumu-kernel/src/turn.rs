@@ -286,7 +286,7 @@ impl Kernel {
     /// Announce a turn and dispatch its prompt event. Returns true when a hook
     /// blocked the prompt (turn.error has been pushed). `append_user` is false
     /// for a regeneration, whose prompt node is already on the branch.
-    async fn open_turn(
+    pub(crate) async fn open_turn(
         self: &Arc<Self>,
         branch: &BranchId,
         content: Content,

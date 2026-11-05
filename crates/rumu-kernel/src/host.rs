@@ -4,8 +4,8 @@ use std::sync::Arc;
 
 use async_trait::async_trait;
 use rumu_core::{
-    Branch, BranchId, History, InnerCall, Node, PathState, Progress, ProgressSink, Result, Runtime,
-    SessionId, SessionInfo, TaskId, TaskInfo,
+    Branch, BranchId, Consult, ConsultReply, History, InnerCall, Node, PathState, Progress,
+    ProgressSink, Result, Runtime, SessionId, SessionInfo, TaskId, TaskInfo,
 };
 use serde_json::{Value, json};
 
@@ -60,6 +60,14 @@ impl Runtime for KernelRuntime {
             .exec_inner_call(branch, caller, parent_call, depth, name, args)
             .await
             .map_err(Into::into)
+    }
+
+    async fn decide(&self, branch: &BranchId, call_id: &str, request: Value) -> Result<Value> {
+        Ok(self.0.decide(branch, call_id, request).await?)
+    }
+
+    async fn consult(&self, branch: &BranchId, consult: Consult) -> Result<ConsultReply> {
+        Ok(self.0.consult(branch, consult).await?)
     }
 
     fn cancel_invokes(&self, _branch: &BranchId, parent_call: &str) {

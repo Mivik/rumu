@@ -1,6 +1,7 @@
 //! rumu-kernel: the agent loop, hook dispatch, predicate engine, projection
 //! inputs and UI tree ops for rumu.
 
+mod decide;
 mod dispatch;
 mod error;
 mod fields;
@@ -174,6 +175,10 @@ pub(crate) struct Inner {
     pub tasks: HashMap<TaskId, crate::task::TaskEntry>,
     /// Running background tasks allowed per owner branch.
     pub max_tasks_per_branch: usize,
+    /// Questions waiting for the user, by id (`Cx::decide`).
+    pub decisions: HashMap<String, decide::PendingDecision>,
+    /// The last decision id handed out.
+    pub decision_seq: u64,
 }
 
 impl Default for Inner {
@@ -191,6 +196,8 @@ impl Default for Inner {
             agent_gate: Arc::new(Semaphore::new(MAX_CONCURRENT_AGENTS)),
             tasks: HashMap::new(),
             max_tasks_per_branch: MAX_TASKS_PER_BRANCH,
+            decisions: HashMap::new(),
+            decision_seq: 0,
         }
     }
 }
@@ -402,6 +409,11 @@ impl Kernel {
         if let Some(tap) = self.tap.lock().unwrap().as_ref() {
             let _ = tap.send(msg);
         }
+    }
+
+    /// Does a loop run on `branch`?
+    pub fn is_running(&self, branch: &BranchId) -> bool {
+        self.inner.lock().unwrap().running.contains_key(branch)
     }
 
     pub fn system_prompt(&self) -> &str {

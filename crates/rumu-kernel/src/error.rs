@@ -100,6 +100,14 @@ pub enum Error {
     #[error("internal tool call aborted")]
     InternalAborted,
 
+    /// A question to the user ended unanswered: the turn was aborted.
+    #[error("the question to the user was cancelled")]
+    DecisionCancelled,
+
+    /// `decision.answer` named no waiting decision.
+    #[error("no pending decision `{0}`")]
+    UnknownDecision(String),
+
     /// A kernel invariant was violated: a bug, or a race at shutdown.
     #[error("internal: {0}")]
     Internal(String),
