@@ -57,7 +57,7 @@ Intermediate results stay inside the script — only its output comes back: `tex
 `return` value (strings as-is, other values as JSON), `attach(img)`, and \
 `console.log/info/warn/error` lines. Use it for loops, filtering/aggregating large outputs, or \
 multi-step work where only the conclusion matters.\n\n\
-Do not use it unless it clearly pays off: ordinary calls — reading a file, one search, one \
+DO NOT USE THIS unless it clearly pays off: ordinary calls — reading a file, one search, one \
 command, one edit, or a few independent calls — go directly to the tool, never wrapped in a \
 script.\n\n\
 A call resolves to the tool's text output (up to ~1M chars with the middle cut — far more than a \
