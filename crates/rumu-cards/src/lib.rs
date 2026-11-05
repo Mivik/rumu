@@ -29,6 +29,7 @@ use serde_json::Value;
 
 pub mod card;
 pub mod catalog;
+pub mod diff;
 mod error;
 pub mod library;
 pub mod recall;

@@ -6,6 +6,6 @@ import type { PatchKind } from "./PatchKind";
  * Payload of the `workspace.file_patch` marker (v1) on real-workspace
  * `write`/`edit` results. `hunks` is `None` for a create (the UI renders
  * the call's `content`) and for an update whose diff was dropped: over the
- * size cap, past the time budget, or against a non-UTF-8 previous version.
+ * size cap, or against a non-UTF-8 previous version.
  */
 export type FilePatch = { kind: PatchKind, hunks?: Array<Hunk> | null, };
