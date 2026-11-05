@@ -53,6 +53,7 @@ async fn agent_transcript_address_is_readable() {
                 default: Some("@rumu".into()),
                 ..WorkspaceCatalog::default()
             },
+            rumu_cards::Decks::load(home.path()).unwrap(),
         )),
     ];
     let kernel = Kernel::new(
@@ -76,7 +77,10 @@ async fn agent_transcript_address_is_readable() {
         },
     )
     .unwrap();
-    let (session, _) = kernel.create_session(None).await.unwrap();
+    let (session, _) = kernel
+        .create_session(None, "assistant".into())
+        .await
+        .unwrap();
     let branch = session.active_branch.clone();
     let mut rx = kernel.tap_pushes();
     kernel.prompt(&branch, "look around").await.unwrap();
@@ -115,6 +119,7 @@ async fn agent_transcript_address_is_readable() {
             default: Some("@rumu".into()),
             ..WorkspaceCatalog::default()
         },
+        rumu_cards::Decks::load(home.path()).unwrap(),
     );
     let cx = rumu_core::Cx::new(
         session.id.clone(),

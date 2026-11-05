@@ -16,6 +16,7 @@ use std::{path::Path, sync::Arc};
 
 use rumu_core::Plugin;
 
+mod approve;
 mod code;
 mod config;
 mod error;
@@ -35,19 +36,18 @@ pub(crate) mod testutil;
 
 /// Load every plugin: memory, workspace, then the external stdio plugins
 /// registered in `<home>/config.yaml` (each spawned and `initialize`d). The
-/// caller supplies the parsed [`Config`] so the kernel and the workspace
-/// plugin share one load, plus the workspace preset catalog derived from it
-/// and the kernel's built-in tools so the `code` plugin's API stub covers
-/// them.
+/// caller supplies the parsed [`Config`], the deck registry and the kernel's
+/// built-in tools so the `code` plugin's API stub covers them.
 pub async fn load_all(
     home: &Path,
     config: &Config,
     catalog: rumu_core::WorkspaceCatalog,
+    decks: rumu_cards::Decks,
     builtin_tools: &[rumu_core::ToolSpec],
 ) -> Result<Vec<Arc<dyn Plugin>>> {
     let mut plugins: Vec<Arc<dyn Plugin>> = vec![
         Arc::new(MemoryPlugin::new(home)),
-        Arc::new(WorkspacePlugin::new(home, catalog)),
+        Arc::new(WorkspacePlugin::new(home, catalog, decks)),
     ];
     for spec in config.external_specs(home)? {
         let plugin = StdioPlugin::spawn(&spec.name, &spec.argv, &spec.cwd)

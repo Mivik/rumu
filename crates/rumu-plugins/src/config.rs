@@ -2,6 +2,7 @@
 //! the workspace presets (string shorthand or `{root, ssh?, read_only?}`),
 //! and the external plugin list — parsed once by [`load_config`]. The
 //! workspace catalog and the external plugin specs are derived from it.
+//! Decks live in `RUMU_HOME/decks/`.
 
 use std::collections::BTreeMap;
 use std::path::{Path, PathBuf};

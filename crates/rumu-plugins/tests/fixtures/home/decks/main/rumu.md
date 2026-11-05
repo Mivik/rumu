@@ -1,6 +1,7 @@
 ---
 description: Overview of the rumu agent framework, crate layout, and core invariants.
-scope: [proj]
+scope:
+- proj
 ---
 rumu is the agent framework this server belongs to. Layout:
 

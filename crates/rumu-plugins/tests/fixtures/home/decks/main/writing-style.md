@@ -1,5 +1,7 @@
 ---
-description: Technical and direct; conclusion first, short paragraphs, consistent terminology.
+description: >-
+  Technical and direct; conclusion first, short paragraphs, consistent
+  terminology.
 ---
 - Technical and direct; no marketing filler, no hedging.
 - Lead with the conclusion, then the reasoning.

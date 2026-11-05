@@ -104,11 +104,131 @@ pub(crate) struct FakeRuntime {
     pub progress: Mutex<Vec<(BranchId, String, Progress)>>,
     /// Kernel tasks returned by `tasks` / `task`: (info, buffered output).
     pub tasks: Mutex<Vec<(TaskInfo, String)>>,
+    /// Answers handed out in order by `decide`; when empty, the host cannot ask.
+    pub answers: Mutex<VecDeque<Value>>,
+    /// Every request `decide` received.
+    pub decisions: Mutex<Vec<Value>>,
+}
+
+/// The id of the test deck `decks/main` (the fixture's `deck.yaml`).
+pub(crate) const MAIN_DECK: &str = "0193a2f1-0000-7000-8000-00000000a1a1";
+
+/// The assistant the fake runtime's session runs as: the deck at
+/// `/cards/self`, as in a real session.
+pub(crate) const TEST_ASSISTANT: &str = MAIN_DECK;
+
+/// Create `<home>/decks/main` with its `deck.yaml` (id [`MAIN_DECK`]).
+pub(crate) fn main_deck(home: &std::path::Path) -> std::path::PathBuf {
+    create_deck(
+        home,
+        "main",
+        Some(&format!("id: {MAIN_DECK}\nname: main\n")),
+        &[],
+    );
+    home.join("decks/main")
+}
+
+/// Create a deck named `name`, with `deck.yaml` when given, and write its
+/// cards through the deck's committing write primitive. An existing deck is
+/// returned unchanged.
+pub(crate) fn create_deck(
+    home: &std::path::Path,
+    name: &str,
+    deck_yaml: Option<&str>,
+    cards: &[(&str, &str)],
+) -> rumu_cards::Deck {
+    if let Ok(Some(deck)) = rumu_cards::open_deck(home, name) {
+        return deck;
+    }
+    let deck = match deck_yaml {
+        Some(text) => {
+            let dir = home.join("decks").join(name);
+            rumu_cards::git::repo(&dir).init().unwrap();
+            let deck = rumu_cards::Deck {
+                meta: rumu_cards::yaml::from_str(text).unwrap(),
+                dir,
+                name: name.to_owned(),
+            };
+            deck.commit(
+                &rumu_cards::Author::user(),
+                "create deck",
+                &std::collections::BTreeMap::from([(
+                    "deck.yaml".to_owned(),
+                    Some(text.to_owned()),
+                )]),
+            )
+            .unwrap();
+            deck
+        }
+        None => rumu_cards::Decks::load(home)
+            .unwrap()
+            .upsert(rumu_cards::DeckMeta {
+                id: String::new(),
+                name: name.to_owned(),
+                assistant: false,
+                workspace: None,
+                mounts: Vec::new(),
+                allow_ask: Vec::new(),
+            })
+            .unwrap(),
+    };
+    for (path, text) in cards {
+        deck.write_file(path, text, &rumu_cards::Author::user())
+            .unwrap();
+    }
+    deck
+}
+
+/// One deck by its directory name.
+pub(crate) fn deck_at(home: &std::path::Path, name: &str) -> rumu_cards::Deck {
+    rumu_cards::open_deck(home, name)
+        .unwrap()
+        .unwrap_or_else(|| panic!("no deck `{name}`"))
+}
+
+/// Write a card as the user would through the UI (one commit).
+pub(crate) fn put_card(
+    home: &std::path::Path,
+    deck: &str,
+    path: &str,
+    text: impl AsRef<str>,
+) -> rumu_cards::Card {
+    deck_at(home, deck)
+        .write_file(path, text.as_ref(), &rumu_cards::Author::user())
+        .unwrap()
+}
+
+/// Remove a card as the user would through the UI.
+pub(crate) fn remove_card(home: &std::path::Path, deck: &str, path: &str) {
+    deck_at(home, deck)
+        .remove_file(path, &rumu_cards::Author::user())
+        .unwrap();
+}
+
+/// Move a card as the user would through the UI.
+pub(crate) fn move_card(home: &std::path::Path, deck: &str, from: &str, to: &str) {
+    deck_at(home, deck)
+        .move_file(from, to, &rumu_cards::Author::user())
+        .unwrap();
+}
+
+/// A card's current text in the deck.
+pub(crate) fn card_text(home: &std::path::Path, deck: &str, path: &str) -> Option<String> {
+    deck_at(home, deck).read(path).unwrap()
 }
 
 impl FakeRuntime {
     pub fn arc() -> Arc<Self> {
-        Arc::new(Self::default())
+        let fake = Self::default();
+        {
+            let mut state = fake.state.lock().unwrap();
+            state.assistant = TEST_ASSISTANT.into();
+            state.mounts = vec![rumu_core::CardMount {
+                deck: MAIN_DECK.into(),
+                at: "/cards/self".into(),
+            }];
+        }
+        Arc::new(fake)
     }
 
     /// A `Cx` on a fresh branch with this runtime and call id `call-1`; the
@@ -213,6 +333,15 @@ impl History for FakeRuntime {
 
 #[async_trait]
 impl Runtime for FakeRuntime {
+    async fn decide(&self, _branch: &BranchId, _call_id: &str, request: Value) -> Result<Value> {
+        self.decisions.lock().unwrap().push(request);
+        self.answers
+            .lock()
+            .unwrap()
+            .pop_front()
+            .ok_or_else(|| rumu_core::Error::msg("this host cannot ask the user"))
+    }
+
     fn path(&self, _branch: &BranchId) -> Result<Arc<[Node]>> {
         Ok(self.nodes.lock().unwrap().clone().into())
     }
@@ -290,6 +419,62 @@ impl Runtime for FakeRuntime {
 /// The sample RUMU_HOME used by the tests.
 pub(crate) fn fixture_home() -> std::path::PathBuf {
     std::path::Path::new(env!("CARGO_MANIFEST_DIR")).join("tests/fixtures/home")
+}
+
+/// A writable copy of [`fixture_home`]. Its plain deck directories become
+/// bare decks built through the deck APIs. The repository itself is never
+/// touched.
+pub(crate) fn fixture_copy() -> tempfile::TempDir {
+    let dir = tempfile::tempdir().unwrap();
+    let source = fixture_home();
+    copy_dir(&source, dir.path());
+    std::fs::remove_dir_all(dir.path().join("decks")).unwrap();
+    for entry in std::fs::read_dir(source.join("decks"))
+        .unwrap()
+        .filter_map(|e| e.ok())
+    {
+        if !entry.file_type().is_ok_and(|t| t.is_dir()) {
+            continue;
+        }
+        let name = entry.file_name().to_string_lossy().into_owned();
+        let deck_yaml = std::fs::read_to_string(entry.path().join("deck.yaml")).unwrap();
+        let mut cards = Vec::new();
+        read_cards(&entry.path(), &entry.path(), &mut cards);
+        let refs: Vec<(&str, &str)> = cards
+            .iter()
+            .map(|(path, text)| (path.as_str(), text.as_str()))
+            .collect();
+        create_deck(dir.path(), &name, Some(&deck_yaml), &refs);
+    }
+    dir
+}
+
+/// `(path without `.md`, text)` for every card under `dir`.
+fn read_cards(root: &std::path::Path, dir: &std::path::Path, out: &mut Vec<(String, String)>) {
+    for entry in std::fs::read_dir(dir).unwrap().filter_map(|e| e.ok()) {
+        let path = entry.path();
+        if path.is_dir() {
+            read_cards(root, &path, out);
+        } else if path.extension().is_some_and(|ext| ext == "md") {
+            let rel = path.strip_prefix(root).unwrap().with_extension("");
+            out.push((
+                rel.to_string_lossy().replace('\\', "/"),
+                std::fs::read_to_string(&path).unwrap(),
+            ));
+        }
+    }
+}
+
+fn copy_dir(from: &std::path::Path, to: &std::path::Path) {
+    std::fs::create_dir_all(to).unwrap();
+    for entry in std::fs::read_dir(from).unwrap().filter_map(|e| e.ok()) {
+        let target = to.join(entry.file_name());
+        if entry.file_type().is_ok_and(|t| t.is_dir()) {
+            copy_dir(&entry.path(), &target);
+        } else {
+            std::fs::copy(entry.path(), target).unwrap();
+        }
+    }
 }
 
 /// An [`Inbox`] that records posts instead of delivering them.

@@ -7,8 +7,7 @@
 
 use super::*;
 use crate::testutil::{FakeRuntime, fixture_home};
-use rumu_cards::store::FsCardStore;
-use rumu_cards::{card, library, usage};
+use rumu_cards::{card, usage};
 use rumu_core::{
     Node, NodeBody, PathState, RUMU_WORKSPACE, Structured, Tagged, ToolOutput, WorkspaceUse,
 };
@@ -27,6 +26,11 @@ fn state_with(workspaces: Vec<Workspace>, default: Option<&str>) -> PathState {
     PathState {
         workspaces,
         default_workspace: default.map(str::to_owned),
+        assistant: crate::testutil::TEST_ASSISTANT.into(),
+        mounts: vec![rumu_core::CardMount {
+            deck: crate::testutil::MAIN_DECK.into(),
+            at: "/cards/self".into(),
+        }],
         ..Default::default()
     }
 }
@@ -43,8 +47,8 @@ fn setup(
     tempfile::TempDir,
 ) {
     let home = tempfile::tempdir().unwrap();
-    std::fs::create_dir_all(home.path().join("cards")).unwrap();
-    let plugin = WorkspacePlugin::new(home.path(), WorkspaceCatalog::default());
+    crate::testutil::main_deck(home.path());
+    let plugin = deck_plugin(home.path(), WorkspaceCatalog::default());
     let mut wsb = ws("proj", &root.to_string_lossy());
     wsb.read_only = read_only;
     let host = FakeRuntime::arc();
@@ -59,12 +63,29 @@ fn flush_output(host: &std::sync::Arc<FakeRuntime>, call_id: &str, out: &ToolOut
     host.apply_output(call_id, out);
 }
 
+/// A workspace plugin over the temp home's decks.
+fn deck_plugin(home: &Path, catalog: WorkspaceCatalog) -> WorkspacePlugin {
+    let decks = rumu_cards::Decks::load(home).unwrap();
+    WorkspacePlugin::new(home, catalog, decks)
+}
+
+/// One card read from a deck's `HEAD` tree.
+fn deck_card_in(home: &Path, deck: &str, path: &str) -> rumu_cards::Card {
+    let text = crate::testutil::card_text(home, deck, path).unwrap();
+    rumu_cards::card::parse_card(path, &text)
+}
+
+/// One card read straight from the `main` deck on disk.
+fn deck_card(home: &Path, path: &str) -> rumu_cards::Card {
+    deck_card_in(home, "main", path)
+}
+
 // ---------- resolution ----------
 
 #[tokio::test]
 async fn address_resolution_errors() {
     let home = tempfile::tempdir().unwrap();
-    let plugin = WorkspacePlugin::new(home.path(), WorkspaceCatalog::default());
+    let plugin = deck_plugin(home.path(), WorkspaceCatalog::default());
     let host = FakeRuntime::arc();
 
     // No default workspace: the error points at `workspace_use()`.
@@ -662,7 +683,7 @@ async fn workspace_use_lists_and_switches() {
         workspaces: vec![ws("proj", "/p/rumu"), prod],
         default: Some("proj".into()),
     };
-    let plugin = WorkspacePlugin::new(home.path(), catalog.clone());
+    let plugin = deck_plugin(home.path(), catalog.clone());
     let host = FakeRuntime::arc();
     *host.state.lock().unwrap() =
         state_with(catalog.workspaces.clone(), catalog.default.as_deref());
@@ -862,37 +883,33 @@ async fn agents_updated_on_hash_change_and_once_per_batch() {
 // ---------- the `@rumu` workspace: /cards ----------
 fn card_home() -> tempfile::TempDir {
     let dir = tempfile::tempdir().unwrap();
-    std::fs::create_dir_all(dir.path().join("cards")).unwrap();
+    crate::testutil::main_deck(dir.path());
     dir
 }
 
 fn card_plugin_for(home: &Path) -> (WorkspacePlugin, std::sync::Arc<FakeRuntime>, rumu_core::Cx) {
-    let plugin = WorkspacePlugin::new(home, WorkspaceCatalog::default());
+    let plugin = deck_plugin(home, WorkspaceCatalog::default());
     let host = FakeRuntime::arc();
     *host.state.lock().unwrap() = state_with(vec![], Some(RUMU_WORKSPACE));
     let cx = host.cx();
     (plugin, host, cx)
 }
 
-/// `@rumu:/cards/x` ≡ `@rumu:/cards/x.md`; with `@rumu` as the branch default,
+/// `@rumu:/cards/self/x` ≡ `@rumu:/cards/self/x.md`; with `@rumu` as the branch default,
 /// `/cards/x` and `cards/x` work too.
 #[tokio::test]
 async fn card_paths_are_equivalent_in_every_form() {
     let home = card_home();
-    std::fs::write(
-        home.path().join("cards/m.md"),
-        "---\ntitle: Old\n---\nbody v1\n",
-    )
-    .unwrap();
+    crate::testutil::put_card(home.path(), "main", "m", "---\ntitle: Old\n---\nbody v1\n");
     let (plugin, _host, cx) = card_plugin_for(home.path());
 
     let mut effects = Vec::new();
     for path in [
-        "@rumu:/cards/m",
-        "@rumu:/cards/m.md",
-        "@rumu:cards/m",
-        "/cards/m",
-        "cards/m",
+        "@rumu:/cards/self/m",
+        "@rumu:/cards/self/m.md",
+        "@rumu:cards/self/m",
+        "/cards/self/m",
+        "cards/self/m",
     ] {
         let out = plugin
             .call_tool("read", json!({ "path": path }), &cx)
@@ -909,8 +926,37 @@ async fn card_paths_are_equivalent_in_every_form() {
     // Every read records one use marker.
     assert_eq!(effects.len(), 5);
     let payload: usage::CardUse = effects[0].decode().expect("card_use payload");
-    assert_eq!(payload.id, "m");
+    assert_eq!(payload.deck, crate::testutil::MAIN_DECK);
+    assert_eq!(payload.path, "m");
     assert_eq!(payload.op, usage::CardOp::Read);
+}
+
+/// A successful model read bumps the card's usage by one; a link bumps its
+/// target.
+#[tokio::test]
+async fn card_read_bumps_the_usage_index() {
+    let home = card_home();
+    crate::testutil::put_card(home.path(), "main", "m", "body\n");
+    let card = deck_card(home.path(), "m");
+    let (plugin, _host, cx) = card_plugin_for(home.path());
+    let dir = plugin.decks().get(crate::testutil::MAIN_DECK).unwrap().dir;
+    let score = || {
+        rumu_cards::usage_index::scores(&dir, rumu_core::now())
+            .get(card.id().unwrap())
+            .copied()
+            .unwrap_or(0.0)
+    };
+    let before = score();
+    let out = plugin
+        .call_tool("read", json!({ "path": "@rumu:/cards/self/m" }), &cx)
+        .await
+        .unwrap();
+    assert!(!out.is_error, "{}", out.content.text);
+    assert!(
+        score() > before,
+        "a successful read adds use: {before} -> {}",
+        score()
+    );
 }
 
 /// Other roots and bash on `@rumu` are refused with useful errors.
@@ -921,9 +967,7 @@ async fn rumu_workspace_edges() {
 
     // `list @rumu:` shows the roots.
     let out = plugin.call_tool("list", json!({}), &cx).await.unwrap();
-    assert_eq!(out.content.text, "cards/
-sessions/
-tasks/");
+    assert_eq!(out.content.text, "cards/\nhistory/\nsessions/\ntasks/");
 
     // Unknown paths name the roots.
     for tool in ["read", "write", "edit", "list"] {
@@ -937,7 +981,9 @@ tasks/");
         let out = plugin.call_tool(tool, args, &cx).await.unwrap();
         assert!(out.is_error, "{tool}: {}", out.content.text);
         assert!(
-            out.content.text.contains("roots: /cards, /sessions"),
+            out.content
+                .text
+                .contains("roots: /cards, /history, /sessions"),
             "{tool}: {}",
             out.content.text
         );
@@ -1006,15 +1052,16 @@ tasks/");
 #[tokio::test]
 async fn card_tools_read_write_validate_and_list() {
     let home = card_home();
-    std::fs::write(
-        home.path().join("cards/m.md"),
+    crate::testutil::put_card(
+        home.path(),
+        "main",
+        "m",
         "---\ntitle: Old\ndescription: d\ntags: [a]\nmatch:\n  event: prompt\nowner: x\n---\nbody v1\n",
-    )
-    .unwrap();
+    );
     let (plugin, _host, cx) = card_plugin_for(home.path());
 
     let out = plugin
-        .call_tool("read", json!({ "path": "@rumu:/cards/m" }), &cx)
+        .call_tool("read", json!({ "path": "@rumu:/cards/self/m" }), &cx)
         .await
         .unwrap();
     assert!(!out.is_error, "{}", out.content.text);
@@ -1052,14 +1099,15 @@ async fn card_tools_read_write_validate_and_list() {
 
     // The use marker carries both revs; `rev` ignores metadata.
     let payload: usage::CardUse = out.effects[0].decode().expect("card_use payload");
-    assert_eq!(payload.id, "m");
+    assert_eq!(payload.deck, crate::testutil::MAIN_DECK);
+    assert_eq!(payload.path, "m");
     assert_eq!(payload.op, usage::CardOp::Read);
     assert_eq!(payload.view_rev, card::view_rev_of(&out.content.text));
     assert_eq!(payload.rev.len(), 8);
 
     // Unknown id: near-miss suggestions, no marker.
     let out = plugin
-        .call_tool("read", json!({ "path": "@rumu:/cards/x" }), &cx)
+        .call_tool("read", json!({ "path": "@rumu:/cards/self/x" }), &cx)
         .await
         .unwrap();
     assert!(
@@ -1069,29 +1117,25 @@ async fn card_tools_read_write_validate_and_list() {
     );
     assert!(out.effects.is_empty());
     let out = plugin
-        .call_tool("read", json!({ "path": "@rumu:/cards/mm" }), &cx)
+        .call_tool("read", json!({ "path": "@rumu:/cards/self/mm" }), &cx)
         .await
         .unwrap();
     assert!(
-        out.is_error && out.content.text.contains("did you mean: m"),
+        out.is_error && out.content.text.contains("did you mean: self/m"),
         "{}",
         out.content.text
     );
     assert!(out.effects.is_empty());
 
     let home = card_home();
-    std::fs::write(
-        home.path().join("cards/c.md"),
-        "---\ntitle: C\n---\nbody v1\n",
-    )
-    .unwrap();
+    crate::testutil::put_card(home.path(), "main", "c", "---\ntitle: C\n---\nbody v1\n");
     let (plugin, host, cx) = card_plugin_for(home.path());
 
     // Overwrite without a prior read → refused.
     let out = plugin
         .call_tool(
             "write",
-            json!({ "path": "@rumu:/cards/c", "content": "---\ntitle: C\n---\nbody v2\n" }),
+            json!({ "path": "@rumu:/cards/self/c", "content": "---\ntitle: C\n---\nbody v2\n" }),
             &cx,
         )
         .await
@@ -1102,21 +1146,21 @@ async fn card_tools_read_write_validate_and_list() {
         out.content.text
     );
     assert!(
-        std::fs::read_to_string(home.path().join("cards/c.md"))
+        crate::testutil::card_text(home.path(), "main", "c")
             .unwrap()
             .contains("v1")
     );
 
     // Read, then the same write passes.
     let out = plugin
-        .call_tool("read", json!({ "path": "@rumu:/cards/c" }), &cx)
+        .call_tool("read", json!({ "path": "@rumu:/cards/self/c" }), &cx)
         .await
         .unwrap();
     flush_output(&host, "call-1", &out);
     let out = plugin
         .call_tool(
             "write",
-            json!({ "path": "@rumu:/cards/c", "content": "---\ntitle: C\n---\nbody v2\n" }),
+            json!({ "path": "@rumu:/cards/self/c", "content": "---\ntitle: C\n---\nbody v2\n" }),
             &cx,
         )
         .await
@@ -1128,7 +1172,7 @@ async fn card_tools_read_write_validate_and_list() {
         out.content.text
     );
     assert!(
-        out.content.text.starts_with("wrote cards/c.md"),
+        out.content.text.starts_with("wrote cards/self/c.md"),
         "{}",
         out.content.text
     );
@@ -1139,14 +1183,14 @@ async fn card_tools_read_write_validate_and_list() {
     let out = plugin
         .call_tool(
             "edit",
-            json!({ "path": "@rumu:/cards/c", "old_string": "v2", "new_string": "v3" }),
+            json!({ "path": "@rumu:/cards/self/c", "old_string": "v2", "new_string": "v3" }),
             &cx,
         )
         .await
         .unwrap();
     assert!(!out.is_error, "{}", out.content.text);
     assert!(
-        std::fs::read_to_string(home.path().join("cards/c.md"))
+        crate::testutil::card_text(home.path(), "main", "c")
             .unwrap()
             .contains("v3")
     );
@@ -1158,15 +1202,11 @@ async fn card_tools_read_write_validate_and_list() {
     assert!(lines.contains(&"+body v3".to_owned()), "{lines:?}");
 
     // Someone edits the file behind our back → mismatch error.
-    std::fs::write(
-        home.path().join("cards/c.md"),
-        "---\ntitle: C\n---\nbody EVIL\n",
-    )
-    .unwrap();
+    crate::testutil::put_card(home.path(), "main", "c", "---\ntitle: C\n---\nbody EVIL\n");
     let out = plugin
         .call_tool(
             "edit",
-            json!({ "path": "@rumu:/cards/c", "old_string": "v3", "new_string": "v4" }),
+            json!({ "path": "@rumu:/cards/self/c", "old_string": "v3", "new_string": "v4" }),
             &cx,
         )
         .await
@@ -1178,7 +1218,7 @@ async fn card_tools_read_write_validate_and_list() {
     );
     assert!(out.content.text.contains("re-read"), "{}", out.content.text);
     assert!(
-        std::fs::read_to_string(home.path().join("cards/c.md"))
+        crate::testutil::card_text(home.path(), "main", "c")
             .unwrap()
             .contains("EVIL")
     );
@@ -1187,25 +1227,26 @@ async fn card_tools_read_write_validate_and_list() {
     let out = plugin
         .call_tool(
             "write",
-            json!({ "path": "@rumu:/cards/new/card", "content": "fresh body\n" }),
+            json!({ "path": "@rumu:/cards/self/new/card", "content": "fresh body\n" }),
             &cx,
         )
         .await
         .unwrap();
     assert!(!out.is_error, "{}", out.content.text);
-    assert!(home.path().join("cards/new/card.md").is_file());
+    assert!(crate::testutil::card_text(home.path(), "main", "new/card").is_some());
     let patch = out.content.decode::<patch::FilePatch>().unwrap();
     assert_eq!(patch.kind, patch::PatchKind::Create);
 
     let home = card_home();
-    std::fs::write(
-        home.path().join("cards/m.md"),
+    crate::testutil::put_card(
+        home.path(),
+        "main",
+        "m",
         "---\ntitle: Old\nmatch:\n  event: prompt\n---\nbody\n",
-    )
-    .unwrap();
+    );
     let (plugin, host, cx) = card_plugin_for(home.path());
     let out = plugin
-        .call_tool("read", json!({ "path": "@rumu:/cards/m" }), &cx)
+        .call_tool("read", json!({ "path": "@rumu:/cards/self/m" }), &cx)
         .await
         .unwrap();
     flush_output(&host, "call-1", &out);
@@ -1214,13 +1255,13 @@ async fn card_tools_read_write_validate_and_list() {
     let out = plugin
         .call_tool(
             "write",
-            json!({ "path": "@rumu:/cards/m", "content": "---\nmatch:\n  event: prompt\nscope: [proj]\n---\nhacked\n" }),
+            json!({ "path": "@rumu:/cards/self/m", "content": "---\nmatch:\n  event: prompt\nscope: [proj]\n---\nhacked\n" }),
             &cx,
         )
         .await
         .unwrap();
     assert!(!out.is_error, "{}", out.content.text);
-    let text = std::fs::read_to_string(home.path().join("cards/m.md")).unwrap();
+    let text = crate::testutil::card_text(home.path(), "main", "m").unwrap();
     assert!(text.contains("hacked"), "{text}");
     assert!(text.contains("match:"), "{text}");
     assert!(text.contains("scope:"), "{text}");
@@ -1231,7 +1272,7 @@ async fn card_tools_read_write_validate_and_list() {
         let out = plugin
             .call_tool(
                 "write",
-                json!({ "path": "@rumu:/cards/m", "content": bad }),
+                json!({ "path": "@rumu:/cards/self/m", "content": bad }),
                 &cx,
             )
             .await
@@ -1241,26 +1282,22 @@ async fn card_tools_read_write_validate_and_list() {
 
     // A clean write keeps the `match:` the view carries. A body change moves
     // `rev` (it is part of the render).
-    let before = library::load_card(&FsCardStore::home(home.path()), "m")
-        .unwrap()
-        .unwrap();
+    let before = deck_card(home.path(), "m");
     let out = plugin
         .call_tool(
             "write",
-            json!({ "path": "@rumu:/cards/m", "content": "---\nowner: me\nmatch:\n  event: prompt\n---\nnew body\n" }),
+            json!({ "path": "@rumu:/cards/self/m", "content": "---\nowner: me\nmatch:\n  event: prompt\n---\nnew body\n" }),
             &cx,
         )
         .await
         .unwrap();
     assert!(!out.is_error, "{}", out.content.text);
-    let text = std::fs::read_to_string(home.path().join("cards/m.md")).unwrap();
+    let text = crate::testutil::card_text(home.path(), "main", "m").unwrap();
     assert!(text.contains("owner: me"), "{text}");
     assert!(text.contains("match:"), "{text}");
     assert!(text.contains("event: prompt"), "{text}");
     assert!(!text.contains("scope:"), "omitted keys are dropped: {text}");
-    let after = library::load_card(&FsCardStore::home(home.path()), "m")
-        .unwrap()
-        .unwrap();
+    let after = deck_card(home.path(), "m");
     assert_ne!(before.revision, after.revision, "the body is in the render");
     flush_output(&host, "call-1", &out);
 
@@ -1269,15 +1306,13 @@ async fn card_tools_read_write_validate_and_list() {
     let out = plugin
         .call_tool(
             "edit",
-            json!({ "path": "@rumu:/cards/m", "old_string": "owner: me", "new_string": "owner: me\ndescription: added" }),
+            json!({ "path": "@rumu:/cards/self/m", "old_string": "owner: me", "new_string": "owner: me\ndescription: added" }),
             &cx,
         )
         .await
         .unwrap();
     assert!(!out.is_error, "{}", out.content.text);
-    let with_desc = library::load_card(&FsCardStore::home(home.path()), "m")
-        .unwrap()
-        .unwrap();
+    let with_desc = deck_card(home.path(), "m");
     assert_eq!(
         after.revision, with_desc.revision,
         "description edits keep `rev`"
@@ -1293,23 +1328,23 @@ async fn card_tools_read_write_validate_and_list() {
     let out = plugin
         .call_tool(
             "write",
-            json!({ "path": "@rumu:/cards/m", "content": "---\nowner: me\n---\nplain\n" }),
+            json!({ "path": "@rumu:/cards/self/m", "content": "---\nowner: me\n---\nplain\n" }),
             &cx,
         )
         .await
         .unwrap();
     assert!(!out.is_error, "{}", out.content.text);
-    let text = std::fs::read_to_string(home.path().join("cards/m.md")).unwrap();
+    let text = crate::testutil::card_text(home.path(), "main", "m").unwrap();
     assert!(!text.contains("match:"), "omitted match is dropped: {text}");
 
     let home = card_home();
-    std::fs::create_dir_all(home.path().join("cards/dev")).unwrap();
-    std::fs::write(
-        home.path().join("cards/x.md"),
+    crate::testutil::put_card(
+        home.path(),
+        "main",
+        "x",
         "---\ndescription: dx\n---\nsecret body\n",
-    )
-    .unwrap();
-    std::fs::write(home.path().join("cards/dev/y.md"), "plain\n").unwrap();
+    );
+    crate::testutil::put_card(home.path(), "main", "dev/y", "plain\n");
     let (plugin, _host, cx) = card_plugin_for(home.path());
 
     let out = plugin
@@ -1317,12 +1352,12 @@ async fn card_tools_read_write_validate_and_list() {
         .await
         .unwrap();
     assert!(
-        out.content.text.contains("@rumu:/cards/dev/y — plain"),
+        out.content.text.contains("@rumu:/cards/self/dev/y — plain"),
         "{}",
         out.content.text
     );
     assert!(
-        out.content.text.contains("@rumu:/cards/x — dx"),
+        out.content.text.contains("@rumu:/cards/self/x — dx"),
         "{}",
         out.content.text
     );
@@ -1333,16 +1368,16 @@ async fn card_tools_read_write_validate_and_list() {
     );
 
     let out = plugin
-        .call_tool("list", json!({ "path": "@rumu:/cards/dev" }), &cx)
+        .call_tool("list", json!({ "path": "@rumu:/cards/self/dev" }), &cx)
         .await
         .unwrap();
     assert!(
-        out.content.text.contains("@rumu:/cards/dev/y"),
+        out.content.text.contains("@rumu:/cards/self/dev/y"),
         "{}",
         out.content.text
     );
     assert!(
-        !out.content.text.contains("@rumu:/cards/x — X"),
+        !out.content.text.contains("@rumu:/cards/self/x — X"),
         "{}",
         out.content.text
     );
@@ -1523,7 +1558,7 @@ fn staged_session() -> (rumu_core::SessionInfo, Vec<Node>, Vec<rumu_core::Branch
             1000,
             NodeBody::Note {
                 source: "system".into(),
-                content: rumu_core::Content::marker(&rumu_core::SessionRoot {}),
+                content: rumu_core::Content::marker(&rumu_core::SessionRoot::default()),
             },
         ),
         mk(
@@ -1645,6 +1680,7 @@ fn staged_session() -> (rumu_core::SessionInfo, Vec<Node>, Vec<rumu_core::Branch
         active_branch: main.id.clone(),
         created_at: 1000,
         updated_at: 8000,
+        assistant: crate::testutil::TEST_ASSISTANT.into(),
     };
     (info, nodes, vec![main, agent])
 }
@@ -1665,11 +1701,11 @@ fn session_host(
 
 fn session_plugin() -> WorkspacePlugin {
     let home = tempfile::tempdir().unwrap();
-    std::fs::create_dir_all(home.path().join("cards")).unwrap();
+    crate::testutil::main_deck(home.path());
     // Leak the tempdir: the plugin only reads RUMU_HOME lazily and the tests
     // finish long before /tmp cleanup matters.
     let home = home.keep();
-    WorkspacePlugin::new(&home, WorkspaceCatalog::default())
+    deck_plugin(&home, WorkspaceCatalog::default())
 }
 
 /// Parse a rendered timestamp and assert it denotes `ms` since the epoch.
@@ -1749,6 +1785,131 @@ async fn session_listing_and_overview() {
         "{}",
         out.content.text
     );
+}
+
+/// Another assistant's sessions are hidden until its deck is mounted; then
+/// `list` and `search` show them (naming it), and `assistant` narrows both.
+#[tokio::test]
+async fn mounted_assistant_sessions_are_visible() {
+    const LEDGER: &str = "0193a2f1-0000-7000-8000-00000000b2b2";
+    let home = tempfile::tempdir().unwrap();
+    crate::testutil::main_deck(home.path());
+    crate::testutil::create_deck(
+        home.path(),
+        "ledger",
+        Some(&format!("id: {LEDGER}\nname: ledger\nassistant: true\n")),
+        &[],
+    );
+    let plugin = deck_plugin(home.path(), WorkspaceCatalog::default());
+
+    let (info, nodes, branches) = staged_session();
+    let host = session_host(info, nodes, branches);
+    let (mut other, other_nodes, other_branches) = staged_session();
+    other.id = rumu_core::SessionId::from("01SLEDGERSESSION000000000000");
+    other.title = "budget".into();
+    other.assistant = LEDGER.into();
+    host.sessions.lock().unwrap().push(other.clone());
+    host.session_trees
+        .lock()
+        .unwrap()
+        .push((other.id.clone(), other, other_nodes, other_branches));
+    let cx = host.cx();
+    let call = |tool: &'static str, args: serde_json::Value| {
+        let (plugin, cx) = (&plugin, &cx);
+        async move { plugin.call_tool(tool, args, cx).await.unwrap() }
+    };
+    let ledger_path = "@rumu:/sessions/01SLEDGERSESSION000000000000";
+    let by_ledger = format!("@rumu:/sessions/by-assistant/{LEDGER}");
+    let by_main = format!(
+        "@rumu:/sessions/by-assistant/{}",
+        crate::testutil::MAIN_DECK
+    );
+
+    // Not mounted: hidden everywhere, and the filter is refused.
+    let out = call("list", json!({ "path": "@rumu:/sessions" })).await;
+    assert!(!out.content.text.contains("LEDGER"), "{}", out.content.text);
+    let out = call("read", json!({ "path": ledger_path })).await;
+    assert!(out.is_error, "{}", out.content.text);
+    let out = call("list", json!({ "path": by_ledger })).await;
+    assert!(
+        out.is_error && out.content.text.contains("not mounted"),
+        "{}",
+        out.content.text
+    );
+
+    // Mounted: listed and searchable, named by its deck.
+    host.state
+        .lock()
+        .unwrap()
+        .mounts
+        .push(rumu_core::CardMount {
+            deck: LEDGER.into(),
+            at: "/cards/ledger".into(),
+        });
+    let out = call("list", json!({ "path": "@rumu:/sessions" })).await;
+    let ledger_line = out
+        .content
+        .text
+        .lines()
+        .find(|l| l.starts_with(ledger_path))
+        .unwrap_or_else(|| panic!("{}", out.content.text));
+    assert!(
+        ledger_line.ends_with("\"budget\"  by ledger"),
+        "{ledger_line}"
+    );
+    assert!(
+        !out.content
+            .text
+            .lines()
+            .any(|l| l.contains("config hunting") && l.contains(" by ")),
+        "{}",
+        out.content.text
+    );
+    let out = call("read", json!({ "path": ledger_path })).await;
+    assert!(!out.is_error, "{}", out.content.text);
+    let out = call(
+        "search",
+        json!({ "query": "config", "scope": "@rumu:/sessions" }),
+    )
+    .await;
+    assert!(
+        out.content.text.contains(ledger_path),
+        "{}",
+        out.content.text
+    );
+
+    // `by-assistant` lists the visible assistants, own first, and narrows
+    // listing and search to one.
+    let out = call("list", json!({ "path": "@rumu:/sessions/by-assistant" })).await;
+    assert_eq!(
+        out.content.text,
+        format!(
+            "{by_main}  main (you)
+{by_ledger}  ledger"
+        ),
+    );
+    let out = call("list", json!({ "path": by_ledger })).await;
+    assert_eq!(out.content.text.lines().count(), 1, "{}", out.content.text);
+    assert!(
+        out.content.text.starts_with(ledger_path),
+        "{}",
+        out.content.text
+    );
+    let out = call("search", json!({ "query": "config", "scope": by_main })).await;
+    assert!(
+        !out.content.text.contains(ledger_path),
+        "{}",
+        out.content.text
+    );
+    assert!(
+        out.content.text.contains("01STESTSSESSION0000000000000"),
+        "{}",
+        out.content.text
+    );
+
+    // Nothing lives below `by-assistant/<id>`.
+    let out = call("read", json!({ "path": format!("{by_ledger}/x") })).await;
+    assert!(out.is_error, "{}", out.content.text);
 }
 
 #[tokio::test]
@@ -1917,6 +2078,7 @@ async fn session_nodes_show_image_placeholders() {
         active_branch: rumu_core::BranchId::from("B1"),
         created_at: 0,
         updated_at: 0,
+        assistant: crate::testutil::TEST_ASSISTANT.into(),
     };
     let host = session_host(info, nodes, vec![]);
     let cx = host.cx();
@@ -2035,6 +2197,7 @@ fn staged_tree(sid: &str, nodes: Vec<Node>, head: &str) -> std::sync::Arc<FakeRu
         active_branch: rumu_core::BranchId::from("B"),
         created_at: 1,
         updated_at: nodes.iter().map(|n| n.at).max().unwrap_or(0),
+        assistant: crate::testutil::TEST_ASSISTANT.into(),
     };
     let branch = rumu_core::Branch {
         id: rumu_core::BranchId::from("B"),
@@ -2061,7 +2224,7 @@ async fn session_render_escapes_markup() {
             1,
             NodeBody::Note {
                 source: "system".into(),
-                content: rumu_core::Content::marker(&rumu_core::SessionRoot {}),
+                content: rumu_core::Content::marker(&rumu_core::SessionRoot::default()),
             },
         ),
         sess_node(
@@ -2457,7 +2620,7 @@ async fn session_prefix_resolution_and_abbreviations() {
             1,
             NodeBody::Note {
                 source: "system".into(),
-                content: rumu_core::Content::marker(&rumu_core::SessionRoot {}),
+                content: rumu_core::Content::marker(&rumu_core::SessionRoot::default()),
             },
         ),
         sess_node(
@@ -2594,6 +2757,7 @@ fn search_sessions() -> std::sync::Arc<FakeRuntime> {
         active_branch: rumu_core::BranchId::from("B"),
         created_at: 1,
         updated_at: updated,
+        assistant: crate::testutil::TEST_ASSISTANT.into(),
     };
     let branch = |sid: &str, head: &str| rumu_core::Branch {
         id: rumu_core::BranchId::from("B"),
@@ -2625,7 +2789,7 @@ fn search_sessions() -> std::sync::Arc<FakeRuntime> {
                     100,
                     NodeBody::Note {
                         source: "system".into(),
-                        content: rumu_core::Content::marker(&rumu_core::SessionRoot {}),
+                        content: rumu_core::Content::marker(&rumu_core::SessionRoot::default()),
                     },
                 ),
                 mk(
@@ -2651,7 +2815,7 @@ fn search_sessions() -> std::sync::Arc<FakeRuntime> {
                     100,
                     NodeBody::Note {
                         source: "system".into(),
-                        content: rumu_core::Content::marker(&rumu_core::SessionRoot {}),
+                        content: rumu_core::Content::marker(&rumu_core::SessionRoot::default()),
                     },
                 ),
                 mk(
@@ -2719,22 +2883,23 @@ async fn search_sessions_and_cards_by_scope() {
     let s1 = "01SSESSIONONE000000000000000";
     let s2 = "01SSESSIONTWO000000000000000";
     let home = tempfile::tempdir().unwrap();
-    std::fs::create_dir_all(home.path().join("cards")).unwrap();
-    std::fs::write(
-        home.path().join("cards/gateway.md"),
+    crate::testutil::main_deck(home.path());
+    crate::testutil::put_card(
+        home.path(),
+        "main",
+        "gateway",
         "---\ntitle: Gateway\n---\nthe example server runs nginx and sshd\n",
-    )
-    .unwrap();
-    let plugin = WorkspacePlugin::new(home.path(), WorkspaceCatalog::default());
+    );
+    let plugin = deck_plugin(home.path(), WorkspaceCatalog::default());
 
-    // Default scope = cards; hits are `@rumu:/cards/<id>` addresses.
+    // Default scope = cards; hits are `@rumu:/cards/self/<id>` addresses.
     let out = plugin
         .call_tool("search", json!({ "query": "gateway" }), &cx)
         .await
         .unwrap();
     assert!(!out.is_error, "{}", out.content.text);
     assert!(
-        out.content.text.contains("@rumu:/cards/gateway"),
+        out.content.text.contains("@rumu:/cards/self/gateway"),
         "{}",
         out.content.text
     );
@@ -2898,6 +3063,7 @@ async fn search_sessions_snippet_cjk_queries() {
         active_branch: rumu_core::BranchId::from("B"),
         created_at: 1,
         updated_at: 1,
+        assistant: crate::testutil::TEST_ASSISTANT.into(),
     };
     let mk = |nid: &str, at: i64, body: NodeBody| Node {
         id: rumu_core::NodeId::from(nid),
@@ -2921,7 +3087,7 @@ async fn search_sessions_snippet_cjk_queries() {
         vec![],
     ));
     let home = tempfile::tempdir().unwrap();
-    let plugin = WorkspacePlugin::new(home.path(), WorkspaceCatalog::default());
+    let plugin = deck_plugin(home.path(), WorkspaceCatalog::default());
     let cx = host.cx();
 
     let out = plugin
@@ -2971,6 +3137,7 @@ async fn search_downweights_tool_results_and_breaks_ties_by_time() {
         active_branch: rumu_core::BranchId::from("B"),
         created_at: 1,
         updated_at: 1,
+        assistant: crate::testutil::TEST_ASSISTANT.into(),
     };
     let mk = |nid: &str, at: i64, body: NodeBody| Node {
         id: rumu_core::NodeId::from(nid),
@@ -3029,7 +3196,7 @@ async fn search_downweights_tool_results_and_breaks_ties_by_time() {
         vec![],
     ));
     let home = tempfile::tempdir().unwrap();
-    let plugin = WorkspacePlugin::new(home.path(), WorkspaceCatalog::default());
+    let plugin = deck_plugin(home.path(), WorkspaceCatalog::default());
     let cx = host.cx();
     let out = plugin
         .call_tool(
@@ -3141,7 +3308,7 @@ async fn background_bash_is_killed_when_dropped() {
 async fn task_read_renders_status_and_output() {
     use rumu_core::{Content, TaskId, TaskInfo, TaskKind, TaskStatus};
     let home = tempfile::tempdir().unwrap();
-    let plugin = WorkspacePlugin::new(home.path(), WorkspaceCatalog::default());
+    let plugin = deck_plugin(home.path(), WorkspaceCatalog::default());
     let host = FakeRuntime::arc();
     let cx = host.cx();
     let info = TaskInfo {
@@ -3182,4 +3349,795 @@ async fn task_read_renders_status_and_output() {
         .unwrap();
     assert!(!listing.is_error, "{}", listing.content.text);
     assert!(listing.content.text.contains("@rumu:/tasks/t1"));
+}
+
+// ---------- decks, mounts and history ----------
+
+/// The CAS refusal names the changes since the seen version and shows the diff.
+#[tokio::test]
+async fn cas_refusal_lists_changes_and_diff() {
+    let home = card_home();
+    crate::testutil::put_card(home.path(), "main", "a", "one\n");
+    let (plugin, host, cx) = card_plugin_for(home.path());
+    let read = plugin
+        .call_tool("read", json!({ "path": "@rumu:/cards/self/a" }), &cx)
+        .await
+        .unwrap();
+    assert!(!read.is_error, "{}", read.content.text);
+    flush_output(&host, "call-1", &read);
+
+    // Another assistant changes the card through the deck history.
+    let decks = plugin.decks();
+    let deck = decks.list().into_iter().find(|d| d.name == "main").unwrap();
+    let cards = rumu_cards::Cards::new(
+        decks,
+        &[rumu_core::CardMount {
+            deck: deck.id().to_owned(),
+            at: "/cards/self".into(),
+        }],
+    );
+    cards
+        .write(
+            "self/a",
+            "---\ntitle: other\n---\ntwo\n",
+            None,
+            None,
+            &rumu_cards::deck::Author {
+                id: "other-id".into(),
+                name: "other-assistant".into(),
+                session: Some("s2".into()),
+                node: Some("n2".into()),
+            },
+        )
+        .unwrap();
+
+    let out = plugin
+        .call_tool(
+            "write",
+            json!({ "path": "@rumu:/cards/self/a", "content": "three\n" }),
+            &cx,
+        )
+        .await
+        .unwrap();
+    assert!(out.is_error, "{}", out.content.text);
+    assert!(
+        out.content.text.contains("changed since you last read it"),
+        "{}",
+        out.content.text
+    );
+    assert!(
+        out.content.text.contains("by other-assistant"),
+        "{}",
+        out.content.text
+    );
+    assert!(out.content.text.contains("Diff"), "{}", out.content.text);
+    assert!(out.content.text.contains("-one"), "{}", out.content.text);
+    assert!(out.content.text.contains("+two"), "{}", out.content.text);
+}
+
+/// Mounts beyond the grant ask the user; an always-allow grant removes the
+/// prompt, and overlapping mount points are refused.
+#[tokio::test]
+async fn mounts_need_a_grant_and_must_not_overlap() {
+    let home = card_home();
+    crate::testutil::create_deck(home.path(), "extra", None, &[]);
+    crate::testutil::put_card(home.path(), "extra", "e", "extra body\n");
+    let (plugin, _host, _cx) = card_plugin_for(home.path());
+    let decks = plugin.decks();
+    let main = decks
+        .list()
+        .into_iter()
+        .find(|d| d.name == "main")
+        .unwrap()
+        .id()
+        .to_owned();
+    let extra = decks
+        .list()
+        .into_iter()
+        .find(|d| d.name == "extra")
+        .unwrap()
+        .id()
+        .to_owned();
+    let host = FakeRuntime::arc();
+    *host.state.lock().unwrap() = PathState {
+        workspaces: vec![],
+        default_workspace: Some(RUMU_WORKSPACE.into()),
+        assistant: main.clone(),
+        mounts: vec![rumu_core::CardMount {
+            deck: main.clone(),
+            at: "/cards/self".into(),
+        }],
+        ..Default::default()
+    };
+    let cx = host.cx();
+
+    // No grant: mounting goes through the user, and this host cannot ask.
+    let out = plugin
+        .call_tool(
+            "card_mount",
+            json!({ "deck": extra, "at": "/cards/extra" }),
+            &cx,
+        )
+        .await
+        .unwrap();
+    assert!(
+        out.is_error && out.content.text.contains("this host cannot ask"),
+        "{}",
+        out.content.text
+    );
+
+    // An explicit grant lets it mount; the note carries the marker.
+    decks.remember(
+        rumu_cards::deck::Action::Mount,
+        rumu_cards::deck::Scope::Always,
+        "",
+        &main,
+        &extra,
+    );
+    let out = plugin
+        .call_tool(
+            "card_mount",
+            json!({ "deck": extra, "at": "/cards/extra" }),
+            &cx,
+        )
+        .await
+        .unwrap();
+    assert!(!out.is_error, "{}", out.content.text);
+    assert!(
+        out.content
+            .text
+            .contains("**Card catalog** (`@rumu:/cards/extra`)"),
+        "the mount result carries the deck's catalog: {}",
+        out.content.text
+    );
+    assert!(
+        out.content.text.contains("[extra/e](@rumu:/cards/extra/e)"),
+        "{}",
+        out.content.text
+    );
+    flush_output(&host, "call-1", &out);
+    host.state
+        .lock()
+        .unwrap()
+        .mounts
+        .push(rumu_core::CardMount {
+            deck: extra.clone(),
+            at: "/cards/extra".into(),
+        });
+
+    // A mount point may not overlap an existing one.
+    let out = plugin
+        .call_tool(
+            "card_mount",
+            json!({ "deck": extra, "at": "/cards/extra/deep" }),
+            &cx,
+        )
+        .await
+        .unwrap();
+    assert!(
+        out.is_error && out.content.text.contains("overlaps"),
+        "{}",
+        out.content.text
+    );
+
+    // The mounted deck now feeds listing.
+    let out = plugin
+        .call_tool("list", json!({ "path": "@rumu:/cards" }), &cx)
+        .await
+        .unwrap();
+    assert!(
+        out.content.text.contains("@rumu:/cards/extra/e"),
+        "{}",
+        out.content.text
+    );
+
+    // Unmounting says the content is no longer available.
+    let out = plugin
+        .call_tool("card_mount", json!({ "at": "/cards/extra" }), &cx)
+        .await
+        .unwrap();
+    assert!(!out.is_error, "{}", out.content.text);
+    assert!(
+        out.content.text.contains("unmounted"),
+        "{}",
+        out.content.text
+    );
+}
+
+/// Links resolve one level and never accept writes.
+#[tokio::test]
+async fn links_read_their_target_and_refuse_writes() {
+    let home = card_home();
+    crate::testutil::create_deck(home.path(), "other", None, &[]);
+    crate::testutil::put_card(home.path(), "other", "t", "target body\n");
+    let (plugin, host, _cx) = card_plugin_for(home.path());
+    let decks = plugin.decks();
+    let main = decks
+        .list()
+        .into_iter()
+        .find(|d| d.name == "main")
+        .unwrap()
+        .id()
+        .to_owned();
+    let other = decks
+        .list()
+        .into_iter()
+        .find(|d| d.name == "other")
+        .unwrap()
+        .id()
+        .to_owned();
+    decks.remember(
+        rumu_cards::deck::Action::Link,
+        rumu_cards::deck::Scope::Always,
+        "",
+        &main,
+        &other,
+    );
+    *host.state.lock().unwrap() = PathState {
+        workspaces: vec![],
+        default_workspace: Some(RUMU_WORKSPACE.into()),
+        assistant: main.clone(),
+        mounts: vec![
+            rumu_core::CardMount {
+                deck: main.clone(),
+                at: "/cards/self".into(),
+            },
+            rumu_core::CardMount {
+                deck: other.clone(),
+                at: "/cards/other".into(),
+            },
+        ],
+        ..Default::default()
+    };
+    let cx = host.cx();
+
+    let out = plugin
+        .call_tool(
+            "write",
+            json!({
+                "path": "@rumu:/cards/self/link",
+                "content": "---\nlink: @rumu:/cards/other/t\n---\nignored\n",
+            }),
+            &cx,
+        )
+        .await
+        .unwrap();
+    assert!(!out.is_error, "{}", out.content.text);
+    flush_output(&host, "call-1", &out);
+
+    // Reading the link shows the target, under the target's location.
+    let out = plugin
+        .call_tool("read", json!({ "path": "@rumu:/cards/self/link" }), &cx)
+        .await
+        .unwrap();
+    assert!(!out.is_error, "{}", out.content.text);
+    assert!(
+        out.content.text.contains("target body"),
+        "{}",
+        out.content.text
+    );
+    let header: card::CardReadHeader = out.content.decode().expect("read header");
+    assert_eq!(header.deck, other);
+    assert_eq!(header.path, "t");
+
+    // Writes through the link are refused.
+    let out = plugin
+        .call_tool(
+            "write",
+            json!({ "path": "@rumu:/cards/self/link", "content": "x" }),
+            &cx,
+        )
+        .await
+        .unwrap();
+    assert!(
+        out.is_error && out.content.text.contains("is a link"),
+        "{}",
+        out.content.text
+    );
+}
+
+/// The `@rumu:/history` timeline, per-card versions and one version's diff.
+#[tokio::test]
+async fn history_listing_and_version_reads() {
+    let home = card_home();
+    crate::testutil::put_card(home.path(), "main", "a", "one\n");
+    let (plugin, host, cx) = card_plugin_for(home.path());
+    let read = plugin
+        .call_tool("read", json!({ "path": "@rumu:/cards/self/a" }), &cx)
+        .await
+        .unwrap();
+    flush_output(&host, "call-1", &read);
+    let write = plugin
+        .call_tool(
+            "write",
+            json!({ "path": "@rumu:/cards/self/a", "content": "two\n" }),
+            &cx,
+        )
+        .await
+        .unwrap();
+    assert!(!write.is_error, "{}", write.content.text);
+    flush_output(&host, "call-1", &write);
+
+    let out = plugin
+        .call_tool("list", json!({ "path": "@rumu:/history" }), &cx)
+        .await
+        .unwrap();
+    assert!(!out.is_error, "{}", out.content.text);
+    assert!(out.content.text.contains("self/a"), "{}", out.content.text);
+    assert!(out.content.text.contains("update"), "{}", out.content.text);
+
+    let out = plugin
+        .call_tool(
+            "list",
+            json!({ "path": "@rumu:/history/cards/self/a" }),
+            &cx,
+        )
+        .await
+        .unwrap();
+    assert!(!out.is_error, "{}", out.content.text);
+    assert!(out.content.text.contains("update"), "{}", out.content.text);
+
+    // Read the latest version: a diff from the previous one.
+    let commit = plugin
+        .decks()
+        .list()
+        .into_iter()
+        .find(|d| d.name == "main")
+        .unwrap()
+        .commits(1)
+        .unwrap()
+        .remove(0);
+    let out = plugin
+        .call_tool(
+            "read",
+            json!({ "path": format!("@rumu:/history/cards/self/a@{}", commit.short) }),
+            &cx,
+        )
+        .await
+        .unwrap();
+    assert!(!out.is_error, "{}", out.content.text);
+    assert!(out.content.text.contains("-one"), "{}", out.content.text);
+    assert!(out.content.text.contains("+two"), "{}", out.content.text);
+}
+
+/// A deleted card's history stays reachable at its old path.
+#[tokio::test]
+async fn deleted_card_history_stays_at_its_old_path() {
+    let home = card_home();
+    crate::testutil::put_card(home.path(), "main", "gone", "old body\n");
+    let (plugin, _host, cx) = card_plugin_for(home.path());
+    crate::testutil::remove_card(home.path(), "main", "gone");
+
+    let out = plugin
+        .call_tool("list", json!({ "path": "@rumu:/history" }), &cx)
+        .await
+        .unwrap();
+    assert!(!out.is_error, "{}", out.content.text);
+    assert!(
+        out.content.text.contains("self/gone  delete"),
+        "{}",
+        out.content.text
+    );
+
+    let out = plugin
+        .call_tool(
+            "list",
+            json!({ "path": "@rumu:/history/cards/self/gone" }),
+            &cx,
+        )
+        .await
+        .unwrap();
+    assert!(!out.is_error, "{}", out.content.text);
+    assert!(out.content.text.contains("delete"), "{}", out.content.text);
+    let first = out
+        .content
+        .text
+        .lines()
+        .last()
+        .unwrap()
+        .split_whitespace()
+        .next()
+        .unwrap()
+        .to_owned();
+
+    // The old version is readable through the same path.
+    let out = plugin
+        .call_tool(
+            "read",
+            json!({ "path": format!("@rumu:/history/cards/self/gone@{first}") }),
+            &cx,
+        )
+        .await
+        .unwrap();
+    assert!(!out.is_error, "{}", out.content.text);
+    assert!(
+        out.content.text.contains("old body"),
+        "{}",
+        out.content.text
+    );
+
+    // A commit that does not touch the card is refused.
+    let out = plugin
+        .call_tool(
+            "read",
+            json!({ "path": "@rumu:/history/cards/self/gone@0000000" }),
+            &cx,
+        )
+        .await
+        .unwrap();
+    assert!(out.is_error, "{}", out.content.text);
+}
+
+/// Writing to another deck asks the user, deck by deck; "allow for this
+/// session" covers later writes of the session, and a decline writes nothing.
+#[tokio::test]
+async fn writes_to_other_decks_need_approval() {
+    let home = card_home();
+    crate::testutil::create_deck(home.path(), "user", None, &[]);
+    crate::testutil::put_card(home.path(), "main", "tz", "UTC+8\n");
+    let (plugin, host, _cx) = card_plugin_for(home.path());
+    let user = plugin
+        .decks()
+        .list()
+        .into_iter()
+        .find(|d| d.name == "user")
+        .unwrap()
+        .id()
+        .to_owned();
+    host.state
+        .lock()
+        .unwrap()
+        .mounts
+        .push(rumu_core::CardMount {
+            deck: user.clone(),
+            at: "/cards/user".into(),
+        });
+    let cx = host.cx();
+    let write = |path: &str, from: Option<&str>| {
+        let mut args = json!({ "path": path, "content": "UTC+8\n" });
+        if let Some(from) = from {
+            args["from"] = json!(from);
+        }
+        args
+    };
+
+    // The own deck never asks.
+    let out = plugin
+        .call_tool("write", write("@rumu:/cards/self/a", None), &cx)
+        .await
+        .unwrap();
+    assert!(!out.is_error, "{}", out.content.text);
+    assert!(host.decisions.lock().unwrap().is_empty());
+
+    // A declined write to `user` leaves nothing behind.
+    host.answers
+        .lock()
+        .unwrap()
+        .push_back(json!({ "allow": false }));
+    let out = plugin
+        .call_tool("write", write("@rumu:/cards/user/a", None), &cx)
+        .await
+        .unwrap();
+    assert!(
+        out.is_error && out.content.text.contains("declined"),
+        "{}",
+        out.content.text
+    );
+    assert!(crate::testutil::card_text(home.path(), "user", "a").is_none());
+
+    // A move into `user`, allowed for the session, lands at the new path.
+    let read = plugin
+        .call_tool("read", json!({ "path": "@rumu:/cards/self/tz" }), &cx)
+        .await
+        .unwrap();
+    flush_output(&host, "call-1", &read);
+    host.answers
+        .lock()
+        .unwrap()
+        .push_back(json!({ "allow": true, "scope": "session" }));
+    let out = plugin
+        .call_tool(
+            "write",
+            write("@rumu:/cards/user/tz", Some("@rumu:/cards/self/tz")),
+            &cx,
+        )
+        .await
+        .unwrap();
+    assert!(!out.is_error, "{}", out.content.text);
+    assert!(crate::testutil::card_text(home.path(), "user", "tz").is_some());
+    assert!(crate::testutil::card_text(home.path(), "main", "tz").is_none());
+    let request = host.decisions.lock().unwrap().last().cloned().unwrap();
+    assert_eq!(request["kind"], "card_write");
+    assert_eq!(request["deck"], "user");
+    assert_eq!(request["move_from"], "self/tz");
+
+    // The session grant covers the next write without a prompt.
+    let asked = host.decisions.lock().unwrap().len();
+    let out = plugin
+        .call_tool("write", write("@rumu:/cards/user/b", None), &cx)
+        .await
+        .unwrap();
+    assert!(!out.is_error, "{}", out.content.text);
+    assert_eq!(host.decisions.lock().unwrap().len(), asked);
+}
+
+/// Card paths cannot leave their deck, and a move out of another deck needs
+/// the user's approval.
+#[tokio::test]
+async fn card_paths_cannot_escape_a_mount() {
+    let home = card_home();
+    crate::testutil::create_deck(home.path(), "other", None, &[]);
+    crate::testutil::put_card(home.path(), "other", "x", "private\n");
+    let (plugin, _host, _cx) = card_plugin_for(home.path());
+    let other = plugin
+        .decks()
+        .list()
+        .into_iter()
+        .find(|d| d.name == "other")
+        .unwrap()
+        .id()
+        .to_owned();
+    let host = FakeRuntime::arc();
+    host.state
+        .lock()
+        .unwrap()
+        .mounts
+        .push(rumu_core::CardMount {
+            deck: other,
+            at: "/cards/other".into(),
+        });
+    let cx = host.cx();
+    let out = plugin
+        .call_tool(
+            "read",
+            json!({ "path": "@rumu:/cards/self/.git/config" }),
+            &cx,
+        )
+        .await
+        .unwrap();
+    assert!(out.is_error, "{}", out.content.text);
+    let out = plugin
+        .call_tool(
+            "write",
+            json!({ "path": "@rumu:/cards/self/stolen", "content": "x\n", "from": "self/../other/x" }),
+            &cx,
+        )
+        .await
+        .unwrap();
+    assert!(out.is_error, "{}", out.content.text);
+    assert!(crate::testutil::card_text(home.path(), "other", "x").is_some());
+    let out = plugin
+        .call_tool(
+            "write",
+            json!({ "path": "@rumu:/cards/self", "content": "x\n" }),
+            &cx,
+        )
+        .await
+        .unwrap();
+    assert!(out.is_error, "{}", out.content.text);
+    assert!(crate::testutil::card_text(home.path(), "main", "").is_none());
+}
+
+/// `read` returns exactly the editable view (the header is structured data),
+/// so writing it back verbatim preserves the frontmatter.
+#[tokio::test]
+async fn read_output_writes_back_verbatim() {
+    let home = card_home();
+    crate::testutil::put_card(
+        home.path(),
+        "main",
+        "r",
+        "---\ndescription: round trip\nkeywords: [alpha, beta]\nowner: me\n---\nbody\n",
+    );
+    let (plugin, host, cx) = card_plugin_for(home.path());
+    let read = plugin
+        .call_tool("read", json!({ "path": "@rumu:/cards/self/r" }), &cx)
+        .await
+        .unwrap();
+    assert!(!read.is_error, "{}", read.content.text);
+    let header: card::CardReadHeader = read.content.decode().expect("read header");
+    assert_eq!(header.deck, crate::testutil::MAIN_DECK);
+    assert_eq!(header.path, "r");
+    assert!(!read.content.text.contains("· id"), "{}", read.content.text);
+    flush_output(&host, "call-1", &read);
+
+    let write = plugin
+        .call_tool(
+            "write",
+            json!({ "path": "@rumu:/cards/self/r", "content": read.content.text }),
+            &cx,
+        )
+        .await
+        .unwrap();
+    assert!(!write.is_error, "{}", write.content.text);
+    let after = deck_card(home.path(), "r");
+    assert_eq!(after.description.as_deref(), Some("round trip"));
+    assert_eq!(after.keywords(), ["alpha", "beta"]);
+    assert_eq!(after.meta.get("owner"), Some(&json!("me")));
+    assert_eq!(after.body, "body\n");
+}
+
+/// Links are written by path and store the target's deck id and path. A move
+/// leaves the link dangling: the card is new at the destination.
+#[tokio::test]
+async fn links_store_the_target_and_go_dangling_on_a_move() {
+    let home = card_home();
+    crate::testutil::create_deck(home.path(), "other", None, &[]);
+    crate::testutil::put_card(home.path(), "other", "t", "target body\n");
+    crate::testutil::put_card(home.path(), "main", "s", "plain\n");
+    let (plugin, host, _cx) = card_plugin_for(home.path());
+    let decks = plugin.decks();
+    let main = decks
+        .list()
+        .into_iter()
+        .find(|d| d.name == "main")
+        .unwrap()
+        .id()
+        .to_owned();
+    let other = decks
+        .list()
+        .into_iter()
+        .find(|d| d.name == "other")
+        .unwrap()
+        .id()
+        .to_owned();
+    decks.remember(
+        rumu_cards::deck::Action::Link,
+        rumu_cards::deck::Scope::Always,
+        "",
+        &main,
+        &other,
+    );
+    *host.state.lock().unwrap() = PathState {
+        workspaces: vec![],
+        default_workspace: Some(RUMU_WORKSPACE.into()),
+        assistant: main.clone(),
+        mounts: vec![
+            rumu_core::CardMount {
+                deck: main.clone(),
+                at: "/cards/self".into(),
+            },
+            rumu_core::CardMount {
+                deck: other.clone(),
+                at: "/cards/other".into(),
+            },
+        ],
+        ..Default::default()
+    };
+    let cx = host.cx();
+
+    let out = plugin
+        .call_tool(
+            "write",
+            json!({
+                "path": "@rumu:/cards/self/link",
+                "content": "---\nlink: @rumu:/cards/other/t\n---\nignored\n",
+            }),
+            &cx,
+        )
+        .await
+        .unwrap();
+    assert!(!out.is_error, "{}", out.content.text);
+    flush_output(&host, "call-1", &out);
+    let text = crate::testutil::card_text(home.path(), "main", "link").unwrap();
+    assert!(text.contains(&format!("link: {other}:t")), "{text}");
+
+    // The target moves; the link goes dangling (nothing follows the card).
+    crate::testutil::move_card(home.path(), "other", "t", "tt");
+    let out = plugin
+        .call_tool("read", json!({ "path": "@rumu:/cards/self/link" }), &cx)
+        .await
+        .unwrap();
+    assert!(
+        out.is_error && out.content.text.contains("no longer exists"),
+        "{}",
+        out.content.text
+    );
+
+    // An unknown path is refused.
+    let out = plugin
+        .call_tool(
+            "write",
+            json!({
+                "path": "@rumu:/cards/self/bad",
+                "content": "---\nlink: @rumu:/cards/self/nope\n---\n",
+            }),
+            &cx,
+        )
+        .await
+        .unwrap();
+    assert!(
+        out.is_error && out.content.text.contains("no card at"),
+        "{}",
+        out.content.text
+    );
+
+    // A self-link is refused.
+    let read = plugin
+        .call_tool("read", json!({ "path": "@rumu:/cards/self/s" }), &cx)
+        .await
+        .unwrap();
+    flush_output(&host, "call-1", &read);
+    let out = plugin
+        .call_tool(
+            "write",
+            json!({
+                "path": "@rumu:/cards/self/s",
+                "content": "---\nlink: @rumu:/cards/self/s\n---\n",
+            }),
+            &cx,
+        )
+        .await
+        .unwrap();
+    assert!(
+        out.is_error && out.content.text.contains("link to itself"),
+        "{}",
+        out.content.text
+    );
+}
+
+/// History is per path: a moved card starts over at its new path.
+#[tokio::test]
+async fn history_lists_versions_by_path() {
+    let home = card_home();
+    crate::testutil::put_card(home.path(), "main", "a", "one\n");
+    let (plugin, host, cx) = card_plugin_for(home.path());
+    let read = plugin
+        .call_tool("read", json!({ "path": "@rumu:/cards/self/a" }), &cx)
+        .await
+        .unwrap();
+    flush_output(&host, "call-1", &read);
+    let moved = plugin
+        .call_tool(
+            "write",
+            json!({
+                "path": "@rumu:/cards/self/sub/b",
+                "content": "two\n",
+                "from": "@rumu:/cards/self/a",
+            }),
+            &cx,
+        )
+        .await
+        .unwrap();
+    assert!(!moved.is_error, "{}", moved.content.text);
+    flush_output(&host, "call-1", &moved);
+
+    let out = plugin
+        .call_tool(
+            "list",
+            json!({ "path": "@rumu:/history/cards/self/sub/b" }),
+            &cx,
+        )
+        .await
+        .unwrap();
+    assert!(!out.is_error, "{}", out.content.text);
+    assert!(out.content.text.contains("move"), "{}", out.content.text);
+    assert!(
+        out.content.text.contains("self/sub/b"),
+        "{}",
+        out.content.text
+    );
+
+    let commit = plugin
+        .decks()
+        .list()
+        .into_iter()
+        .find(|d| d.name == "main")
+        .unwrap()
+        .commits(1)
+        .unwrap()
+        .remove(0);
+    let out = plugin
+        .call_tool(
+            "read",
+            json!({ "path": format!("@rumu:/history/cards/self/sub/b@{}", commit.short) }),
+            &cx,
+        )
+        .await
+        .unwrap();
+    assert!(!out.is_error, "{}", out.content.text);
+    // The new path has only the move: a full version, not a diff from the
+    // old card's text.
+    assert!(out.content.text.contains("two"), "{}", out.content.text);
+    assert!(!out.content.text.contains("-one"), "{}", out.content.text);
 }

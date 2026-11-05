@@ -14,7 +14,7 @@ pub enum Error {
     #[error(transparent)]
     Io(#[from] IoError),
 
-    /// The card library failed.
+    /// A deck or card operation failed.
     #[error(transparent)]
     Cards(#[from] rumu_cards::Error),
 

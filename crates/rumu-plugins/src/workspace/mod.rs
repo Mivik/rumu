@@ -5,9 +5,10 @@
 //!
 //! Every file tool takes one `path`, optionally qualified as
 //! `<workspace>:<path>` (rumu-core `addr`); the `@rumu` workspace is a
-//! virtual filesystem holding rumu's own data: knowledge cards
-//! (`@rumu:/cards/<id>`, over the home card library) and, read-only, past
-//! conversations (`@rumu:/sessions/...`).
+//! virtual filesystem holding rumu's own data: cards of the decks mounted on
+//! this branch (`@rumu:/cards/<mount>/<path>`, `card_mount`), their history
+//! (`@rumu:/history`), and, read-only, past conversations
+//! (`@rumu:/sessions/...`).
 //!
 //! The workspace root of the file tools is an addressing convention, not a
 //! security boundary — absolute paths and `..` are allowed, and `bash` can
@@ -22,6 +23,8 @@
 mod agents;
 pub(crate) mod backend;
 mod cards;
+mod history;
+mod mount;
 mod patch;
 mod session;
 mod task;
@@ -43,10 +46,13 @@ use serde_json::Value;
 use tracing::warn;
 
 use backend::{Backend, LocalBackend, SshBackend};
+use rumu_cards::Decks;
 
 pub struct WorkspacePlugin {
     home: PathBuf,
     catalog: WorkspaceCatalog,
+    /// The deck registry behind `@rumu:/cards`.
+    decks: Decks,
     /// The blob store behind image reads (`<home>/blobs`), opened lazily on
     /// the first one — most plugin instances never read an image.
     blobs: std::sync::OnceLock<rumu_blob::Blobs>,
@@ -60,15 +66,21 @@ pub struct WorkspacePlugin {
 }
 
 impl WorkspacePlugin {
-    pub fn new(home: &Path, catalog: WorkspaceCatalog) -> Self {
+    pub fn new(home: &Path, catalog: WorkspaceCatalog, decks: Decks) -> Self {
         Self {
             home: home.to_path_buf(),
             catalog,
+            decks,
             blobs: std::sync::OnceLock::new(),
             ssh_ctl_dir: ssh_ctl_dir(),
             ssh_uname: Mutex::new(HashMap::new()),
             agents_missing: Mutex::new(std::collections::HashSet::new()),
         }
+    }
+
+    /// The deck registry behind `/cards`.
+    pub fn decks(&self) -> &Decks {
+        &self.decks
     }
 
     /// The catalog this plugin was built with (config.yaml presets).

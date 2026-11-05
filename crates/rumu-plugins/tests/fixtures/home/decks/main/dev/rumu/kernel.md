@@ -1,7 +1,6 @@
 ---
 description: The agent loop, hook dispatch and projection in crates/rumu-kernel.
 ---
-
 `crates/rumu-kernel` is the only "business" code in rumu:
 
 - **Agent loop** (`turn.rs`): per step — flush queued notes, dispatch

@@ -1,12 +1,12 @@
 //! The model-facing tools: schemas, `<ws>:<path>` target resolution and the
 //! implementations over the workspace backends. The `@rumu`
-//! virtual workspace (`/cards`, `/sessions`) is routed from here into
-//! [`cards`] (and, for `/sessions`, `session`).
+//! virtual workspace (`/cards`, `/history`, `/sessions`) is routed from here
+//! into [`cards`] (and, for `/sessions`, `session`).
 
 use std::time::Duration;
 
 use rumu_cards::usage::CardOp;
-use rumu_cards::{card, library};
+use rumu_cards::{Cards, card};
 use rumu_core::{
     Effect, INVOKE_OUTPUT_LIMIT, Manifest, PathState, Progress, RUMU_WORKSPACE, Structured,
     ToolError, ToolOutput, ToolResult, ToolResultExt, ToolSpec, Utf8TypedPathBuf, Utf8UnixPath,
@@ -97,12 +97,16 @@ to its root, or absolute on its machine), or `<workspace>:<path>` for another wo
 `proj:src/main.rs`, `app:/var/log/app.log`. `workspace_use(name)` changes the default; \
 `workspace_use()` lists workspaces. `bash` runs in a workspace root, so relative paths mean the \
 same thing in bash and in the file tools. Read-only workspaces refuse writes and bash.\n\n\
-The `@rumu` workspace holds rumu's own data and has no bash. `@rumu:/cards/<id>` are knowledge \
-cards: `read` returns an editable view (YAML frontmatter, then the body), and writes are refused \
-if the card changed since you last read it — re-read and merge. \
+The `@rumu` workspace holds rumu's own data and has no bash. `@rumu:/cards/<mount>/<path>` are \
+cards of the decks mounted on this branch (`/cards/self` is your own deck); `read` returns an \
+editable view (YAML frontmatter, then the body), and writes are refused if the card changed \
+since you last read it — re-read and merge. `card_mount` \
+mounts and unmounts decks. `@rumu:/history` is the decks' change timeline. \
 `@rumu:/sessions/<session>/<node>` and `@rumu:/sessions/<session>/<from>..<to>` are past \
-conversation records (read-only); `search(query, scope: \"@rumu:/sessions\")` searches them. If \
-the user rewinds the conversation, card edits persist.";
+conversation records (read-only): yours, and those of every assistant whose deck is mounted \
+(`@rumu:/sessions/by-assistant/<deck id>` lists one assistant's); \
+`search(query, scope: \"@rumu:/sessions\")` searches them. If the \
+user rewinds the conversation, card edits persist.";
 
 // ---------------------------------------------------------------------------
 // Tool arguments (the single source of truth for parsing and schemas)
@@ -126,6 +130,9 @@ struct WriteArgs {
     path: String,
     /// full file content (for cards: the editable view — frontmatter + body)
     content: String,
+    /// for cards: move the card at this path to `path` (a write plus removal;
+    /// nothing carries over)
+    from: Option<String>,
 }
 
 #[derive(Debug, Deserialize, JsonSchema)]
@@ -177,6 +184,20 @@ struct WorkspaceUseArgs {
     name: Option<String>,
 }
 
+#[derive(Debug, Deserialize, JsonSchema)]
+#[serde(deny_unknown_fields)]
+pub(super) struct CardMountArgs {
+    /// deck id (from the listing); omit to list decks
+    pub(super) deck: Option<String>,
+    /// mount point under `/cards` (`/cards/user`); with no `deck`, unmounts it
+    pub(super) at: Option<String>,
+}
+
+/// Parse `card_mount` arguments.
+pub(super) fn parse_mount_args(args: &Value) -> ToolResult<CardMountArgs> {
+    parse_args("card_mount", args)
+}
+
 /// The plugin manifest.
 pub(super) fn manifest() -> Manifest {
     Manifest {
@@ -189,9 +210,9 @@ pub(super) fn manifest() -> Manifest {
 image (PNG, JPEG, GIF, WebP) as an image attachment beside a one-line header naming the file, \
 its dimensions and stored size. `path` is a \
 workspace path (relative to the workspace root, absolute on its machine, or \
-`<workspace>:<path>`; `@rumu:/cards/<id>` for a card). `offset` is a 1-based start line and \
-`limit` a line count (text only — they do not apply to images); a trailing `#L<n>` / \
-`#L<a>-L<b>` anchor sets them when omitted."
+`<workspace>:<path>`; `@rumu:/cards/<mount>/<path>` for a card, `@rumu:/history` for deck \
+history). `offset` is a 1-based start line and `limit` a line count (text only — they do not \
+apply to images); a trailing `#L<n>` / `#L<a>-L<b>` anchor sets them when omitted."
                     .into(),
                 schema: tool_schema::<ReadArgs>(),
                 background: false,
@@ -202,7 +223,9 @@ workspace path (relative to the workspace root, absolute on its machine, or \
                 name: "write".into(),
                 description: "Create or overwrite a file (parent directories are created; \
 rejected on read-only workspaces). Same `path` addressing as `read`; for cards the \
-content is the editable view — frontmatter + body."
+content is the editable view — frontmatter + body. With `from`, moves that card to `path` \
+(the destination must not exist). Writing to a deck other than your own asks the user unless \
+they already allowed it."
                     .into(),
                 schema: tool_schema::<WriteArgs>(),
                 background: false,
@@ -247,14 +270,29 @@ stdout+stderr (truncated to ~20k chars) and the exit code. Default timeout 60s (
             ToolSpec {
                 name: "search".into(),
                 description: "Search cards (default) or past conversations by text. Both are \
-relevance-ranked and match any term. `scope` narrows it: `@rumu:/cards/<prefix>` for a card \
-directory, `@rumu:/sessions` for all past conversations, `@rumu:/sessions/<session>` for one. \
-Returns addresses with short snippets, never full text — follow up with `read`."
+relevance-ranked and match any term. `scope` narrows it: `@rumu:/cards/<mount>/<prefix>` for a \
+mounted deck's cards, `@rumu:/sessions` for all past conversations you can see (yours and \
+mounted assistants'), `@rumu:/sessions/by-assistant/<deck id>` for one assistant's, \
+`@rumu:/sessions/<session>` for one. Returns addresses with short snippets, never full text — \
+follow up with `read`."
                     .into(),
                 schema: tool_schema::<SearchArgs>(),
                 background: false,
                 output_schema: None,
                 parallel: true,
+            },
+            ToolSpec {
+                name: "card_mount".into(),
+                description: "Manage the branch's card mounts. Without arguments, list decks \
+(name, id, mount point, and whether mounting or writing it asks the user). With `deck` and \
+`at`, mount it at `/cards/<at>` (the user approves unless they already allowed it). With `at` \
+alone, unmount. Mount points must not overlap. Only mounted decks feed the catalog, recall, \
+list, search and notices."
+                    .into(),
+                schema: tool_schema::<CardMountArgs>(),
+                background: false,
+                output_schema: None,
+                parallel: false,
             },
             ToolSpec {
                 name: "workspace_use".into(),
@@ -301,20 +339,38 @@ pub(super) fn read_only_err(ws: &Workspace, action: &str) -> ToolError {
     ToolError::model(format!("workspace `{}` is read-only; {action}", ws.name))
 }
 
-/// Reject a malformed card id before it becomes a path.
-pub(super) fn invalid_card_id(id: &str) -> Option<ToolError> {
-    (!rumu_cards::valid_card_id(id)).then(|| {
-        ToolError::model(format!(
-            "invalid card id `{id}`: use `/`-separated segments of \
-                 [A-Za-z0-9._-], no leading dots, max depth 8"
-        ))
-    })
+/// Reject a card reference that is not under a mounted deck.
+pub(super) fn invalid_card_ref(cards: &Cards, public: &str) -> Option<ToolError> {
+    if cards.split(public).is_some() {
+        return None;
+    }
+    if cards.mount_of(public).is_some() {
+        return Some(ToolError::model(format!(
+            "invalid card path `{}`: name a card below the mount point, with segments of \
+             `[A-Za-z0-9._-]` that do not start with `.`",
+            rumu_cards::card_uri(public)
+        )));
+    }
+    let mounts: Vec<String> = cards
+        .mounts()
+        .iter()
+        .map(|m| format!("`{}/`", m.point()))
+        .collect();
+    Some(ToolError::model(format!(
+        "card `{}` is not under a mounted deck ({})",
+        rumu_cards::card_uri(public),
+        if mounts.is_empty() {
+            "nothing is mounted; use card_mount".to_owned()
+        } else {
+            mounts.join(", ")
+        }
+    )))
 }
 
 /// `no card `<uri>``, plus near matches when there are any.
-pub(super) fn no_card_err(id: &str, known: &[String]) -> ToolError {
-    let mut message = format!("no card `{}`", rumu_cards::card_uri(id));
-    let suggestions = rumu_cards::suggest_ids(known, id);
+pub(super) fn no_card_err(public: &str, known: &[String]) -> ToolError {
+    let mut message = format!("no card `{}`", rumu_cards::card_uri(public));
+    let suggestions = rumu_cards::suggest_ids(known, public);
     if !suggestions.is_empty() {
         message.push_str(&format!(" (did you mean: {}?)", suggestions.join(", ")));
     }
@@ -322,17 +378,17 @@ pub(super) fn no_card_err(id: &str, known: &[String]) -> ToolError {
 }
 
 /// `loading card `<uri>`: {source}`.
-pub(super) fn card_load_err(id: &str, source: impl std::fmt::Display) -> ToolError {
+pub(super) fn card_load_err(public: &str, source: impl std::fmt::Display) -> ToolError {
     ToolError::model(format!(
         "loading card `{}`: {source}",
-        rumu_cards::card_uri(id)
+        rumu_cards::card_uri(public)
     ))
 }
 
 /// `unknown path ...`.
 pub(super) fn unknown_rumu_path(abs: &Utf8UnixPath) -> ToolError {
     ToolError::model(format!(
-        "unknown path `{RUMU_WORKSPACE}:{abs}` (roots: /cards, /sessions, /tasks)"
+        "unknown path `{RUMU_WORKSPACE}:{abs}` (roots: /cards, /history, /sessions, /tasks)"
     ))
 }
 
@@ -486,6 +542,7 @@ pub(super) async fn call(
         "list" => p.tool_list(state, &args, cx).await.finish(),
         "bash" => p.tool_bash(state, &args, cx).await.finish(),
         "workspace_use" => p.tool_use(state, &args, cx).await.finish(),
+        "card_mount" => p.tool_card_mount(state, &args, cx).await.finish(),
         "search" => p.tool_search(state, &args, cx).await.finish(),
         _ => Ok(ToolOutput::err(format!(
             "workspace plugin has no tool `{name}`"
@@ -602,10 +659,11 @@ impl WorkspacePlugin {
                 }
             }
             Target::Rumu { abs } => {
-                let Some(id) = card_id_of(&abs) else {
+                let Some(path) = card_ref_of(&abs) else {
                     return Err(self.rumu_write_refused(&abs));
                 };
-                self.card_write(id, &args.content, CardOp::Write, cx).await
+                self.card_write(path, &args.content, CardOp::Write, args.from.as_deref(), cx)
+                    .await
             }
         }
     }
@@ -668,15 +726,30 @@ impl WorkspacePlugin {
                 // Edit = string replace on the view, then the write path. The
                 // read-freshness check comes first: a stale read is the more
                 // fundamental problem than a non-matching string.
-                let Some(id) = card_id_of(&abs) else {
+                let Some(path) = card_ref_of(&abs) else {
                     return Err(self.rumu_write_refused(&abs));
                 };
-                let existing = match library::load_card(&self.card_store(), id) {
+                if cx.state()?.asked_by.is_some() {
+                    return Err(ToolError::model(
+                        "you are answering a question; cards cannot change here",
+                    ));
+                }
+                let cards = self.cards(cx)?;
+                if let Some(err) = invalid_card_ref(&cards, path) {
+                    return Err(err);
+                }
+                let existing = match cards.raw(path) {
                     Ok(Some(c)) => c,
-                    Ok(None) => return Err(no_card_err(id, &[])),
-                    Err(e) => return Err(card_load_err(id, e)),
+                    Ok(None) => return Err(no_card_err(path, &[])),
+                    Err(e) => return Err(card_load_err(path, e)),
                 };
-                if let Some(err) = self.ensure_fresh_read(id, &existing, cx) {
+                if existing.link().is_some() {
+                    return Err(ToolError::model(format!(
+                        "card `{}` is a link; write its target instead",
+                        rumu_cards::card_uri(path)
+                    )));
+                }
+                if let Some(err) = self.ensure_fresh_read(&cards, path, &existing, cx) {
                     return Err(err);
                 }
                 let view = card::view_of(&existing);
@@ -689,14 +762,16 @@ impl WorkspacePlugin {
                     Ok(x) => x,
                     Err(e) => return Err(ToolError::model(e)),
                 };
-                let mut out = self.card_write(id, &new_view, CardOp::Edit, cx).await?;
+                let mut out = self
+                    .card_write(path, &new_view, CardOp::Edit, None, cx)
+                    .await?;
                 if out.is_error {
                     return Ok(out);
                 }
                 // Keep the write's diff payload; only the text is edit-specific.
                 out.content.text = format!(
                     "edited card `{}` ({n} replacement{})",
-                    rumu_cards::card_uri(id),
+                    rumu_cards::card_uri(path),
                     if n == 1 { "" } else { "s" }
                 );
                 Ok(out)
@@ -852,10 +927,12 @@ fn display(ws: &Workspace, abs: &Utf8TypedPathBuf) -> String {
     rumu_core::display(&ws.name, ws.root.to_path(), abs.to_path())
 }
 
-/// The card id a `/cards/<id>[.md]` path addresses, if it is one.
-pub(super) fn card_id_of(abs: &Utf8UnixPath) -> Option<&str> {
-    let id = abs.strip_prefix("/cards").ok()?.as_str();
-    (!id.is_empty()).then(|| id.strip_suffix(".md").unwrap_or(id))
+/// The card path a `/cards/<mount>/<path>[.md]` address names, if it is one.
+pub(super) fn card_ref_of(abs: &Utf8UnixPath) -> Option<&str> {
+    let path = abs.strip_prefix("/cards").ok()?.as_str();
+    let path = path.trim_start_matches('/');
+    let path = path.strip_suffix(".md").unwrap_or(path);
+    (!path.is_empty()).then_some(path)
 }
 
 // ---------------------------------------------------------------------------
@@ -872,8 +949,11 @@ impl WorkspacePlugin {
         limit: Option<u64>,
         cx: &Cx,
     ) -> ToolResult<ToolOutput> {
-        if let Some(id) = card_id_of(abs) {
-            return self.card_read(id, offset, limit, cx).await;
+        if abs.starts_with("/history") {
+            return self.history_read(abs, offset, limit, cx).await;
+        }
+        if let Some(path) = card_ref_of(abs) {
+            return self.card_read(path, offset, limit, cx).await;
         }
         if abs.starts_with("/sessions") {
             return self.session_read(abs, offset, limit, cx).await;
@@ -884,11 +964,13 @@ impl WorkspacePlugin {
         Err(unknown_rumu_path(abs))
     }
 
-    /// The refusal for writes outside `/cards/<id>`: `/sessions` is
+    /// The refusal for writes outside `/cards/<mount>/<path>`: `/sessions` is
     /// read-only, everything else is unknown.
     fn rumu_write_refused(&self, abs: &Utf8UnixPath) -> ToolError {
         if abs.starts_with("/sessions") {
             ToolError::model("`@rumu:/sessions` is read-only")
+        } else if abs.starts_with("/history") {
+            ToolError::model("`@rumu:/history` is read-only")
         } else {
             unknown_rumu_path(abs)
         }
@@ -897,17 +979,16 @@ impl WorkspacePlugin {
     /// `list` inside the `@rumu` workspace.
     async fn rumu_list(&self, abs: &Utf8UnixPath, cx: &Cx) -> ToolResult<ToolOutput> {
         match abs.as_str() {
-            "/" => Ok("cards/
-sessions/
-tasks/".into()),
-            "/cards" => self.card_list("").await,
+            "/" => Ok("cards/\nhistory/\nsessions/\ntasks/".into()),
+            "/cards" => self.card_list("", cx).await,
             _ if abs.starts_with("/cards") => {
                 let prefix = abs
                     .strip_prefix("/cards")
                     .map(Utf8UnixPath::as_str)
                     .unwrap_or("");
-                self.card_list(prefix).await
+                self.card_list(prefix, cx).await
             }
+            _ if abs.starts_with("/history") => self.history_list(abs, cx).await,
             _ if abs.starts_with("/sessions") => self.session_list(abs, cx).await,
             _ if abs.starts_with("/tasks") => self.task_read(abs, None, None, cx).await,
             _ => Err(unknown_rumu_path(abs)),
@@ -940,11 +1021,7 @@ tasks/".into()),
             return Err(bad_scope());
         };
         if abs.starts_with("/sessions") {
-            let sid = abs
-                .strip_prefix("/sessions")
-                .map(Utf8UnixPath::as_str)
-                .unwrap_or("");
-            return self.session_search(&args.query, sid, limit, cx).await;
+            return self.session_search(&args.query, &abs, limit, cx).await;
         }
         if abs.starts_with("/cards") {
             let prefix = abs
@@ -952,7 +1029,7 @@ tasks/".into()),
                 .map(Utf8UnixPath::as_str)
                 .unwrap_or("");
             return rumu_cards::search_text(
-                &self.card_store(),
+                &self.cards(cx)?,
                 &args.query,
                 &json!({ "prefix": prefix, "limit": limit }),
             );
