@@ -28,7 +28,7 @@ const kindDot: Record<ToastKind, string> = {
       role="alert"
     >
       <span class="mt-1.5 size-2 flex-none rounded-full" :class="kindDot[toast.kind]" />
-      <span class="min-w-0">
+      <span class="min-w-0 flex-1">
         {{ toast.message }}
         <span v-if="toast.detail" class="mt-0.5 block font-mono text-micro break-words text-ink-3">{{
           toast.detail
