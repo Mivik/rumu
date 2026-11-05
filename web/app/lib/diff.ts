@@ -3,12 +3,16 @@
 // results without one (older sessions) — a plain line-level LCS over the
 // call's own strings, enough to render a +/- view and count a row's changes.
 
-import type { Content, FilePatch } from './types'
+import type { Content, FilePatch, Tagged } from './types'
+
+/** A `workspace.file_patch` payload, from a result or a `code.call` trace. */
+export function patchOfData(d: Tagged | null | undefined): FilePatch | null {
+  return d && d.tag === 'workspace.file_patch' && d.v === 1 ? (d.data as FilePatch) : null
+}
 
 /** The `workspace.file_patch` payload of a tool result's content, if any. */
 export function filePatchOf(content: Content | null | undefined): FilePatch | null {
-  const d = content?.data
-  return d && d.tag === 'workspace.file_patch' && d.v === 1 ? (d.data as FilePatch) : null
+  return patchOfData(content?.data)
 }
 
 /** One line of a fallback diff: context, removed or added. */

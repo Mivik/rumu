@@ -8,7 +8,11 @@
 use serde::{Deserialize, Serialize};
 use serde_json::Value;
 
-use crate::{BranchId, Timestamp};
+use crate::{BranchId, Tagged, Timestamp};
+
+/// Tag of the `write`/`edit` result payload the UI renders as a file diff.
+/// It is the only structured result a [`CodeCall`] keeps.
+pub const FILE_PATCH_TAG: &str = "workspace.file_patch";
 
 /// One tool call issued by a `code` script, addressed by the enclosing
 /// `code` tool call id plus a 1-based per-parent sequence number.
@@ -28,6 +32,10 @@ pub struct CodeCall {
     /// The hook's block reason when `tool.pre` blocked the call.
     #[serde(default)]
     pub blocked: Option<String>,
+    /// The result's `workspace.file_patch` payload, if any: what the UI needs
+    /// to render a `write`/`edit` diff. Other structured results are not traced.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub patch: Option<Tagged>,
     pub dur_ms: u64,
     pub at: Timestamp,
 }

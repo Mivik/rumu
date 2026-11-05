@@ -939,6 +939,7 @@ mod tests {
             output: "contents".into(),
             is_error: false,
             blocked: None,
+            patch: None,
             dur_ms: 12,
             at: now(),
         };

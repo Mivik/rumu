@@ -6,12 +6,14 @@
 // session.tree `code_calls`.
 import { computed, ref } from 'vue'
 import { t } from '../../i18n'
-import type { Branch, CodeCall, Content, Decision } from '../../lib/types'
+import type { Branch, CodeCall, Content, Decision, FilePatch } from '../../lib/types'
 import { selectBranch, state } from '../../lib/store'
 import { argSummary, shortId } from '../../lib/util'
 import { prettyJson } from '../../lib/markdown'
+import { patchOfData } from '../../lib/diff'
 import Icon from '../ui/Icon.vue'
 import Chip from '../ui/Chip.vue'
+import FileDiff from './FileDiff.vue'
 
 const props = defineProps<{ parentCall: string }>()
 
@@ -56,6 +58,19 @@ function summary(c: CodeCall): string {
 }
 function output(c: CodeCall): string {
   return c.blocked ?? c.output
+}
+
+/** A successful write/edit expands to its diff, like a direct call's row. */
+function patchOf(c: CodeCall): FilePatch | null {
+  return status(c) === 'ok' ? patchOfData(c.patch) : null
+}
+function argsOf(c: CodeCall): Record<string, unknown> | null {
+  const a = c.args
+  return a && typeof a === 'object' && !Array.isArray(a) ? (a as Record<string, unknown>) : null
+}
+function pathOf(c: CodeCall): string {
+  const p = argsOf(c)?.path
+  return typeof p === 'string' ? p : ''
 }
 
 function effectLabel(e: Content): string {
@@ -145,18 +160,27 @@ const iconTone: Record<Status, string> = {
           {{ t('tools.row.openSubAgent') }}
         </Chip>
         <div v-if="isOpen(c.seq)" class="reveal flex flex-col gap-1.5 pt-1 pr-2 pb-2 pl-[28px]">
-          <div>
-            <div class="mb-1 text-micro font-semibold text-ink-3">{{ t('tools.detail.args') }}</div>
-            <pre class="code">{{ prettyJson(c.args) }}</pre>
-          </div>
-          <div>
-            <div class="mb-1 text-micro font-semibold text-ink-3">
-              {{ c.is_error ? t('tools.detail.outputError') : t('tools.detail.output') }}
+          <FileDiff
+            v-if="patchOf(c)"
+            :patch="patchOf(c)"
+            :path="pathOf(c)"
+            :args="argsOf(c)"
+            class="overflow-hidden rounded-control border border-line-soft"
+          />
+          <template v-else>
+            <div>
+              <div class="mb-1 text-micro font-semibold text-ink-3">{{ t('tools.detail.args') }}</div>
+              <pre class="code">{{ prettyJson(c.args) }}</pre>
             </div>
-            <pre class="code" :class="{ 'border-danger/40 text-danger': c.is_error }">{{
-              output(c) || t('common.empty')
-            }}</pre>
-          </div>
+            <div>
+              <div class="mb-1 text-micro font-semibold text-ink-3">
+                {{ c.is_error ? t('tools.detail.outputError') : t('tools.detail.output') }}
+              </div>
+              <pre class="code" :class="{ 'border-danger/40 text-danger': c.is_error }">{{
+                output(c) || t('common.empty')
+              }}</pre>
+            </div>
+          </template>
         </div>
       </div>
     </div>

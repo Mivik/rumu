@@ -2548,6 +2548,54 @@ async fn code_inner_block_is_not_a_node() {
     assert!(stored[0].is_error);
 }
 
+/// The trace keeps a `write`/`edit` file patch so the UI can render the diff
+/// after a reload, but no other structured result.
+#[tokio::test]
+async fn code_trace_keeps_the_file_patch() {
+    let write: ToolFn = Arc::new(|_: &str, _: Value, _: &Cx| {
+        let mut out = ToolOutput::ok("wrote a.rs (1 bytes)");
+        out.content.data = Some(Tagged {
+            tag: rumu_core::FILE_PATCH_TAG.to_owned(),
+            v: 1,
+            data: json!({ "kind": "update", "hunks": null }),
+        });
+        out
+    });
+    let plugin = Arc::new(script_host(&["write"], vec![], noop_hooks(), write));
+    let (kernel, _llm, session, branch) = setup(
+        vec![plugin],
+        vec![
+            LlmResponse::calls(vec![ToolCall::new(
+                "c1",
+                "script",
+                json!({ "calls": [{
+                    "name": "write",
+                    "args": { "path": "a.rs", "content": "b" },
+                }] }),
+            )]),
+            LlmResponse::text("done"),
+        ],
+    )
+    .await;
+    let mut rx = kernel.tap_pushes();
+    let (_, seen) = turn_collect(&kernel, &branch, &mut rx, "go").await;
+
+    let pushes: Vec<&Value> = seen.iter().filter(|p| p["method"] == "code.call").collect();
+    assert_eq!(pushes.len(), 1);
+    assert_eq!(
+        pushes[0]["params"]["patch"]["tag"],
+        rumu_core::FILE_PATCH_TAG
+    );
+    assert_eq!(pushes[0]["params"]["patch"]["data"]["kind"], "update");
+
+    let stored = kernel.code_calls(&session).unwrap();
+    assert_eq!(stored.len(), 1);
+    let patch = stored[0].patch.as_ref().expect("the file patch is kept");
+    assert_eq!(patch.tag, rumu_core::FILE_PATCH_TAG);
+    assert_eq!(patch.v, 1);
+    assert_eq!(patch.data["kind"], "update");
+}
+
 /// `caller` distinguishes inner (`code`) from direct (`model`) calls in both
 /// directions, and direct calls are the default the hooks see.
 #[tokio::test]
@@ -3136,6 +3184,7 @@ async fn fork_session_copies_the_path_into_a_new_session() {
         output: "5".into(),
         is_error: false,
         blocked: None,
+        patch: None,
         dur_ms: 3,
         at: 9,
     };

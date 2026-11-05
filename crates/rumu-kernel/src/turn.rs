@@ -8,9 +8,9 @@ use crate::{Error, Result};
 use rumu_core::kind;
 use rumu_core::{
     Branch, BranchId, BranchKind, BranchStatus, CODE_DENIED_TOOLS, Call, CodeCall, Content, Cx,
-    Inherit, InheritContext, InnerCall, NodeBody, NodeId, Plugin, RUMU_WORKSPACE, SYSTEM_SOURCE,
-    SessionId, ToolCall, ToolError, ToolOutput, ToolResultExt, TurnError, WorkspaceScope,
-    WorkspaceUse, now, parse_args, truncate_chars, truncate_output,
+    FILE_PATCH_TAG, Inherit, InheritContext, InnerCall, NodeBody, NodeId, Plugin, RUMU_WORKSPACE,
+    SYSTEM_SOURCE, SessionId, ToolCall, ToolError, ToolOutput, ToolResultExt, TurnError,
+    WorkspaceScope, WorkspaceUse, now, parse_args, truncate_chars, truncate_output,
 };
 use schemars::JsonSchema;
 use serde::Deserialize;
@@ -824,6 +824,9 @@ impl Kernel {
             output: truncate_output(out.content.text.clone()),
             is_error: out.is_error,
             blocked: blocked.clone(),
+            // Only file patches are worth tracing: they let a reloaded session
+            // render an internal write/edit exactly like a direct one.
+            patch: out.content.data.clone().filter(|d| d.tag == FILE_PATCH_TAG),
             dur_ms,
             at: now(),
         };

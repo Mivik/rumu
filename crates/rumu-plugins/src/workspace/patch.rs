@@ -33,7 +33,7 @@ pub enum PatchKind {
 }
 
 impl Structured for FilePatch {
-    const TAG: &'static str = "workspace.file_patch";
+    const TAG: &'static str = rumu_core::FILE_PATCH_TAG;
     const V: u32 = 1;
 }
 
