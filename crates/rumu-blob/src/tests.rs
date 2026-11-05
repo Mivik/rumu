@@ -28,7 +28,10 @@ fn png_round_trips_as_png() {
     let dir = temp_dir("png");
     let blobs = Blobs::open(&dir).unwrap();
     let a = blobs
-        .ingest_image(&encoded(rgb(40, 30), ImageFormat::Png), Some("a.png".into()))
+        .ingest_image(
+            &encoded(rgb(40, 30), ImageFormat::Png),
+            Some("a.png".into()),
+        )
         .unwrap();
     assert_eq!(a.mime, "image/png");
     assert_eq!((a.width, a.height), (40, 30));
@@ -45,7 +48,10 @@ fn png_round_trips_as_png() {
     assert_eq!(blobs.describe(&a.hash, Some("a.png".into())).unwrap(), a);
     // A stored non-image cannot be described.
     let text = blobs.put(b"not an image").unwrap();
-    assert!(matches!(blobs.describe(&text, None), Err(Error::Unsupported)));
+    assert!(matches!(
+        blobs.describe(&text, None),
+        Err(Error::Unsupported)
+    ));
     fs::remove_dir_all(&dir).ok();
 }
 
@@ -98,7 +104,10 @@ fn rejects_non_images() {
 fn hashes_are_validated() {
     let dir = temp_dir("hash");
     let blobs = Blobs::open(&dir).unwrap();
-    assert!(matches!(blobs.path("../etc/passwd"), Err(Error::InvalidHash(_))));
+    assert!(matches!(
+        blobs.path("../etc/passwd"),
+        Err(Error::InvalidHash(_))
+    ));
     assert!(matches!(
         blobs.path(&"A".repeat(64)),
         Err(Error::InvalidHash(_))

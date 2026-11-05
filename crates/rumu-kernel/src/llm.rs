@@ -76,7 +76,8 @@ impl LlmError {
 fn embedded_status(message: &str) -> Option<u16> {
     const LEADS: [&str; 3] = ["status: ", "status code '", "error ("];
     let lower = message.to_ascii_lowercase();
-    LEADS.iter()
+    LEADS
+        .iter()
         .filter_map(|lead| lower.find(lead).map(|at| (at, lead.len())))
         .min_by_key(|(at, _)| *at)
         .and_then(|(at, len)| {
@@ -189,7 +190,9 @@ mod tests {
             "Web call failed for model 'anthropic/m'.\nCause: Reqwest error: error sending \
              request for url (https://api.example.com/v1/messages)"
         ));
-        assert!(t("Reqwest error: HTTP status server error (502) for url (https://x)"));
+        assert!(t(
+            "Reqwest error: HTTP status server error (502) for url (https://x)"
+        ));
     }
 
     #[test]
@@ -197,10 +200,8 @@ mod tests {
         let t = |m: &str| LlmError::Request(m.to_owned()).is_transient();
         // A 400 about anything (including a body that mentions retryable-looking
         // numbers) is decided by its status, which precedes the body.
-        assert!(!t(
-            "HTTP error.\nStatus: 400 Bad Request\nBody:\n{\
-             \"message\":\"max_tokens: `error (500)` is not valid\"}"
-        ));
+        assert!(!t("HTTP error.\nStatus: 400 Bad Request\nBody:\n{\
+             \"message\":\"max_tokens: `error (500)` is not valid\"}"));
         assert!(!t(
             "Web call failed for model 'anthropic/m'.\nCause: Request failed with status code \
              '401'. Response body:\nunauthorized"
@@ -210,10 +211,13 @@ mod tests {
              '404'. Response body:\nno such model"
         ));
         // Stream parse failures carry no status and match no network fragment.
-        assert!(!LlmError::Stream(
-            "Failed to parse stream data for model 'anthropic/m'.\nCause: expected value".into()
-        )
-        .is_transient());
+        assert!(
+            !LlmError::Stream(
+                "Failed to parse stream data for model 'anthropic/m'.\nCause: expected value"
+                    .into()
+            )
+            .is_transient()
+        );
         assert!(!LlmError::MissingModel.is_transient());
         assert!(!LlmError::InvalidEffort("extreme".into()).is_transient());
         assert!(!LlmError::Client("bad proxy url".into()).is_transient());

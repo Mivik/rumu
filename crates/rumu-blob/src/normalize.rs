@@ -56,9 +56,7 @@ pub(crate) fn normalize(bytes: &[u8]) -> Result<Normalized> {
     reader.limits(limits);
     let decode = |e: image::ImageError| Error::Decode(e.to_string());
     let mut decoder = reader.into_decoder().map_err(decode)?;
-    let orientation = decoder
-        .orientation()
-        .unwrap_or(Orientation::NoTransforms);
+    let orientation = decoder.orientation().unwrap_or(Orientation::NoTransforms);
     let mut img = DynamicImage::from_decoder(decoder).map_err(decode)?;
     img.apply_orientation(orientation);
 
