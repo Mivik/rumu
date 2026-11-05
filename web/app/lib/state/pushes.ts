@@ -26,6 +26,7 @@ import type {
 } from '../types'
 import { MAX_DELTA_CHARS, MAX_TRACE, state } from './state'
 import { closeSession, forgetSession, openSession, refreshCards, refreshLists } from './sessions'
+import { refreshLibrary } from './library'
 import { loadPath } from './tree'
 import { toast } from './ui'
 
@@ -43,6 +44,8 @@ function cardChanged(node: Node): boolean {
   const data = node.body.content.data
   if (!data) return false
   if (data.tag === 'memory.card_update') return true
+  // The mount table changed: the shelf follows the branch.
+  if (data.tag === 'card.mount' || data.tag === 'card.unmount') return true
   if (data.tag !== 'card_use') return false
   const op = (data.data as { op?: unknown }).op
   return op === 'write' || op === 'edit'
@@ -50,7 +53,11 @@ function cardChanged(node: Node): boolean {
 
 function onNodeAppended(p: NodeAppendedPush): void {
   const { branch, node } = p
-  if (cardChanged(node)) void refreshCards()
+  if (cardChanged(node)) {
+    void refreshCards()
+    // The model may be writing cards while the user browses the library.
+    if (state.library.isOpen) void refreshLibrary()
+  }
   if (state.sessionId && node.session === state.sessionId) {
     state.nodes[node.id] = node
     // If the node extends the active branch's head, the path grows live.
@@ -293,8 +300,9 @@ export function startApp(): void {
 
   rumu.start(async () => {
     await refreshLists()
-    // First boot follows the URL; a reconnect resyncs the open session. A URL
-    // naming an unknown session falls back to the landing page.
+    // A reconnect resyncs the open library; boot follows the session URL. A
+    // URL naming an unknown session falls back to the landing page.
+    if (state.library.isOpen) void refreshLibrary()
     const target = sessionIdFromLocation() ?? state.sessionId
     try {
       if (target && !(await openSession(target, { history: 'none' }))) {

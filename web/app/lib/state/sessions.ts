@@ -1,10 +1,12 @@
 // Session lifecycle: listing, opening/closing, creating, prompting.
 
+import { watch } from 'vue'
 import { rumu } from '../api'
 import { t } from '../../i18n'
 import { routeSession } from '../router'
 import type {
   Card,
+  Assistant,
   Node,
   NodeId,
   SessionId,
@@ -17,18 +19,49 @@ import { state } from './state'
 import { forkAt, loadPath, replaceTree } from './tree'
 import { toast } from './ui'
 
+/** `card.list`: what the open branch has mounted (`card_mount` included), else
+ * the default mounts of the assistant in view. An assistant gone from the
+ * config has no shelf; its old sessions still open, with no cards. */
+async function listCards(): Promise<Card[]> {
+  if (state.activeBranch) return rumu.request<Card[]>('card.list', { branch: state.activeBranch })
+  if (!state.assistants.some((c) => c.id === state.assistant)) return []
+  return rumu.request<Card[]>('card.list', { assistant: state.assistant })
+}
+
+/** The id of the default assistant ('' before the roster has loaded). */
+export function defaultAssistant(): string {
+  return state.assistants.find((a) => a.default)?.id ?? ''
+}
+
 export async function refreshLists(): Promise<void> {
   try {
-    const [sessions, cards] = await Promise.all([
+    const [sessions, assistants] = await Promise.all([
       rumu.request<SessionInfo[]>('session.list'),
-      rumu.request<Card[]>('card.list'),
+      rumu.request<Assistant[]>('assistant.list'),
     ])
     state.sessions = sessions
-    state.cards = cards
+    state.assistants = assistants
+    if (!assistants.some((a) => a.id === state.assistant)) {
+      state.assistant = defaultAssistant()
+    }
+    state.cards = await listCards()
   } catch (err) {
     toast('error', t('errors.listingSessions'), (err as Error).message)
   }
 }
+
+/** Re-read the configured assistants (`assistant.list`), e.g. after editing them in the
+ *  assistant config dialog. */
+export async function refreshAssistants(): Promise<Assistant[]> {
+  state.assistants = await rumu.request<Assistant[]>('assistant.list')
+  return state.assistants
+}
+
+// The shelf follows the open branch's mount table.
+watch(
+  () => state.activeBranch,
+  () => void refreshCards(),
+)
 
 /** In-flight `card.list` refresh, so a burst of writes costs one request. */
 let cardsRefresh: Promise<void> | null = null
@@ -46,7 +79,7 @@ export function refreshCards(): Promise<void> {
     try {
       do {
         cardsDirty = false
-        state.cards = await rumu.request<Card[]>('card.list')
+        state.cards = await listCards()
       } while (cardsDirty)
     } catch (err) {
       toast('error', t('errors.listingCards'), (err as Error).message)
@@ -55,6 +88,14 @@ export function refreshCards(): Promise<void> {
     }
   })()
   return cardsRefresh
+}
+
+/** Bring `assistant` into view: its sessions, its library, and new sessions run as
+ * it. A session of another assistant stays open until the user leaves it. */
+export function viewAssistant(assistant: string): void {
+  if (state.assistant === assistant) return
+  state.assistant = assistant
+  void refreshCards()
 }
 
 /** Open a session. `history` decides what happens to the address bar: a pick
@@ -71,6 +112,7 @@ export async function openSession(id: SessionId, opts: { history?: OpenHistory }
     const tree = await rumu.request<SessionTreeResult>('session.tree', { session: id })
     if (seq !== openSeq) return false
     state.sessionId = tree.session.id
+    viewAssistant(tree.session.assistant)
     replaceTree(tree)
     // A newly loaded history has no live failures; anything still listed here
     // belonged to the view we just left.
@@ -148,7 +190,7 @@ export function openTaskDetail(id: TaskId): void {
 
 export async function newSession(): Promise<boolean> {
   try {
-    const res = await rumu.request<{ session: SessionInfo }>('session.create', {})
+    const res = await rumu.request<{ session: SessionInfo }>('session.create', { assistant: state.assistant || undefined })
     // The server may have pushed session.updated for it already.
     const i = state.sessions.findIndex((s) => s.id === res.session.id)
     if (i >= 0) state.sessions[i] = res.session

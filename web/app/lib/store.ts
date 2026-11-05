@@ -47,18 +47,33 @@ export type {
   ToolRowInfo,
 } from './state/timeline'
 
-export {
-  closeCatalog,
-  closeDrawer,
-  dismissToast,
-  openCatalog,
-  openDrawer,
-  openLightbox,
-  closeLightbox,
-} from './state/ui'
+export { closeDrawer, dismissToast, openDrawer, openLightbox, closeLightbox } from './state/ui'
 
 export { findAgentChild, forkAt, regenerateFrom, retryBranch, selectBranch } from './state/tree'
 export type { OpenHistory, PromptAttachment } from './state/sessions'
+
+export {
+  cardHistory,
+  cardVersion,
+  closeCard,
+  closeLibrary,
+  addFolder,
+  createDeck,
+  deleteCard,
+  deleteDeck,
+  deleteFolder,
+  loadCard,
+  moveEntry,
+  newCard,
+  openCard,
+  openLibrary,
+  openLibraryAtDeck,
+  refreshLibrary,
+  renameDeck,
+  saveCard,
+  searchLibrary,
+} from './state/library'
+export type { SaveCardRequest } from './state/library'
 export {
   closeSession,
   deleteSession,
@@ -70,9 +85,12 @@ export {
   newSession,
   openSession,
   openTaskDetail,
+  defaultAssistant,
+  refreshAssistants,
   refreshTasks,
   sendPrompt,
   stopTurn,
+  viewAssistant,
 } from './state/sessions'
 
 export { startApp } from './state/pushes'

@@ -9,10 +9,18 @@
 import { computed, ref } from 'vue'
 import { t } from '../../i18n'
 import type { Content, Node, TaskDone, TaskStatus } from '../../lib/types'
-import { CATALOG_TAG, TASK_TAG, TASK_VERSION } from '../../lib/types'
+import { CATALOG_TAG, ASSISTANT_INTRO_TAG, TASK_TAG, TASK_VERSION } from '../../lib/types'
 import Chip from '../ui/Chip.vue'
 import Icon from '../ui/Icon.vue'
-import { agentsOf, cardForImport, importOf, updateOf, workspaceUseOf } from '../../lib/cards'
+import {
+  agentsOf,
+  cardByKey,
+  cardForImport,
+  cardLabel,
+  importOf,
+  updateOf,
+  workspaceUseOf,
+} from '../../lib/cards'
 import { preview } from '../../lib/util'
 import { openDrawer, openTaskDetail } from '../../lib/store'
 import { taskStatusWord } from '../../lib/tasks'
@@ -25,6 +33,12 @@ interface CardItem {
   cardId: string | null
   title: string
   hover: string
+}
+
+/** A card that opens by its full id, shown under its mount-free label. */
+interface CardRef {
+  id: string
+  label: string
 }
 
 /** Decode a `kernel.task` completion payload, if that is what this note is. */
@@ -40,6 +54,7 @@ interface PillSpec {
   kind: 'memory' | 'update' | 'workspace' | 'agents' | 'note' | 'task'
   title: string
   cards?: CardItem[]
+  refs?: CardRef[]
   names?: string[]
   texts?: string[]
   expandable?: boolean
@@ -85,6 +100,7 @@ const pills = computed<PillSpec[]>(() => {
     const b = n.body
     // A card catalog belongs to the activity run it precedes (CatalogList).
     if (b.type === 'note' && b.content.data?.tag === CATALOG_TAG) continue
+    if (b.type === 'note' && b.content.data?.tag === ASSISTANT_INTRO_TAG) continue
     if (b.type === 'note') {
       const task = taskDoneOf(b.content)
       const update = updateOf(b.content)
@@ -100,24 +116,27 @@ const pills = computed<PillSpec[]>(() => {
         })
       } else if (b.source === 'memory' && update) {
         // Update notice: names the card, carries no body.
-        const p = ensure('update', 'update', t('cards.pills.changed'), { names: [], texts: [] })
-        if (!p.names!.includes(update.id)) p.names!.push(update.id)
+        const p = ensure('update', 'update', t('cards.pills.changed'), { refs: [], texts: [] })
+        const key = `${update.deck}:${update.path}`
+        const id = cardByKey.value.get(key)?.id ?? update.path
+        if (!p.refs!.some((r) => r.id === id)) p.refs!.push({ id, label: cardLabel(id) })
         p.texts!.push(b.content.text)
       } else if (b.source === 'memory' && imp) {
         const p = ensure('memory', 'memory', t('cards.pills.imported'), { cards: [] })
         const card = cardForImport(imp)
         if (card) {
+          const label = cardLabel(card.id)
           p.cards!.push({
             node: n,
             cardId: card.id,
-            title: card.id,
-            hover: `#${card.id}${card.description ? ` — ${card.description}` : ''}`,
+            title: label,
+            hover: `#${label}${card.description ? ` — ${card.description}` : ''}`,
           })
         } else {
           p.cards!.push({
             node: n,
-            cardId: imp.id,
-            title: imp.id,
+            cardId: null,
+            title: imp.path,
             hover: b.content.text,
           })
         }
@@ -221,10 +240,10 @@ function label(names: string[]): string {
 
       <!-- update notices: "A changed (+N)", click opens the card -->
       <Chip v-else-if="p.kind === 'update'" icon="note" tone="memory" :title="p.title">
-        <template v-for="(name, i) in p.names ?? []" :key="name">
+        <template v-for="(ref, i) in p.refs ?? []" :key="ref.id">
           <span v-if="i > 0">,</span>
-          <button class="card-ref" type="button" @click.stop="openDrawer(name)">
-            {{ name }}
+          <button class="card-ref" type="button" @click.stop="openDrawer(ref.id)">
+            {{ ref.label }}
           </button>
         </template>
         <span class="text-ink-3">&nbsp;{{ t('cards.pills.changed') }}</span>

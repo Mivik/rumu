@@ -1,6 +1,7 @@
 <script setup lang="ts">
-// Left column: the wordmark with the language key beside it, the new-session
-// button, the card library (rumu's memory, opened as the CardCatalog), the
+// Left column: the wordmark with the language key beside it, the assistant roster
+// (when assistants are configured), the new-session button, the card library
+// (every deck, opened as the Library page), that assistant's
 // sessions (grouped Today / Earlier) and, at the foot, the connection status.
 // Below lg it is the drawer; at lg it is the desk's second sheet of paper
 // (the card's edge lives on the <aside> in app.vue).
@@ -20,13 +21,15 @@ import {
   deleteSession,
   goHome,
   isBusy,
-  openCatalog,
+  openLibrary,
   openSession,
   sortedSessions,
   state,
+  viewAssistant,
 } from '../lib/store'
 import type { SessionInfo } from '../lib/types'
-import { layout } from '../lib/layout'
+import { layout, openAssistantSettings } from '../lib/layout'
+import RumuCat from './brand/RumuCat.vue'
 import RumuMark from './brand/RumuMark.vue'
 import Icon from './ui/Icon.vue'
 import Popover from './ui/Popover.vue'
@@ -39,13 +42,36 @@ function home(): void {
 }
 
 function library(): void {
-  openCatalog()
+  openLibrary()
   layout.sidebarOpen = false
 }
 
 function pickSession(id: string): void {
   openSession(id)
   layout.sidebarOpen = false
+}
+
+/** The roster: every assistant deck, plus any deck only old sessions still
+ * name (gone from the roster, its sessions must stay reachable). */
+const roster = computed<{ id: string; name: string }[]>(() => {
+  const out = state.assistants.map((c) => ({ id: c.id, name: c.name }))
+  const known = new Set(out.map((c) => c.id))
+  for (const s of state.sessions) {
+    if (!known.has(s.assistant)) {
+      out.push({ id: s.assistant, name: s.assistant })
+      known.add(s.assistant)
+    }
+  }
+  if (!known.has(state.assistant)) out.push({ id: state.assistant, name: state.assistant })
+  return out
+})
+
+/** Bring an assistant deck into view: its sessions list, and the next session
+ * is its. An open session of another deck is left for the landing page. */
+function pickAssistant(id: string): void {
+  const leaving = state.sessionId && state.session?.assistant !== id
+  viewAssistant(id)
+  if (leaving) goHome()
 }
 
 /** The session whose action menu is asking for delete confirmation. The menu
@@ -102,6 +128,7 @@ const rows = computed<Row[]>(() => {
   const out: Row[] = []
   let group = ''
   for (const s of sortedSessions.value) {
+    if (s.assistant !== state.assistant) continue
     const today = s.updated_at >= midnight
     const g = today ? t('chat.sidebar.today') : t('chat.sidebar.earlier')
     if (g !== group) {
@@ -156,6 +183,37 @@ const rows = computed<Row[]>(() => {
       </span>
     </div>
 
+    <div class="mb-2 flex flex-none flex-wrap items-center gap-1 px-1.5">
+      <div role="tablist" class="contents">
+        <button
+          v-for="assistant in roster"
+          :key="assistant.id"
+          type="button"
+          role="tab"
+          :aria-selected="assistant.id === state.assistant"
+          class="flex items-center gap-1.5 rounded-full border py-0.5 pr-2.5 pl-1.5 text-meta transition-colors duration-200"
+          :class="
+            assistant.id === state.assistant
+              ? 'border-line bg-surface-2 font-semibold text-ink shadow-soft'
+              : 'border-transparent text-ink-3 hover:bg-surface-2/60 hover:text-ink'
+          "
+          @click="pickAssistant(assistant.id)"
+        >
+          <RumuCat :size="18" :paper="false" />
+          {{ assistant.name }}
+        </button>
+      </div>
+      <button
+        type="button"
+        class="icon-btn size-6 flex-none"
+        :title="t('assistants.manage')"
+        :aria-label="t('assistants.manage')"
+        @click="openAssistantSettings()"
+      >
+        <Icon name="edit" :size="13" />
+      </button>
+    </div>
+
     <button
       class="flex w-full flex-none items-center gap-2.5 rounded-control border border-transparent py-1.5 pl-2.5 pr-1.5 text-left text-secondary text-ink-2 transition-colors duration-200 hover:bg-surface-2/60 hover:text-ink lg:pr-3"
       @click="home"
@@ -173,7 +231,7 @@ const rows = computed<Row[]>(() => {
       <span class="flex size-5 flex-none items-center justify-center">
         <Icon name="memory" :size="16" class="text-memory" />
       </span>
-      <span class="flex-1">{{ t('cards.library.title') }}</span>
+      <span class="flex-1">{{ t('library.title') }}</span>
       <span class="text-micro text-ink-3 tabular-nums">{{ state.cards.length }}</span>
     </button>
 

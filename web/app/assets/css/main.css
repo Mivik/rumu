@@ -269,6 +269,80 @@
   textarea::placeholder {
     color: var(--ink-3);
   }
+
+  /* checked is ink, like a primary button */
+  input[type='checkbox'] {
+    appearance: none;
+    display: inline-grid;
+    flex: none;
+    place-content: center;
+    width: 16px;
+    height: 16px;
+    padding: 0;
+    border-color: color-mix(in srgb, var(--ink-3) 55%, var(--line));
+    border-radius: 5px;
+    cursor: pointer;
+  }
+
+  input[type='checkbox']::after {
+    content: '';
+    width: 8px;
+    height: 4.5px;
+    border: solid var(--surface);
+    border-width: 0 0 2px 2px;
+    opacity: 0;
+    transform: translateY(-1px) rotate(-45deg);
+  }
+
+  input[type='checkbox']:checked {
+    border-color: var(--ink);
+    background: var(--ink);
+  }
+
+  input[type='checkbox']:checked::after {
+    opacity: 1;
+  }
+
+  input[type='checkbox']:focus {
+    border-color: color-mix(in srgb, var(--ink-3) 55%, var(--line));
+    box-shadow: none;
+  }
+
+  input[type='checkbox']:checked:focus {
+    border-color: var(--ink);
+  }
+
+  input[type='checkbox']:focus-visible {
+    box-shadow: 0 0 0 3px color-mix(in srgb, var(--brand) 18%, transparent);
+  }
+
+  /* ui/Select.vue: shaped like an input, so a form's fields line up */
+  .select-trigger {
+    display: flex;
+    align-items: center;
+    gap: 8px;
+    width: 100%;
+    padding: 6px 8px 6px 10px;
+    border: 1px solid var(--line);
+    border-radius: var(--radius-control);
+    background: var(--surface);
+    font-size: var(--text-secondary);
+    line-height: 1.5;
+    transition:
+      border-color 0.15s,
+      box-shadow 0.15s;
+  }
+
+  .select-trigger:hover {
+    border-color: color-mix(in srgb, var(--ink-3) 60%, var(--line));
+  }
+
+  .select-trigger:focus-visible,
+  .select-trigger.is-open {
+    outline: none;
+    border-color: var(--brand);
+    box-shadow: 0 0 0 3px color-mix(in srgb, var(--brand) 18%, transparent);
+  }
 }
 
 /* ---- shared component classes ----
@@ -335,6 +409,18 @@
 
   .btn-danger:hover:not(:disabled) {
     background: color-mix(in srgb, var(--danger) 88%, var(--ink));
+  }
+
+  /* form field label and hint (cat settings and other dialogs) */
+  .field-label {
+    font-size: var(--text-micro);
+    font-weight: 700;
+    color: var(--ink-3);
+  }
+
+  .field-hint {
+    font-size: var(--text-micro);
+    color: var(--ink-3);
   }
 
   /* small ghost icon buttons (hover actions) */
@@ -484,6 +570,12 @@
     box-shadow:
       0 0 0 1px var(--line),
       var(--shadow-card-v);
+  }
+
+  /* A centered reading column that scrolls: the scrollbar would add its width
+   * to one side only, so reserve the gutter on both. */
+  .scroll-gutter {
+    scrollbar-gutter: stable both-edges;
   }
 
   /* a control in the chat header's bar: a quiet pill that fills in sand

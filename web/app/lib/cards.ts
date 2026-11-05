@@ -6,12 +6,12 @@
 //   3. ToolResult of a card read/write (read/write/edit on
 //      `@rumu:/cards/<id>`) + a card_use note → tool row chip
 //   4. the Context panel (card.list + the uses derived from the path)
-// Cards are identified by their plain path id everywhere (`@rumu:/cards/<id>`
-// is the display form). This module maps all shapes to the same Card record.
-// It mirrors the derivation in crates/rumu-cards/src/usage.rs.
+// A card is identified by its deck id and path; records carry both. This
+// module maps all shapes to the same Card record. It mirrors the derivation in
+// crates/rumu-cards/src/usage.rs.
 
 import { computed } from 'vue'
-import { parse as parseYaml } from 'yaml'
+import { parse as parseYaml, stringify as stringifyYaml } from 'yaml'
 import type { Card, CardImport, CardUpdate, CardUse as CardUseRecord, Content, Node } from './types'
 import { callsOnPath, pathNodes, state } from './store'
 
@@ -120,15 +120,120 @@ export function parseCardView(text: string, rendered = false): CardView {
   }
 }
 
+/** The fields the library form edits, split out of an editable view. */
+export interface CardForm {
+  description: string
+  keywords: string[]
+  pinned: boolean
+  /** YAML for every other frontmatter key (`""` when none). */
+  extra: string
+  body: string
+}
+
+/** The frontmatter keys the library form edits itself. */
+const FORM_KEYS = new Set(['description', 'keywords', 'pinned', 'link'])
+
+/** The fields the library form edits, split out of an editable view. */
+export function formOfView(view: string): CardForm {
+  const split = splitFrontmatter(view)
+  let meta: Record<string, unknown> = {}
+  if (split) {
+    try {
+      const parsed: unknown = parseYaml(split.yaml)
+      if (parsed && typeof parsed === 'object' && !Array.isArray(parsed)) {
+        meta = parsed as Record<string, unknown>
+      }
+    } catch {
+      // A malformed view is shown as written; nothing can be split from it.
+    }
+  }
+  const extra: Record<string, unknown> = {}
+  for (const [key, value] of Object.entries(meta)) {
+    if (!FORM_KEYS.has(key)) extra[key] = value
+  }
+  return {
+    description: typeof meta.description === 'string' ? meta.description : '',
+    keywords: keywordsOf(meta.keywords),
+    pinned: meta.pinned === true,
+    extra: Object.keys(extra).length ? stringifyYaml(extra, { indentSeq: false }).trimEnd() : '',
+    body: split ? split.body : view,
+  }
+}
+
+/** Inverse of `formOfView`: frontmatter (description, keywords, pinned, then
+ *  the extra keys) + body. Empty values are omitted; no frontmatter block when
+ *  nothing is left. Throws on invalid `extra` YAML. */
+export function viewOfForm(form: CardForm): string {
+  let extra: Record<string, unknown> = {}
+  const text = form.extra.trim()
+  if (text) {
+    const parsed: unknown = parseYaml(text)
+    if (!parsed || typeof parsed !== 'object' || Array.isArray(parsed)) {
+      throw new Error('frontmatter must be a YAML mapping (key: value lines)')
+    }
+    extra = parsed as Record<string, unknown>
+  }
+  const meta: Record<string, unknown> = {}
+  if (form.description.trim()) meta.description = form.description.trim()
+  if (form.keywords.length) meta.keywords = [...form.keywords]
+  if (form.pinned) meta.pinned = true
+  for (const [key, value] of Object.entries(extra)) {
+    if (!FORM_KEYS.has(key)) meta[key] = value
+  }
+  const front = Object.keys(meta).length
+    ? `---\n${stringifyYaml(meta, { indentSeq: false }).trimEnd()}\n---\n`
+    : ''
+  return front + form.body
+}
+
 /** Does a use still match the current card content? */
 export function useIsCurrent(card: Card, use: CardUse): boolean {
   return use.rev === card.revision
 }
 
-/** card id → record from card.list. */
+/** The mount points the current cards are addressed under (`/cards/self` →
+ * `self`), longest first so a nested mount wins over its parent. */
+const cardMountPoints = computed(() => {
+  const mounts =
+    state.activeBranch && state.pathState
+      ? state.pathState.mounts
+      : (state.assistants.find((a) => a.id === state.assistant)?.mounts ?? [])
+  const points = new Set(['self'])
+  for (const m of mounts) {
+    const point = m.at.replace(/^\/?cards\/?/, '').replace(/\/+$/, '')
+    if (point) points.add(point)
+  }
+  return [...points].sort((a, b) => b.length - a.length)
+})
+
+/** A card id without its deck's mount prefix, for display (`self/dev/x` →
+ * `dev/x`). Clicks and requests keep the full id; a folder equal to the mount
+ * head has no label left. */
+export function cardLabel(id: string): string {
+  for (const point of cardMountPoints.value) {
+    if (id === point) return ''
+    if (id.startsWith(`${point}/`)) return id.slice(point.length + 1)
+  }
+  return id
+}
+
+/** card path → record from card.list (paths are what the UI opens). */
 export const cardById = computed(() => {
   const m = new Map<string, Card>()
   for (const c of state.cards) m.set(c.id, c)
+  return m
+})
+
+/** A card's identity key: the link target's `deck:path` for a link, else its
+ * own `deck:path`. Usage payloads carry the identity. */
+export function cardKey(card: Pick<Card, 'deck' | 'path' | 'link'>): string {
+  return card.link ?? `${card.deck}:${card.path}`
+}
+
+/** card identity → record: usage payloads (imports, notices, uses) key on it. */
+export const cardByKey = computed(() => {
+  const m = new Map<string, Card>()
+  for (const c of state.cards) m.set(cardKey(c), c)
   return m
 })
 
@@ -168,7 +273,7 @@ export const cardUsesOnPath = computed(() => {
     if (b.type !== 'note') continue
     const imp = importOf(b.content)
     if (imp) {
-      push(imp.id, {
+      push(`${imp.deck}:${imp.path}`, {
         kind: 'import',
         rev: imp.rev,
         node: n,
@@ -180,7 +285,7 @@ export const cardUsesOnPath = computed(() => {
     const u = cardUseOf(b.content)
     if (!u) continue
     const callId = u.call_id ?? null
-    if (!u.id || !u.rev) continue
+    if (!u.deck || !u.path || !u.rev) continue
     // Abort-path guard: only count records whose call succeeded.
     if (callId && !okCalls.has(callId)) continue
     const op = u.op === 'read' ? 'read' : 'write'
@@ -189,25 +294,26 @@ export const cardUsesOnPath = computed(() => {
       op === 'write'
         ? String((calls.get(callId ?? '')?.call.args as { content?: unknown } | undefined)?.content ?? '')
         : (resultText.get(callId ?? '') ?? '')
-    push(u.id, { kind: op, rev: u.rev, node: n, snapshot, callId })
+    push(`${u.deck}:${u.path}`, { kind: op, rev: u.rev, node: n, snapshot, callId })
   }
   return uses
 })
 
-/** Card id → update notes on this path (`memory.card_update`), in order. */
+/** Card identity → update notes on this path (`memory.card_update`), in order. */
 export const updateNotesByCard = computed(() => {
   const m = new Map<string, Node[]>()
   for (const n of pathNodes.value) {
     if (n.body.type !== 'note') continue
     const u = updateOf(n.body.content)
     if (!u) continue
-    if (!m.has(u.id)) m.set(u.id, [])
-    m.get(u.id)!.push(n)
+    const key = `${u.deck}:${u.path}`
+    if (!m.has(key)) m.set(key, [])
+    m.get(key)!.push(n)
   }
   return m
 })
 
 /** Look up a card for an import payload; null if none. */
 export function cardForImport(imp: CardImport | null): Card | null {
-  return imp ? (cardById.value.get(imp.id) ?? null) : null
+  return imp ? (cardByKey.value.get(`${imp.deck}:${imp.path}`) ?? null) : null
 }

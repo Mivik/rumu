@@ -10,6 +10,18 @@ import type { WsMessage } from './types'
 
 export type PushHandler = (params: Record<string, unknown>) => void
 
+/** A JSON-RPC error response; `code` is the server's error code (the web
+ *  checks `-32010` for a stale card write). */
+export class RpcError extends Error {
+  constructor(
+    message: string,
+    readonly code: number,
+  ) {
+    super(message)
+    this.name = 'RpcError'
+  }
+}
+
 export function defaultWsUrl(): string {
   if (typeof location !== 'undefined') {
     const proto = location.protocol === 'https:' ? 'wss' : 'ws'
@@ -99,7 +111,7 @@ export class RumuClient {
       const entry = this.pending.get(msg.id)
       if (!entry) return
       this.pending.delete(msg.id)
-      if ('error' in msg) entry.reject(new Error(msg.error.message))
+      if ('error' in msg) entry.reject(new RpcError(msg.error.message, msg.error.code))
       else entry.resolve(msg.result)
     } else if ('method' in msg) {
       const set = this.handlers.get(msg.method)

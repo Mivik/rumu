@@ -1,4 +1,4 @@
-// Transient UI state: toasts, the card catalog and drawer, the image lightbox.
+// Transient UI state: toasts, the card drawer, the image lightbox.
 
 import type { Attachment, ToastKind } from '../types'
 import { blobUrl } from '../attachments'
@@ -17,15 +17,7 @@ export function dismissToast(id: number): void {
   if (i >= 0) state.toasts.splice(i, 1)
 }
 
-// ---- card catalog + drawer (shared UI state) ----
-
-export function openCatalog(): void {
-  state.catalogOpen = true
-}
-
-export function closeCatalog(): void {
-  state.catalogOpen = false
-}
+// ---- card drawer (shared UI state) ----
 
 export function openDrawer(cardId: string, useRef?: string): void {
   state.drawer = { cardId, useRef }

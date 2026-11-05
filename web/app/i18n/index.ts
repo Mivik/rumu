@@ -5,6 +5,8 @@
 import { createI18n } from 'vue-i18n'
 
 import enCards from './en/cards.json'
+import enLibrary from './en/library.json'
+import enAssistants from './en/assistants.json'
 import enChat from './en/chat.json'
 import enCommon from './en/common.json'
 import enErrors from './en/errors.json'
@@ -13,6 +15,8 @@ import enTools from './en/tools.json'
 import enUsage from './en/usage.json'
 
 import zhCards from './zh-CN/cards.json'
+import zhLibrary from './zh-CN/library.json'
+import zhAssistants from './zh-CN/assistants.json'
 import zhChat from './zh-CN/chat.json'
 import zhCommon from './zh-CN/common.json'
 import zhErrors from './zh-CN/errors.json'
@@ -23,8 +27,10 @@ import zhUsage from './zh-CN/usage.json'
 const en = {
   common: enCommon,
   chat: enChat,
+  assistants: enAssistants,
   tools: enTools,
   cards: enCards,
+  library: enLibrary,
   panels: enPanels,
   usage: enUsage,
   errors: enErrors,
@@ -33,8 +39,10 @@ const en = {
 const zhCN = {
   common: zhCommon,
   chat: zhChat,
+  assistants: zhAssistants,
   tools: zhTools,
   cards: zhCards,
+  library: zhLibrary,
   panels: zhPanels,
   usage: zhUsage,
   errors: zhErrors,

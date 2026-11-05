@@ -19,6 +19,9 @@ const props = withDefaults(
     menu?: boolean
     /** The panel's ARIA role; `menu` for an action menu. */
     role?: 'dialog' | 'menu'
+    /** Teleport target; position absolutely inside it. A modal `<dialog>`
+     *  makes everything outside inert, so pass the dialog itself. */
+    to?: string
   }>(),
   {
     placement: 'bottom-end',
@@ -46,7 +49,9 @@ const { floatingStyles, isPositioned } = useFloating(
   {
     open,
     placement: props.placement,
-    strategy: 'fixed',
+    // A contained panel is absolute to its target; the default escapes
+    // scrollers and sheets as a viewport-fixed layer.
+    strategy: props.to ? 'absolute' : 'fixed',
     // left/top rather than a transform: the entrance below animates
     // `translate`, and must never carry the panel in from the corner.
     transform: false,
@@ -61,6 +66,9 @@ function onPointer(e: PointerEvent): void {
 }
 function onKey(e: KeyboardEvent): void {
   if (e.key !== 'Escape') return
+  // Close only the popover: a dialog behind it stays open.
+  e.preventDefault()
+  e.stopPropagation()
   close()
   // Put focus back on the trigger that opened the panel.
   anchor.value?.querySelector<HTMLElement>('button, [href], [tabindex]')?.focus()
@@ -69,10 +77,10 @@ function onKey(e: KeyboardEvent): void {
 watch(open, (v) => {
   if (v) {
     document.addEventListener('pointerdown', onPointer, true)
-    window.addEventListener('keydown', onKey)
+    window.addEventListener('keydown', onKey, true)
   } else {
     document.removeEventListener('pointerdown', onPointer, true)
-    window.removeEventListener('keydown', onKey)
+    window.removeEventListener('keydown', onKey, true)
   }
 })
 
@@ -83,7 +91,7 @@ onBeforeUnmount(close)
   <div ref="anchor" class="inline-flex">
     <slot name="trigger" :open="open" :toggle="toggle" />
   </div>
-  <Teleport to="body">
+  <Teleport :to="to || 'body'">
     <Transition
       enter-active-class="transition-[opacity,translate] duration-150 ease-soft"
       enter-from-class="-translate-y-1 opacity-0"
@@ -96,7 +104,7 @@ onBeforeUnmount(close)
         :role="role"
         :aria-label="label"
         :style="{ ...floatingStyles, visibility: isPositioned ? 'visible' : 'hidden' }"
-        class="z-50 max-h-[min(70vh,560px)] overflow-y-auto rounded-card border border-line-soft bg-surface shadow-pop"
+        class="z-60 max-h-[min(70vh,560px)] overflow-y-auto rounded-card border border-line-soft bg-surface shadow-pop"
         :class="
           menu
             ? 'w-[min(220px,calc(100vw-1rem))] p-1'

@@ -11,9 +11,7 @@
     "task": "任务 {id} · {status}",
     "moreCards": "{names}（{count} 张）",
     "catalogTitles": {
-      "root": "卡片目录",
-      "directory": "{prefix}/ 下的卡片",
-      "workspace": "与工作区 {name} 相关的卡片"
+      "deck": "{at} 的卡片"
     }
   },
   "drawer": {
@@ -29,13 +27,5 @@
     "path": "路径",
     "revision": "内容版本",
     "olderSeen": "当时看到的不是最新版本。"
-  },
-  "library": {
-    "title": "卡片库"
-  },
-  "catalog": {
-    "search": "搜索卡片",
-    "none": "没有匹配“{q}”的卡片。",
-    "empty": "rumu 学到值得记住的东西时，会写成一张卡片。"
   }
 }

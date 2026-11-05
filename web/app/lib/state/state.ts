@@ -8,6 +8,7 @@ import type {
   Branch,
   BranchId,
   Card,
+  Assistant,
   CodeCall,
   Node,
   NodeId,
@@ -19,6 +20,8 @@ import type {
   TaskInfo,
   Timestamp,
   ToastKind,
+  LibraryDeck,
+  LibraryCard,
 } from '../types'
 
 export interface HookTraceEntry {
@@ -84,7 +87,35 @@ export const MAX_TRACE = 500
 export const MAX_DELTA_CHARS = 400_000
 
 const initial = {
+  /** The full-page card library dialog. */
+  library: {
+    /** Whether the library dialog is open. */
+    isOpen: false,
+    decks: [] as LibraryDeck[],
+    cards: [] as LibraryCard[],
+    query: '',
+    /** Server search hits for `query` (null while the query is empty). */
+    hits: null as LibraryCard[] | null,
+    /** The open card: {deck, path}; `isNew` starts a blank form at `path`
+     *  (a folder prefix, or `""`). */
+    open: null as { deck: string; path: string; isNew?: boolean } | null,
+    /** A deck to scroll into view the next time the tree renders (set by
+     *  "open in library" jumps from elsewhere). */
+    focusDeck: null as string | null,
+    /** Expanded tree nodes (`deck:<id>`, `dir:<id>:<path>`). */
+    expanded: new Set<string>(),
+    /** Folders made in the tree that hold no card yet (`<deck id>:<path>`);
+     *  a folder only exists on disk through its cards. */
+    folders: new Set<string>(),
+    loading: false,
+  },
+
   sessions: [] as SessionInfo[],
+  /** The configured assistants (`assistant.list`); exactly one is the default. */
+  assistants: [] as Assistant[],
+  /** The assistant in view: whose sessions the sidebar lists, whose library `cards`
+   *  holds, and who new sessions run as. */
+  assistant: '',
   cards: [] as Card[],
 
   // Open session tree (from session.tree, kept live via pushes).
@@ -130,8 +161,6 @@ const initial = {
   hookTrace: [] as HookTraceEntry[],
   toasts: [] as Toast[],
 
-  /** The card catalog (the whole library) is open over the chat. */
-  catalogOpen: false,
   /** Card drawer (opened by any card chip): card id + the use it was opened
    * from (a note node id or a tool call id; absent for the library). */
   drawer: null as { cardId: string; useRef?: string } | null,

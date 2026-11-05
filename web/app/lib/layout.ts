@@ -3,15 +3,39 @@
 // closes it on Escape, on a scrim click, and when the viewport grows past the
 // breakpoint that made it an overlay.
 import { reactive } from 'vue'
+import { state } from './state/state'
 
 export const layout = reactive({
   sidebarOpen: false,
+  /** The assistant config dialog (opened from the sidebar roster). */
+  assistantSettingsOpen: false,
+  /** The assistant the dialog opens on (`null`: the one in view). */
+  assistantSettingsFor: null as string | null,
 })
 
 export function toggleSidebar(): void {
   layout.sidebarOpen = !layout.sidebarOpen
 }
 
+/** Open the assistant dialog, on `id` when given. */
+export function openAssistantSettings(id: string | null = null): void {
+  layout.assistantSettingsFor = id
+  layout.assistantSettingsOpen = true
+}
+
+export function closeAssistantSettings(): void {
+  layout.assistantSettingsOpen = false
+}
+
+/** Escape: close the topmost layer. The library may sit over the assistant
+ *  dialog (a deck link opens it there), so it goes first, on its own. */
 export function closePanels(): void {
+  if (state.library.isOpen) {
+    state.library.isOpen = false
+    state.library.open = null
+    state.library.focusDeck = null
+    return
+  }
   layout.sidebarOpen = false
+  layout.assistantSettingsOpen = false
 }

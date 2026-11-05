@@ -1,6 +1,7 @@
 <script setup lang="ts">
 // A knowledge card on a tool row, set as a plain card reference (.card-ref)
 // small enough to sit inside the row's line. Click → drawer.
+import { cardLabel } from '../../lib/cards'
 import type { Card } from '../../lib/types'
 import { openDrawer } from '../../lib/store'
 
@@ -14,7 +15,7 @@ function onClick(): void {
 }
 
 function tooltip(): string {
-  return `#${props.card.id}${props.card.description ? ` — ${props.card.description}` : ''}`
+  return `#${cardLabel(props.card.id)}${props.card.description ? ` — ${props.card.description}` : ''}`
 }
 </script>
 
@@ -25,6 +26,6 @@ function tooltip(): string {
     :title="title ?? tooltip()"
     @click.stop="onClick"
   >
-    <span class="truncate">{{ card.id }}</span>
+    <span class="truncate">{{ cardLabel(card.id) }}</span>
   </button>
 </template>

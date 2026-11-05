@@ -43,6 +43,15 @@ export type { InheritContext } from './generated/InheritContext'
 export type { BranchStatus } from './generated/BranchStatus'
 export type { Branch } from './generated/Branch'
 export type { SessionInfo } from './generated/SessionInfo'
+export type { Assistant } from './generated/Assistant'
+export type { DeckMount } from './generated/DeckMount'
+export type { CardMount } from './generated/CardMount'
+/** `assistant.options`: choices for the assistant config form. */
+export interface AssistantOptions {
+  /** Decks available as mount targets (assistant decks included). */
+  decks: { id: string; name: string; assistant: boolean }[]
+  workspaces: string[]
+}
 export type { TaskStatus } from './generated/TaskStatus'
 export type { TaskKind } from './generated/TaskKind'
 export type { TaskInfo } from './generated/TaskInfo'
@@ -62,6 +71,12 @@ export type { FilePatch } from './generated/FilePatch'
 export type { Hunk } from './generated/Hunk'
 export type { CardUse } from './generated/CardUse'
 export type { CardInfo as Card } from './generated/CardInfo'
+export type { LibraryDeck } from './generated/LibraryDeck'
+export type { LibraryCard } from './generated/LibraryCard'
+export type { LibraryRef } from './generated/LibraryRef'
+export type { LibraryCardDetail } from './generated/LibraryCardDetail'
+export type { LibraryCommit } from './generated/LibraryCommit'
+export type { LibraryVersion } from './generated/LibraryVersion'
 export type { AgentsNote } from './generated/AgentsNote'
 
 /** Milliseconds since the Unix epoch (rumu-core's `Timestamp` alias). */
@@ -78,7 +93,9 @@ export type Effect = Content
 
 /** The tag/version the catalog payload uses. */
 export const CATALOG_TAG = 'memory.catalog'
-export const CATALOG_VERSION = 2
+/** The once-per-path assistant introduction: model context only, never shown. */
+export const ASSISTANT_INTRO_TAG = 'assistant.intro'
+export const CATALOG_VERSION = 3
 
 export const TASK_TAG = 'kernel.task'
 export const TASK_VERSION = 1

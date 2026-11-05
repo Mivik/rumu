@@ -12,6 +12,8 @@ const paths: Record<string, string> = {
   memory:
     '<path d="M12 3.5l8.5 4.5L12 12.5 3.5 8 12 3.5z"/><path d="M3.5 12.5L12 17l8.5-4.5"/><path d="M3.5 16.5L12 21l8.5-4.5"/>',
   tag: '<path d="M4 4h7.2l8.8 8.8-7.2 7.2L4 11.2V4z"/><circle cx="8.7" cy="8.7" r="1.3"/>',
+  pin: '<path d="M9.5 4h5l-.8 5.2 3.3 3.3H7l3.3-3.3L9.5 4z"/><path d="M12 12.5V20"/>',
+  link: '<path d="M9.5 14.5l5-5"/><path d="M8.5 11.5l-1.7 1.7a3.2 3.2 0 0 0 4.5 4.5l1.7-1.7"/><path d="M15.5 12.5l1.7-1.7a3.2 3.2 0 0 0-4.5-4.5l-1.7 1.7"/>',
   mount:
     '<path d="M3.5 7.5a2 2 0 0 1 2-2h4l2 2.2h7a2 2 0 0 1 2 2v8.8a2 2 0 0 1-2 2h-13a2 2 0 0 1-2-2v-11z"/>',
   tool: '<rect x="3.5" y="5" width="17" height="14" rx="2"/><path d="M7.5 10l3 2.5-3 2.5"/><path d="M12.5 15h4"/>',
@@ -26,16 +28,18 @@ const paths: Record<string, string> = {
   error: '<circle cx="12" cy="12" r="8.5"/><path d="M9 9l6 6M15 9l-6 6"/>',
   ok: '<path d="M5.5 13l4.2 4.2L18.5 8"/>',
   note: '<path d="M5 4.5A1.5 1.5 0 0 1 6.5 3h11A1.5 1.5 0 0 1 19 4.5v15a1.5 1.5 0 0 1-1.5 1.5h-11A1.5 1.5 0 0 1 5 19.5v-15z"/><path d="M8.5 8h7M8.5 12h7M8.5 16h4"/>',
+  history: '<circle cx="12" cy="12" r="8.5"/><path d="M12 7.5V12l3 2"/>',
   file: '<path d="M6 3.5h7.5l4.5 4.5v12.5H6v-17z"/><path d="M13.5 3.5V8H18"/>',
   external: '<path d="M7 17L17 7"/><path d="M9.5 7H17v7.5"/>',
   close: '<path d="M6.5 6.5l11 11M17.5 6.5l-11 11"/>',
   menu: '<path d="M4 7h16M4 12h16M4 17h16"/>',
-  more: '<circle cx="6" cy="12" r="1.4" fill="currentColor" stroke="none"/><circle cx="12" cy="12" r="1.4" fill="currentColor" stroke="none"/><circle cx="18" cy="12" r="1.4" fill="currentColor" stroke="none"/>',
+  more: '<circle cx="6" cy="12" r="1.7" fill="currentColor" stroke="none"/><circle cx="12" cy="12" r="1.7" fill="currentColor" stroke="none"/><circle cx="18" cy="12" r="1.7" fill="currentColor" stroke="none"/>',
   panel: '<rect x="3.5" y="4.5" width="17" height="15" rx="2"/><path d="M15 4.5v15"/>',
   chevron: '<path d="M9 6l6 6-6 6"/>',
   down: '<path d="M6.5 9.5l5.5 5.5 5.5-5.5"/>',
   gauge:
     '<path d="M4.2 16.5a8 8 0 1 1 15.6 0"/><path d="M12 15l3.6-4.2"/><circle cx="12" cy="15.5" r="1.2"/>',
+  search: '<circle cx="11" cy="11" r="6.5"/><path d="M16 16l4 4"/>',
   plus: '<path d="M12 4v16M4 12h16"/>',
   send: '<path d="M12 19V5.5"/><path d="M6.5 11L12 5.5l5.5 5.5"/>',
   image:

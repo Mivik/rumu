@@ -11,9 +11,7 @@
     "task": "task {id} · {status}",
     "moreCards": "{names} ({count})",
     "catalogTitles": {
-      "root": "Card catalog",
-      "directory": "Cards under {prefix}/",
-      "workspace": "Cards related to workspace {name}"
+      "deck": "Cards at {at}"
     }
   },
   "drawer": {
@@ -29,13 +27,5 @@
     "path": "Path",
     "revision": "Revision",
     "olderSeen": "The version seen then is not the latest."
-  },
-  "library": {
-    "title": "Card library"
-  },
-  "catalog": {
-    "search": "Search cards",
-    "none": "No card matches “{q}”.",
-    "empty": "rumu writes a card when it learns something worth keeping."
   }
 }

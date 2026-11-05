@@ -1,8 +1,9 @@
 <script setup lang="ts">
 import { onBeforeUnmount, onMounted, ref } from 'vue'
 import Sidebar from './components/Sidebar.vue'
+import AssistantSettings from './components/AssistantSettings.vue'
 import ChatView from './components/chat/ChatView.vue'
-import CardCatalog from './components/chat/CardCatalog.vue'
+import LibraryView from './components/library/LibraryView.vue'
 import Lightbox from './components/Lightbox.vue'
 import Toasts from './components/Toasts.vue'
 import { closePanels, layout } from './lib/layout'
@@ -51,7 +52,8 @@ onBeforeUnmount(() => {
       :aria-hidden="!layout.sidebarOpen && !lgUp ? 'true' : undefined"
     />
     <ChatView />
-    <CardCatalog />
+    <LibraryView />
+    <AssistantSettings />
     <Lightbox />
     <Toasts />
 
