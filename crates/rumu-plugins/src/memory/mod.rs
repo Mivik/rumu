@@ -1,43 +1,43 @@
 //! The memory plugin.
 //!
 //! Memory is the capability of keeping, finding and using **cards**: markdown
-//! knowledge files addressed by path ids (`dev/rumu/kernel`) in the home
-//! library under `RUMU_HOME/cards` (`@rumu:/cards/<id>`). The card library
-//! itself — content model, storage, discovery — lives in the `rumu-cards`
-//! crate; this plugin surfaces cards to the model through four built-in
-//! hooks:
+//! files in the **decks** mounted on the branch (`@rumu:/cards/<mount>/<path>`).
+//! The decks, their identity and history live in the `rumu-cards` crate; this
+//! plugin surfaces their cards to the model through five built-in hooks:
 //!
-//! - `card-catalog` on `llm.pre`: the layered card index;
+//! - `assistant-intro` on `llm.pre`: once per path, which assistant deck this
+//!   is, the mount table, the placement rules and the mounted decks' pinned
+//!   cards;
+//! - `card-catalog` on `llm.pre`: one catalog per mounted deck (once per
+//!   path);
 //! - `recall` on `prompt`: imports the cards whose text best matches the
-//!   prompt (BM25F over `keywords:`, title, description and body), within a
-//!   body budget and deduped per `(id, rev)`;
-//! - `related-cards` on `tool.post`: a successful call touching a workspace
-//!   or file imports the cards whose `scope:` covers it, most specific first.
-//!   Imports are revision-aware: the path's latest use of a card decides
-//!   whether its body is (re)injected;
-//! - `card-updates` on `llm.pre`: cards whose current revision differs from
-//!   the path's last-used revision get a one-line notice (no body), deduped
-//!   per new revision by querying the path index.
+//!   prompt (BM25F over `keywords:`, path, description and body);
+//! - `related-cards` on `tool.post`: imports the cards whose `scope:` covers a
+//!   touched workspace or file;
+//! - `card-updates` on `llm.pre`: cards (keyed by deck id and path) whose current
+//!   revision differs from the path's last-used revision get a one-line
+//!   notice.
 
-use std::collections::{BTreeMap, HashMap, HashSet};
-use std::path::Path;
-use std::sync::{Arc, Mutex};
+use std::collections::BTreeSet;
 
 use crate::Result;
 use async_trait::async_trait;
-use rumu_cards::catalog::{self, CatalogInput, CatalogNote, CatalogScope, SessionTouch};
-use rumu_cards::store::FsCardStore;
-use rumu_cards::{Card, library, scope, usage};
+use rumu_cards::catalog::{self, CatalogNote};
+use rumu_cards::deck::Action;
+use rumu_cards::{Card, Cards, Decks, card, scope, usage};
 use rumu_core::{
     Content, Cx, Decision, Event, HookOutput, HookSpec, Manifest, Plugin, RUMU_WORKSPACE,
-    SessionId, Timestamp, Utf8TypedPath, Utf8TypedPathBuf, now,
+    Structured, Utf8TypedPath, Utf8TypedPathBuf,
 };
+use serde::{Deserialize, Serialize};
 use serde_json::{Value, json};
 
 #[cfg(test)]
 mod tests;
 
-/// Built-in hook id for the layered card catalog (fires on `llm.pre`).
+/// Built-in hook id for the assistant's introduction (fires on `llm.pre`, first).
+const ASSISTANT_INTRO_HOOK: &str = "assistant-intro";
+/// Built-in hook id for the per-deck card catalogs (fires on `llm.pre`).
 const CARD_CATALOG_HOOK: &str = "card-catalog";
 /// Built-in hook id for update notices (fires on `llm.pre`, runs last).
 const CARD_UPDATES_HOOK: &str = "card-updates";
@@ -51,9 +51,12 @@ const RECALL_LIMIT: usize = 5;
 const RECALL_BUDGET: usize = 10_000;
 
 const INSTRUCTIONS: &str = "Cards are your memory across conversations: markdown notes at \
-`@rumu:/cards/<id>`, where the id is a slash path such as `dev/rumu/kernel`.\n\n\
-Finding cards. A catalog note lists cards by id and description; its folded directories unfold \
-in later notes once you touch a card under them or switch to a related workspace. Some cards \
+`@rumu:/cards/<mount>/<path>`. The decks mounted on this branch appear under `/cards`; your own \
+deck is `/cards/self`, and `/cards/<other>` are other mounted decks. Writing to another deck asks \
+the user unless they already allowed it. Where a card belongs is in the placement rules of your \
+introduction.\n\n\
+Finding cards. A catalog note lists a deck's most-used cards by path and description; its folded \
+directories group the rest — `list` or `search` reach them. Some cards \
 arrive on their own, in full, as notes: those whose text matches the user's message, and those \
 whose `scope:` covers a workspace or file you use — don't re-read them. For any other card that \
 looks relevant, `read` it; `search` finds cards the catalog doesn't show. When a note says a card \
@@ -62,8 +65,8 @@ Saving cards. Save what will matter in later conversations: the user's preferenc
 corrections, project facts and conventions, decisions with their reasons, procedures that worked. \
 Don't save the state of the current task or anything easily re-derived from the files. `search` \
 before creating a card, and update an existing one rather than adding a near-duplicate. Keep one \
-topic per card, grouped with related cards under a shared directory. Name ids with short \
-English kebab-case segments, such as `user/profile` or `user/dev-environment`.\n\n\
+topic per card, grouped with related cards under a shared directory. Name paths with short \
+English kebab-case segments, such as `user/profile`.\n\n\
 Every card's frontmatter has a one-sentence `description` (shown in the catalog) and \
 `keywords:` — the terms that should bring it to mind, as a YAML list (`keywords: [deploy, \
 production]`); keywords, description and body are what message matching scores. Write a card's \
@@ -71,30 +74,34 @@ description and body in the language of the conversation. Give `keywords` both t
 actually uses for the topic, in their language, and their English equivalents. Give \
 project-specific cards a `scope:` — a workspace name (`proj`) or a workspace-relative glob \
 (`proj:src/net/**`), one or a list — so they arrive when that workspace or those files are used. \
-Link other cards as `@rumu:/cards/<id>`.";
+A link card is only `link: @rumu:/cards/<path>` (anything else is dropped); reads follow it, writes are \
+refused.";
+
+/// Payload of the `assistant.intro` note (v1): the once-per-path assistant introduction.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+struct AssistantIntro {
+    name: String,
+}
+
+impl Structured for AssistantIntro {
+    const TAG: &'static str = "assistant.intro";
+    const V: u32 = 1;
+}
 
 /// The memory plugin. Card content is read from disk on demand.
 pub struct MemoryPlugin {
-    /// The home card library (`RUMU_HOME/cards`).
-    store: Arc<FsCardStore>,
-    /// Per-session [`SessionTouch`], keyed by the session's `updated_at` so a
-    /// cached history is reused until that session changes.
-    touch_cache: Mutex<HashMap<SessionId, (Timestamp, SessionTouch)>>,
+    decks: Decks,
 }
 
 impl MemoryPlugin {
-    /// Open the card library under `RUMU_HOME` (a missing `cards/` is an
-    /// empty library).
-    pub fn new(home: &Path) -> Self {
-        Self {
-            store: Arc::new(FsCardStore::home(home)),
-            touch_cache: Mutex::new(HashMap::new()),
-        }
+    pub fn new(decks: Decks) -> Self {
+        Self { decks }
     }
 
-    /// Load a card from the home library on demand (content is never cached).
-    fn load_card(&self, id: &str) -> Result<Option<Card>> {
-        Ok(library::load_card(&self.store, id)?)
+    /// The mounted card space of the branch.
+    fn cards(&self, cx: &Cx) -> Result<Cards> {
+        let state = cx.state()?;
+        Ok(Cards::new(&self.decks, &state.mounts))
     }
 }
 
@@ -102,6 +109,11 @@ impl MemoryPlugin {
 /// notices) and the scope-card import on successful tool calls.
 fn builtin_hooks() -> Vec<HookSpec> {
     vec![
+        HookSpec {
+            id: ASSISTANT_INTRO_HOOK.into(),
+            matcher: json!({ "event": "llm.pre" }),
+            priority: i32::MAX - 2,
+        },
         HookSpec {
             id: CARD_CATALOG_HOOK.into(),
             matcher: json!({ "event": "llm.pre" }),
@@ -116,7 +128,7 @@ fn builtin_hooks() -> Vec<HookSpec> {
             id: RELATED_CARDS_HOOK.into(),
             matcher: json!({
                 "event": "tool.post",
-                "tool": ["read", "write", "edit", "list", "bash", "workspace_use"],
+                "tool": ["read", "write", "edit", "list", "bash", "workspace_use", "card_mount"],
             }),
             priority: 0,
         },
@@ -146,6 +158,7 @@ impl Plugin for MemoryPlugin {
         cx: &Cx,
     ) -> rumu_core::Result<HookOutput> {
         let out = match hook_id {
+            ASSISTANT_INTRO_HOOK => self.assistant_intro(cx).await,
             CARD_CATALOG_HOOK => self.catalog_notes(cx).await,
             CARD_UPDATES_HOOK => self.update_notices(cx).await,
             RELATED_CARDS_HOOK => self.related_cards(event, cx).await,
@@ -157,123 +170,194 @@ impl Plugin for MemoryPlugin {
 }
 
 impl MemoryPlugin {
-    /// The `card-catalog` hook: the root index once per branch plus
-    /// progressive directory / workspace unfolding.
-    async fn catalog_notes(&self, cx: &Cx) -> Result<HookOutput> {
-        let cards = library::load_all(&self.store)?;
-        if cards.is_empty() {
+    /// The `assistant-intro` hook: once per path, say which assistant deck
+    /// this is, its mount table, the placement rules and the mounted decks'
+    /// pinned cards. Written as a note, so the prompt cache is unaffected.
+    async fn assistant_intro(&self, cx: &Cx) -> Result<HookOutput> {
+        let state = cx.state()?;
+        let Some(deck) = self.decks.get(&state.assistant) else {
+            return Ok(HookOutput::default());
+        };
+        if !cx.index()?.all::<AssistantIntro>().is_empty() {
             return Ok(HookOutput::default());
         }
-        let path_nodes = cx.path()?;
-        let state = cx.state()?;
-
-        let mut mtimes: BTreeMap<String, rumu_core::Timestamp> = BTreeMap::new();
-        for id in cards.keys() {
-            if let Ok(Some(m)) = self.store.mtime(id) {
-                mtimes.insert(id.clone(), m);
+        let mut text = format!(
+            "You are the assistant `{}` (deck id {}). Cards live in the decks mounted under `{RUMU_WORKSPACE}:/cards`.",
+            deck.meta.name, deck.meta.id
+        );
+        let cards = Cards::new(&self.decks, &state.mounts);
+        if cards.mounts().is_empty() {
+            text.push_str(" No deck is mounted.");
+        } else {
+            text.push_str("\nMounts:");
+            let session = cx.session.to_string();
+            for mounted in cards.mounts() {
+                let asks = state.asked_by.is_none()
+                    && !self.decks.allowed(
+                        Action::Write,
+                        &session,
+                        &state.assistant,
+                        mounted.deck.id(),
+                    );
+                text.push_str(&format!(
+                    "\n- `{RUMU_WORKSPACE}:/cards/{}` — deck `{}`{}",
+                    mounted.point(),
+                    mounted.deck.meta.name,
+                    if asks { " (writes ask the user)" } else { "" }
+                ));
             }
         }
-        let now_ms = now();
-
-        // Use history from other sessions; hosts without session storage
-        // (the plugins' test fakes) degrade to "no history". A session's
-        // touch is cached until its `updated_at` changes.
-        let mut sessions: Vec<SessionTouch> = Vec::new();
-        if let Ok(all) = cx.history().sessions() {
-            let mut cache = self
-                .touch_cache
-                .lock()
-                .expect("session touch cache poisoned");
-            let live: HashSet<SessionId> = all.iter().map(|s| s.id.clone()).collect();
-            cache.retain(|id, _| live.contains(id));
-            for s in all {
-                if s.id == cx.session {
-                    continue;
-                }
-                if let Some((at, touch)) = cache.get(&s.id)
-                    && *at == s.updated_at
-                {
-                    sessions.push(touch.clone());
-                    continue;
-                }
-                if let Ok((_, nodes, _)) = cx.history().session_tree(&s.id) {
-                    let touch = catalog::extract_session_touch(&nodes);
-                    cache.insert(s.id.clone(), (s.updated_at, touch.clone()));
-                    sessions.push(touch);
-                }
-            }
-        }
-
-        let scores: BTreeMap<String, f64> = cards
-            .keys()
-            .map(|id| {
-                (
-                    id.clone(),
-                    catalog::score_card(id, mtimes.get(id).copied(), &sessions, now_ms),
-                )
-            })
-            .collect();
-
-        let unfolded: Vec<CatalogScope> = cx
-            .index()?
-            .all::<CatalogNote>()
-            .into_iter()
-            .map(|e| e.value.scope)
-            .collect();
-        let notes = catalog::plan_unfold_notes(&CatalogInput {
-            cards: &cards,
-            scores: &scores,
-            path_nodes: &path_nodes,
-            unfolded: &unfolded,
-            default_workspace: state.default_workspace.as_deref(),
-            sessions: &sessions,
-            now_ms,
-        });
-        Ok(HookOutput {
-            effects: notes
+        text.push_str(
+            "\n\nPlacement rules:\n\
+1. Put a card in the mounted deck whose charter (its pinned `about` card) it fits; if none fits, \
+keep it in your own deck (`/cards/self`).\n\
+2. When a card in your own deck turns out to fit another deck's charter (for example, the user \
+says it applies everywhere), move it there (`write` with `from`).\n\
+3. Process stays in sessions (`@rumu:/sessions` is memory too); only conclusions become cards.\n\
+4. Link related cards instead of copying them (`link: @rumu:/cards/<path>`).",
+        );
+        if state.asked_by.is_none() {
+            let others: Vec<String> = self
+                .decks
+                .assistants()
                 .into_iter()
-                .map(|n| Content::note_with(n.catalog.markdown(), &n.catalog))
-                .collect(),
+                .filter(|d| d.id() != deck.id())
+                .map(|d| format!("`{}` (id {})", d.meta.name, d.id()))
+                .collect();
+            if !others.is_empty() {
+                text.push_str(&format!(
+                    "\n\nOther assistants (`ask` takes the id): {}.",
+                    others.join(", ")
+                ));
+            }
+        }
+        let mut pinned = Vec::new();
+        for mounted in cards.mounts() {
+            for card in mounted.deck.pinned()? {
+                let public = mounted.card_path(&card.path);
+                pinned.push(format!("## {public}\n{}", card.body.trim_end()));
+            }
+        }
+        if !pinned.is_empty() {
+            text.push_str("\n\nPinned cards:\n\n");
+            text.push_str(&pinned.join("\n\n"));
+        }
+        Ok(HookOutput {
+            effects: vec![Content::note_with(
+                text,
+                &AssistantIntro {
+                    name: deck.meta.name.clone(),
+                },
+            )],
+            decision: Decision::Pass,
+        })
+    }
+
+    /// The `card-catalog` hook: one note per mounted deck at the first model
+    /// call of a path that has no catalog yet. A catalog is frozen, so once a
+    /// note is on the path this does nothing and reads no cards.
+    async fn catalog_notes(&self, cx: &Cx) -> Result<HookOutput> {
+        if !cx.index()?.all::<CatalogNote>().is_empty() {
+            return Ok(HookOutput::default());
+        }
+        let cards = self.cards(cx)?;
+        let state = cx.state()?;
+        let now_ms = rumu_core::now();
+        let mut effects = Vec::new();
+        for mounted in cards.mounts() {
+            let note = catalog::deck_catalog(
+                &self.decks,
+                &mounted.deck,
+                &mounted.mount.at,
+                &state.assistant,
+                now_ms,
+            )?;
+            if !note.entries.is_empty() || !note.folded.is_empty() {
+                effects.push(Content::note_with(note.markdown(), &note));
+            }
+        }
+        Ok(HookOutput {
+            effects,
             decision: Decision::Pass,
         })
     }
 
     /// The `card-updates` hook: one-line notices for used cards whose current
     /// revision differs from the last-used one. A notice already on the path
-    /// for that `(id, rev)` is not repeated.
+    /// for that `(deck, path, rev)` is not repeated.
     async fn update_notices(&self, cx: &Cx) -> Result<HookOutput> {
+        let cards = self.cards(cx)?;
         let nodes = cx.path()?;
         let uses = usage::uses_on_path(&nodes);
         let seen = cx.index()?.all::<usage::CardUpdate>();
+        let mounted = cards.deck_ids();
+        // Live cards outside the mounted decks that a mounted link still
+        // shares; read only when a changed card's deck is not mounted.
+        let mut linked: Option<BTreeSet<(String, String)>> = None;
         let mut out = HookOutput::default();
-        for (id, u) in &uses {
-            let (rev, text) = match self.load_card(id)? {
+        for ((deck_id, path), u) in &uses {
+            let deck = self.decks.get(deck_id);
+            let card = deck
+                .as_ref()
+                .and_then(|deck| deck.read(path).ok().flatten())
+                .map(|text| card::parse_card(path, &text));
+            let shown = cards.public_path(deck_id, path).unwrap_or_else(|| {
+                let name = deck
+                    .as_ref()
+                    .map(|d| d.meta.name.clone())
+                    .unwrap_or_else(|| deck_id.clone());
+                format!("{name}:{path}")
+            });
+            let (rev, text) = match card {
                 Some(c) if Some(c.revision.as_str()) == u.rev.as_deref() => continue,
-                Some(c) => (
-                    c.revision.clone(),
-                    format!(
-                        "Card `{RUMU_WORKSPACE}:/cards/{id}` changed since this branch last read \
-                         it (rev {} → {}). Re-read it if it is still relevant.",
-                        u.rev.as_deref().unwrap_or("?"),
-                        c.revision,
-                    ),
-                ),
-                None => (
-                    "deleted".to_owned(),
-                    format!(
-                        "Card `{RUMU_WORKSPACE}:/cards/{id}` was deleted after this branch last read it \
-                         (last seen rev {}); its snapshot in this conversation is unchanged.",
-                        u.rev.as_deref().unwrap_or("?"),
-                    ),
-                ),
+                Some(c) => {
+                    // An unmounted card is no longer updated.
+                    if !mounted.contains(deck_id) {
+                        if linked.is_none() {
+                            linked = Some(cards.identities()?.into_values().collect());
+                        }
+                        if !linked
+                            .as_ref()
+                            .is_some_and(|l| l.contains(&(deck_id.clone(), path.clone())))
+                        {
+                            continue;
+                        }
+                    }
+                    (
+                        c.revision.clone(),
+                        format!(
+                            "Card `{RUMU_WORKSPACE}:/cards/{shown}` changed since this branch last \
+                             read it (rev {} → {}). Re-read it if it is still relevant.",
+                            u.rev.as_deref().unwrap_or("?"),
+                            c.revision,
+                        ),
+                    )
+                }
+                None => {
+                    // The card is gone; its path is where it was.
+                    if !mounted.contains(deck_id) {
+                        continue;
+                    }
+                    (
+                        "deleted".to_owned(),
+                        format!(
+                            "Card `{RUMU_WORKSPACE}:/cards/{shown}` was deleted after this branch last read it (last seen rev {}); its snapshot in this conversation is unchanged.",
+                            u.rev.as_deref().unwrap_or("?"),
+                        ),
+                    )
+                }
             };
-            if seen.iter().any(|e| e.value.id == *id && e.value.rev == rev) {
+            if seen
+                .iter()
+                .any(|e| e.value.deck == *deck_id && e.value.path == *path && e.value.rev == rev)
+            {
                 continue;
             }
             out.effects.push(Content::note_with(
                 text,
                 &usage::CardUpdate {
-                    id: id.clone(),
+                    deck: deck_id.clone(),
+                    path: path.clone(),
                     rev,
                 },
             ));
@@ -283,14 +367,11 @@ impl MemoryPlugin {
 
     /// The `related-cards` hook: a successful call targeting a workspace
     /// imports the cards whose `scope:` covers it (or the touched files),
-    /// most specific first. A card already seen on this path at its current
-    /// revision is skipped; an older revision is superseded.
+    /// most specific first.
     async fn related_cards(&self, event: &Event, cx: &Cx) -> Result<HookOutput> {
         if event.payload.get("is_error").and_then(Value::as_bool) == Some(true) {
             return Ok(HookOutput::default());
         }
-        // File tools and bash name the workspace in `fields.workspace`;
-        // `workspace_use` carries it in its args.
         let name = if event.fields.tool.as_deref() == Some("workspace_use") {
             event.payload["args"]["name"].as_str().map(str::to_owned)
         } else {
@@ -317,22 +398,30 @@ impl MemoryPlugin {
             .collect();
         let paths: Vec<&str> = rels.iter().map(|p| p.as_str()).collect();
 
-        let cards = library::load_all(&self.store)?;
-        let related = scope::related(&cards, &name, &paths);
+        let cards = self.cards(cx)?;
+        let all = cards.rankable()?;
+        let related = scope::related(&all, &name, &paths);
         if related.is_empty() {
             return Ok(HookOutput::default());
         }
         let uses = usage::uses_on_path(&cx.path()?);
+        let identities = cards.identities()?;
         let mut out = HookOutput::default();
         for card in related {
-            let last = uses.get(&card.id).and_then(|u| u.rev.as_deref());
+            let Some((deck, path)) = identities.get(&card.path) else {
+                continue;
+            };
+            let last = uses
+                .get(&(deck.clone(), path.clone()))
+                .and_then(|u| u.rev.as_deref());
             let Some(body) = import_body(card, last) else {
                 continue;
             };
             out.effects.push(Content::note_with(
                 body,
                 &usage::CardImport {
-                    id: card.id.clone(),
+                    deck: deck.clone(),
+                    path: path.clone(),
                     rev: card.revision.clone(),
                 },
             ));
@@ -342,23 +431,28 @@ impl MemoryPlugin {
 
     /// The `recall` hook: the cards whose text best matches the prompt are
     /// imported as notes, best first, until [`RECALL_BUDGET`] is spent.
-    /// Revision-aware like scope imports: a card already on the path at the
-    /// current revision is skipped, an older one is superseded.
     async fn recall(&self, event: &Event, cx: &Cx) -> Result<HookOutput> {
         let Some(text) = event.fields.text.as_deref() else {
             return Ok(HookOutput::default());
         };
-        let cards = library::load_all(&self.store)?;
-        let hits = rumu_cards::recall::rank(&cards, text, RECALL_LIMIT);
+        let cards = self.cards(cx)?;
+        let all = cards.rankable()?;
+        let hits = rumu_cards::recall::rank(&all, text, RECALL_LIMIT);
         if hits.is_empty() {
             return Ok(HookOutput::default());
         }
         let uses = usage::uses_on_path(&cx.path()?);
+        let identities = cards.identities()?;
         let mut out = HookOutput::default();
         let mut budget = RECALL_BUDGET;
         for hit in hits {
             let card = hit.card;
-            let last = uses.get(&card.id).and_then(|u| u.rev.as_deref());
+            let Some((deck, path)) = identities.get(&card.path) else {
+                continue;
+            };
+            let last = uses
+                .get(&(deck.clone(), path.clone()))
+                .and_then(|u| u.rev.as_deref());
             let Some(body) = import_body(card, last) else {
                 continue;
             };
@@ -369,7 +463,8 @@ impl MemoryPlugin {
             out.effects.push(Content::note_with(
                 body,
                 &usage::CardImport {
-                    id: card.id.clone(),
+                    deck: deck.clone(),
+                    path: path.clone(),
                     rev: card.revision.clone(),
                 },
             ));
