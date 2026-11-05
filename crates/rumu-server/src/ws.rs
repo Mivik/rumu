@@ -2,7 +2,6 @@
 
 use std::collections::HashMap;
 use std::net::IpAddr;
-use std::path::PathBuf;
 use std::sync::Arc;
 
 use axum::Json;
@@ -16,9 +15,15 @@ use axum::response::{IntoResponse, Response};
 use axum::routing::{get, post};
 use futures_util::{SinkExt, StreamExt};
 use rumu_blob::Blobs;
-use rumu_core::{BranchId, Content, NodeId, SessionId, TaskId};
+use rumu_cards::{Author, Cards, Decks, library};
+use rumu_core::{
+    BranchId, CardMount, Content, NodeId, RUMU_WORKSPACE, SessionId, SessionRoot, TaskId,
+    WorkspaceCatalog,
+};
 use rumu_kernel::Kernel;
+use rumu_plugins::{Assistant, assistant_of};
 use rust_embed::{EmbeddedFile, RustEmbed};
+use serde::Deserialize;
 use serde_json::{Value, json};
 use tokio::sync::broadcast::error::RecvError;
 use tracing::warn;
@@ -34,7 +39,7 @@ enum ServerError {
     #[error(transparent)]
     Kernel(#[from] rumu_kernel::Error),
 
-    /// The card library failed.
+    /// A deck or card operation failed.
     #[error(transparent)]
     Cards(#[from] rumu_cards::Error),
 
@@ -53,6 +58,18 @@ enum ServerError {
     /// A required string parameter is missing.
     #[error("missing string param `{0}`")]
     MissingParam(String),
+
+    /// A request parameter has the wrong shape.
+    #[error("invalid params: {0}")]
+    InvalidParams(String),
+
+    /// An assistant edit was refused (validation or writing `deck.yaml`).
+    #[error(transparent)]
+    Plugins(#[from] rumu_plugins::Error),
+
+    /// The request names an assistant that is not configured.
+    #[error("unknown assistant `{0}`")]
+    UnknownAssistant(String),
 }
 
 impl ServerError {
@@ -60,7 +77,9 @@ impl ServerError {
     fn code(&self) -> i64 {
         match self {
             Self::UnknownMethod(_) => -32601,
-            Self::MissingParam(_) => -32602,
+            Self::MissingParam(_) | Self::InvalidParams(_) => -32602,
+            // A stale write: the web shows its "this card changed" banner.
+            Self::Cards(rumu_cards::Error::Stale { .. }) => -32010,
             _ => -32000,
         }
     }
@@ -68,12 +87,13 @@ impl ServerError {
 
 type Result<T> = std::result::Result<T, ServerError>;
 
-/// Shared handler state: the kernel, RUMU_HOME (for the home card library)
+/// Shared handler state: the kernel, the deck registry, the workspace catalog
 /// and the blob store behind image attachments.
 #[derive(Clone)]
 struct AppState {
     kernel: Arc<Kernel>,
-    home: PathBuf,
+    decks: Decks,
+    catalog: WorkspaceCatalog,
     blobs: Blobs,
 }
 
@@ -84,10 +104,16 @@ struct AppState {
 #[allow_missing = true]
 struct WebAssets;
 
-pub fn router(kernel: Arc<Kernel>, home: PathBuf, blobs: Blobs) -> Router {
+pub fn router(
+    kernel: Arc<Kernel>,
+    decks: Decks,
+    catalog: WorkspaceCatalog,
+    blobs: Blobs,
+) -> Router {
     let state = AppState {
         kernel,
-        home,
+        decks,
+        catalog,
         blobs,
     };
     Router::new()
@@ -319,6 +345,20 @@ async fn handle_request(state: &AppState, raw: &str) -> String {
     }
 }
 
+/// The assistant deck named by the `assistant` id param (the default
+/// assistant when omitted).
+fn assistant_param(state: &AppState, p: &Value) -> Result<rumu_cards::Deck> {
+    let id = p
+        .get("assistant")
+        .and_then(Value::as_str)
+        .map_or_else(|| state.decks.default_assistant(), str::to_owned);
+    state
+        .decks
+        .get(&id)
+        .filter(|d| d.assistant())
+        .ok_or(ServerError::UnknownAssistant(id))
+}
+
 /// A JSON-RPC 2.0 error response.
 fn error_frame(id: Value, code: i64, message: String) -> Value {
     json!({ "jsonrpc": "2.0", "id": id, "error": { "code": code, "message": message } })
@@ -330,10 +370,152 @@ async fn dispatch(state: &AppState, method: &str, p: &Value) -> Result<Value> {
         "session.list" => Ok(json!(kernel.list_sessions()?)),
 
         "session.create" => {
-            // Optional initial default workspace (a preset name or `@rumu`).
-            let workspace = p.get("workspace").and_then(Value::as_str);
-            let (session, branch) = kernel.create_session(workspace.map(str::to_owned)).await?;
+            // The assistant deck id (the default assistant when omitted); its
+            // default workspace applies unless the request names one (a preset
+            // name or `@rumu`).
+            let deck = assistant_param(state, p)?;
+            let workspace = p
+                .get("workspace")
+                .and_then(Value::as_str)
+                .map(str::to_owned)
+                .or(deck.meta.workspace.clone());
+            let mounts = state.decks.default_mounts(deck.id());
+            let (session, branch) = kernel
+                .create_rooted_session(
+                    workspace,
+                    SessionRoot {
+                        assistant: deck.id().to_owned(),
+                        asked_by: None,
+                        mounts,
+                    },
+                )
+                .await?;
             Ok(json!({ "session": session, "branch": branch }))
+        }
+
+        "assistant.list" => {
+            let list: Vec<Assistant> = state
+                .decks
+                .assistants()
+                .iter()
+                .map(|d| assistant_of(&state.decks, d))
+                .collect();
+            Ok(json!(list))
+        }
+
+        // Choices for the assistant config form: decks (as mount targets) and
+        // the workspaces an assistant may default to (`@rumu` always).
+        "assistant.options" => {
+            let mut workspaces = vec![RUMU_WORKSPACE.to_owned()];
+            workspaces.extend(state.catalog.workspaces.iter().map(|w| w.name.clone()));
+            let decks: Vec<Value> = state
+                .decks
+                .list()
+                .iter()
+                .map(|d| json!({ "id": d.id(), "name": d.meta.name, "assistant": d.assistant() }))
+                .collect();
+            Ok(json!({ "decks": decks, "workspaces": workspaces }))
+        }
+
+        // Create or replace an assistant deck: its `deck.yaml` and, when given,
+        // a pinned `instructions.md`.
+        "assistant.upsert" => {
+            #[derive(Deserialize)]
+            #[serde(deny_unknown_fields)]
+            struct MountReq {
+                deck: String,
+                at: String,
+                #[serde(default)]
+                write: bool,
+            }
+            #[derive(Deserialize)]
+            #[serde(deny_unknown_fields)]
+            struct Upsert {
+                #[serde(default)]
+                id: Option<String>,
+                name: String,
+                #[serde(default)]
+                mounts: Vec<MountReq>,
+                #[serde(default)]
+                workspace: Option<String>,
+                #[serde(default)]
+                instructions: Option<String>,
+                #[serde(default)]
+                allow_ask: Vec<String>,
+            }
+            let req: Upsert = serde_json::from_value(p.clone())
+                .map_err(|e| ServerError::InvalidParams(e.to_string()))?;
+            // No id creates a deck (refused if its directory exists); an id
+            // updates exactly that deck.
+            let existing = match req.id.as_deref().filter(|id| !id.is_empty()) {
+                Some(id) => Some(
+                    state
+                        .decks
+                        .get(id)
+                        .ok_or_else(|| ServerError::UnknownAssistant(id.to_owned()))?,
+                ),
+                None => None,
+            };
+            let mounts = req
+                .mounts
+                .into_iter()
+                .map(|m| rumu_cards::DeckMount {
+                    deck: m.deck,
+                    at: m.at,
+                    write: m.write,
+                })
+                .collect();
+            let meta = rumu_cards::DeckMeta {
+                id: existing
+                    .as_ref()
+                    .map(|d| d.id().to_owned())
+                    .unwrap_or_default(),
+                name: req.name.clone(),
+                assistant: true,
+                workspace: req.workspace.filter(|w| !w.is_empty()),
+                mounts,
+                allow_ask: req.allow_ask,
+            };
+            let deck = state.decks.upsert(meta)?;
+            let cards = Cards::library(&state.decks);
+            let public = format!("{}/instructions", deck.name);
+            match req.instructions.filter(|i| !i.trim().is_empty()) {
+                Some(instructions) => {
+                    let view = format!(
+                        "---\npinned: true\ndescription: Pinned instructions for {}\n---\n{}\n",
+                        req.name,
+                        instructions.trim_end()
+                    );
+                    cards.write(&public, &view, None, None, &Author::user())?;
+                }
+                None if cards.raw(&public)?.is_some() => {
+                    cards.remove(&public, None, &Author::user())?;
+                }
+                None => {}
+            }
+            Ok(json!({ "deck": assistant_of(&state.decks, &deck) }))
+        }
+
+        "assistant.delete" => {
+            let id = str_param(p, "id")?;
+            state.decks.remove_assistant(id)?;
+            Ok(json!({}))
+        }
+
+        "assistant.set_default" => {
+            let id = str_param(p, "id")?;
+            state.decks.set_default_assistant(id)?;
+            Ok(json!({}))
+        }
+
+        // Questions a tool call put to the user (`decision.requested`).
+        "decision.list" => Ok(json!(kernel.decisions())),
+
+        "decision.answer" => {
+            let id = str_param(p, "id")?;
+            let answer = p.get("answer").cloned().unwrap_or(Value::Null);
+            kernel.answer_decision(id, answer)?;
+            Ok(json!({}))
         }
 
         "session.tree" => {
@@ -436,17 +618,235 @@ async fn dispatch(state: &AppState, method: &str, p: &Value) -> Result<Value> {
             Ok(json!({ "task": kernel.kill_task(&id).await? }))
         }
 
-        // The home card library (`@rumu:/cards`).
+        // The cards a branch sees (its mount table, `card_mount` included), or
+        // without a `branch` what an assistant deck sees by default:
+        // `/cards/self` plus its `deck.yaml` mounts.
         "card.list" => {
-            let store = rumu_cards::FsCardStore::home(&state.home);
-            let out = match rumu_cards::library::card_infos(&store) {
-                Ok(infos) => infos,
+            let mounts = match p.get("branch").and_then(Value::as_str) {
+                Some(branch) => kernel
+                    .branch_path(&BranchId::from(branch))?
+                    .1
+                    .mounts
+                    .clone(),
+                None => {
+                    let deck = assistant_param(state, p)?;
+                    let mut mounts = vec![CardMount {
+                        deck: deck.id().to_owned(),
+                        at: rumu_cards::cards::SELF_MOUNT.into(),
+                    }];
+                    mounts.extend(state.decks.default_mounts(deck.id()));
+                    mounts
+                }
+            };
+            let cards = Cards::new(&state.decks, &mounts);
+            let out: Vec<rumu_cards::CardInfo> = match cards.all() {
+                Ok(all) => all
+                    .into_values()
+                    .map(|loaded| {
+                        // The card file's own deck and path (for a link, not
+                        // the target's): the drawer opens it in the library.
+                        let (deck, path) = cards
+                            .mount_of(&loaded.path)
+                            .map(|(mounted, path)| (mounted.deck.id().to_owned(), path.to_owned()))
+                            .unwrap_or_default();
+                        let description = loaded.card.summary();
+                        let keywords = loaded
+                            .card
+                            .keywords()
+                            .into_iter()
+                            .map(str::to_owned)
+                            .collect();
+                        let pinned = loaded.card.pinned();
+                        let link = loaded
+                            .link
+                            .clone()
+                            .or_else(|| loaded.card.link().map(str::to_owned));
+                        rumu_cards::CardInfo {
+                            id: loaded.path,
+                            deck,
+                            path,
+                            description,
+                            keywords,
+                            body: loaded.card.body,
+                            revision: loaded.card.revision,
+                            pinned,
+                            link,
+                            meta: loaded.card.meta,
+                        }
+                    })
+                    .collect(),
                 Err(e) => {
                     warn!(error = %e, "card.list failed");
                     vec![]
                 }
             };
             Ok(serde_json::to_value(out)?)
+        }
+
+        // ---- the library (the user's view of every deck) ----
+        "library.decks" => Ok(json!(library::decks(&state.decks)?)),
+
+        "library.deck_create" => {
+            let name = str_param(p, "name")?;
+            Ok(json!(library::deck_create(&state.decks, name)?))
+        }
+
+        "library.deck_rename" => {
+            let id = str_param(p, "id")?;
+            let name = str_param(p, "name")?;
+            let deck = deck_param(state, id)?;
+            Ok(json!(library::deck_rename(&state.decks, &deck, name)?))
+        }
+
+        "library.deck_delete" => {
+            let deck = deck_param(state, str_param(p, "id")?)?;
+            state.decks.delete(deck.id())?;
+            Ok(json!({}))
+        }
+
+        "library.move" => {
+            #[derive(Deserialize)]
+            #[serde(deny_unknown_fields)]
+            struct Move {
+                deck: String,
+                from: String,
+                to: String,
+                #[serde(default)]
+                folder: bool,
+            }
+            let req: Move = serde_json::from_value(p.clone())
+                .map_err(|e| ServerError::InvalidParams(e.to_string()))?;
+            let deck = deck_param(state, &req.deck)?;
+            library::move_path(&state.decks, &deck, &req.from, &req.to, req.folder)?;
+            Ok(json!({}))
+        }
+
+        "library.delete_folder" => {
+            let deck = deck_param(state, str_param(p, "deck")?)?;
+            library::delete_folder(&state.decks, &deck, str_param(p, "path")?)?;
+            Ok(json!({}))
+        }
+
+        "library.cards" => {
+            let deck = optional_deck_param(state, p)?;
+            Ok(json!(library::cards(&state.decks, deck.as_ref())?))
+        }
+
+        "library.search" => {
+            #[derive(Deserialize)]
+            #[serde(deny_unknown_fields)]
+            struct Search {
+                query: String,
+                #[serde(default)]
+                deck: Option<String>,
+            }
+            let req: Search = serde_json::from_value(p.clone())
+                .map_err(|e| ServerError::InvalidParams(e.to_string()))?;
+            if req.query.trim().is_empty() {
+                return Err(ServerError::MissingParam("query".into()));
+            }
+            let deck = match req.deck.as_deref().filter(|deck| !deck.is_empty()) {
+                Some(id) => Some(deck_param(state, id)?),
+                None => None,
+            };
+            Ok(json!(library::search(
+                &state.decks,
+                &req.query,
+                deck.as_ref()
+            )?))
+        }
+
+        "library.card" => {
+            let deck = deck_param(state, str_param(p, "deck")?)?;
+            let path = str_param(p, "path")?;
+            Ok(json!(library::detail(&state.decks, &deck, path)?))
+        }
+
+        "library.save" => {
+            #[derive(Deserialize)]
+            #[serde(deny_unknown_fields)]
+            struct RefReq {
+                deck: String,
+                path: String,
+            }
+            #[derive(Deserialize)]
+            #[serde(deny_unknown_fields)]
+            struct Save {
+                deck: String,
+                path: String,
+                view: String,
+                base: String,
+                #[serde(default)]
+                from: Option<RefReq>,
+            }
+            let req: Save = serde_json::from_value(p.clone())
+                .map_err(|e| ServerError::InvalidParams(e.to_string()))?;
+            let deck = deck_param(state, &req.deck)?;
+            let from_deck = match &req.from {
+                Some(from) => Some(deck_param(state, &from.deck)?),
+                None => None,
+            };
+            let from = match (&req.from, &from_deck) {
+                (Some(from), Some(from_deck)) => Some((from_deck, from.path.as_str())),
+                _ => None,
+            };
+            Ok(json!(library::save(
+                &state.decks,
+                &deck,
+                library::SaveRequest {
+                    path: &req.path,
+                    view: &req.view,
+                    base: &req.base,
+                    from,
+                },
+            )?))
+        }
+
+        "library.delete" => {
+            #[derive(Deserialize)]
+            #[serde(deny_unknown_fields)]
+            struct Delete {
+                deck: String,
+                path: String,
+                base: String,
+            }
+            let req: Delete = serde_json::from_value(p.clone())
+                .map_err(|e| ServerError::InvalidParams(e.to_string()))?;
+            let deck = deck_param(state, &req.deck)?;
+            library::delete(&state.decks, &deck, &req.path, &req.base)?;
+            Ok(json!({}))
+        }
+
+        "library.history" => {
+            #[derive(Deserialize)]
+            #[serde(deny_unknown_fields)]
+            struct History {
+                deck: String,
+                path: String,
+            }
+            let req: History = serde_json::from_value(p.clone())
+                .map_err(|e| ServerError::InvalidParams(e.to_string()))?;
+            let deck = deck_param(state, &req.deck)?;
+            Ok(json!(library::history(&state.decks, &deck, &req.path)?))
+        }
+
+        "library.version" => {
+            #[derive(Deserialize)]
+            #[serde(deny_unknown_fields)]
+            struct Version {
+                deck: String,
+                path: String,
+                commit: String,
+            }
+            let req: Version = serde_json::from_value(p.clone())
+                .map_err(|e| ServerError::InvalidParams(e.to_string()))?;
+            let deck = deck_param(state, &req.deck)?;
+            Ok(json!(library::version(
+                &state.decks,
+                &deck,
+                &req.path,
+                &req.commit
+            )?))
         }
 
         other => Err(ServerError::UnknownMethod(other.to_owned())),
@@ -457,4 +857,24 @@ fn str_param<'a>(p: &'a Value, key: &str) -> Result<&'a str> {
     p.get(key)
         .and_then(Value::as_str)
         .ok_or_else(|| ServerError::MissingParam(key.to_owned()))
+}
+
+/// The deck a library request names; an unknown id is a bad request.
+fn deck_param(state: &AppState, id: &str) -> Result<rumu_cards::Deck> {
+    state
+        .decks
+        .get(id)
+        .ok_or_else(|| ServerError::InvalidParams(format!("unknown deck `{id}`")))
+}
+
+/// The optional `deck` filter of a library listing.
+fn optional_deck_param(state: &AppState, p: &Value) -> Result<Option<rumu_cards::Deck>> {
+    match p
+        .get("deck")
+        .and_then(Value::as_str)
+        .filter(|id| !id.is_empty())
+    {
+        Some(id) => Ok(Some(deck_param(state, id)?)),
+        None => Ok(None),
+    }
 }

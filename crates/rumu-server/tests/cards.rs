@@ -47,7 +47,9 @@ fn has_card_use(nodes: &[Node]) -> bool {
     nodes.iter().any(|n| {
         matches!(&n.body,
         NodeBody::Note { content, .. }
-            if content.decode::<rumu_cards::usage::CardUse>().is_some_and(|u| u.id == "x"))
+            if content
+                .decode::<rumu_cards::usage::CardUse>()
+                .is_some_and(|u| !u.deck.is_empty() && !u.path.is_empty()))
     })
 }
 
@@ -56,8 +58,23 @@ fn has_card_use(nodes: &[Node]) -> bool {
 fn card_home() -> (tempfile::TempDir, std::path::PathBuf) {
     let dir = tempfile::tempdir().unwrap();
     let home = dir.path().to_path_buf();
-    std::fs::create_dir_all(home.join("cards")).unwrap();
-    std::fs::write(home.join("cards/x.md"), "---\ntitle: X\n---\nv1 body\n").unwrap();
+    let decks = rumu_cards::Decks::load(&home).unwrap();
+    let deck = decks
+        .upsert(rumu_cards::DeckMeta {
+            id: String::new(),
+            name: "main".into(),
+            assistant: false,
+            workspace: None,
+            mounts: Vec::new(),
+            allow_ask: Vec::new(),
+        })
+        .unwrap();
+    deck.write_file(
+        "x",
+        "---\ntitle: X\n---\nv1 body\n",
+        &rumu_cards::Author::user(),
+    )
+    .unwrap();
     (dir, home)
 }
 
@@ -80,16 +97,28 @@ async fn run_turn(kernel: &Arc<Kernel>, branch: &rumu_core::BranchId, text: &str
 async fn update_notices_only_follow_actual_reads() {
     let (_dir, home) = card_home();
     // One kernel, two sessions, one script in call order:
-    //   A turn 1: read(@rumu:/cards/x) + reply;  B turn 1: reply;  A turn 2: reply;
+    //   A turn 1: read(@rumu:/cards/self/x) + reply;  B turn 1: reply;  A turn 2: reply;
     //   fork turn: reply.
+    let decks = rumu_cards::Decks::load(&home).unwrap();
+    let main = decks
+        .list()
+        .into_iter()
+        .find(|d| d.name == "main")
+        .unwrap()
+        .id()
+        .to_owned();
     let plugins: Vec<Arc<dyn Plugin>> = vec![
-        Arc::new(MemoryPlugin::new(&home)),
-        Arc::new(WorkspacePlugin::new(&home, WorkspaceCatalog::default())),
+        Arc::new(MemoryPlugin::new(decks.clone())),
+        Arc::new(WorkspacePlugin::new(
+            &home,
+            WorkspaceCatalog::default(),
+            decks,
+        )),
     ];
     let kernel = Kernel::new(
         Arc::new(Store::in_memory()),
         Arc::new(ScriptedLlm::strict([
-            resp_call("a1", "read", json!({ "path": "@rumu:/cards/x" })),
+            resp_call("a1", "read", json!({ "path": "@rumu:/cards/self/x" })),
             LlmResponse::text("done-a1"),
             LlmResponse::text("done-b1"),
             LlmResponse::text("done-a2"),
@@ -103,7 +132,7 @@ async fn update_notices_only_follow_actual_reads() {
     )
     .unwrap();
 
-    let (a, _) = kernel.create_session(None).await.unwrap();
+    let (a, _) = kernel.create_session(None, main.clone()).await.unwrap();
     let ba = a.active_branch.clone();
     run_turn(&kernel, &ba, "read card x").await;
     let (nodes_a, _) = kernel.branch_path(&ba).unwrap();
@@ -115,10 +144,18 @@ async fn update_notices_only_follow_actual_reads() {
     assert!(has_card_use(&nodes_a), "card_use marker on A's path");
 
     // The card changes on disk.
-    std::fs::write(home.join("cards/x.md"), "---\ntitle: X\n---\nv2 body\n").unwrap();
+    rumu_cards::open_deck(&home, "main")
+        .unwrap()
+        .unwrap()
+        .write_file(
+            "x",
+            "---\ntitle: X\n---\nv2 body\n",
+            &rumu_cards::Author::user(),
+        )
+        .unwrap();
 
     // B (fresh session, same home) never read the card → no notice.
-    let (b, _) = kernel.create_session(None).await.unwrap();
+    let (b, _) = kernel.create_session(None, main.clone()).await.unwrap();
     let bb = b.active_branch.clone();
     run_turn(&kernel, &bb, "hello without reading anything").await;
     let (nodes_b, _) = kernel.branch_path(&bb).unwrap();
@@ -133,10 +170,7 @@ async fn update_notices_only_follow_actual_reads() {
     let (nodes_a2, _) = kernel.branch_path(&ba).unwrap();
     let updates = update_notices(&nodes_a2);
     assert_eq!(
-        updates
-            .iter()
-            .filter(|u| u.id == "x" && u.rev != "deleted")
-            .count(),
+        updates.iter().filter(|u| u.rev != "deleted").count(),
         1,
         "exactly one notice: {updates:?}"
     );
@@ -146,14 +180,17 @@ async fn update_notices_only_follow_actual_reads() {
             NodeBody::Note { content, .. }
                 if content
                     .decode::<rumu_cards::usage::CardUpdate>()
-                    .is_some_and(|u| u.id == "x") =>
+                    .is_some_and(|u| u.rev != "deleted") =>
             {
                 Some(content.text.clone())
             }
             _ => None,
         })
         .unwrap();
-    assert!(notice_text.contains("`@rumu:/cards/x`"), "{notice_text}");
+    assert!(
+        notice_text.contains("`@rumu:/cards/self/x`"),
+        "{notice_text}"
+    );
     assert!(notice_text.contains("Re-read it"), "{notice_text}");
     assert!(
         !notice_text.contains("v2 body"),

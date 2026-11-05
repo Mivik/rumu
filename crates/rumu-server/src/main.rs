@@ -54,12 +54,13 @@ async fn main() -> Result<()> {
             .join(", "),
         "workspaces loaded"
     );
-    let plugins = load_plugins(&home, &config, catalog.clone()).await?;
+    let decks = rumu_cards::Decks::load(&home)?;
+    let plugins = load_plugins(&home, &config, catalog.clone(), decks.clone()).await?;
     let llm = load_llm(blobs.clone())?;
     let kernel = Kernel::new(store.clone(), llm, plugins, catalog.clone())?;
     spawn_blob_gc(store, blobs.clone());
 
-    let app = ws::router(kernel, home.clone(), blobs);
+    let app = ws::router(kernel, decks, catalog, blobs);
     let addr = SocketAddr::new(host, port);
     let listener = tokio::net::TcpListener::bind(addr).await?;
     info!(home = %home.display(), %addr, "listening on http://{addr}");
@@ -128,9 +129,10 @@ async fn load_plugins(
     home: &Path,
     config: &rumu_plugins::Config,
     catalog: rumu_core::WorkspaceCatalog,
+    decks: rumu_cards::Decks,
 ) -> Result<Vec<Arc<dyn Plugin>>> {
     let plugins =
-        rumu_plugins::load_all(home, config, catalog, &[rumu_kernel::agent_tool()]).await?;
+        rumu_plugins::load_all(home, config, catalog, decks, &[rumu_kernel::agent_tool()]).await?;
     let names: Vec<_> = plugins.iter().map(|p| p.manifest().name).collect();
     info!(plugins = %names.join(", "), "plugins loaded");
     Ok(plugins)
