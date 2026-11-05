@@ -33,6 +33,7 @@ export type { OwedReply, SiblingAlternative } from './state/derived'
 export { timeline } from './state/timeline'
 export type {
   ActivityCatalog,
+  ActivityRecall,
   ActivityStep,
   ActivityThought,
   ActivityTools,

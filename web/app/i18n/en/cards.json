@@ -6,6 +6,8 @@
   },
   "pills": {
     "imported": "Recalled",
+    "recalled": "Recalled {count} card | Recalled {count} cards",
+    "recalledList": "Recalled {count} card: | Recalled {count} cards:",
     "changed": "changed",
     "workspace": "default {names}",
     "task": "task {id} · {status}",

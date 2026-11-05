@@ -2,15 +2,16 @@
 // A card catalog note (`memory.catalog`), one per mounted deck: the cards it
 // offered the model, each opening in the CardDrawer, and the folded
 // directories as one line each. Shown inside an opened activity run
-// (ActivityRun); the heading names the deck's mount point. It only mounts when
-// its run opens, so its cards' underlines draw in each time
+// (ActivityRun), folded under a heading that names the deck's mount point. It
+// only mounts when its run opens, so its cards' underlines draw in each time
 // (.underline-cascade).
-import { computed } from 'vue'
+import { computed, ref } from 'vue'
 import { t } from '../../i18n'
 import { cardLabel } from '../../lib/cards'
 import type { CatalogNote, Node } from '../../lib/types'
 import { CATALOG_TAG, CATALOG_VERSION } from '../../lib/types'
 import { openDrawer } from '../../lib/store'
+import Icon from '../ui/Icon.vue'
 
 const props = defineProps<{ node: Node }>()
 
@@ -25,9 +26,12 @@ const catalog = computed<CatalogNote | null>(() => {
 
 const heading = computed(() => {
   const s = catalog.value?.scope
-  if (!s?.at) return ''
+  if (!s?.at) return t('tools.phrase.catalog')
   return t('cards.pills.catalogTitles.deck', { at: s.at })
 })
+
+/** Folded until asked for: the run's line is already the outer disclosure. */
+const open = ref(false)
 
 /** A folded directory without its mount prefix (`self/dev` → `dev/`). */
 function folderLabel(prefix: string): string {
@@ -45,22 +49,34 @@ function foldedLabel(names: string[]): string {
 </script>
 
 <template>
-  <div v-if="catalog" class="underline-cascade text-meta">
-    <div v-if="heading" class="mb-1 font-semibold text-ink">{{ heading }}</div>
-    <ul class="flex flex-col gap-0.5">
-      <li v-for="(e, i) in catalog.entries" :key="e.id">
-        <button type="button" class="card-ref" :style="{ '--i': i }" @click="openDrawer(e.id)">
-          {{ cardLabel(e.id) }}
-        </button>
-        <span v-if="e.summary" class="text-ink-3"> — {{ e.summary }}</span>
-      </li>
-    </ul>
-    <div v-if="catalog.folded.length" class="mt-1 flex flex-col gap-0.5 text-ink-3">
-      <div v-for="f in catalog.folded" :key="f.prefix">
-        <template v-if="folderLabel(f.prefix)">
-          <span class="font-mono">{{ folderLabel(f.prefix) }}</span> —
-        </template>
-        {{ foldedLabel(f.names) }}
+  <div v-if="catalog" class="text-meta">
+    <button
+      type="button"
+      class="reason-toggle max-w-full"
+      :class="open ? 'text-ink-2' : 'text-ink-3 hover:text-ink-2'"
+      :aria-expanded="open"
+      @click="open = !open"
+    >
+      <Icon name="memory" :size="12" class="relative top-px flex-none text-memory" />
+      <span class="min-w-0 truncate">{{ heading }}</span>
+      <Icon name="chevron" :size="10" class="reason-chevron flex-none" :class="{ 'rotate-90': open }" />
+    </button>
+    <div v-if="open" class="underline-cascade reveal mt-1">
+      <ul class="flex flex-col gap-0.5">
+        <li v-for="(e, i) in catalog.entries" :key="e.id">
+          <button type="button" class="card-ref" :style="{ '--i': i }" @click="openDrawer(e.id)">
+            {{ cardLabel(e.id) }}
+          </button>
+          <span v-if="e.summary" class="text-ink-3"> — {{ e.summary }}</span>
+        </li>
+      </ul>
+      <div v-if="catalog.folded.length" class="mt-1 flex flex-col gap-0.5 text-ink-3">
+        <div v-for="f in catalog.folded" :key="f.prefix">
+          <template v-if="folderLabel(f.prefix)">
+            <span class="font-mono">{{ folderLabel(f.prefix) }}</span> —
+          </template>
+          {{ foldedLabel(f.names) }}
+        </div>
       </div>
     </div>
   </div>

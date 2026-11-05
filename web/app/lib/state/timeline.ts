@@ -18,8 +18,8 @@ function isCatalogNote(n: Node): boolean {
   return n.body.type === 'note' && n.body.content.data?.tag === CATALOG_TAG
 }
 
-/** A card memory recalled for the prompt: rumu's doing, so it belongs to the
- *  assistant turn (after the mascot), not under the user's message. */
+/** Cards recalled for the prompt (`memory.import`): rumu's doing, so they fold
+ *  into the work of the step they were recalled for. */
 function isRecallNote(n: Node): boolean {
   return n.body.type === 'note' && n.body.source === 'memory' && n.body.content.data?.tag === 'memory.import'
 }
@@ -66,7 +66,13 @@ export interface ActivityCatalog {
   kind: 'catalog'
   node: Node
 }
-export type ActivityStep = ActivityThought | ActivityTools | ActivityCatalog
+/** Cards recalled before a step: they fold into the run, whose body lists
+ *  them. */
+export interface ActivityRecall {
+  kind: 'recall'
+  nodes: Node[]
+}
+export type ActivityStep = ActivityThought | ActivityTools | ActivityCatalog | ActivityRecall
 export interface GroupActivityItem {
   kind: 'activity'
   steps: ActivityStep[]
@@ -90,13 +96,25 @@ function pushActivity(g: TimelineGroup, step: ActivityStep): void {
   else g.items.push({ kind: 'activity', steps: [step] })
 }
 
-/** Move the notes collected for a turn into its group: the plain ones (a
- * recalled card, …) as a context line of their own, then each card catalog
- * as an activity step, so the reasoning that follows joins its fold. */
+/** Add a recalled card to the trailing recall step, or start one. */
+function pushRecall(g: TimelineGroup, n: Node): void {
+  const last = g.items[g.items.length - 1]
+  const step = last?.kind === 'activity' ? last.steps[last.steps.length - 1] : undefined
+  if (step?.kind === 'recall') step.nodes.push(n)
+  else pushActivity(g, { kind: 'recall', nodes: [n] })
+}
+
+/** Move the notes collected for a turn into its group: the plain ones (a card
+ * update, a task completion, …) as a context line of their own, then each
+ * recalled card and card catalog as activity steps, so the reasoning that
+ * follows joins its fold. */
 function moveNotes(g: TimelineGroup, notes: Node[]): void {
-  const plain = notes.filter((n) => !isCatalogNote(n))
+  const plain = notes.filter((n) => !isCatalogNote(n) && !isRecallNote(n))
   if (plain.length) g.items.push({ kind: 'context', nodes: plain })
-  for (const n of notes) if (isCatalogNote(n)) pushActivity(g, { kind: 'catalog', node: n })
+  for (const n of notes) {
+    if (isRecallNote(n)) pushRecall(g, n)
+    else if (isCatalogNote(n)) pushActivity(g, { kind: 'catalog', node: n })
+  }
 }
 
 export interface TimelineGroup {

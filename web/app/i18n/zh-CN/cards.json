@@ -6,6 +6,8 @@
   },
   "pills": {
     "imported": "回忆",
+    "recalled": "回忆了 {count} 张卡片",
+    "recalledList": "回忆了 {count} 张卡片：",
     "changed": "已变更",
     "workspace": "默认 {names}",
     "task": "任务 {id} · {status}",
