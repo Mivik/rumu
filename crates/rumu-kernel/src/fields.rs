@@ -132,8 +132,8 @@ fn known(name: &str, state: &PathState) -> bool {
     name == RUMU_WORKSPACE || state.workspaces.iter().any(|w| w.name == name)
 }
 
-/// The field form of a `@rumu` workspace path: card ids drop their optional
-/// `.md` (`/cards/<id>`); everything else (including `/sessions/…` and bare
+/// The field form of a `@rumu` workspace path: card paths drop their
+/// optional `.md` (`/cards/<mount>/<path>`); everything else (including `/sessions/…` and bare
 /// prefixes) keeps the normalized path.
 fn rumu_field_path(abs: &Utf8TypedPathBuf) -> String {
     let Utf8TypedPathBuf::Unix(abs) = abs else {

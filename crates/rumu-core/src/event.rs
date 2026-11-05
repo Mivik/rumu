@@ -54,7 +54,7 @@ pub struct Fields {
     /// The normalized absolute paths of a tool call's `path`(+`paths`) args
     /// (file tools only): on the workspace's machine in its native style
     /// (`/home/u/code/proj/src/a.rs`, `C:\Users\me\proj\src\a.rs`), or
-    /// `/cards/<id>` / `/sessions/…` on `@rumu`. The target itself is
+    /// `/cards/<mount>/<path>` / `/sessions/…` on `@rumu`. The target itself is
     /// `workspace`, not a path — `bash`, which has no `path`, is matchable
     /// via `workspace`.
     pub paths: Vec<String>,

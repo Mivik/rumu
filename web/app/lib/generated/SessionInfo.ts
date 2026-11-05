@@ -2,4 +2,8 @@
 import type { BranchId } from "./BranchId";
 import type { SessionId } from "./SessionId";
 
-export type SessionInfo = { id: SessionId, title: string, active_branch: BranchId, created_at: number, updated_at: number, };
+export type SessionInfo = { id: SessionId, title: string, active_branch: BranchId, created_at: number, updated_at: number, 
+/**
+ * The assistant the session runs as.
+ */
+assistant: string, };

@@ -391,9 +391,50 @@ impl Structured for WorkspaceScope {
     const V: u32 = 1;
 }
 
-/// Payload of the session `root` marker (v1).
+/// One entry of the branch's card mount table: a deck mounted at `/cards/…`.
+/// Mounting makes a deck readable; writing to it is approved separately
+/// (the session's own deck is always writable).
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, ts_rs::TS)]
+#[ts(export)]
+pub struct CardMount {
+    /// The mounted deck's id.
+    pub deck: String,
+    /// The mount point, always under `/cards` (`/cards/self`, `/cards/user`).
+    pub at: String,
+}
+
+impl Structured for CardMount {
+    const TAG: &'static str = "card.mount";
+    const V: u32 = 1;
+}
+
+/// Payload of a card unmount marker (v1).
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+pub struct CardUnmount {
+    pub at: String,
+}
+
+impl Structured for CardUnmount {
+    const TAG: &'static str = "card.unmount";
+    const V: u32 = 1;
+}
+
+/// Payload of the session `root` marker (v1). The assistant lives on the root so
+/// that every path of the session carries it, including sub-agents forked at
+/// the root.
 #[derive(Debug, Clone, Default, PartialEq, Eq, Serialize, Deserialize)]
-pub struct SessionRoot {}
+pub struct SessionRoot {
+    /// The deck id of the assistant the session runs as.
+    pub assistant: String,
+    /// The assistant deck whose `ask` this session answers. Every path of the session
+    /// carries it, so a sub-agent cannot shed the restrictions it implies.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub asked_by: Option<String>,
+    /// The deck's `deck.yaml` mounts, seeded at session start (the session's
+    /// own deck is implicit at `/cards/self`).
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub mounts: Vec<CardMount>,
+}
 
 impl Structured for SessionRoot {
     const TAG: &'static str = "root";
@@ -524,6 +565,8 @@ pub struct SessionInfo {
     pub active_branch: BranchId,
     pub created_at: Timestamp,
     pub updated_at: Timestamp,
+    /// The assistant the session runs as.
+    pub assistant: String,
 }
 
 /// State derived purely from the root→head path (`state = f(path)`), merged
@@ -546,6 +589,14 @@ pub struct PathState {
     /// default → first available) and kept within the workspace scope.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub default_workspace: Option<String>,
+    /// The assistant from the session's root.
+    pub assistant: String,
+    /// The assistant whose `ask` this session answers, from the session's root.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub asked_by: Option<String>,
+    /// The branch's card mount table (root defaults + `card_mount` markers).
+    #[serde(default)]
+    pub mounts: Vec<CardMount>,
 }
 
 #[cfg(test)]

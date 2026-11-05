@@ -2,7 +2,8 @@
 //! then merging in the workspace preset catalog.
 
 use rumu_core::{
-    Node, NodeBody, PathState, RUMU_WORKSPACE, WorkspaceCatalog, WorkspaceScope, WorkspaceUse,
+    Node, NodeBody, PathState, RUMU_WORKSPACE, SessionRoot, WorkspaceCatalog, WorkspaceScope,
+    WorkspaceUse,
 };
 
 /// Fold nodes (root → head, in order) into the derived path state.
@@ -47,6 +48,21 @@ fn fold_node(st: &mut PathState, body: &NodeBody) {
     };
     if let Some(use_) = content.decode::<WorkspaceUse>() {
         st.default_workspace = Some(use_.name);
+    } else if let Some(root) = content.decode::<SessionRoot>() {
+        st.assistant = root.assistant.clone();
+        st.asked_by = root.asked_by;
+        // The session's own deck is always at `/cards/self`.
+        st.mounts = vec![rumu_core::CardMount {
+            deck: root.assistant,
+            at: "/cards/self".into(),
+        }];
+        st.mounts
+            .extend(root.mounts.into_iter().filter(|m| m.at != "/cards/self"));
+    } else if let Some(mount) = content.decode::<rumu_core::CardMount>() {
+        st.mounts.retain(|m| m.at != mount.at);
+        st.mounts.push(mount);
+    } else if let Some(unmount) = content.decode::<rumu_core::CardUnmount>() {
+        st.mounts.retain(|m| m.at != unmount.at);
     } else if let Some(scope) = content.decode::<WorkspaceScope>() {
         // Nested scopes can only narrow: keep the intersection, in the
         // first scope's order.

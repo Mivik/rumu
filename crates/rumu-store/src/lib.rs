@@ -731,7 +731,7 @@ mod tests {
             dur_ms: None,
             body: NodeBody::Note {
                 source: "system".into(),
-                content: rumu_core::Content::marker(&rumu_core::SessionRoot {}),
+                content: rumu_core::Content::marker(&rumu_core::SessionRoot::default()),
             },
         };
         let branch = Branch {
@@ -749,6 +749,7 @@ mod tests {
             active_branch: branch.id.clone(),
             created_at: root.at,
             updated_at: root.at,
+            assistant: "assistant".into(),
         };
         store.insert_session(&session).unwrap();
         store.insert_branch(&branch).unwrap();
@@ -854,13 +855,13 @@ mod tests {
         let line = |s: &str| format!("{s}\n");
         let content = [
             line(&format!(
-                r#"{{"t":"session","id":"{sid}","title":"","tags":["infra"],"active_branch":"B1","created_at":1,"updated_at":1}}"#
+                r#"{{"t":"session","id":"{sid}","title":"","tags":["infra"],"active_branch":"B1","created_at":1,"updated_at":1,"assistant":"A"}}"#
             )),
             line(&format!(
                 r#"{{"t":"branch","id":"B1","session":"{sid}","head":"N0","forked_from":null,"kind":{{"type":"main"}},"status":"active","created_at":1}}"#
             )),
             line(&format!(
-                r#"{{"t":"node","id":"N0","parent":null,"session":"{sid}","at":1,"body":{{"type":"note","source":"system","content":{{"text":"","data":{{"tag":"root","v":1,"data":{{}}}}}}}}}}"#
+                r#"{{"t":"node","id":"N0","parent":null,"session":"{sid}","at":1,"body":{{"type":"note","source":"system","content":{{"text":"","data":{{"tag":"root","v":1,"data":{{"assistant":"A"}}}}}}}}}}"#
             )),
             line(&format!(
                 r#"{{"t":"node","id":"N1","parent":"N0","session":"{sid}","at":2,"body":{{"type":"note","source":"system","content":{{"text":"","data":{{"tag":"tag","v":1,"data":{{"name":"infra"}}}}}}}}}}"#

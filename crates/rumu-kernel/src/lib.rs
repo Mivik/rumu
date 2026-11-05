@@ -536,10 +536,33 @@ impl Kernel {
 
     // ---- session lifecycle ----
 
+    /// Create a session running as `assistant`, with an optional initial default
+    /// workspace. The assistant is recorded on the root node, so every path of the
+    /// session (and `session.start` hooks) sees it.
     pub async fn create_session(
         self: &Arc<Self>,
         default_workspace: Option<String>,
+        assistant: String,
     ) -> Result<(SessionInfo, Branch)> {
+        self.create_rooted_session(
+            default_workspace,
+            SessionRoot {
+                assistant,
+                asked_by: None,
+                mounts: Vec::new(),
+            },
+        )
+        .await
+    }
+
+    /// Create a session from a fully populated root marker (the deck id, the
+    /// asked-by reference, and the deck's default mounts).
+    pub async fn create_rooted_session(
+        self: &Arc<Self>,
+        default_workspace: Option<String>,
+        root_data: SessionRoot,
+    ) -> Result<(SessionInfo, Branch)> {
+        let assistant = root_data.assistant.clone();
         let at = now();
         let session = SessionId::new();
         let root = Node {
@@ -550,7 +573,7 @@ impl Kernel {
             dur_ms: None,
             body: NodeBody::Note {
                 source: SYSTEM_SOURCE.into(),
-                content: Content::marker(&SessionRoot {}),
+                content: Content::marker(&root_data),
             },
         };
         let branch = Branch {
@@ -568,6 +591,7 @@ impl Kernel {
             active_branch: branch.id.clone(),
             created_at: at,
             updated_at: at,
+            assistant,
         };
         self.store.insert_session(&info)?;
         self.store.insert_branch(&branch)?;
@@ -1215,6 +1239,7 @@ impl Kernel {
             active_branch: branch.id.clone(),
             created_at: at,
             updated_at: at,
+            assistant: src.assistant.clone(),
         };
         // The session row first: the store drops writes for unknown sessions.
         self.store.insert_session(&info)?;
@@ -1336,7 +1361,10 @@ mod tests {
             WorkspaceCatalog::default(),
         )
         .unwrap();
-        let (_, branch) = kernel.create_session(None).await.unwrap();
+        let (_, branch) = kernel
+            .create_session(None, "assistant".into())
+            .await
+            .unwrap();
 
         kernel
             .append_body(
@@ -1468,7 +1496,10 @@ mod tests {
             WorkspaceCatalog::default(),
         )
         .unwrap();
-        let (_, branch) = kernel.create_session(None).await.unwrap();
+        let (_, branch) = kernel
+            .create_session(None, "assistant".into())
+            .await
+            .unwrap();
 
         kernel
             .append_body(

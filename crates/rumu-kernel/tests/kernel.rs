@@ -616,7 +616,10 @@ async fn setup_with_catalog(
     catalog: WorkspaceCatalog,
 ) -> (Arc<Kernel>, Arc<FakeLlm>, SessionId, BranchId) {
     let (kernel, llm) = kernel_with(plugins, scripted, catalog);
-    let (session, _) = kernel.create_session(None).await.unwrap();
+    let (session, _) = kernel
+        .create_session(None, "assistant".into())
+        .await
+        .unwrap();
     (
         kernel,
         llm,
@@ -1053,7 +1056,10 @@ async fn flaky_setup(
         WorkspaceCatalog::default(),
     )
     .unwrap();
-    let (session, _) = kernel.create_session(None).await.unwrap();
+    let (session, _) = kernel
+        .create_session(None, "assistant".into())
+        .await
+        .unwrap();
     (kernel, llm, session.active_branch.clone())
 }
 
@@ -1163,7 +1169,10 @@ async fn failure_after_a_delta_is_not_retried() {
         WorkspaceCatalog::default(),
     )
     .unwrap();
-    let (session, _) = kernel.create_session(None).await.unwrap();
+    let (session, _) = kernel
+        .create_session(None, "assistant".into())
+        .await
+        .unwrap();
     let branch = session.active_branch.clone();
     let mut rx = kernel.tap_pushes();
 
@@ -1277,7 +1286,10 @@ async fn retry_refused_when_answered_or_busy() {
         WorkspaceCatalog::default(),
     )
     .unwrap();
-    let (session, _) = kernel.create_session(None).await.unwrap();
+    let (session, _) = kernel
+        .create_session(None, "assistant".into())
+        .await
+        .unwrap();
     let branch = session.active_branch.clone();
     kernel.prompt(&branch, "go").await.unwrap();
     started_rx.recv().await.expect("first LLM call in flight");
@@ -1313,7 +1325,10 @@ async fn retry_works_behind_a_hook_note() {
         WorkspaceCatalog::default(),
     )
     .unwrap();
-    let (session, _) = kernel.create_session(None).await.unwrap();
+    let (session, _) = kernel
+        .create_session(None, "assistant".into())
+        .await
+        .unwrap();
     let branch = session.active_branch.clone();
     let mut rx = kernel.tap_pushes();
 
@@ -2051,7 +2066,10 @@ async fn agent_concurrency_limit_serialises_script_fanout() {
         WorkspaceCatalog::default(),
     )
     .unwrap();
-    let (session, _) = kernel.create_session(None).await.unwrap();
+    let (session, _) = kernel
+        .create_session(None, "assistant".into())
+        .await
+        .unwrap();
     let branch = BranchId::from(session.active_branch.0.as_str());
     kernel.set_agent_concurrency(1);
 
@@ -2100,7 +2118,10 @@ async fn abort_while_waiting_for_an_agent_permit_creates_no_child() {
         WorkspaceCatalog::default(),
     )
     .unwrap();
-    let (session, _) = kernel.create_session(None).await.unwrap();
+    let (session, _) = kernel
+        .create_session(None, "assistant".into())
+        .await
+        .unwrap();
     let branch = BranchId::from(session.active_branch.0.as_str());
     kernel.set_agent_concurrency(1);
     let mut rx = kernel.tap_pushes();
@@ -2217,14 +2238,20 @@ async fn session_default_workspace_is_branch_state() {
     let (kernel, _llm) = kernel_with(vec![], vec![], project("proj", "/p/rumu"));
 
     // No initial workspace → the catalog default applies.
-    let (s1, _) = kernel.create_session(None).await.unwrap();
+    let (s1, _) = kernel
+        .create_session(None, "assistant".into())
+        .await
+        .unwrap();
     let (_, st1) = kernel.branch_path(&s1.active_branch).unwrap();
     assert_eq!(st1.default_workspace.as_deref(), Some("proj"));
     assert_eq!(st1.workspaces.len(), 1);
 
     // An explicit initial default (`@rumu` is valid too) is a `workspace.use`
     // marker on the path.
-    let (s2, _) = kernel.create_session(Some("@rumu".into())).await.unwrap();
+    let (s2, _) = kernel
+        .create_session(Some("@rumu".into()), "assistant".into())
+        .await
+        .unwrap();
     let (nodes, st2) = kernel.branch_path(&s2.active_branch).unwrap();
     assert_eq!(st2.default_workspace.as_deref(), Some("@rumu"));
     assert!(nodes.iter().any(|n| matches!(&n.body,
@@ -2232,7 +2259,7 @@ async fn session_default_workspace_is_branch_state() {
 
     // Unknown names are rejected outright.
     let err = kernel
-        .create_session(Some("ghost".into()))
+        .create_session(Some("ghost".into()), "assistant".into())
         .await
         .unwrap_err();
     assert!(
@@ -2245,7 +2272,10 @@ async fn session_default_workspace_is_branch_state() {
 async fn delete_session_removes_the_tree_and_pushes_it() {
     let (kernel, _llm, session, branch) = setup(vec![], vec![]).await;
     // Another session must be untouched.
-    let (keep, _) = kernel.create_session(None).await.unwrap();
+    let (keep, _) = kernel
+        .create_session(None, "assistant".into())
+        .await
+        .unwrap();
     let mut rx = kernel.tap_pushes();
 
     kernel.delete_session(&session).unwrap();
@@ -3079,7 +3109,10 @@ async fn fork_session_copies_the_path_into_a_new_session() {
         WorkspaceCatalog::default(),
     )
     .unwrap();
-    let (session, _) = kernel.create_session(None).await.unwrap();
+    let (session, _) = kernel
+        .create_session(None, "assistant".into())
+        .await
+        .unwrap();
     let branch = BranchId::from(session.active_branch.0.as_str());
     let (_, nodes, _) = run_turn_on(&kernel, &branch, "hello").await;
     let result = nodes
@@ -3628,7 +3661,10 @@ async fn steering_prompt_starts_a_new_turn_if_the_turn_ended_first() {
         WorkspaceCatalog::default(),
     )
     .unwrap();
-    let (session, _) = kernel.create_session(None).await.unwrap();
+    let (session, _) = kernel
+        .create_session(None, "assistant".into())
+        .await
+        .unwrap();
     let branch = session.active_branch.clone();
     kernel.set_wake_debounce(Duration::from_millis(5));
     let mut rx = kernel.tap_pushes();
@@ -3896,7 +3932,10 @@ async fn setup_split(
     let store = Store::in_memory();
     let llm = Arc::new(SplitLlm::new(parent, child));
     let kernel = Kernel::new(Arc::new(store), llm, plugins, WorkspaceCatalog::default()).unwrap();
-    let (session, _) = kernel.create_session(None).await.unwrap();
+    let (session, _) = kernel
+        .create_session(None, "assistant".into())
+        .await
+        .unwrap();
     let branch = BranchId::from(session.active_branch.0.as_str());
     (kernel, session.id, branch)
 }
@@ -4388,7 +4427,10 @@ async fn kernel_start_closes_out_active_agent_branches() {
         WorkspaceCatalog::default(),
     )
     .unwrap();
-    let (session, _) = kernel.create_session(None).await.unwrap();
+    let (session, _) = kernel
+        .create_session(None, "assistant".into())
+        .await
+        .unwrap();
     let main = store.get_branch(&session.active_branch).unwrap().unwrap();
     let child = rumu_core::Branch {
         id: BranchId::new(),

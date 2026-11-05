@@ -149,7 +149,7 @@ pub fn normalize_rumu(rel: &str) -> Result<Utf8UnixPathBuf> {
 }
 
 /// The canonical display form used in tool output, sub-agent footnotes
-/// and search results: `@rumu:/cards/<id>` for `@rumu`; real workspaces show
+/// and search results: `@rumu:/cards/<mount>/<path>` for `@rumu`; real workspaces show
 /// `proj:src/a.rs` under their root (with `/` separators, whatever the
 /// machine's style) and `proj:<absolute path>` outside it.
 pub fn display(ws: &str, root: Utf8TypedPath, abs: Utf8TypedPath) -> String {
