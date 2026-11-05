@@ -2,7 +2,7 @@
 // keeps the same commands for any pose, so two poses blend by plain lerp and
 // the drawing morphs.
 
-export type CatState = 'idle' | 'waiting' | 'working' | 'done' | 'blocked' | 'offline'
+export type CatState = 'idle' | 'waiting' | 'thinking' | 'working' | 'done' | 'blocked' | 'offline'
 
 export interface CatPose {
   /** Ears, each side: -1 flattened and turned out, 0 at rest, 1 perked. */
@@ -52,19 +52,20 @@ const REST: CatPose = {
 
 export const POSES: Record<CatState, CatPose> = {
   idle: REST,
-  // wide-eyed, ears up; poseAt() gives it a slow, patient look about
-  waiting: {
+  // - ω -; poseAt() rocks it gently side to side
+  waiting: { ...REST, earL: 0.5, earR: 0.5, open: 0, eyeY: -0.4 },
+  // wide-eyed and looking up; poseAt() has it gaze off to one side, then the other
+  thinking: {
     ...REST,
     earL: 1,
     earR: 1,
-    open: 1,
-    eyeY: -2.2,
+    eyeY: -2.4,
     mouthW: 3.4,
     mouthDepth: 1.8,
     mouthLift: 0.9,
   },
-  // - ω -; poseAt() sets it glancing left and right
-  working: { ...REST, earL: 0.5, earR: 0.5, open: 0, eyeY: -0.4 },
+  // eyes on the page, a touch low; poseAt() sets it reading along a line
+  working: { ...REST, earL: 0.6, earR: 0.6, eyeY: 0.5 },
   done: { ...REST, earL: 0.3, earR: 0.3, open: 0, arc: 1, mouthW: 4.2, mouthDepth: 2.8 },
   blocked: {
     ...REST,
@@ -87,70 +88,79 @@ export function lerpPose(a: CatPose, b: CatPose, t: number): CatPose {
 
 const smooth = (x: number): number => x * x * (3 - 2 * x)
 
-/** The working glance, -1…1: drift left, then look right and left in turn,
- * resting at each side. It starts from the centre at t = 0, so it picks up
- * from a still face without a jump. `t` in ms. */
-export function glance(t: number): number {
-  const IN = 500
-  const HOLD = 750
-  const MOVE = 850
-  if (t < IN) return -smooth(t / IN)
-  const p = (t - IN) % (2 * (HOLD + MOVE))
-  const leg = p % (HOLD + MOVE)
-  const from = p < HOLD + MOVE ? -1 : 1
-  return leg < HOLD ? from : from - 2 * from * smooth((leg - HOLD) / MOVE)
+/** The working read: the eyes drift along a line left to right, then snap
+ * back to the next one, blinking on the way. `look` is -1…1 and `blink` 0…1
+ * (1 shut). It starts from the centre at t = 0, so it picks up from a still
+ * face without a jump. `t` in ms. */
+function read(t: number): { look: number; blink: number } {
+  const IN = 400
+  const SWEEP = 1700
+  const BACK = 360
+  const HOLD = 300
+  const AMP = 0.7
+  if (t < IN) return { look: -AMP * smooth(t / IN), blink: 0 }
+  const p = (t - IN) % (SWEEP + BACK + HOLD)
+  if (p < SWEEP) return { look: AMP * (2 * smooth(p / SWEEP) - 1), blink: 0 }
+  if (p >= SWEEP + BACK) return { look: -AMP, blink: 0 }
+  const q = (p - SWEEP) / BACK
+  return {
+    look: AMP * (1 - 2 * smooth(q)),
+    blink: Math.sin(Math.PI * Math.min(Math.max(1.6 * q - 0.15, 0), 1)),
+  }
 }
 
-/** The waiting search, -1…1: drift left, hold, then cross to the right and
- * back — slower and shorter than the working glance, so it reads as patient
- * attention rather than scanning. It starts from the centre at t = 0, so it
- * picks up from a still face without a jump. `t` in ms. */
-function waitGlance(t: number): number {
-  const IN = 700
-  const HOLD = 850
-  const MOVE = 1250
-  const AMP = 0.55
-  if (t < IN) return -AMP * smooth(t / IN)
-  const p = (t - IN) % (2 * (HOLD + MOVE))
-  const leg = p % (HOLD + MOVE)
-  const from = p < HOLD + MOVE ? -AMP : AMP
-  return leg < HOLD ? from : from - 2 * from * smooth((leg - HOLD) / MOVE)
+/** A swing, -amp…amp: drift left, hold, cross to the right, hold, and back.
+ * It starts from the centre at t = 0, so it picks up from a still face
+ * without a jump. `t` in ms. */
+function swing(t: number, hold: number, move: number, amp: number): number {
+  const into = move / 2
+  if (t < into) return -amp * smooth(t / into)
+  const p = (t - into) % (2 * (hold + move))
+  const leg = p % (hold + move)
+  const from = p < hold + move ? -amp : amp
+  return leg < hold ? from : from - 2 * from * smooth((leg - hold) / move)
 }
 
-/** The ear sway's beat: ~4.5× the glance's 3.2 s cycle and quicker than a
- * 850 ms head turn, so the ears keep ticking while the eyes hold and settle.
- * `t` in ms. */
-const SWAY_MS = 900
-const SWAY_AMP = 1
+/** Ears bending back and forth, `amp` at most, once every `ms`. */
+const sway = (t: number, ms: number, amp: number): number => amp * Math.sin((t / ms) * Math.PI * 2)
 
 /** Whether a state keeps moving after the morph into it has settled. */
 export function isAnimated(state: CatState): boolean {
-  return state === 'waiting' || state === 'working'
+  return state === 'waiting' || state === 'thinking' || state === 'working'
 }
 
-/** A state's pose `t` ms after it began. Waiting and working move: waiting
- * looks slowly about with its ears up, awaiting the first token; working
- * glances and its ears sway on a quicker beat while tokens stream. */
+/** A state's pose `t` ms after it began. The live states move: waiting rocks
+ * gently with its eyes shut until the model speaks; thinking gazes up and
+ * off to each side in turn, head cocked; working reads along line after
+ * line, ears ticking, while the answer streams. */
 export function poseAt(state: CatState, t: number): CatPose {
   const p = POSES[state]
   if (state === 'waiting') {
-    const g = waitGlance(t)
+    const g = swing(t, 500, 1300, 0.6)
+    return { ...p, look: g, tilt: g * 5, earSway: sway(t, 1800, 0.5) }
+  }
+  if (state === 'thinking') {
+    const g = swing(t, 1800, 1100, 1)
     return {
       ...p,
-      look: g,
-      tilt: g * 3,
-      earSway: 0.4 * Math.sin((t / 1600) * Math.PI * 2),
+      look: 0.65 * g,
+      tilt: 8 * g,
+      // the head cocks: the ear on the side it leans to drops
+      earL: p.earL + 1.2 * Math.min(g, 0),
+      earR: p.earR - 1.2 * Math.max(g, 0),
+      earSway: sway(t, 2400, 0.3),
     }
   }
   if (state !== 'working') return p
-  const g = glance(t)
+  const { look: g, blink } = read(t)
   return {
     ...p,
     look: g,
-    tilt: g * 4,
+    tilt: g * 3,
+    open: p.open - blink,
     earL: p.earL - 0.3 * g,
     earR: p.earR + 0.3 * g,
-    earSway: SWAY_AMP * Math.sin((t / SWAY_MS) * Math.PI * 2),
+    earSway: sway(t, 900, 1),
   }
 }
 

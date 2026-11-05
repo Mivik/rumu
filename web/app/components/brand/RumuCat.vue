@@ -4,9 +4,9 @@ export type { CatPose, CatState } from '../../lib/cat'
 
 <script setup lang="ts">
 // The mascot, driven parametrically (lib/cat.ts): each state is a pose, and a
-// state change morphs from whatever is on screen to the new pose. Waiting and
-// working are the loops — waiting looks slowly about before the first token,
-// working glances left and right after it — and they stop when the turn does.
+// state change morphs from whatever is on screen to the new pose. Waiting,
+// thinking and working are the loops (see poseAt), and they stop when the
+// turn does.
 import { onBeforeUnmount, onMounted, shallowRef, watch } from 'vue'
 import {
   eyesD,

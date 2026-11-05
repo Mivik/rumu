@@ -41,13 +41,12 @@ const streamText = computed(() => (props.live ? (activeDelta.value?.text ?? '') 
 /** Before the first token there is no body yet: the cat plus "working…". */
 const hasBody = computed(() => props.group.items.length > 0 || props.group.assistants.length > 0)
 
-/** Live: waiting for the turn's first token (reasoning or text) vs. tokens
- * already streaming. The cat reads the difference — ears up and a slow look
- * about while waiting, a quicker side-to-side scan while generating. */
+/** Live: waiting on the model (nothing streamed yet), thinking (reasoning
+ * streams) or working (answer text streams). */
 const catState = computed<CatState>(() => {
   if (!props.live) return 'idle'
   const d = activeDelta.value
-  return d && (d.text || d.reasoning) ? 'working' : 'waiting'
+  return d?.text ? 'working' : d?.reasoning ? 'thinking' : 'waiting'
 })
 
 function textOf(n: Node): string {
