@@ -47,7 +47,7 @@
   --brand-soft: #fde8e1;
   --on-brand: #ffffff;
 
-  /* the quiet secondary: pine (topics, main branch, healthy states) */
+  /* the quiet secondary: pine (diff additions, healthy states) */
   --pine: #2f5d50;
   --pine-soft: #e3eee9;
 
@@ -307,31 +307,34 @@
     scale: 0.96;
   }
 
+  /* primary is ink, not brand: solid color on a button is reserved for danger */
   .btn-primary {
     border-color: transparent;
-    background: var(--brand);
-    color: var(--on-brand);
+    background: var(--ink);
+    color: var(--surface);
   }
 
   .btn-primary:hover:not(:disabled) {
-    background: color-mix(in srgb, var(--brand) 88%, var(--ink));
+    background: color-mix(in srgb, var(--ink) 86%, var(--surface));
   }
 
   /* a primary with nothing to do steps back to a tint instead of a dim slab */
   .btn-primary:disabled {
     opacity: 1;
-    background: var(--brand-soft);
-    color: color-mix(in srgb, var(--brand-strong) 55%, transparent);
+    background: var(--surface-2);
+    color: var(--ink-3);
     box-shadow: none;
   }
 
+  /* the confirm step of a destructive action: the only solid red on screen */
   .btn-danger {
-    border-color: color-mix(in srgb, var(--danger) 40%, var(--line));
-    color: var(--danger);
+    border-color: transparent;
+    background: var(--danger);
+    color: #fff;
   }
 
   .btn-danger:hover:not(:disabled) {
-    background: var(--danger-soft);
+    background: color-mix(in srgb, var(--danger) 88%, var(--ink));
   }
 
   /* small ghost icon buttons (hover actions) */
@@ -361,9 +364,6 @@
   }
   .tone-brand {
     --tone: var(--brand);
-  }
-  .tone-pine {
-    --tone: var(--pine);
   }
   .tone-memory {
     --tone: var(--memory);

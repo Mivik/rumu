@@ -5,7 +5,7 @@
 // The tint recipe lives in main.css (.chip + .tone-*).
 import Icon from './Icon.vue'
 
-export type ChipTone = 'neutral' | 'brand' | 'pine' | 'memory' | 'tool' | 'danger' | 'agent'
+export type ChipTone = 'neutral' | 'brand' | 'memory' | 'tool' | 'danger' | 'agent'
 
 withDefaults(
   defineProps<{
