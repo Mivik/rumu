@@ -11,3 +11,6 @@ web/mock/home/sessions/
 web/mock/home/blobs/
 web/mock/home/scratch/*
 !web/mock/home/scratch/.gitkeep
+# Created by the server at runtime.
+web/mock/home/grants.json
+web/mock/home/decks/*/usage.json

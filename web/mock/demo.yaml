@@ -14,7 +14,7 @@ turns:
       - call_id: c-read
         name: read
         args:
-          path: '@rumu:/cards/gateway'
+          path: '@rumu:/cards/self/gateway'
       - call_id: c-search
         name: search
         args:
