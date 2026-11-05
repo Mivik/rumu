@@ -71,5 +71,20 @@
     "label": "对话时间线",
     "emptyPrompt": "（空提问）",
     "images": "{count} 张图片"
+  },
+  "ask": {
+    "title": "{from} 想问 {to}",
+    "hint": "{to} 会根据自己的记忆回答；除非 {from} 自己记下来，否则不会保存。",
+    "mountTitle": "{from} 想挂载 {deck}",
+    "mountHint": "{deck} 会挂载到 {at}，之后可以读取其中的卡片。",
+    "writeTitle": "{from} 想写入 {deck}",
+    "writeHint": "卡片 {path}，内容如上。",
+    "moveHint": "把 {source} 移到 {path}，内容如上。",
+    "linkTitle": "{from} 想链接 {to} 里的一张卡片",
+    "linkHint": "{path} 会把 {target} 展示给所有挂载它所在卡组的会话。",
+    "deny": "不允许",
+    "once": "允许这一次",
+    "session": "本会话内允许",
+    "always": "始终允许"
   }
 }

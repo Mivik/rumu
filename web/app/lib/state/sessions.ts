@@ -7,6 +7,8 @@ import { routeSession } from '../router'
 import type {
   Card,
   Assistant,
+  DecisionAnswer,
+  PendingDecision,
   Node,
   NodeId,
   SessionId,
@@ -35,15 +37,17 @@ export function defaultAssistant(): string {
 
 export async function refreshLists(): Promise<void> {
   try {
-    const [sessions, assistants] = await Promise.all([
+    const [sessions, assistants, decisions] = await Promise.all([
       rumu.request<SessionInfo[]>('session.list'),
       rumu.request<Assistant[]>('assistant.list'),
+      rumu.request<PendingDecision[]>('decision.list'),
     ])
     state.sessions = sessions
     state.assistants = assistants
     if (!assistants.some((a) => a.id === state.assistant)) {
       state.assistant = defaultAssistant()
     }
+    state.decisions = decisions
     state.cards = await listCards()
   } catch (err) {
     toast('error', t('errors.listingSessions'), (err as Error).message)
@@ -88,6 +92,18 @@ export function refreshCards(): Promise<void> {
     }
   })()
   return cardsRefresh
+}
+
+/** Answer the oldest pending question. An "always" grant changes what the
+ * assistant roster reports, so the assistants are re-read. */
+export async function answerDecision(id: string, answer: DecisionAnswer): Promise<void> {
+  state.decisions = state.decisions.filter((d) => d.id !== id)
+  try {
+    await rumu.request('decision.answer', { id, answer })
+    if (answer.scope === 'always') state.assistants = await rumu.request<Assistant[]>('assistant.list')
+  } catch (err) {
+    toast('error', t('errors.answer'), (err as Error).message)
+  }
 }
 
 /** Bring `assistant` into view: its sessions, its library, and new sessions run as

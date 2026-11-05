@@ -75,6 +75,7 @@ export {
 } from './state/library'
 export type { SaveCardRequest } from './state/library'
 export {
+  answerDecision,
   closeSession,
   deleteSession,
   editPrompt,

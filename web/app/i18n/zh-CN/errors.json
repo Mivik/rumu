@@ -17,5 +17,6 @@
   "labels": {
     "edit": "编辑"
   },
-  "forkSession": "分叉会话失败"
+  "forkSession": "分叉会话失败",
+  "answer": "回答失败"
 }

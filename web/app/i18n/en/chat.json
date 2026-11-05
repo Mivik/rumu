@@ -71,5 +71,20 @@
     "label": "Conversation timeline",
     "emptyPrompt": "(empty prompt)",
     "images": "{count} image | {count} images"
+  },
+  "ask": {
+    "title": "{from} wants to ask {to}",
+    "hint": "{to} answers from its own memory; nothing is saved unless {from} writes it down.",
+    "mountTitle": "{from} wants to mount {deck}",
+    "mountHint": "{deck} would be mounted at {at}, and its cards readable from then on.",
+    "writeTitle": "{from} wants to write to {deck}",
+    "writeHint": "The card {path}, as shown above.",
+    "moveHint": "Moves {source} to {path}, as shown above.",
+    "linkTitle": "{from} wants to link a card from {to}",
+    "linkHint": "{path} would show {target} to every session that mounts its deck.",
+    "deny": "Don't allow",
+    "once": "Allow once",
+    "session": "Allow for this session",
+    "always": "Always allow"
   }
 }

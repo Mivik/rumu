@@ -12,6 +12,7 @@ import type { CodeCall } from './generated/CodeCall'
 import type { Content } from './generated/Content'
 import type { Decision } from './generated/Decision'
 import type { Node } from './generated/Node'
+import type { SessionId } from './generated/SessionId'
 import type { PathState } from './generated/PathState'
 import type { SessionInfo } from './generated/SessionInfo'
 import type { Tagged } from './generated/Tagged'
@@ -149,6 +150,78 @@ export interface LlmDeltaPush {
 
 export interface BranchUpdatedPush {
   branch: Branch
+}
+
+/** A question a tool call put to the user (`decision.requested` push and
+ * `decision.list` rows); answered with `decision.answer`. */
+export interface PendingDecision {
+  id: string
+  session: SessionId
+  branch: BranchId
+  call_id: string
+  request: DecisionRequest
+}
+
+/** What a tool call asks the user to approve. Names are for display; the
+ * `_id` fields are the deck ids. */
+export type DecisionRequest = AskRequest | MountRequest | WriteRequest | LinkRequest
+
+/** How long an approval lasts. */
+export type DecisionScope = 'once' | 'session' | 'always'
+
+/** The answer to a `decision.requested`. */
+export interface DecisionAnswer {
+  allow: boolean
+  scope?: DecisionScope
+}
+
+/** `ask`: `from` asks `to` the question. */
+export interface AskRequest {
+  kind: 'ask'
+  from: string
+  from_id: string
+  to: string
+  to_id: string
+  question: string
+}
+
+/** `card_mount` without a grant: `from` mounts `deck` at `at`. */
+export interface MountRequest {
+  kind: 'card_mount'
+  from: string
+  from_id: string
+  deck: string
+  deck_id: string
+  at: string
+}
+
+/** A card write into a deck that is not `from`'s own: `content` at `path`,
+ * moved from `move_from` when set. */
+export interface WriteRequest {
+  kind: 'card_write'
+  from: string
+  from_id: string
+  deck: string
+  deck_id: string
+  path: string
+  move_from?: string | null
+  content: string
+}
+
+/** A link into another deck: the card at `path` would share `target`. */
+export interface LinkRequest {
+  kind: 'card_link'
+  from: string
+  from_id: string
+  to: string
+  to_id: string
+  target: string
+  path: string
+}
+
+/** `decision.resolved` push: answered, or the turn was aborted. */
+export interface DecisionResolvedPush {
+  id: string
 }
 
 export interface SessionUpdatedPush {

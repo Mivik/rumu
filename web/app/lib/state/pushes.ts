@@ -7,6 +7,8 @@ import { routeSession, sessionIdFromLocation } from '../router'
 import type {
   BranchUpdatedPush,
   CodeCallPush,
+  PendingDecision,
+  DecisionResolvedPush,
   HookFiredPush,
   LlmDeltaPush,
   Node,
@@ -277,6 +279,14 @@ export function startApp(): void {
   rumu.onPush('llm.delta', (p) => onLlmDelta(p as unknown as LlmDeltaPush))
   rumu.onPush('branch.updated', (p) => onBranchUpdated(p as unknown as BranchUpdatedPush))
   rumu.onPush('session.updated', (p) => onSessionUpdated(p as unknown as SessionUpdatedPush))
+  rumu.onPush('decision.requested', (p) => {
+    const d = p as unknown as PendingDecision
+    if (!state.decisions.some((x) => x.id === d.id)) state.decisions.push(d)
+  })
+  rumu.onPush('decision.resolved', (p) => {
+    const { id } = p as unknown as DecisionResolvedPush
+    state.decisions = state.decisions.filter((d) => d.id !== id)
+  })
   rumu.onPush('session.deleted', (p) => onSessionDeleted(p as unknown as SessionDeletedPush))
   rumu.onPush('hook.fired', (p) => onHookFired(p as unknown as HookFiredPush))
   rumu.onPush('code.call', (p) => onCodeCall(p as unknown as CodeCallPush))

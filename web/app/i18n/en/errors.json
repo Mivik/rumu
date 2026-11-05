@@ -17,5 +17,6 @@
   "labels": {
     "edit": "edit"
   },
-  "forkSession": "Couldn't fork the session"
+  "forkSession": "Couldn't fork the session",
+  "answer": "Answering failed"
 }

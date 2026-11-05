@@ -9,6 +9,7 @@ import type {
   BranchId,
   Card,
   Assistant,
+  PendingDecision,
   CodeCall,
   Node,
   NodeId,
@@ -117,6 +118,8 @@ const initial = {
    *  holds, and who new sessions run as. */
   assistant: '',
   cards: [] as Card[],
+  /** Questions tool calls are waiting on, oldest first. */
+  decisions: [] as PendingDecision[],
 
   // Open session tree (from session.tree, kept live via pushes).
   sessionId: null as SessionId | null,
