@@ -5,21 +5,26 @@
 // column is capped at --col-max (main.css), centered. On phones and in
 // portrait the sheet drops its card edges and becomes the page (main.css).
 //
-// A prompt you just sent opens near the top of the sheet, with the rest of
-// the page left blank: the reply grows down into that blank rather than
-// pinning your eye to the sliver just above the composer. The blank is a
-// tail spacer after the timeline whose height shrinks as the reply fills it;
-// once it is used up the scroller follows the tail as usual. Only a prompt
-// that arrives while a turn is starting (one you just sent) anchors — a
-// session switch still lands at the end of the conversation, and a branch
-// switch keeps your place in it.
+// The page never shrinks under you: a blank tail after the timeline (the
+// spacer) takes back whatever the column gives up — a running call's output
+// folding into its summary line, a fold closed — so what you are reading
+// stays put, and growth fills that blank before it moves the page. Its floor
+// rises three ways: a prompt you just sent opens near the top of the sheet,
+// the reply growing down into the blank below it rather than pinning your eye
+// to the sliver above the composer; while a turn runs, LIVE_ROOM stays free
+// under the reply, so whatever shows up next (a tall preview, a tool's
+// output) lands in view; otherwise the column's own height. Any size change
+// of the column or the scroller — not only new tokens — re-pins the end while
+// you follow it. Only a prompt that arrives while a turn is starting (one you
+// just sent) anchors — a session switch still lands at the end of the
+// conversation, and a branch switch keeps your place in it.
 //
 // The thread is the rail down the sheet's right edge (TimelineRail), which
 // owns its measurement and drawing. This file owns the scroll state and
 // jumping.
 import { computed, nextTick, onBeforeUnmount, ref, watch } from 'vue'
 import { t } from '../../i18n'
-import { activeDelta, connected, isBusy, owedReply, queuedPrompts, state, timeline } from '../../lib/store'
+import { connected, isBusy, owedReply, queuedPrompts, state, timeline } from '../../lib/store'
 import { prefersReduced, timelineLive, vEnter } from '../../lib/motion'
 import { layout, toggleSidebar } from '../../lib/layout'
 import type { TimelineEntry } from '../../lib/store'
@@ -130,14 +135,20 @@ watch(scrollEl, (el) => {
   if (el && endSeq) settleEnd(endSeq)
 })
 
-// ---- a just-sent prompt opens on a blank page ----
+// ---- the page below the timeline ----
 
 /** Distance from the scroller's top edge to the freshly sent prompt. */
 const ANCHOR_GAP = 28
-/** The prompt the blank page hangs from (a user node id), if any. */
-const anchorNode = ref<string | null>(null)
-/** Height of the blank page below the timeline, px. */
-const tailSpace = ref(0)
+/** Blank kept under the reply while a turn runs, px. */
+const LIVE_ROOM = 120
+/** Where the page ends, in column px: the column plus the spacer reach it. */
+let floor = 0
+/** A just-sent prompt (node id) whose blank page is not laid out yet. */
+let anchorPending: string | null = null
+/** The smooth settle onto a just-sent prompt is still running: following
+ *  the end must not cut it short. */
+let settlingUntil = 0
+const spacerEl = ref<HTMLElement | null>(null)
 
 /** The newest prompt on the path — the one a just-started turn answers. */
 const lastPromptId = computed(() => {
@@ -150,74 +161,65 @@ const lastPromptId = computed(() => {
 
 /** The prompt most recently rendered; only a change means something was sent. */
 let seenPrompt = ''
-/** The blank page for the current anchor has already been scrolled into place. */
-let anchorPlaced = false
 
 watch(
   lastPromptId,
   (id) => {
     // A new prompt while a turn starts is one you just sent. (History loads
-    // change this too, but they reset the anchor in the view watcher below,
-    // and no turn is starting.)
+    // change this too, but they reset the view below, and no turn is
+    // starting.)
     const sent = !!id && id !== seenPrompt && isBusy.value
     seenPrompt = id
     if (!sent) return
-    anchorNode.value = id
-    anchorPlaced = false
+    anchorPending = id
     nearBottom.value = true
   },
   { flush: 'pre' },
 )
 
-let padEl: HTMLElement | null = null
-let padBottom = 0
-
 /**
- * Size the blank page so the anchored prompt sits ANCHOR_GAP below the
- * scroller's top. offsetTop is layout: the entrance animations may still be
- * running, and transforms don't move it.
+ * Raise the floor, size the spacer to reach it, and keep the end pinned
+ * while following. offsetTop is layout: the entrance animations may still
+ * be running, and transforms don't move it.
  */
-function measureTail(): void {
-  const sc = scrollRoot()
-  const inner = columnRoot()
-  const id = anchorNode.value
-  const el = sc && inner && id ? inner.querySelector<HTMLElement>(`[data-node-id="${CSS.escape(id)}"]`) : null
-  if (!sc || !inner || !el) {
-    tailSpace.value = 0
-    return
+function layoutTail(): void {
+  const sc = scrollEl.value
+  const inner = innerEl.value
+  const spacer = spacerEl.value
+  if (!sc || !inner || !spacer) return
+  const height = inner.offsetHeight
+  const prompt = anchorPending
+    ? inner.querySelector<HTMLElement>(`[data-node-id="${CSS.escape(anchorPending)}"]`)
+    : null
+  if (prompt) {
+    // Enough page below the prompt for it to sit ANCHOR_GAP under the top.
+    const pad = parseFloat(getComputedStyle(sc).paddingBottom) || 0
+    floor = Math.max(floor, prompt.offsetTop + sc.clientHeight - ANCHOR_GAP - pad)
+    anchorPending = null
   }
-  if (sc !== padEl) {
-    padEl = sc
-    padBottom = parseFloat(getComputedStyle(sc).paddingBottom) || 0
+  floor = Math.max(floor, height + (isBusy.value ? LIVE_ROOM : 0))
+  spacer.style.height = `${floor - height}px`
+  if (prompt) {
+    settlingUntil = performance.now() + 600
+    scrollToEnd(true)
+  } else if (nearBottom.value && performance.now() >= settlingUntil) {
+    scrollToEnd()
   }
-  const top = inner.offsetTop + el.offsetTop
-  const bottom = inner.offsetTop + inner.offsetHeight
-  tailSpace.value = Math.max(0, sc.clientHeight - (bottom - top) - ANCHOR_GAP - padBottom)
 }
 
+// One observer per mounted timeline (the column remounts per session): the
+// column's size covers every growth and shrink, the scroller's a composer
+// that grows or shrinks under it.
 watch(
-  () => [
-    timeline.value.length,
-    activeDelta.value?.text.length ?? 0,
-    activeDelta.value?.reasoning.length ?? 0,
-  ],
-  async () => {
-    await nextTick()
-    const tail = tailSpace.value
-    measureTail()
-    if (tailSpace.value !== tail) await nextTick()
-    if (tailSpace.value > 0) {
-      // While the blank is still open the scroll target stays put (the spacer
-      // shrinks by exactly what the reply grows): settle there once, smoothly,
-      // and otherwise leave the view alone.
-      if (!anchorPlaced) {
-        anchorPlaced = true
-        scrollToEnd(true)
-      }
-    } else if (nearBottom.value) {
-      scrollToEnd()
-    }
+  [scrollEl, innerEl],
+  ([sc, inner], _, onCleanup) => {
+    if (!sc || !inner) return
+    const ro = new ResizeObserver(layoutTail)
+    ro.observe(sc)
+    ro.observe(inner)
+    onCleanup(() => ro.disconnect())
   },
+  { flush: 'post' },
 )
 
 // A different view renders all at once: that render is "history" (no entrance
@@ -225,12 +227,13 @@ watch(
 // already seen. Anything mounted afterwards is live.
 function resetView(): void {
   timelineLive.value = false
-  anchorNode.value = null
-  anchorPlaced = false
-  tailSpace.value = 0
+  anchorPending = null
+  floor = 0
   seenPrompt = lastPromptId.value
   void nextTick(() => {
     timelineLive.value = true
+    // A same-height swap fires no resize; the spacer still starts over.
+    layoutTail()
   })
 }
 
@@ -417,9 +420,9 @@ function jumpTo(i: number): void {
                    (or was never finished) — offer to run it again -->
               <ErrorRow v-if="owedReply" :owed="owedReply" />
             </div>
-            <!-- the page still to be written: keeps the just-sent prompt at
-                 the top while its reply grows down into the blank -->
-            <div v-if="tailSpace > 0" aria-hidden="true" :style="{ height: `${tailSpace}px` }" />
+            <!-- the page below the timeline (layoutTail): room for the
+                 reply to grow into, and what folds give back -->
+            <div ref="spacerEl" aria-hidden="true" />
           </div>
         </div>
 
