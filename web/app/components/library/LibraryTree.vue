@@ -559,7 +559,7 @@ const isFolder = (node: TreeNode): node is FolderNode => node.kind === 'folder'
         :aria-expanded="isBranch(node) ? isExpanded(node) : undefined"
         :aria-selected="node.kind === 'card' ? isSelected(node) : undefined"
         :tabindex="i === focused ? 0 : -1"
-        :title="node.kind === 'card' ? cardTitle(node.card) : undefined"
+        :title="node.kind === 'card' ? cardTitle(node.card) : node.kind === 'deck' ? (node.deck.description ?? undefined) : undefined"
         :draggable="canDrag(node)"
         class="group flex min-h-8 cursor-pointer items-center gap-1.5 rounded-control border pr-1 font-card outline-none transition-colors duration-150 hover:bg-surface-2/60 focus-visible:ring-2 focus-visible:ring-brand/25"
         :class="[

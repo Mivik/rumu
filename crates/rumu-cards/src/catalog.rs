@@ -168,6 +168,10 @@ pub fn deck_catalog(
             }
         };
         let raw = parse_card(&path, &text);
+        // Pinned cards are loaded in full next to the catalog.
+        if raw.pinned() && raw.link().is_none() {
+            continue;
+        }
         let mut content_deck = deck.id().to_owned();
         let mut content_path = path.clone();
         let mut key = raw.id().map(str::to_owned);

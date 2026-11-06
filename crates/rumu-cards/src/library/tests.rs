@@ -39,10 +39,12 @@ fn create_lists_keys_and_records_the_user() {
     assert_eq!(saved.card.keywords, ["k"]);
     assert_eq!(saved.card.updated_by.as_deref(), Some("user"));
 
+    // A new deck starts with its charter, `about`.
     let rows = cards(&decks, Some(&main)).unwrap();
-    assert_eq!(rows.len(), 1);
-    assert_eq!(rows[0].path, "notes/a");
-    assert_eq!(rows[0].updated_by.as_deref(), Some("user"));
+    assert_eq!(rows.len(), 2);
+    assert_eq!(rows[0].path, "about");
+    assert_eq!(rows[1].path, "notes/a");
+    assert_eq!(rows[1].updated_by.as_deref(), Some("user"));
 }
 
 #[test]
@@ -272,7 +274,10 @@ fn a_folder_move_moves_every_card() {
 
     let rows = cards(&decks, Some(&other)).unwrap();
     let paths: Vec<_> = rows.iter().map(|r| r.path.as_str()).collect();
-    assert_eq!(paths, ["archive/notes/a", "archive/notes/sub/b", "notes-x"]);
+    assert_eq!(
+        paths,
+        ["about", "archive/notes/a", "archive/notes/sub/b", "notes-x"]
+    );
     assert!(
         cards(&decks, Some(&other))
             .unwrap()
@@ -301,7 +306,7 @@ fn a_move_refuses_an_existing_destination_and_a_move_into_itself() {
         .into_iter()
         .map(|r| r.path)
         .collect();
-    assert_eq!(paths, ["b", "dir/c", "renamed"]);
+    assert_eq!(paths, ["about", "b", "dir/c", "renamed"]);
 }
 
 #[test]
@@ -316,7 +321,7 @@ fn a_folder_delete_removes_only_its_cards() {
         .into_iter()
         .map(|r| r.path)
         .collect();
-    assert_eq!(paths, ["keep"]);
+    assert_eq!(paths, ["about", "keep"]);
     assert!(
         cards(&decks, Some(&other))
             .unwrap()

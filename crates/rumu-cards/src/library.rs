@@ -23,6 +23,8 @@ pub struct LibraryDeck {
     /// The display name (`deck.yaml` `name`).
     pub name: String,
     pub assistant: bool,
+    /// The one-line summary from its charter (`about.md`).
+    pub description: Option<String>,
     /// The number of card files in the deck.
     pub cards: usize,
 }
@@ -150,6 +152,7 @@ fn library_deck(deck: &Deck) -> Result<LibraryDeck> {
         id: deck.id().to_owned(),
         name: deck.meta.name.clone(),
         assistant: deck.meta.assistant,
+        description: deck.summary(),
         cards: deck.walk()?.len(),
     })
 }

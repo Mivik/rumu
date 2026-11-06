@@ -209,12 +209,16 @@ impl MemoryPlugin {
         }
         text.push_str(
             "\n\nPlacement rules:\n\
-1. Put a card in the mounted deck whose charter (its pinned `about` card) it fits; if none fits, \
-keep it in your own deck (`/cards/self`).\n\
-2. When a card in your own deck turns out to fit another deck's charter (for example, the user \
-says it applies everywhere), move it there (`write` with `from`).\n\
+1. Put a card in the mounted deck whose charter (its pinned `about` card) fits what the card is \
+about, whichever assistant learned it: a fact about the user goes to the user's deck.\n\
+2. Your own deck (`/cards/self`) is your own memory: your persona and instructions, what you \
+learned from your own work (approaches that worked, mistakes to avoid), and work under way. A card \
+no mounted deck fits also stays there until one does; then move it (`write` with `from`).\n\
 3. Process stays in sessions (`@rumu:/sessions` is memory too); only conclusions become cards.\n\
-4. Link related cards instead of copying them (`link: @rumu:/cards/<path>`).",
+4. Link related cards instead of copying them (`link: @rumu:/cards/<path>`).\n\
+5. A deck's structure lives in its charter: when you add a directory or change what one holds, \
+update the charter (what each directory holds, what to read first). Keep no separate index card: \
+the catalog lists the cards.",
         );
         if state.asked_by.is_none() {
             let others: Vec<String> = self
@@ -222,7 +226,10 @@ says it applies everywhere), move it there (`write` with `from`).\n\
                 .assistants()
                 .into_iter()
                 .filter(|d| d.id() != deck.id())
-                .map(|d| format!("`{}` (id {})", d.meta.name, d.id()))
+                .map(|d| match d.summary() {
+                    Some(s) => format!("`{}` (id {}: {s})", d.meta.name, d.id()),
+                    None => format!("`{}` (id {})", d.meta.name, d.id()),
+                })
                 .collect();
             if !others.is_empty() {
                 text.push_str(&format!(

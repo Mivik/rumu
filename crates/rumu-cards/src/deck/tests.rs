@@ -505,3 +505,62 @@ fn the_default_assistant_is_a_pointer_that_follows_the_roster() {
     });
     assert!(err.is_err());
 }
+
+#[test]
+fn a_fresh_home_gets_user_and_world_mounted_by_the_default_assistant() {
+    let dir = tempfile::tempdir().unwrap();
+    let decks = Decks::load(dir.path()).unwrap();
+    let default = decks.get(&decks.default_assistant()).unwrap();
+    let mounted: Vec<(String, String)> = default
+        .meta
+        .mounts
+        .iter()
+        .map(|m| (decks.get(&m.deck).unwrap().name, m.at.clone()))
+        .collect();
+    assert_eq!(
+        mounted,
+        [
+            ("user".to_owned(), "/cards/user".to_owned()),
+            ("world".to_owned(), "/cards/world".to_owned()),
+        ]
+    );
+    for deck in decks.list() {
+        let about = deck.pinned().unwrap();
+        assert_eq!(about.len(), 1, "{} has its charter pinned", deck.name);
+        assert_eq!(about[0].path, ABOUT);
+        assert!(about[0].id().is_some());
+        assert_eq!(deck.summary(), about[0].description);
+    }
+}
+
+#[test]
+fn a_home_with_decks_but_no_assistant_gets_only_the_assistant() {
+    let dir = tempfile::tempdir().unwrap();
+    let decks = Decks::load(dir.path()).unwrap();
+    let first = decks.default_assistant();
+    decks.remove_assistant(&first).unwrap();
+    let decks = Decks::load(dir.path()).unwrap();
+    let names: BTreeSet<String> = decks.list().into_iter().map(|d| d.name).collect();
+    assert_eq!(names, BTreeSet::from(["default", "default-1", "user", "world"].map(String::from)));
+    let default = decks.get(&decks.default_assistant()).unwrap();
+    assert_eq!(default.name, "default-1");
+    assert!(default.meta.mounts.is_empty());
+}
+
+#[test]
+fn a_new_deck_has_a_blank_charter_that_loads_nothing() {
+    let dir = tempfile::tempdir().unwrap();
+    let deck = create_deck(dir.path(), "notes", &[]);
+    assert_eq!(deck.walk().unwrap(), [ABOUT]);
+    assert_eq!(deck.summary(), None);
+    assert!(deck.pinned().unwrap().is_empty());
+
+    deck.write_file(
+        ABOUT,
+        "---\npinned: true\ndescription: Reading notes.\n---\nBooks and papers.\n",
+        &Author::user(),
+    )
+    .unwrap();
+    assert_eq!(deck.summary().as_deref(), Some("Reading notes."));
+    assert_eq!(deck.pinned().unwrap().len(), 1);
+}

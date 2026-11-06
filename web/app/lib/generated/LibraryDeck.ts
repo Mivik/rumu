@@ -9,6 +9,10 @@ export type LibraryDeck = { id: string,
  */
 name: string, assistant: boolean, 
 /**
+ * The one-line summary from its charter (`about.md`).
+ */
+description: string | null, 
+/**
  * The number of card files in the deck.
  */
 cards: number, };

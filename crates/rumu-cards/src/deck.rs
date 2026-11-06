@@ -19,7 +19,9 @@ use rumu_core::CardMount;
 use serde::{Deserialize, Serialize};
 use tracing::warn;
 
-use crate::card::{Card, frontmatter_is_broken, new_uuid, parse_card, valid_card_path};
+use crate::card::{
+    Card, card_content, frontmatter_is_broken, new_uuid, parse_card, valid_card_path,
+};
 use crate::cards::{SELF_MOUNT, mount_points_overlap, normalize_mount_point};
 use crate::git::{self, GitAuthor, Repo};
 use crate::{Error, Result};
@@ -30,6 +32,9 @@ pub const DECKS_DIR: &str = "decks";
 pub const DECK_FILE: &str = "deck.yaml";
 /// The grants file ("always allow" answers).
 pub const GRANTS_FILE: &str = "grants.json";
+/// The charter card: its body says what belongs in the deck, its
+/// `description` is the deck's one-line summary.
+pub const ABOUT: &str = "about";
 /// The file holding the default assistant's deck id.
 pub const DEFAULT_FILE: &str = "default-assistant";
 /// The author recorded for changes made by the user (UI edits).
@@ -149,14 +154,21 @@ impl Deck {
         self.repo().read(&format!("{path}.md"))
     }
 
+    /// The deck's one-line summary: its charter's summary.
+    pub fn summary(&self) -> Option<String> {
+        let card = parse_card(ABOUT, &self.read(ABOUT).ok()??);
+        card.link().is_none().then(|| card.summary()).flatten()
+    }
+
     /// The pinned cards of this deck, in path order. A link is never
-    /// pinned: its target's own deck pins it.
+    /// pinned: its target's own deck pins it, and a blank card has nothing
+    /// to load.
     pub fn pinned(&self) -> Result<Vec<Card>> {
         let mut out = Vec::new();
         for path in self.walk()? {
             if let Some(text) = self.read(&path)? {
                 let card = parse_card(&path, &text);
-                if card.pinned() && card.link().is_none() {
+                if card.pinned() && card.link().is_none() && !card.body.trim().is_empty() {
                     out.push(card);
                 }
             }
@@ -657,12 +669,11 @@ impl Decks {
             .unwrap_or_else(|| meta.name.clone());
         let deck = Deck { meta, dir, name };
         deck.repo().init()?;
-        let subject = if existing.is_some() {
-            "update deck.yaml"
+        if existing.is_some() {
+            write_deck_meta(&deck, "update deck.yaml", None)?;
         } else {
-            "create deck"
-        };
-        write_deck_meta(&deck, subject)?;
+            write_deck_meta(&deck, "create deck", Some(&Charter::BLANK))?;
+        }
         let mut inner = self.inner.write().unwrap();
         inner.decks.insert(deck.meta.id.clone(), deck.clone());
         Ok(deck)
@@ -679,7 +690,7 @@ impl Decks {
             });
         };
         deck.meta.assistant = false;
-        write_deck_meta(&deck, "update deck.yaml")?;
+        write_deck_meta(&deck, "update deck.yaml", None)?;
         let mut guard = self.inner.write().unwrap();
         let inner = &mut *guard;
         let was_default = inner.default == deck.meta.id;
@@ -763,17 +774,45 @@ fn read_grants(path: &Path) -> std::result::Result<Grants, ()> {
     })
 }
 
-/// Commit `deck.yaml` as `user`.
-fn write_deck_meta(deck: &Deck, subject: &str) -> Result<()> {
+/// A deck's charter as created with it: a pinned `about.md`.
+struct Charter {
+    description: &'static str,
+    body: &'static str,
+}
+
+impl Charter {
+    /// A user-created deck's: empty until the user fills it in.
+    const BLANK: Charter = Charter {
+        description: "",
+        body: "",
+    };
+
+    /// The file text, with a fresh card id.
+    fn text(&self) -> String {
+        let mut meta = serde_json::Map::new();
+        meta.insert("id".into(), new_uuid().into());
+        meta.insert("pinned".into(), true.into());
+        card_content(&Card {
+            path: ABOUT.to_owned(),
+            description: Some(self.description.to_owned()).filter(|d| !d.is_empty()),
+            body: self.body.to_owned(),
+            revision: String::new(),
+            meta,
+        })
+    }
+}
+
+/// Commit `deck.yaml`, and with a new deck its charter, as `user`.
+fn write_deck_meta(deck: &Deck, subject: &str, charter: Option<&Charter>) -> Result<()> {
     let text = serde_saphyr::to_string(&deck.meta).map_err(|e| Error::Config {
         path: deck.dir.join(DECK_FILE),
         message: format!("serializing deck.yaml: {e}"),
     })?;
-    deck.commit(
-        &Author::user(),
-        subject,
-        &BTreeMap::from([(DECK_FILE.to_owned(), Some(text))]),
-    )?;
+    let mut changes = BTreeMap::from([(DECK_FILE.to_owned(), Some(text))]);
+    if let Some(charter) = charter {
+        changes.insert(format!("{ABOUT}.md"), Some(charter.text()));
+    }
+    deck.commit(&Author::user(), subject, &changes)?;
     Ok(())
 }
 
@@ -809,7 +848,8 @@ fn load_home(home: &Path) -> Result<Inner> {
 }
 
 /// A new default assistant, saved as such: the first assistant deck by
-/// directory, or a new `default` deck when there is none.
+/// directory, or a new `default` deck when there is none. A home with no
+/// decks at all also gets the `user` and `world` decks, mounted by it.
 fn fallback_default(home: &Path, decks: &mut BTreeMap<String, Deck>) -> Result<String> {
     let first = decks
         .values()
@@ -819,7 +859,23 @@ fn fallback_default(home: &Path, decks: &mut BTreeMap<String, Deck>) -> Result<S
     let id = match first {
         Some(id) => id,
         None => {
-            let deck = create_default_deck(&home.join(DECKS_DIR))?;
+            let decks_dir = home.join(DECKS_DIR);
+            let mut mounts = Vec::new();
+            if decks.is_empty() {
+                for (name, charter) in [("user", &USER_CHARTER), ("world", &WORLD_CHARTER)] {
+                    let deck = create_deck(&decks_dir, name, charter, |_| {})?;
+                    mounts.push(DeckMount {
+                        deck: deck.meta.id.clone(),
+                        at: format!("/cards/{name}"),
+                        write: true,
+                    });
+                    decks.insert(deck.meta.id.clone(), deck);
+                }
+            }
+            let deck = create_deck(&decks_dir, "default", &SELF_CHARTER, |meta| {
+                meta.assistant = true;
+                meta.mounts = mounts;
+            })?;
             let id = deck.meta.id.clone();
             decks.insert(id.clone(), deck);
             id
@@ -829,22 +885,48 @@ fn fallback_default(home: &Path, decks: &mut BTreeMap<String, Deck>) -> Result<S
     Ok(id)
 }
 
-/// A new, empty assistant deck in the first free `decks/default[-N]`.
-fn create_default_deck(decks_dir: &Path) -> Result<Deck> {
+const SELF_CHARTER: Charter = Charter {
+    description: "This assistant: its persona, instructions and what it learned from its own work.",
+    body: "Here: who this assistant is and how it should work; what it learned doing its work \
+(approaches that worked, mistakes to avoid); and work it has under way.\n\nNot here: facts \
+about the user, or facts about tools and the world that hold whoever looks.\n",
+};
+
+const USER_CHARTER: Charter = Charter {
+    description: "The user: who they are, their preferences, background and habits.",
+    body: "Here: facts about the user, whichever assistant learned them. When a preference holds \
+only in some context, say so in the card.\n\nNot here: how tools, machines or methods work, or \
+how one particular assistant should behave.\n",
+};
+
+const WORLD_CHARTER: Charter = Charter {
+    description: "Facts and methods that are not about the user and not tied to one project.",
+    body: "Here: how tools and software behave, machines and environments, procedures that \
+carry across projects.\n\nNot here: the user's own preferences, or the conventions of a single \
+project.\n",
+};
+
+/// A new deck in the first free `decks/<name>[-N]`, created with its
+/// charter; `init` sets the rest of its `deck.yaml`.
+fn create_deck(
+    decks_dir: &Path,
+    name: &str,
+    charter: &Charter,
+    init: impl FnOnce(&mut DeckMeta),
+) -> Result<Deck> {
     let name = (0..)
         .map(|i| match i {
-            0 => "default".to_owned(),
-            i => format!("default-{i}"),
+            0 => name.to_owned(),
+            i => format!("{name}-{i}"),
         })
         .find(|n| !decks_dir.join(n).exists())
         .expect("some directory name is free");
     let dir = decks_dir.join(&name);
     let mut meta = empty_meta(new_uuid(), name.clone());
-    meta.assistant = true;
-    let repo = git::repo(&dir);
-    repo.init()?;
+    init(&mut meta);
+    git::repo(&dir).init()?;
     let deck = Deck { meta, dir, name };
-    write_deck_meta(&deck, "create deck")?;
+    write_deck_meta(&deck, "create deck", Some(charter))?;
     Ok(deck)
 }
 

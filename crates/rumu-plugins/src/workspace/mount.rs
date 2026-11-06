@@ -58,7 +58,7 @@ impl WorkspacePlugin {
                 .map(|(_, name)| name)
                 .collect();
             lines.push(format!(
-                "{} ({})  {}{}{}",
+                "{} ({})  {}{}{}{}",
                 deck.meta.name,
                 deck.meta.id,
                 mounted
@@ -73,7 +73,10 @@ impl WorkspacePlugin {
                     String::new()
                 } else {
                     format!("  asks the user to {}", asks.join(", "))
-                }
+                },
+                deck.summary()
+                    .map(|s| format!("  — {s}"))
+                    .unwrap_or_default()
             ));
         }
         if lines.is_empty() {
