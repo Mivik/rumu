@@ -9,11 +9,13 @@ import { t } from '../../i18n'
 import type { Branch, CodeCall, Content, Decision, FilePatch } from '../../lib/types'
 import { selectBranch, state } from '../../lib/store'
 import { argSummary, shortId } from '../../lib/util'
-import { prettyJson } from '../../lib/markdown'
+import { highlightLine, prettyJson } from '../../lib/markdown'
 import { patchOfData } from '../../lib/diff'
 import Icon from '../ui/Icon.vue'
 import Chip from '../ui/Chip.vue'
+import BashView from './BashView.vue'
 import FileDiff from './FileDiff.vue'
+import FileView from './FileView.vue'
 
 const props = defineProps<{ parentCall: string }>()
 
@@ -60,7 +62,8 @@ function output(c: CodeCall): string {
   return c.blocked ?? c.output
 }
 
-/** A successful write/edit expands to its diff, like a direct call's row. */
+/** A successful write/edit expands to its diff, a read to its file and a
+ * bash to its terminal, like a direct call's row. */
 function patchOf(c: CodeCall): FilePatch | null {
   return status(c) === 'ok' ? patchOfData(c.patch) : null
 }
@@ -71,6 +74,11 @@ function argsOf(c: CodeCall): Record<string, unknown> | null {
 function pathOf(c: CodeCall): string {
   const p = argsOf(c)?.path
   return typeof p === 'string' ? p : ''
+}
+/** A bash row is its own `$ command` line, whole once open. */
+function commandOf(c: CodeCall): string {
+  const cmd = argsOf(c)?.command
+  return typeof cmd === 'string' ? cmd.trim() : ''
 }
 
 function effectLabel(e: Content): string {
@@ -111,22 +119,28 @@ const iconTone: Record<Status, string> = {
         :class="{ 'bg-danger-soft/30': status(c) !== 'ok' }"
       >
         <button
-          class="flex w-full min-w-0 items-center gap-2 px-2 py-1 text-left transition-colors hover:bg-surface-2/70"
+          class="flex w-full min-w-0 gap-2 px-2 py-1 text-left transition-colors hover:bg-surface-2/70"
+          :class="c.name === 'bash' && isOpen(c.seq) ? 'items-start' : 'items-center'"
           :title="`${c.name} ${summary(c)} → ${statusLabel(c)}`"
           @click="toggle(c.seq)"
         >
           <Icon
             :name="status(c) === 'ok' ? 'tool' : status(c) === 'blocked' ? 'blocked' : 'error'"
             :size="11"
-            :class="iconTone[status(c)]"
+            :class="[iconTone[status(c)], { 'mt-[3px]': c.name === 'bash' && isOpen(c.seq) }]"
           />
           <span
             class="font-mono text-micro font-medium"
             :class="status(c) === 'ok' ? 'text-tool' : 'text-danger'"
           >
-            {{ c.name }}
+            {{ c.name === 'bash' ? '$' : c.name }}
           </span>
-          <span v-if="summary(c)" class="min-w-0 truncate font-mono text-micro text-ink-2">{{
+          <span
+            v-if="c.name === 'bash' && isOpen(c.seq)"
+            class="shell max-h-40 min-w-0 flex-1 overflow-y-auto font-mono text-micro break-words whitespace-pre-wrap text-ink"
+            v-html="highlightLine(commandOf(c), 'bash')"
+          ></span>
+          <span v-else-if="summary(c)" class="min-w-0 truncate font-mono text-micro text-ink-2">{{
             summary(c)
           }}</span>
           <span class="ml-auto flex flex-none items-center gap-2">
@@ -165,6 +179,19 @@ const iconTone: Record<Status, string> = {
             :patch="patchOf(c)"
             :path="pathOf(c)"
             :args="argsOf(c)"
+            class="overflow-hidden rounded-control border border-line-soft"
+          />
+          <FileView
+            v-else-if="c.name === 'read' && status(c) === 'ok'"
+            :text="c.output"
+            :path="pathOf(c)"
+            :args="argsOf(c)"
+            class="overflow-hidden rounded-control border border-line-soft"
+          />
+          <BashView
+            v-else-if="c.name === 'bash'"
+            :output="output(c)"
+            :failed="status(c) !== 'ok'"
             class="overflow-hidden rounded-control border border-line-soft"
           />
           <template v-else>

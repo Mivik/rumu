@@ -19,13 +19,15 @@ import type { ToolRowView, ToolStatus } from '../../lib/toolrows'
 import { argsOf, toolRowTitle, toolRowView } from '../../lib/toolrows'
 import { taskStatusWord } from '../../lib/tasks'
 import { shortId } from '../../lib/util'
-import { prettyJson } from '../../lib/markdown'
+import { highlightLine, prettyJson } from '../../lib/markdown'
 import { vEnter } from '../../lib/motion'
 import Icon from '../ui/Icon.vue'
 import Chip from '../ui/Chip.vue'
 import CardChip from './CardChip.vue'
 import CodeCalls from './CodeCalls.vue'
+import BashView from './BashView.vue'
 import FileDiff from './FileDiff.vue'
+import FileView from './FileView.vue'
 import ImageThumb from './ImageThumb.vue'
 
 const props = defineProps<{ rows: ToolRowInfo[] }>()
@@ -47,15 +49,40 @@ function isOpen(v: ToolRowView): boolean {
   return v.status === 'blocked' || expanded.value.has(id)
 }
 
-/** The script text of a `code` call, for the expanded row's script block. */
-function callScript(args: unknown): string {
-  return String((args as Record<string, unknown> | null)?.code ?? '')
+/** A string arg of the call: a `code` script, a `bash` command. */
+function callArg(v: ToolRowView, key: string): string {
+  const raw = argsOf(v.row.call)?.[key]
+  return typeof raw === 'string' ? raw.trim() : ''
 }
 
-/** A write/edit that succeeded shows its diff expanded; failures keep the
- * args/output view. */
-function isDiffRow(v: ToolRowView): boolean {
-  return v.status === 'ok' && (v.name === 'write' || v.name === 'edit') && !!v.row.call
+/** A bash row is its own prompt line: `$ command`, clipped to one line
+ * while closed, the whole command (highlighted) once open — its body then
+ * says the exit code, so the row's result hides. */
+function isShellOpen(v: ToolRowView): boolean {
+  return v.name === 'bash' && isOpen(v)
+}
+
+/** The dedicated body an expanded row gets: a successful write/edit its
+ * diff, a text read the file, any bash its terminal. Everything else (and
+ * a failed file call) keeps the args/output view. */
+function bodyOf(v: ToolRowView): 'diff' | 'file' | 'bash' | null {
+  if (!v.row.call) return null
+  if (v.name === 'bash') return 'bash'
+  if (v.status !== 'ok') return null
+  if (v.name === 'write' || v.name === 'edit') return 'diff'
+  if (v.name === 'read' && !v.attachments.length) return 'file'
+  return null
+}
+
+/** A background bash shows its task: live output while it runs, the final
+ * result (with its exit code) once done. The row's own result is only the
+ * "started task" line — all that is left after a reload drops the task. */
+function bashOf(v: ToolRowView): { output: string; failed: boolean; running: boolean } {
+  const task = v.taskId ? state.tasks[v.taskId] : undefined
+  if (!task) return { output: v.output, failed: v.status !== 'ok', running: false }
+  const live = liveTaskOutput(task.id)
+  const running = task.status === 'running'
+  return { output: running ? live : (task.result?.text ?? live), failed: task.is_error, running }
 }
 
 function toggle(v: ToolRowView): void {
@@ -100,7 +127,8 @@ function liveTaskOutput(id: string | null): string {
       :class="{ 'bg-danger-soft/40': v.status !== 'ok' }"
     >
       <button
-        class="flex w-full min-w-0 items-center gap-2 px-2.5 py-1 text-left transition-colors hover:bg-surface-2/70"
+        class="flex w-full min-w-0 gap-2 px-2.5 py-1 text-left transition-colors hover:bg-surface-2/70"
+        :class="isShellOpen(v) ? 'items-start' : 'items-center'"
         :title="toolRowTitle(v)"
         :aria-expanded="isOpen(v)"
         @click="toggle(v)"
@@ -108,12 +136,17 @@ function liveTaskOutput(id: string | null): string {
         <Icon
           :name="v.status === 'ok' ? 'tool' : v.status === 'blocked' ? 'blocked' : 'error'"
           :size="12"
-          :class="iconClass(v)"
+          :class="[iconClass(v), { 'mt-[3px]': isShellOpen(v) }]"
         />
         <span class="max-w-[40%] flex-none truncate font-mono text-meta font-medium" :class="nameClass(v)">{{
-          v.name
+          v.name === 'bash' ? '$' : v.name
         }}</span>
-        <span v-if="v.callText" class="min-w-0 truncate font-mono text-meta text-ink-2">{{
+        <span
+          v-if="isShellOpen(v)"
+          class="shell max-h-40 min-w-0 flex-1 overflow-y-auto font-mono text-meta break-words whitespace-pre-wrap text-ink"
+          v-html="highlightLine(callArg(v, 'command'), 'bash')"
+        ></span>
+        <span v-else-if="v.callText" class="min-w-0 truncate font-mono text-meta text-ink-2">{{
           v.callText
         }}</span>
         <span
@@ -130,7 +163,10 @@ function liveTaskOutput(id: string | null): string {
           · <span class="font-medium text-pine">+{{ v.diff.added }}</span>
           <span v-if="v.diff.removed" class="font-medium text-danger">−{{ v.diff.removed }}</span>
         </span>
-        <span v-else-if="v.resultText" class="max-w-[40%] flex-none truncate text-micro text-ink-3">
+        <span
+          v-else-if="v.resultText && !isShellOpen(v)"
+          class="max-w-[40%] flex-none truncate text-micro text-ink-3"
+        >
           · {{ v.resultText }}
         </span>
         <span
@@ -194,18 +230,26 @@ function liveTaskOutput(id: string | null): string {
         {{ t('tools.row.openSubAgent') }}
       </Chip>
 
-      <!-- a diff fills the expanded row edge to edge -->
+      <!-- dedicated bodies fill the expanded row edge to edge -->
       <FileDiff
-        v-if="isOpen(v) && isDiffRow(v)"
+        v-if="isOpen(v) && bodyOf(v) === 'diff'"
         class="reveal"
         :patch="v.patch"
         :path="v.toolCardId ? 'card.md' : v.callFull"
         :args="argsOf(v.row.call)"
       />
+      <FileView
+        v-else-if="isOpen(v) && bodyOf(v) === 'file'"
+        class="reveal"
+        :text="v.output"
+        :path="v.toolCardId ? 'card.md' : v.callFull"
+        :args="argsOf(v.row.call)"
+      />
+      <BashView v-else-if="isOpen(v) && bodyOf(v) === 'bash'" class="reveal" v-bind="bashOf(v)" />
       <div v-else-if="isOpen(v)" class="reveal flex flex-col gap-2 pt-1 pr-2.5 pb-2.5 pl-[30px]">
         <div v-if="v.row.call && v.name === 'code'">
           <div class="mb-1 text-micro font-semibold text-ink-3">{{ t('tools.detail.script') }}</div>
-          <pre class="code">{{ callScript(v.row.call.args) }}</pre>
+          <pre class="code">{{ callArg(v, 'code') }}</pre>
         </div>
         <div v-else-if="v.row.call">
           <div class="mb-1 text-micro font-semibold text-ink-3">{{ t('tools.detail.args') }}</div>

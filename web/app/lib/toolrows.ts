@@ -69,6 +69,15 @@ function lineCount(text: string): number {
   return text.split('\n').length - (text.endsWith('\n') ? 1 : 0)
 }
 
+/** A multi-line command on one line: `a\n  b` → `a ; b`. */
+function oneLine(command: string): string {
+  return command
+    .split('\n')
+    .map((line) => line.trim())
+    .filter(Boolean)
+    .join(' ; ')
+}
+
 /** A path's last segment: "src/lib/store.ts" → "store.ts". */
 function baseName(path: string): string {
   const trimmed = path.replace(/\/+$/, '')
@@ -103,13 +112,9 @@ function callFull(name: string, call: Call): string {
       // `proj:` / `@rumu:` (empty rest) is that workspace's root.
       return str('path') || (name === 'list' ? 'root' : '')
     case 'bash': {
-      const command = str('command')
-        .split('\n')
-        .map((line) => line.trim())
-        .filter(Boolean)
-        .join(' ; ')
+      const command = preview(oneLine(str('command')), 200)
       const ws = str('workspace')
-      if (command) return ws ? `${ws}: ${preview(command, 200)}` : preview(command, 200)
+      if (command) return ws ? `${ws}: ${command}` : command
       return ws
     }
     case 'workspace_use':
@@ -144,7 +149,8 @@ function callShort(name: string, call: Call): string {
       return '/'
     }
     case 'bash':
-      return preview(str('command'), 40)
+      // the row's `$` line: as much as fits (the row clips it)
+      return oneLine(str('command'))
     case 'code':
       return preview(str('code'), 40)
     case 'workspace_use':
@@ -204,6 +210,13 @@ function diffOf(name: string, patch: FilePatch | null, args: Args): DiffCounts |
   return counts.added + counts.removed ? counts : null
 }
 
+/** A `bash` result split into its `exit code: N` header and the output
+ * after it; `code` is null when there is no header (a tool error, a block). */
+export function bashExit(text: string): { code: number | null; body: string } {
+  const m = /^exit code: (-?\d+)\n?/.exec(text)
+  return m ? { code: Number(m[1]), body: text.slice(m[0].length) } : { code: null, body: text }
+}
+
 /** What the call produced, as a count or a word (empty when the call line says it). */
 function resultShort(name: string, output: string, diff: DiffCounts | null): string {
   if (!output) return ''
@@ -222,9 +235,9 @@ function resultShort(name: string, output: string, diff: DiffCounts | null): str
       return diff ? (diff.removed ? `+${diff.added} −${diff.removed}` : `+${diff.added}`) : ''
     case 'bash': {
       // a clean exit is the norm; say the exit code only when it isn't 0
-      const m = /exit code:\s*(-?\d+)/.exec(output)
-      if (m && m[1] !== '0') return t('tools.result.exit', { code: m[1] })
-      const lines = nonEmptyLines(output.replace(/^.*exit code:\s*-?\d+\n?/, '')).length
+      const { code, body } = bashExit(output)
+      if (code) return t('tools.result.exit', { code })
+      const lines = nonEmptyLines(body).length
       return lines ? t('tools.count.lines', { count: lines }) : ''
     }
     default: {
@@ -289,11 +302,12 @@ export function toolRowView(row: ToolRowInfo): ToolRowView {
       callFull: callFull(name, row.call),
       diff,
       // A blocked row is already explained by its stamp; an error keeps a
-      // clipped first line so the row hints at what went wrong.
+      // clipped first line so the row hints at what went wrong (a bash
+      // that ran says its exit code).
       result:
         blocked !== null
           ? ''
-          : isError
+          : isError && !(name === 'bash' && bashExit(output).code !== null)
             ? preview(nonEmptyLines(output)[0] ?? '', 40)
             : resultShort(name, output, diff),
     }
@@ -361,8 +375,9 @@ const KIND_KEYS: Record<string, string> = {
   workspace_use: 'workspaceUse',
 }
 
-/** A lone call's phrase names its target: "read store.ts", "ran cargo test". */
-const TARGETED = new Set(['read', 'write', 'edit', 'list', 'bash', 'search', 'workspace_use'])
+/** A lone call's phrase names its target: "read store.ts". A command is
+ * left to its row's `$` line ("ran 1 command"). */
+const TARGETED = new Set(['read', 'write', 'edit', 'list', 'search', 'workspace_use'])
 
 function kindKey(v: ToolRowView): string {
   if (v.toolCardId) return `${v.name}:card`
