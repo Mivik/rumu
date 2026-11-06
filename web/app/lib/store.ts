@@ -30,7 +30,7 @@ export {
 } from './state/derived'
 export type { OwedReply, SiblingAlternative } from './state/derived'
 
-export { timeline } from './state/timeline'
+export { pendingCalls, timeline } from './state/timeline'
 export type {
   ActivityCatalog,
   ActivityRecall,

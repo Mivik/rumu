@@ -51,3 +51,23 @@ export const vPlayOnce: Directive<HTMLElement, { key: string; cls?: string }> = 
     el.classList.add(cls)
   },
 }
+
+/** Within this of its end, a scroll box counts as following its stream. */
+const FOLLOW_SLOP = 24
+const following = new WeakMap<HTMLElement, boolean>()
+
+/** `v-follow="live"`: while `live`, keep a scroll box pinned to its end as
+ * its content grows — unless it was scrolled up away from the end, which
+ * holds it in place until scrolled back down. A box that opens mid-stream
+ * starts at its end. */
+export const vFollow: Directive<HTMLElement, boolean> = {
+  mounted(el, binding) {
+    if (binding.value) el.scrollTop = el.scrollHeight
+  },
+  beforeUpdate(el) {
+    following.set(el, el.scrollHeight - el.scrollTop - el.clientHeight < FOLLOW_SLOP)
+  },
+  updated(el, binding) {
+    if (binding.value && following.get(el)) el.scrollTop = el.scrollHeight
+  },
+}

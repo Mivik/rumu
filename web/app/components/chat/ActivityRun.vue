@@ -7,7 +7,9 @@
 // every turn, so neither shows on the line; the opened body still renders
 // them. With tool calls the line doesn't count the thoughts; without any
 // (reasoning right before the answer) it names the thinking instead: "Thought
-// for 2s". While the model thinks, it leads with the live dot, and a run with
+// for 2s". The live run (the turn's tail while it runs) leads with the live
+// dot through every phase — thinking, calling, waiting on the next step — so
+// it never blinks out between them. While the model thinks, a run with
 // no calls opens by itself so the reasoning streams in view, folding once the
 // answer starts unless toggled by hand. Exploration pills stay on the folded
 // line so the jump to the child branch is one click.
@@ -29,7 +31,7 @@ import RecallList from './RecallList.vue'
 import ThoughtStep from './ThoughtStep.vue'
 import ToolList from './ToolList.vue'
 
-const props = defineProps<{ steps: ActivityStep[] }>()
+const props = withDefaults(defineProps<{ steps: ActivityStep[]; live?: boolean }>(), { live: false })
 
 const thoughts = computed(() => props.steps.filter((s): s is ActivityThought => s.kind === 'thought'))
 const views = computed<ToolRowView[]>(() =>
@@ -125,7 +127,7 @@ function toggleOpen(): void {
         :aria-expanded="open"
         @click="toggleOpen"
       >
-        <span v-if="thinking" class="dot-live size-1.5 flex-none rounded-full bg-brand" />
+        <span v-if="live" class="dot-live size-1.5 flex-none rounded-full bg-brand" />
         <Icon v-else-if="!views.length" name="brain" :size="12" class="flex-none" />
         <span class="min-w-0 truncate"
           ><span v-for="(p, i) in summaryParts" :key="i" :class="{ 'font-mono font-medium': p.mono }">{{

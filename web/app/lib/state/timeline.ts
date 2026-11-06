@@ -7,7 +7,7 @@
 // only answer text and context pills stand on their own.
 
 import { computed } from 'vue'
-import type { Node } from '../types'
+import type { Node, ToolCall } from '../types'
 import { CATALOG_TAG, TURN_ERROR_TAG, reasoningText } from '../types'
 import { contentText } from '../util'
 import { callsOnPath, pathNodes } from './derived'
@@ -244,3 +244,14 @@ export const timeline = computed<TimelineEntry[]>(() => {
   // nothing to hang the group under, so leave the timeline alone.
   return out
 })
+
+/** The group's tool calls still waiting on their result. */
+export function pendingCalls(g: TimelineGroup): ToolCall[] {
+  const answered = new Set<string>()
+  for (const n of pathNodes.value) {
+    if (n.body.type === 'tool_result') answered.add(n.body.call_id)
+  }
+  return g.assistants.flatMap((a) =>
+    a.body.type === 'assistant' ? a.body.tool_calls.filter((c) => !answered.has(c.call_id)) : [],
+  )
+}

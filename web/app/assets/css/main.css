@@ -693,6 +693,15 @@
     margin-bottom: -4px;
   }
 
+  /* A live turn between visible steps: the dot on a line of its own. */
+  .working-line {
+    display: inline-flex;
+    align-items: center;
+    gap: 6px;
+    font-size: var(--text-meta);
+    color: var(--ink-3);
+  }
+
   /* A step's reasoning, in place: a quiet disclosure ("Thought for 4s", or
    * the live "Thinking") and, opened, the text under a hairline. Flex so the
    * toggle is the box's full height — an inline toggle would leave a text

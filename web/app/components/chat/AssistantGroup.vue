@@ -3,7 +3,10 @@
 // left-aligned text (no bubble) at the column's full width; the cat mascot
 // heads the turn on a line of its own. Between pieces of answer text, the
 // steps' reasoning and tool calls fold into one ActivityRun summary line, live
-// as "thinking" while the model reasons. One muted meta line at the bottom:
+// as "thinking" while the model reasons. While the turn runs, its frontier
+// always carries the live dot: the trailing activity run, the streaming
+// text's caret, the running calls, or else a "working…" line of its own.
+// One muted meta line at the bottom:
 // usage stays visible (hover for the full request/turn breakdown);
 // copy/regenerate/fork reveal on hover once the turn has finished.
 // Only the `live` group (the last one, while a turn runs) shows the stream.
@@ -11,7 +14,7 @@ import { computed, onBeforeUnmount, ref, watch } from 'vue'
 import { t } from '../../i18n'
 import type { Node } from '../../lib/types'
 import type { TimelineGroup } from '../../lib/store'
-import { activeDelta, forkSession, regenerateFrom, state } from '../../lib/store'
+import { activeDelta, forkSession, pendingCalls, regenerateFrom, state } from '../../lib/store'
 import type { CatState } from '../../lib/cat'
 import { renderMarkdown } from '../../lib/markdown'
 import { contentText, copyText } from '../../lib/util'
@@ -48,6 +51,9 @@ const catState = computed<CatState>(() => {
   const d = activeDelta.value
   return d?.text ? 'working' : d?.reasoning ? 'thinking' : 'waiting'
 })
+
+/** Calls of the live turn still waiting on their result (RunningTools). */
+const pending = computed(() => (props.live ? pendingCalls(props.group) : []))
 
 function textOf(n: Node): string {
   return contentText(bodyOf(n).content)
@@ -115,6 +121,15 @@ watch(
   { immediate: true },
 )
 onBeforeUnmount(() => retryTimer && clearInterval(retryTimer))
+
+/** The live turn is between visible steps: its tail is no activity run and no
+ * streaming text, and no call is running — so the dot needs a line of its
+ * own ("working…"): beside the mascot before anything shows, else at the end. */
+const idle = computed(() => {
+  if (!props.live || retrying.value || pending.value.length) return false
+  const tail = props.group.items.at(-1)
+  return tail?.kind !== 'activity' && !(tail?.kind === 'text' && tail.streaming)
+})
 </script>
 
 <template>
@@ -136,14 +151,19 @@ onBeforeUnmount(() => retryTimer && clearInterval(retryTimer))
           })
         }}
       </span>
-      <span v-else-if="!hasBody" v-enter="'enter-fade'" class="text-meta text-ink-3">{{
-        t('chat.assistant.working')
-      }}</span>
+      <span v-else-if="idle && !hasBody" v-enter="'enter-fade'" class="working-line">
+        <span class="dot-live size-1.5 rounded-full bg-brand" />{{ t('chat.assistant.working') }}
+      </span>
     </div>
 
     <template v-for="(item, i) in group.items" :key="i">
       <ContextPills v-if="item.kind === 'context'" v-enter="'enter-fade'" :nodes="item.nodes" />
-      <ActivityRun v-else-if="item.kind === 'activity'" v-enter="'enter-fade'" :steps="item.steps" />
+      <ActivityRun
+        v-else-if="item.kind === 'activity'"
+        v-enter="'enter-fade'"
+        :steps="item.steps"
+        :live="live && i === group.items.length - 1"
+      />
       <div
         v-else-if="item.kind === 'reset'"
         :data-path-node="item.node.id"
@@ -167,7 +187,10 @@ onBeforeUnmount(() => retryTimer && clearInterval(retryTimer))
     </template>
 
     <!-- live output of the calls still running -->
-    <RunningTools v-if="live" v-enter="'enter-fade'" :group="group" />
+    <RunningTools v-if="live" v-enter="'enter-fade'" :calls="pending" />
+    <span v-if="idle && hasBody" v-enter="'enter-fade'" class="working-line">
+      <span class="dot-live size-1.5 rounded-full bg-brand" />{{ t('chat.assistant.working') }}
+    </span>
 
     <!-- meta line: usage stays visible; actions reveal on hover once finished -->
     <div v-if="hasBody" class="-mt-0.5 flex min-h-6 items-center gap-2">

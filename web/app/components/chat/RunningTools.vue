@@ -4,13 +4,12 @@
 // the folded ActivityRun as soon as its tool_result node lands.
 import { computed } from 'vue'
 import { t } from '../../i18n'
-import type { TimelineGroup } from '../../lib/store'
 import type { ToolCall } from '../../lib/types'
-import { pathNodes, state } from '../../lib/store'
+import { state } from '../../lib/store'
 import { argSummary } from '../../lib/util'
 import Icon from '../ui/Icon.vue'
 
-const props = defineProps<{ group: TimelineGroup }>()
+const props = defineProps<{ calls: ToolCall[] }>()
 
 interface RunningRow {
   call: ToolCall
@@ -18,22 +17,12 @@ interface RunningRow {
 }
 
 const rows = computed<RunningRow[]>(() => {
-  const answered = new Set<string>()
-  for (const n of pathNodes.value) {
-    if (n.body.type === 'tool_result') answered.add(n.body.call_id)
-  }
   const branch = state.activeBranch
   if (!branch) return []
-  const out: RunningRow[] = []
-  for (const a of props.group.assistants) {
-    if (a.body.type !== 'assistant') continue
-    for (const call of a.body.tool_calls) {
-      if (answered.has(call.call_id)) continue
-      const progress = state.toolProgress[`${branch}:${call.call_id}`]?.text ?? ''
-      out.push({ call, progress })
-    }
-  }
-  return out
+  return props.calls.map((call) => ({
+    call,
+    progress: state.toolProgress[`${branch}:${call.call_id}`]?.text ?? '',
+  }))
 })
 
 function target(call: ToolCall): string {

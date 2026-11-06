@@ -4,11 +4,13 @@
 // (`node` null) reads "Thinking" and shows its stream while the model
 // thinks, folding once the answer starts unless toggled by hand. `flat` shows
 // just the text, for a run (ActivityRun) whose own line is the disclosure.
+// The live stream's box follows its end as the reasoning grows.
 import { computed, ref } from 'vue'
 import { t } from '../../i18n'
 import { type Node, reasoningText } from '../../lib/types'
 import { activeDelta } from '../../lib/store'
 import { fmtThought } from '../../lib/util'
+import { vFollow } from '../../lib/motion'
 import Icon from '../ui/Icon.vue'
 
 const props = withDefaults(defineProps<{ node: Node | null; flat?: boolean }>(), { flat: false })
@@ -45,6 +47,7 @@ const label = computed(() => {
   <!-- flat: inside a run whose line already names the thinking -->
   <div
     v-if="flat"
+    v-follow="!node"
     class="max-h-[300px] overflow-y-auto text-meta leading-[1.625] whitespace-pre-wrap text-ink-2"
     v-text="reasoning"
   />
@@ -61,6 +64,6 @@ const label = computed(() => {
       {{ label }}
       <Icon name="chevron" :size="10" class="reason-chevron" :class="{ 'rotate-90': open }" />
     </button>
-    <div v-if="open" class="reason-body reveal">{{ reasoning }}</div>
+    <div v-if="open" v-follow="!node" class="reason-body reveal">{{ reasoning }}</div>
   </div>
 </template>
