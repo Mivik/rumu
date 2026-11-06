@@ -9,9 +9,6 @@ import { refreshCards } from './sessions'
 import { state } from './state'
 import { toast } from './ui'
 
-/** Decks seen so far; a newly appearing root starts expanded. */
-const knownDecks = new Set<string>()
-
 /** Open the library dialog at a deck and/or card path, then load it. */
 export function openLibrary(deck: string | null = null, path: string | null = null): void {
   state.library.isOpen = true
@@ -63,11 +60,6 @@ export async function refreshLibrary(): Promise<void> {
     ])
     state.library.decks = decks
     state.library.cards = cards
-    for (const deck of decks) {
-      if (knownDecks.has(deck.id)) continue
-      knownDecks.add(deck.id)
-      state.library.expanded.add(`deck:${deck.id}`)
-    }
     // A mutation while the tree is filtered must refresh its hits too.
     if (state.library.query.trim()) void searchLibrary(state.library.query)
   } catch (err) {

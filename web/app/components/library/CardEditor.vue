@@ -621,7 +621,7 @@ const draftDiff = computed(() =>
               <template #meta>
                 <slot name="meta">
                   <p v-if="shown.pinned" class="mt-3 flex items-center gap-1.5 text-meta text-memory">
-                    <Icon name="pin" :size="12" />
+                    <Icon name="pin" :size="13" />
                     {{ t('library.pinned') }}
                   </p>
                 </slot>

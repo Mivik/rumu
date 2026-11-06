@@ -628,15 +628,15 @@ const isFolder = (node: TreeNode): node is FolderNode => node.kind === 'folder'
               <Icon
                 v-if="node.card.pinned"
                 name="pin"
-                :size="11"
-                class="flex-none text-memory"
+                :size="13"
+                class="flex-none translate-y-px text-memory"
                 :aria-label="t('library.pinned')"
               />
               <Icon
                 v-if="node.card.link || node.card.dangling"
                 name="link"
-                :size="11"
-                class="flex-none"
+                :size="13"
+                class="flex-none translate-y-px"
                 :class="node.card.dangling ? 'text-danger' : 'text-ink-3'"
                 :aria-label="t(node.card.dangling ? 'library.dangling' : 'library.link')"
               />
