@@ -8,13 +8,18 @@
     "imported": "回忆",
     "recalled": "回忆了 {count} 张卡片",
     "recalledList": "回忆了 {count} 张卡片：",
-    "changed": "已变更",
-    "workspace": "默认 {names}",
-    "task": "任务 {id} · {status}",
     "moreCards": "{names}（{count} 张）",
     "catalogTitles": {
       "deck": "{at} 的卡片"
     }
+  },
+  "notes": {
+    "count": "{count} 条旁注",
+    "workspace": "默认工作区设为 {name}",
+    "loaded": "读入 {name}",
+    "cardBefore": "卡片",
+    "cardAfter": "已变更",
+    "task": "后台任务 {id}：{status}"
   },
   "drawer": {
     "label": "知识卡片",

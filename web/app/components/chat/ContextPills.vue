@@ -1,16 +1,16 @@
 <script setup lang="ts">
-// One "context" row: consecutive Notes/Markers collapsed into compact,
-// tinted pills — "recalled [A] [B]" as card stubs, "card A changed". Same-kind
-// items share one pill; card names are clickable and open the CardDrawer.
-// Each pill carries node ids so the Context panel can jump to the injection
-// point. Pills pop in when they happen live; a recalled memory fades in and
-// underlines its cards one by one. It lines up with the content column's left
-// edge and puts no node on the thread (only messages do).
+// One "context" row: the Notes between messages. Recalled cards stay in view
+// as card stubs ("recalled [A] [B]", clickable, opening the CardDrawer); every
+// other notice (the default workspace, a loaded CLAUDE.md, a card that
+// changed, a finished task, a plain note) is a side note. They fold into a
+// divider across the column, "── 2 side notes › ──", since they happen
+// between the turns rather than in one; opened, each is a sentence of its own
+// (NoticeRow) in a list centred under it. Puts no node on the thread (only
+// messages do).
 import { computed, ref } from 'vue'
 import { t } from '../../i18n'
-import type { Content, Node, TaskDone, TaskStatus } from '../../lib/types'
+import type { Content, Node, TaskDone } from '../../lib/types'
 import { CATALOG_TAG, ASSISTANT_INTRO_TAG, TASK_TAG, TASK_VERSION } from '../../lib/types'
-import Chip from '../ui/Chip.vue'
 import Icon from '../ui/Icon.vue'
 import {
   agentsOf,
@@ -21,10 +21,10 @@ import {
   updateOf,
   workspaceUseOf,
 } from '../../lib/cards'
-import { preview } from '../../lib/util'
-import { openDrawer, openTaskDetail } from '../../lib/store'
-import { taskStatusWord } from '../../lib/tasks'
+import { openDrawer } from '../../lib/store'
 import { vEnter } from '../../lib/motion'
+import NoticeRow from './NoticeRow.vue'
+import type { Notice } from './NoticeRow.vue'
 
 const props = defineProps<{ nodes: Node[] }>()
 
@@ -35,12 +35,6 @@ interface CardItem {
   hover: string
 }
 
-/** A card that opens by its full id, shown under its mount-free label. */
-interface CardRef {
-  id: string
-  label: string
-}
-
 /** Decode a `kernel.task` completion payload, if that is what this note is. */
 function taskDoneOf(content: Content): TaskDone | null {
   const d = content.data
@@ -49,178 +43,89 @@ function taskDoneOf(content: Content): TaskDone | null {
   return t && typeof t === 'object' && typeof t.id === 'string' ? t : null
 }
 
-interface PillSpec {
-  key: string
-  kind: 'memory' | 'update' | 'workspace' | 'agents' | 'note' | 'task'
-  title: string
-  cards?: CardItem[]
-  refs?: CardRef[]
-  names?: string[]
-  texts?: string[]
-  expandable?: boolean
-  taskId?: string
-  taskStatus?: TaskStatus
-}
-
 /** Up to 3 names shown; past that, 2 names + "+N" (rest in the hover title). */
 const SHOWN = 3
 
-function memoryShown(p: PillSpec): CardItem[] {
-  const cards = p.cards ?? []
-  return cards.slice(0, cards.length > SHOWN ? 2 : SHOWN)
-}
+const parsed = computed(() => {
+  const cards: CardItem[] = []
+  const notices = new Map<string, Notice>()
+  const add = (n: Notice): void => {
+    if (!notices.has(n.key)) notices.set(n.key, n)
+  }
 
-function memoryMore(p: PillSpec): number {
-  const cards = p.cards ?? []
-  return cards.length > SHOWN ? cards.length - 2 : 0
-}
+  for (const n of props.nodes) {
+    const b = n.body
+    if (b.type !== 'note') continue
+    // A card catalog belongs to the activity run it precedes (CatalogList).
+    if (b.content.data?.tag === CATALOG_TAG || b.content.data?.tag === ASSISTANT_INTRO_TAG) continue
+    const task = taskDoneOf(b.content)
+    const update = updateOf(b.content)
+    const imp = importOf(b.content)
+    const agents = agentsOf(b.content)
+    const wsUse = workspaceUseOf(b.content)
+    if (task) {
+      add({ kind: 'task', key: `task:${task.id}`, id: task.id, status: task.status, text: b.content.text })
+    } else if (b.source === 'memory' && update) {
+      const id = cardByKey.value.get(`${update.deck}:${update.path}`)?.id ?? update.path
+      add({ kind: 'update', key: `update:${id}`, id, label: cardLabel(id), text: b.content.text })
+    } else if (b.source === 'memory' && imp) {
+      const card = cardForImport(imp)
+      const label = card ? cardLabel(card.id) : imp.path
+      cards.push({
+        node: n,
+        cardId: card?.id ?? null,
+        title: label,
+        hover: card ? `#${label}${card.description ? ` — ${card.description}` : ''}` : b.content.text,
+      })
+    } else if (agents) {
+      // The injected text starts with `# CLAUDE.md (workspace `proj`)`;
+      // name the document, not the directory basename.
+      const doc = (b.content.text.split('\n')[0] ?? '')
+        .replace(/^#\s*/, '')
+        .replace(/\s*\(workspace `[^`]+`\)(\s*\(updated\))?\s*$/, '')
+        .trim()
+      const name = `${agents.ws}/${doc || agents.file}`
+      add({ kind: 'agents', key: `agents:${name}`, name })
+    } else if (wsUse) {
+      add({ kind: 'workspace', key: `workspace:${wsUse.name}`, name: wsUse.name })
+    } else if (b.content.text || !b.content.data) {
+      add({ kind: 'note', key: `note:${n.id}`, text: b.content.text })
+    }
+    // An empty-text note with data that no producer claimed (e.g. the root
+    // marker or a card_use record) has nothing to show here.
+  }
+  return { cards, notices: [...notices.values()] }
+})
+
+const cards = computed(() => parsed.value.cards)
+const notices = computed(() => parsed.value.notices)
+const cardsShown = computed(() => cards.value.slice(0, cards.value.length > SHOWN ? 2 : SHOWN))
+const cardsMore = computed(() => (cards.value.length > SHOWN ? cards.value.length - 2 : 0))
+const cardsTitle = computed(() => cards.value.map((c) => c.hover).join('\n'))
 
 function openCard(c: CardItem): void {
   if (c.cardId) openDrawer(c.cardId, c.node.id)
 }
 
-const pills = computed<PillSpec[]>(() => {
-  const byKind = new Map<string, PillSpec>()
-
-  const ensure = (
-    key: string,
-    kind: PillSpec['kind'],
-    title: string,
-    extra: Partial<PillSpec> = {},
-  ): PillSpec => {
-    let p = byKind.get(key)
-    if (!p) {
-      p = { key, kind, title, ...extra }
-      byKind.set(key, p)
-    }
-    return p
-  }
-
-  for (const n of props.nodes) {
-    const b = n.body
-    // A card catalog belongs to the activity run it precedes (CatalogList).
-    if (b.type === 'note' && b.content.data?.tag === CATALOG_TAG) continue
-    if (b.type === 'note' && b.content.data?.tag === ASSISTANT_INTRO_TAG) continue
-    if (b.type === 'note') {
-      const task = taskDoneOf(b.content)
-      const update = updateOf(b.content)
-      const imp = importOf(b.content)
-      const agents = agentsOf(b.content)
-      const wsUse = workspaceUseOf(b.content)
-      if (task) {
-        // A background-task completion: one pill per task, opening the live /
-        // buffered output in the tasks panel.
-        ensure(`task:${task.id}`, 'task', b.content.text, {
-          taskId: task.id,
-          taskStatus: task.status,
-        })
-      } else if (b.source === 'memory' && update) {
-        // Update notice: names the card, carries no body.
-        const p = ensure('update', 'update', t('cards.pills.changed'), { refs: [], texts: [] })
-        const key = `${update.deck}:${update.path}`
-        const id = cardByKey.value.get(key)?.id ?? update.path
-        if (!p.refs!.some((r) => r.id === id)) p.refs!.push({ id, label: cardLabel(id) })
-        p.texts!.push(b.content.text)
-      } else if (b.source === 'memory' && imp) {
-        const p = ensure('memory', 'memory', t('cards.pills.imported'), { cards: [] })
-        const card = cardForImport(imp)
-        if (card) {
-          const label = cardLabel(card.id)
-          p.cards!.push({
-            node: n,
-            cardId: card.id,
-            title: label,
-            hover: `#${label}${card.description ? ` — ${card.description}` : ''}`,
-          })
-        } else {
-          p.cards!.push({
-            node: n,
-            cardId: null,
-            title: imp.path,
-            hover: b.content.text,
-          })
-        }
-      } else if (agents) {
-        // The injected text starts with `# CLAUDE.md (workspace `proj`)`;
-        // label the pill with that document, not with the directory basename.
-        const first = b.content.text.split('\n')[0] ?? ''
-        const doc = first
-          .replace(/^#\s*/, '')
-          .replace(/\s*\(workspace `[^`]+`\)(\s*\(updated\))?\s*$/, '')
-          .trim()
-        const name = `${agents.ws}/${doc || agents.file}`
-        const p = ensure('agents', 'agents', '', { names: [] })
-        if (!p.names!.includes(name)) p.names!.push(name)
-      } else if (wsUse) {
-        const p = ensure('workspace', 'workspace', '', { names: [] })
-        if (!p.names!.includes(wsUse.name)) p.names!.push(wsUse.name)
-      } else if (b.content.text || !b.content.data) {
-        const p = ensure(`note:${b.source}`, 'note', b.content.text, {
-          texts: [],
-          expandable: true,
-        })
-        p.texts!.push(b.content.text)
-      }
-      // An empty-text note with data that no producer claimed (e.g. the root
-      // marker or a card_use record) has nothing to show here.
-    }
-  }
-
-  const out: PillSpec[] = []
-  if (byKind.has('memory')) {
-    const p = byKind.get('memory')!
-    p.title = p.cards!.map((c) => c.hover).join('\n')
-    out.push(p)
-  }
-  for (const p of byKind.values()) {
-    if (p.kind === 'memory') continue
-    if (p.kind === 'note') p.title = p.texts!.join('\n\n')
-    if (p.kind === 'agents') p.title = p.names!.join('\n')
-    if (p.kind === 'update') p.title = p.texts!.join('\n\n')
-    out.push(p)
-  }
-  return out
-})
-
-const expandedId = ref<string | null>(null)
-const expandedPill = computed(() => pills.value.find((x) => x.key === expandedId.value) ?? null)
-const expandedText = computed(() => {
-  const p = expandedPill.value
-  return p?.expandable ? (p.texts ?? []).join('\n\n') : ''
-})
-
-function toggle(p: PillSpec): void {
-  if (!p.expandable) return
-  expandedId.value = expandedId.value === p.key ? null : p.key
-}
-
-function label(names: string[]): string {
-  return names.join(', ')
-}
+const open = ref(false)
 </script>
 
 <template>
-  <div class="relative flex flex-wrap items-center gap-1.5 text-meta">
-    <span
-      v-for="p in pills"
-      :key="p.key"
-      v-enter="p.kind === 'memory' ? 'enter-recall' : 'enter-pop'"
-      class="inline-flex min-w-0 max-w-full"
-      :class="p.kind === 'memory' ? 'rounded-control' : 'rounded-full'"
-    >
-      <!-- memory: "imported" then each card as a little card stub (+N) -->
+  <div class="flex min-w-0 flex-col items-start gap-2">
+    <div v-if="cards.length" class="flex max-w-full min-w-0 text-meta">
+      <!-- recalled cards: "recalled" then each card as a little card stub (+N) -->
       <span
-        v-if="p.kind === 'memory'"
+        v-enter="'enter-recall'"
         class="inline-flex min-w-0 max-w-full flex-wrap items-baseline gap-1.5"
-        :title="p.title"
+        :title="cardsTitle"
       >
-        <!-- set like the fold lines around it (.reason-toggle); the row sits
-             on the titles' baseline, which are larger and in the card face -->
+        <!-- set like the fold lines (.reason-toggle); the row sits on the
+             titles' baseline, which are larger and in the card face -->
         <span class="inline-flex items-baseline gap-1.5 text-micro font-semibold text-ink-3">
           <Icon name="memory" :size="12" class="text-memory" />
           {{ t('cards.pills.imported') }}
         </span>
-        <template v-for="(c, i) in memoryShown(p)" :key="c.node.id">
+        <template v-for="(c, i) in cardsShown" :key="c.node.id">
           <button
             v-if="c.cardId"
             class="card-ref"
@@ -235,57 +140,29 @@ function label(names: string[]): string {
             <span class="truncate">{{ c.title }}</span>
           </span>
         </template>
-        <span v-if="memoryMore(p)" class="text-ink-3">+{{ memoryMore(p) }}</span>
+        <span v-if="cardsMore" class="text-ink-3">+{{ cardsMore }}</span>
       </span>
-
-      <!-- update notices: "A changed (+N)", click opens the card -->
-      <Chip v-else-if="p.kind === 'update'" icon="note" tone="memory" :title="p.title">
-        <template v-for="(ref, i) in p.refs ?? []" :key="ref.id">
-          <span v-if="i > 0">,</span>
-          <button class="card-ref" type="button" @click.stop="openDrawer(ref.id)">
-            {{ ref.label }}
-          </button>
-        </template>
-        <span class="text-ink-3">&nbsp;{{ t('cards.pills.changed') }}</span>
-      </Chip>
-
-      <Chip
-        v-else-if="p.kind === 'workspace'"
-        icon="mount"
-        tone="tool"
-        :label="t('cards.pills.workspace', { names: label(p.names ?? []) })"
-      />
-      <Chip
-        v-else-if="p.kind === 'agents'"
-        icon="file"
-        tone="tool"
-        :label="label(p.names ?? [])"
-        :title="p.title"
-      />
-      <Chip
-        v-else-if="p.kind === 'task'"
-        icon="tool"
-        tone="tool"
-        clickable
-        :label="t('cards.pills.task', { id: p.taskId, status: taskStatusWord(p.taskStatus ?? 'done') })"
-        :title="p.title"
-        @click="openTaskDetail(p.taskId!)"
-      />
-      <Chip
-        v-else
-        icon="note"
-        tone="neutral"
-        :label="preview(p.texts?.[0] ?? '', 40)"
-        :title="p.title"
-        clickable
-        @click="toggle(p)"
-      />
-    </span>
-    <div
-      v-if="expandedText"
-      class="reveal mt-0.5 basis-full whitespace-pre-wrap rounded-control bg-canvas px-3 py-2 text-meta text-ink-2"
-    >
-      {{ expandedText }}
     </div>
+
+    <!-- every other notice: a divider across the column, between the turns -->
+    <template v-if="notices.length">
+      <div v-enter="'enter-fade'" class="flex w-full items-center gap-3">
+        <span class="h-px flex-1 bg-line" />
+        <button
+          type="button"
+          class="reason-toggle flex-none"
+          :class="open ? 'text-ink-2' : 'text-ink-3 hover:text-ink-2'"
+          :aria-expanded="open"
+          @click="open = !open"
+        >
+          <span>{{ t('cards.notes.count', { count: notices.length }) }}</span>
+          <Icon name="chevron" :size="12" class="reason-chevron flex-none" :class="{ 'rotate-90': open }" />
+        </button>
+        <span class="h-px flex-1 bg-line" />
+      </div>
+      <div v-if="open" class="reveal mx-auto flex flex-col items-start gap-1">
+        <NoticeRow v-for="n in notices" :key="n.key" :notice="n" />
+      </div>
+    </template>
   </div>
 </template>

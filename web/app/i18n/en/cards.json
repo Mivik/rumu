@@ -8,13 +8,18 @@
     "imported": "Recalled",
     "recalled": "Recalled {count} card | Recalled {count} cards",
     "recalledList": "Recalled {count} card: | Recalled {count} cards:",
-    "changed": "changed",
-    "workspace": "default {names}",
-    "task": "task {id} · {status}",
     "moreCards": "{names} ({count})",
     "catalogTitles": {
       "deck": "Cards at {at}"
     }
+  },
+  "notes": {
+    "count": "{count} side note | {count} side notes",
+    "workspace": "Default workspace set to {name}",
+    "loaded": "Loaded {name}",
+    "cardBefore": "Card",
+    "cardAfter": "changed",
+    "task": "Background task {id}: {status}"
   },
   "drawer": {
     "label": "knowledge card",
