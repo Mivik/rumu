@@ -79,6 +79,12 @@ function pickAssistant(id: string): void {
   if (leaving) goHome()
 }
 
+/** Other sessions with a tool call waiting on the user's approval (the open
+ *  one shows it in its composer). */
+const waiting = computed(
+  () => new Set(state.decisions.map((d) => d.session).filter((s) => s !== state.sessionId)),
+)
+
 /** The session whose action menu is asking for delete confirmation. The menu
  * opens on its action list every time, so a reopened menu never starts on the
  * destructive step. */
@@ -278,7 +284,12 @@ const rows = computed<Row[]>(() => {
           >
             <span class="min-w-0 flex-1 truncate">{{ r.s.title || t('common.untitled') }}</span>
             <span
-              v-if="r.s.id === state.sessionId && isBusy"
+              v-if="waiting.has(r.s.id)"
+              class="size-2 flex-none rounded-full bg-brand ring-3 ring-brand-soft"
+              :title="t('chat.ask.waiting')"
+            />
+            <span
+              v-else-if="r.s.id === state.sessionId && isBusy"
               class="dot-live size-1.5 flex-none rounded-full bg-brand"
               :title="t('common.working')"
             />

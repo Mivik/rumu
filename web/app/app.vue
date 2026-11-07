@@ -5,7 +5,6 @@ import AssistantSettings from './components/AssistantSettings.vue'
 import WorkspaceSettings from './components/WorkspaceSettings.vue'
 import ChatView from './components/chat/ChatView.vue'
 import LibraryView from './components/library/LibraryView.vue'
-import AskDialog from './components/AskDialog.vue'
 import Lightbox from './components/Lightbox.vue'
 import Toasts from './components/Toasts.vue'
 import { closePanels, layout } from './lib/layout'
@@ -58,7 +57,6 @@ onBeforeUnmount(() => {
     <AssistantSettings />
     <WorkspaceSettings />
     <Lightbox />
-    <AskDialog />
     <Toasts />
 
     <Transition

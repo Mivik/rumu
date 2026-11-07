@@ -11,12 +11,15 @@
 // stays put, and growth fills that blank before it moves the page. Its floor
 // rises three ways: a prompt you just sent opens near the top of the sheet,
 // the reply growing down into the blank below it rather than pinning your eye
-// to the sliver above the composer; while a turn runs, LIVE_ROOM stays free
-// under the reply, so whatever shows up next (a tall preview, a tool's
-// output) lands in view; otherwise the column's own height. Any size change
+// to the sliver above the composer; while a turn runs (and is not waiting on
+// a decision), LIVE_ROOM stays free under the reply, so whatever shows up next
+// (a tall preview, a tool's output) lands in view; otherwise the column's own
+// height. Any size change
 // of the column or the scroller — not only new tokens — re-pins the end while
-// you follow it. Only a prompt that arrives while a turn is starting (one you
-// just sent) anchors — a session switch still lands at the end of the
+// you follow it, after the blank has absorbed what it can: a composer that
+// grows (a decision unfolding) eats into the blank, not the page, and gets it
+// back when it shrinks. Only a prompt that arrives while a turn is starting
+// (one you just sent) anchors — a session switch still lands at the end of the
 // conversation, and a branch switch keeps your place in it.
 //
 // The thread is the rail down the sheet's right edge (TimelineRail), which
@@ -149,6 +152,11 @@ let anchorPending: string | null = null
  *  the end must not cut it short. */
 let settlingUntil = 0
 const spacerEl = ref<HTMLElement | null>(null)
+/** The scroller's height at the last layout. */
+let viewHeight = 0
+/** Blank the scroller took back when it shrank (the composer growing — a
+ *  decision unfolding, the tasks panel), owed back when it grows again. */
+let lent = 0
 
 /** The newest prompt on the path — the one a just-started turn answers. */
 const lastPromptId = computed(() => {
@@ -197,7 +205,18 @@ function layoutTail(): void {
     floor = Math.max(floor, prompt.offsetTop + sc.clientHeight - ANCHOR_GAP - pad)
     anchorPending = null
   }
-  floor = Math.max(floor, height + (isBusy.value ? LIVE_ROOM : 0))
+  // A turn held up on a decision writes nothing until it is answered.
+  const live = isBusy.value && !state.decisions.some((d) => d.session === state.sessionId)
+  floor = Math.max(floor, height + (live ? LIVE_ROOM : 0))
+  // While you follow the end, a resize of the scroller comes out of the blank
+  // first, so the page under you stays put instead of riding up with it.
+  const delta = sc.clientHeight - viewHeight
+  if (viewHeight && delta && nearBottom.value && !prompt) {
+    const shift = delta < 0 ? -Math.min(-delta, floor - height) : Math.min(delta, lent)
+    floor += shift
+    lent -= shift
+  }
+  viewHeight = sc.clientHeight
   spacer.style.height = `${floor - height}px`
   if (prompt) {
     settlingUntil = performance.now() + 600
@@ -229,6 +248,7 @@ function resetView(): void {
   timelineLive.value = false
   anchorPending = null
   floor = 0
+  lent = 0
   seenPrompt = lastPromptId.value
   void nextTick(() => {
     timelineLive.value = true

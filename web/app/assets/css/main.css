@@ -1487,9 +1487,9 @@
     flex: none;
     align-items: center;
     justify-content: center;
-    width: 38px;
-    height: 38px;
-    border-radius: 12px;
+    width: 32px;
+    height: 32px;
+    border-radius: 10px;
     transition:
       background-color 0.15s,
       color 0.15s,

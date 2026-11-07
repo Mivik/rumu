@@ -10,6 +10,9 @@
 // to send. While rumu works, sending steers the turn and a stop button
 // joins it.
 //
+// A tool call waiting on the user's approval unfolds from the top of the
+// sheet (DecisionPanel), above the writing.
+//
 // Images attach three ways — paste, drop, the footer's picture key — and
 // upload the moment they arrive, into the tray above the writing; a failed
 // upload keeps its tile (the server's word arrived as a toast) until retried
@@ -25,6 +28,7 @@ import { openLightbox, toast } from '../../lib/state/ui'
 import Icon from '../ui/Icon.vue'
 import Popover from '../ui/Popover.vue'
 import WorkspacesPanel from '../WorkspacesPanel.vue'
+import DecisionPanel from './DecisionPanel.vue'
 
 /** One image being attached: the file, its local preview, and where its
  * upload stands. */
@@ -237,7 +241,8 @@ const model = computed(() => {
     @dragleave="onDragleave"
     @drop="onDrop"
   >
-    <div v-if="attachments.length" class="flex flex-wrap gap-2 px-5 pt-4">
+    <DecisionPanel />
+    <div v-if="attachments.length" class="flex flex-wrap gap-2 px-4 pt-3">
       <div v-for="(item, i) in attachments" :key="item.id" class="relative">
         <button
           type="button"
@@ -286,14 +291,13 @@ const model = computed(() => {
     <textarea
       ref="textareaEl"
       v-model="draft"
-      class="max-h-[240px] min-h-[52px] resize-none rounded-none border-0 bg-transparent px-5 pb-1 text-message leading-normal [field-sizing:content] focus:shadow-none"
-      :class="attachments.length ? 'pt-2' : 'pt-4'"
-      rows="2"
+      class="max-h-[240px] min-h-[calc(2lh+1rem)] resize-none rounded-none border-0 bg-transparent px-4 pb-1 text-message leading-normal [field-sizing:content] focus:shadow-none"
+      :class="attachments.length ? 'pt-2' : 'pt-3'"
       :placeholder="placeholder"
       @keydown="onKeydown"
       @paste="onPaste"
     />
-    <div class="flex min-w-0 items-center gap-2 pt-1 pr-3 pb-3 pl-4" @click.self="textareaEl?.focus()">
+    <div class="flex min-w-0 items-center gap-1.5 pt-0.5 pr-2 pb-2 pl-3" @click.self="textareaEl?.focus()">
       <Popover v-if="workspace" :label="t('workspaces.title')" placement="top-start">
         <template #trigger="{ open, toggle }">
           <button
@@ -348,7 +352,7 @@ const model = computed(() => {
           :aria-label="t('chat.composer.stop')"
           @click="stopTurn()"
         >
-          <Icon name="stop" :size="18" />
+          <Icon name="stop" :size="16" />
         </button>
       </Transition>
       <button
@@ -358,7 +362,7 @@ const model = computed(() => {
         :aria-label="isBusy ? t('chat.composer.steer') : t('chat.composer.send')"
         @click="submit"
       >
-        <Icon name="send" :size="18" />
+        <Icon name="send" :size="16" />
       </button>
     </div>
   </div>

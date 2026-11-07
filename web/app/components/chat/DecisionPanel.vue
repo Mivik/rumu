@@ -1,0 +1,165 @@
+<script setup lang="ts">
+// A tool call waiting on the user (`decision.requested`): questions an `ask`
+// puts to the user (QuestionsForm), or approval of an `ask` between
+// assistants, mounting a deck, writing to another deck, or a link into
+// another deck. It
+// unfolds from the top of the composer, so the request sits where the reply
+// to it would be written; the oldest pending one of the open session shows,
+// the rest wait their turn (other sessions' requests are marked in the
+// sidebar). Escape declines (or dismisses the questions), unless focus is in
+// a text field.
+import { computed, onBeforeUnmount, onMounted, shallowRef, watch } from 'vue'
+import { t } from '../../i18n'
+import { answerDecision, state } from '../../lib/store'
+import type { DecisionScope, PendingDecision } from '../../lib/types'
+import RumuCat from '../brand/RumuCat.vue'
+import QuestionsForm from './QuestionsForm.vue'
+
+const pending = computed(() => state.decisions.filter((d) => d.session === state.sessionId))
+const current = computed(() => pending.value[0] ?? null)
+
+/** What the panel shows: the current request, or the last one while the
+ *  panel folds away after it was answered. */
+const shown = shallowRef<PendingDecision | null>(current.value)
+watch(current, (d) => {
+  if (d) shown.value = d
+})
+
+/** Title, quoted detail (if any) and hint for the shown request. */
+const view = computed(() => {
+  const r = shown.value?.request
+  if (!r) return null
+  switch (r.kind) {
+    case 'questions':
+      return { title: t('chat.ask.questionsTitle', { from: r.from }), detail: null, hint: null }
+    case 'ask':
+      return {
+        title: t('chat.ask.title', { from: r.from, to: r.to }),
+        detail: r.question,
+        hint: t('chat.ask.hint', { from: r.from, to: r.to }),
+      }
+    case 'card_mount':
+      return {
+        title: t('chat.ask.mountTitle', { from: r.from, deck: r.deck }),
+        detail: null,
+        hint: t('chat.ask.mountHint', { deck: r.deck, at: r.at }),
+      }
+    case 'card_write':
+      return {
+        title: t('chat.ask.writeTitle', { from: r.from, deck: r.deck }),
+        detail: r.content,
+        hint: r.move_from
+          ? t('chat.ask.moveHint', { path: r.path, source: r.move_from })
+          : t('chat.ask.writeHint', { path: r.path }),
+      }
+    case 'card_link':
+      return {
+        title: t('chat.ask.linkTitle', { from: r.from, to: r.to }),
+        detail: `${r.path} → ${r.target}`,
+        hint: t('chat.ask.linkHint', { path: r.path, target: r.target }),
+      }
+  }
+})
+
+function answer(allow: boolean, scope: DecisionScope = 'once'): void {
+  if (current.value) void answerDecision(current.value.id, { allow, scope })
+}
+
+/** Decline the current request, or dismiss its questions. */
+function decline(): void {
+  const d = current.value
+  if (d) void answerDecision(d.id, d.request.kind === 'questions' ? {} : { allow: false })
+}
+
+// Capture phase, before the panels and drawers below it hear the key.
+function onKey(e: KeyboardEvent): void {
+  const el = document.activeElement
+  const typing =
+    el instanceof HTMLInputElement ||
+    el instanceof HTMLTextAreaElement ||
+    (el as HTMLElement | null)?.isContentEditable
+  if (e.key === 'Escape' && current.value && !typing) {
+    e.stopPropagation()
+    decline()
+  }
+}
+
+onMounted(() => window.addEventListener('keydown', onKey, true))
+onBeforeUnmount(() => window.removeEventListener('keydown', onKey, true))
+</script>
+
+<template>
+  <!-- 0fr ↔ 1fr rows: the sheet grows upward by exactly the panel's height -->
+  <div
+    class="grid cursor-auto overflow-hidden rounded-t-[inherit] transition-[grid-template-rows] duration-300 ease-soft"
+    :class="current ? 'grid-rows-[1fr]' : 'grid-rows-[0fr]'"
+    :inert="!current"
+  >
+    <div class="min-h-0">
+      <Transition
+        mode="out-in"
+        enter-active-class="transition duration-200 ease-soft"
+        enter-from-class="translate-y-1 opacity-0"
+        leave-active-class="transition duration-100"
+        leave-to-class="opacity-0"
+      >
+        <div
+          v-if="shown && view"
+          :key="shown.id"
+          class="max-h-[min(70vh,560px)] overflow-y-auto border-b border-line-soft bg-surface-2/50 px-4 pt-3 pb-3"
+          role="alertdialog"
+          aria-modal="false"
+          :aria-label="view.title"
+        >
+          <div class="flex items-center gap-2">
+            <RumuCat state="waiting" :size="34" :paper="false" class="-my-1" />
+            <p class="min-w-0 text-message font-semibold text-ink">{{ view.title }}</p>
+            <span v-if="pending.length > 1" class="ml-auto text-micro text-ink-3 tabular-nums">
+              1 / {{ pending.length }}
+            </span>
+          </div>
+          <QuestionsForm v-if="shown.request.kind === 'questions'" :id="shown.id" :request="shown.request" />
+          <template v-else>
+            <blockquote
+              v-if="view.detail"
+              class="mt-2 max-h-40 overflow-y-auto rounded-control bg-surface px-3 py-2 text-secondary whitespace-pre-wrap text-ink-2 ring-1 ring-line-soft"
+            >
+              {{ view.detail }}
+            </blockquote>
+            <p v-if="view.hint" class="mt-1.5 text-micro text-ink-3">{{ view.hint }}</p>
+            <div class="mt-2.5 flex flex-wrap items-center justify-end gap-1.5">
+              <button
+                type="button"
+                class="btn flex-auto px-3 py-1 sm:mr-auto sm:flex-none"
+                @click="answer(false)"
+              >
+                {{ t('chat.ask.deny') }}
+              </button>
+              <button
+                type="button"
+                class="btn flex-auto px-3 py-1 sm:flex-none"
+                @click="answer(true, 'always')"
+              >
+                {{ t('chat.ask.always') }}
+              </button>
+              <button
+                type="button"
+                class="btn flex-auto px-3 py-1 sm:flex-none"
+                @click="answer(true, 'session')"
+              >
+                {{ t('chat.ask.session') }}
+              </button>
+              <button
+                type="button"
+                class="btn btn-primary flex-auto px-3 py-1 sm:flex-none"
+                @click="answer(true)"
+              >
+                {{ t('chat.ask.once') }}
+              </button>
+            </div>
+          </template>
+        </div>
+      </Transition>
+    </div>
+  </div>
+</template>

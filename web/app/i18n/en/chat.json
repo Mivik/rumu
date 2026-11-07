@@ -85,6 +85,15 @@
     "deny": "Don't allow",
     "once": "Allow once",
     "session": "Allow for this session",
-    "always": "Always allow"
+    "always": "Always allow",
+    "waiting": "Waiting for your answer",
+    "questionsTitle": "{from} asks you",
+    "questionN": "Question {n}",
+    "multiple": "Choose any",
+    "custom": "Something else…",
+    "answer": "Type your answer…",
+    "skip": "Skip",
+    "next": "Next",
+    "submit": "Send"
   }
 }

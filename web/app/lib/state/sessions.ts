@@ -103,7 +103,7 @@ export async function answerDecision(id: string, answer: DecisionAnswer): Promis
   state.decisions = state.decisions.filter((d) => d.id !== id)
   try {
     await rumu.request('decision.answer', { id, answer })
-    if (answer.scope === 'always') state.assistants = await rumu.request<Assistant[]>('assistant.list')
+    if ('scope' in answer && answer.scope === 'always') state.assistants = await rumu.request<Assistant[]>('assistant.list')
   } catch (err) {
     toast('error', t('errors.answer'), (err as Error).message)
   }

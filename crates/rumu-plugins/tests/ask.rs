@@ -86,7 +86,7 @@ impl Llm for AssistantsLlm {
             None => LlmResponse::calls([ToolCall::new(
                 "a1",
                 "ask",
-                json!({ "to": LEDGER, "question": "what is the monthly budget?" }),
+                json!({ "to": LEDGER, "questions": [{ "question": "what is the monthly budget?" }] }),
             )]),
             Some(result) => LlmResponse::text(format!("scout heard: {result}")),
         })
@@ -378,7 +378,7 @@ impl Llm for StuckLlm {
         Ok(LlmResponse::calls([ToolCall::new(
             "a1",
             "ask",
-            json!({ "to": LEDGER, "question": "what is the monthly budget?" }),
+            json!({ "to": LEDGER, "questions": [{ "question": "what is the monthly budget?" }] }),
         )]))
     }
 }

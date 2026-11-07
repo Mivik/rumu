@@ -163,15 +163,19 @@ export interface PendingDecision {
 
 /** What a tool call asks the user to approve. Names are for display; the
  * `_id` fields are the deck ids. */
-export type DecisionRequest = AskRequest | MountRequest | WriteRequest | LinkRequest
+export type DecisionRequest = AskRequest | QuestionsRequest | MountRequest | WriteRequest | LinkRequest
 
 /** How long an approval lasts. */
 export type DecisionScope = 'once' | 'session' | 'always'
 
-/** The answer to a `decision.requested`. */
-export interface DecisionAnswer {
-  allow: boolean
-  scope?: DecisionScope
+/** The answer to a `decision.requested`: an approval, or the answers to a
+ * `questions` request (none when the user dismissed them). */
+export type DecisionAnswer = { allow: boolean; scope?: DecisionScope } | { answers?: QuestionAnswer[] }
+
+/** The answer to one question: the labels chosen and/or the user's own words. */
+export interface QuestionAnswer {
+  selected: string[]
+  custom?: string
 }
 
 /** `ask`: `from` asks `to` the question. */
@@ -182,6 +186,29 @@ export interface AskRequest {
   to: string
   to_id: string
   question: string
+}
+
+/** `ask` with `to: "user"`: questions from `from` for the user. */
+export interface QuestionsRequest {
+  kind: 'questions'
+  from: string
+  from_id: string
+  questions: Question[]
+}
+
+/** One question to the user; any can also be answered in their own words. */
+export interface Question {
+  question: string
+  /** A word or two naming it (the tab of a multi-question request). */
+  header?: string
+  options: QuestionOption[]
+  /** Whether several options may be chosen. */
+  multiple: boolean
+}
+
+export interface QuestionOption {
+  label: string
+  description?: string
 }
 
 /** `card_mount` without a grant: `from` mounts `deck` at `at`. */
