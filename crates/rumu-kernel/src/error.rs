@@ -91,9 +91,9 @@ pub enum Error {
         source: PredicateError,
     },
 
-    /// A session's default workspace is not known.
-    #[error("unknown workspace `{name}` (presets: {presets}, or `@rumu`)")]
-    UnknownWorkspace { name: String, presets: String },
+    /// A workspace the request names is not available (or is repeated).
+    #[error("unknown workspace `{name}` (available: {available})")]
+    UnknownWorkspace { name: String, available: String },
 
     // ---- lifecycle / control flow ----
     /// The enclosing turn was aborted while an internal call was queued.

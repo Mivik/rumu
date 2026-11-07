@@ -38,22 +38,25 @@ from the Rust serde types by ts-rs. After changing a wire type, run
 `cargo test` to regenerate `web/app/lib/generated`; those files are checked in
 because the web build imports them.
 
-`RUMU_HOME` (default `~/.rumu`) holds `config.yaml` (workspace presets and
-external plugins), `decks/` (cards, assistants and their history), `grants.json`
-(remembered mount / ask permissions) and `sessions/`. With no config at all,
-the current directory becomes the default workspace, so it runs out of the
-box.
+`RUMU_HOME` (default `~/.rumu`) holds `config.yaml` (external plugins),
+`workspaces.yaml` (the workspace registry), `decks/` (cards, assistants and
+their history), `grants.json` (remembered mount / ask permissions) and
+`sessions/`. With no `workspaces.yaml`, the current directory is registered
+as the first workspace, so it runs out of the box.
 
-Workspaces are a named map. Each entry is a root string or a map with `root`
-plus optional `ssh` (a remote `[user@]host`) and `read_only`:
+A **workspace** is a named directory, local or on an ssh host. rumu writes
+`workspaces.yaml`; add, edit and remove workspaces in the web UI. Like decks,
+workspaces are attached per branch: a session starts with its assistant's
+`workspaces` (the first is the default), and the composer adds, removes and
+switches them for the branch. The model switches the default among them with
+`workspace_use`. Each entry is a root string or a map:
 
 ```yaml
-workspaces:
-  proj: ~/code/proj
-  app:
-    ssh: deploy@prod
-    root: /srv/app
-    read_only: true
+proj: ~/code/proj
+app:
+  ssh: deploy@prod
+  root: /srv/app
+  read_only: true
 ```
 
 A **deck** is a set of cards about one subject, kept as a bare git repository
@@ -71,7 +74,7 @@ cards and its own past sessions. An **assistant** is a deck with
 id: 0193a2f1-7c4e-7b2a-9d01-5e8f3a6b2c10
 name: ledger
 assistant: true
-workspace: proj
+workspaces: [proj]
 mounts:
   - { deck: <finance-deck-id>, at: /cards/finance, write: true }
 ```
@@ -86,8 +89,8 @@ with `write`. Mount, ask and link approvals marked "always allow" are kept in
 gitoxide (`gix`); no git binary is needed at runtime.
 
 rumu's own data — knowledge cards and past conversations — lives in the
-reserved `@rumu:/…` workspace. The leading `@` is not a valid preset name, so
-a project called `rumu` can be an ordinary workspace.
+reserved `@rumu:/…` workspace, always attached. The leading `@` is not a
+valid workspace name, so a project called `rumu` can be an ordinary workspace.
 
 ## Images
 

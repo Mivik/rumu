@@ -5,7 +5,7 @@
 
 use std::sync::Arc;
 
-use rumu_core::{Node, NodeBody, Plugin, ToolCall, WorkspaceCatalog};
+use rumu_core::{Node, NodeBody, Plugin, ToolCall, Workspaces};
 use rumu_kernel::{Kernel, LlmResponse, ScriptedLlm};
 use rumu_plugins::{MemoryPlugin, WorkspacePlugin};
 use rumu_store::Store;
@@ -64,7 +64,7 @@ fn card_home() -> (tempfile::TempDir, std::path::PathBuf) {
             id: String::new(),
             name: "main".into(),
             assistant: false,
-            workspace: None,
+            workspaces: Vec::new(),
             mounts: Vec::new(),
             allow_ask: Vec::new(),
         })
@@ -109,11 +109,7 @@ async fn update_notices_only_follow_actual_reads() {
         .to_owned();
     let plugins: Vec<Arc<dyn Plugin>> = vec![
         Arc::new(MemoryPlugin::new(decks.clone())),
-        Arc::new(WorkspacePlugin::new(
-            &home,
-            WorkspaceCatalog::default(),
-            decks,
-        )),
+        Arc::new(WorkspacePlugin::new(&home, decks)),
     ];
     let kernel = Kernel::new(
         Arc::new(Store::in_memory()),
@@ -125,14 +121,14 @@ async fn update_notices_only_follow_actual_reads() {
             LlmResponse::text("done-fork"),
         ])),
         plugins,
-        WorkspaceCatalog {
-            default: Some("@rumu".into()),
-            ..WorkspaceCatalog::default()
-        },
+        Workspaces::default(),
     )
     .unwrap();
 
-    let (a, _) = kernel.create_session(None, main.clone()).await.unwrap();
+    let (a, _) = kernel
+        .create_session(Vec::new(), main.clone())
+        .await
+        .unwrap();
     let ba = a.active_branch.clone();
     run_turn(&kernel, &ba, "read card x").await;
     let (nodes_a, _) = kernel.branch_path(&ba).unwrap();
@@ -155,7 +151,10 @@ async fn update_notices_only_follow_actual_reads() {
         .unwrap();
 
     // B (fresh session, same home) never read the card → no notice.
-    let (b, _) = kernel.create_session(None, main.clone()).await.unwrap();
+    let (b, _) = kernel
+        .create_session(Vec::new(), main.clone())
+        .await
+        .unwrap();
     let bb = b.active_branch.clone();
     run_turn(&kernel, &bb, "hello without reading anything").await;
     let (nodes_b, _) = kernel.branch_path(&bb).unwrap();

@@ -71,6 +71,7 @@ const paths: Record<string, string> = {
   search: mdiMagnify,
   plus: mdiPlus,
   send: mdiArrowUp,
+  up: mdiArrowUp,
   image: mdiImageOutline,
   stop: mdiStop,
   brain: mdiLightbulbOutline,

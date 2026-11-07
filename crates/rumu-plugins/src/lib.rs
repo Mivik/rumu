@@ -24,6 +24,7 @@ mod error;
 mod memory;
 mod stdio;
 mod workspace;
+mod workspaces;
 
 pub use ask::{AskPlugin, Assistant, assistant_of};
 pub use code::CodePlugin;
@@ -32,6 +33,7 @@ pub use error::{Error, Result};
 pub use memory::MemoryPlugin;
 pub use stdio::{StdioError, StdioPlugin};
 pub use workspace::{BackendError, WorkspacePlugin};
+pub use workspaces::{WORKSPACES_FILE, load_workspaces, remove_workspace, upsert_workspace};
 
 #[cfg(test)]
 pub(crate) mod testutil;
@@ -43,13 +45,12 @@ pub(crate) mod testutil;
 pub async fn load_all(
     home: &Path,
     config: &Config,
-    catalog: rumu_core::WorkspaceCatalog,
     decks: rumu_cards::Decks,
     builtin_tools: &[rumu_core::ToolSpec],
 ) -> Result<Vec<Arc<dyn Plugin>>> {
     let mut plugins: Vec<Arc<dyn Plugin>> = vec![
         Arc::new(MemoryPlugin::new(decks.clone())),
-        Arc::new(WorkspacePlugin::new(home, catalog, decks.clone())),
+        Arc::new(WorkspacePlugin::new(home, decks.clone())),
         Arc::new(AskPlugin::new(decks)),
     ];
     for spec in config.external_specs(home)? {

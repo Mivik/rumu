@@ -1,7 +1,7 @@
 <script setup lang="ts">
 // Assistant configuration: the roster's settings dialog. Each assistant is a
 // deck (`decks/<name>/deck.yaml`) with a pinned `instructions.md`; this form
-// edits its name, default workspace, default mounts, instructions and who may
+// edits its name, workspaces, default mounts, instructions and who may
 // ask it. Saves go through `assistant.upsert` / `assistant.delete`;
 // `assistant.set_default` picks the one sessions run as by default.
 import { computed, onBeforeUnmount, reactive, ref, watch } from 'vue'
@@ -22,7 +22,8 @@ interface Form {
   id: string
   name: string
   mounts: DeckMount[]
-  workspace: string
+  /** Attached to its new sessions; the first is the default. */
+  workspaces: string[]
   instructions: string
   allow_ask: string[]
 }
@@ -32,13 +33,13 @@ function blank(): Form {
     id: '',
     name: '',
     mounts: [],
-    workspace: '',
+    workspaces: [],
     instructions: '',
     allow_ask: [],
   }
 }
 
-const options = ref<AssistantOptions>({ decks: [], workspaces: [] })
+const options = ref<AssistantOptions>({ decks: [] })
 const form = reactive<Form>(blank())
 const pristine = ref(JSON.stringify(blank()))
 const editing = ref<string>(NEW)
@@ -154,14 +155,15 @@ function removeMount(index: number): void {
   form.mounts.splice(index, 1)
 }
 
-const workspaceOptions = computed<SelectOption[]>(() => {
-  const names = new Set(options.value.workspaces)
-  if (form.workspace) names.add(form.workspace)
-  return [
-    { value: '', label: t('assistants.workspaceDefault') },
-    ...[...names].map((ws) => ({ value: ws, label: ws, icon: 'file' })),
-  ]
-})
+/** Registered workspaces the assistant does not attach yet. */
+const otherWorkspaces = computed(() =>
+  state.workspaces.map((w) => w.name).filter((n) => !form.workspaces.includes(n)),
+)
+
+/** Move a workspace to the front: the first is the default. */
+function makeDefaultWorkspace(name: string): void {
+  form.workspaces = [name, ...form.workspaces.filter((n) => n !== name)]
+}
 
 const askOptions = computed(() => assistants.value.filter((a) => a.id !== form.id))
 
@@ -180,7 +182,7 @@ function fromAssistant(assistant: Assistant): Form {
     id: assistant.id,
     name: assistant.name,
     mounts: assistant.mounts.map((m) => ({ ...m })),
-    workspace: assistant.workspace ?? '',
+    workspaces: [...assistant.workspaces],
     instructions: assistant.instructions ?? '',
     allow_ask: [...assistant.allow_ask],
   }
@@ -223,7 +225,7 @@ async function save(): Promise<void> {
       id: form.id || undefined,
       name,
       mounts: form.mounts,
-      workspace: form.workspace || undefined,
+      workspaces: form.workspaces,
       instructions: form.instructions.trim() || undefined,
       allow_ask: form.allow_ask.filter((asker) => asker !== form.id),
     })
@@ -389,12 +391,47 @@ onBeforeUnmount(() => window.removeEventListener('keydown', onKey, true))
             </label>
 
             <div class="flex flex-col gap-1.5">
-              <span class="field-label">{{ t('assistants.workspace') }}</span>
-              <Select
-                v-model="form.workspace"
-                :options="workspaceOptions"
-                :label="t('assistants.workspace')"
-              />
+              <span class="field-label">{{ t('assistants.workspaces') }}</span>
+              <div class="flex flex-wrap gap-1.5">
+                <span
+                  v-for="(name, i) in form.workspaces"
+                  :key="name"
+                  class="chip tone-agent gap-0.5 pr-1 pl-1"
+                >
+                  <span v-if="i === 0" class="px-1 text-micro opacity-70">{{ t('workspaces.default') }}</span>
+                  <button
+                    v-else
+                    type="button"
+                    class="icon-btn size-5 opacity-50 hover:opacity-100"
+                    :title="t('workspaces.makeDefault')"
+                    :aria-label="t('workspaces.makeDefault')"
+                    @click="makeDefaultWorkspace(name)"
+                  >
+                    <Icon name="pin" :size="11" />
+                  </button>
+                  <span class="font-card">{{ name }}</span>
+                  <button
+                    type="button"
+                    class="icon-btn size-5"
+                    :title="t('assistants.removeWorkspace')"
+                    :aria-label="t('assistants.removeWorkspace')"
+                    @click="toggle(form.workspaces, name)"
+                  >
+                    <Icon name="close" :size="11" />
+                  </button>
+                </span>
+                <button
+                  v-for="name in otherWorkspaces"
+                  :key="name"
+                  type="button"
+                  class="chip tone-neutral border-dashed"
+                  :title="t('assistants.addWorkspace')"
+                  @click="toggle(form.workspaces, name)"
+                >
+                  <Icon name="plus" :size="12" />
+                  <span class="font-card">{{ name }}</span>
+                </button>
+              </div>
             </div>
 
             <div class="flex flex-col gap-1.5">

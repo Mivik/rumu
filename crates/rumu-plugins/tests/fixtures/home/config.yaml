@@ -1,12 +1,5 @@
-# rumu configuration: workspace presets and external plugins in one file.
-# Card frontmatter `scope:` relates cards to workspaces and files.
-default: proj
-workspaces:
-  proj: ~/code/proj          # string shorthand: a local read-write root
-  # app:
-  #   ssh: deploy@prod           # optional: [user@]host; omitted = local
-  #   root: /srv/app             # absolute on the ssh host
-  #   read_only: true            # optional: default false
+# rumu configuration: external plugins. Workspaces live in workspaces.yaml,
+# managed from the web UI.
 
 plugins:                         # external stdio plugins
   - name: clock

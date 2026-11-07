@@ -180,7 +180,7 @@ struct SearchArgs {
 #[derive(Debug, Deserialize, JsonSchema)]
 #[serde(deny_unknown_fields)]
 struct WorkspaceUseArgs {
-    /// workspace name (a preset or `@rumu`)
+    /// workspace name (an attached workspace or `@rumu`)
     name: Option<String>,
 }
 
@@ -298,7 +298,8 @@ list, search and notices."
                 name: "workspace_use".into(),
                 description: "Set the default workspace for subsequent tool calls \
 (branch state; forks inherit it) and return the workspace listing. Without \
-`name`, just list workspaces. `name` may be a preset or `@rumu`."
+`name`, just list workspaces. `name` may be any attached workspace or `@rumu`; the user \
+attaches workspaces."
                     .into(),
                 schema: tool_schema::<WorkspaceUseArgs>(),
                 background: false,
@@ -888,9 +889,7 @@ impl WorkspacePlugin {
     async fn listing(&self, state: &PathState) -> String {
         let mut lines = Vec::new();
         if state.workspaces.is_empty() {
-            lines.push(
-                "no workspaces configured (presets live in RUMU_HOME/config.yaml)".to_owned(),
-            );
+            lines.push("no workspaces attached (the user attaches them)".to_owned());
         }
         for ws in &state.workspaces {
             let star = if state.default_workspace.as_deref() == Some(ws.name.as_str()) {

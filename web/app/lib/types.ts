@@ -51,7 +51,6 @@ export type { CardMount } from './generated/CardMount'
 export interface AssistantOptions {
   /** Decks available as mount targets (assistant decks included). */
   decks: { id: string; name: string; assistant: boolean }[]
-  workspaces: string[]
 }
 export type { TaskStatus } from './generated/TaskStatus'
 export type { TaskKind } from './generated/TaskKind'

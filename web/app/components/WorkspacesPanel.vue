@@ -1,83 +1,111 @@
 <script setup lang="ts">
-// Workspaces on the current branch path: the user presets from
-// config.yaml (available to every session) plus the implicit `@rumu`
-// workspace holding rumu's own data, with the default marker.
-// Presets are user config — the panel is read-only; the model switches
-// defaults with `workspace_use`.
+// The open branch's workspaces, from the composer: pick the default, remove
+// one from the session, add a registered one, or open the registry. `@rumu`
+// is always there for the model and never listed.
 import { computed } from 'vue'
 import { t } from '../i18n'
-import { state } from '../lib/store'
-import { INTERNAL_WORKSPACE } from '../lib/types'
+import { openWorkspaceSettings } from '../lib/layout'
+import { attachWorkspaces, state, useWorkspace } from '../lib/store'
+import type { Workspace } from '../lib/types'
 import Icon from './ui/Icon.vue'
 
-interface Row {
-  name: string
-  /** Machine label: `local` or `ssh:<host>`. */
-  machine: string
-  root: string
-  read_only: boolean
-  isDefault: boolean
+const emit = defineEmits<{ close: [] }>()
+
+const attached = computed(() => state.pathState?.workspaces ?? [])
+const names = computed(() => attached.value.map((w) => w.name))
+const others = computed(() => state.workspaces.filter((w) => !names.value.includes(w.name)))
+const current = computed(() => state.pathState?.default_workspace ?? null)
+
+function where(w: Workspace): string {
+  return w.ssh ? `${w.ssh}:${w.root}` : w.root
 }
 
-const rows = computed<Row[]>(() => {
-  const ws = state.pathState?.workspaces ?? []
-  const def = state.pathState?.default_workspace ?? null
-  return ws.map((w) => ({
-    name: w.name,
-    machine: w.ssh ? `ssh:${w.ssh}` : 'local',
-    root: w.root,
-    read_only: w.read_only,
-    isDefault: def === w.name,
-  }))
-})
+function detach(name: string): void {
+  void attachWorkspaces(names.value.filter((n) => n !== name))
+}
 
-const rumuDefault = computed(() => state.pathState?.default_workspace === INTERNAL_WORKSPACE)
+function attach(name: string): void {
+  void attachWorkspaces([...names.value, name])
+}
+
+function edit(name = ''): void {
+  emit('close')
+  openWorkspaceSettings(name, !name)
+}
 </script>
 
 <template>
-  <div>
-    <div class="flex flex-col gap-1.5">
-      <div
-        v-for="w in rows"
-        :key="w.name"
-        class="flex items-center gap-2 rounded-card bg-surface px-3 py-2 shadow-soft"
-        :title="`${w.machine} · ${w.root}`"
+  <div class="flex flex-col gap-0.5">
+    <div
+      v-for="w in attached"
+      :key="w.name"
+      class="group flex items-center gap-1 rounded-control transition-colors duration-150 hover:bg-surface-2"
+    >
+      <button
+        type="button"
+        class="flex min-w-0 flex-1 items-center gap-2 py-1.5 pl-2.5 text-left"
+        :title="t('workspaces.makeDefault')"
+        :aria-pressed="w.name === current"
+        @click="useWorkspace(w.name)"
       >
-        <Icon name="mount" :size="14" class="flex-none text-tool" />
+        <Icon
+          name="ok"
+          :size="13"
+          class="flex-none text-brand"
+          :class="w.name === current ? '' : 'invisible'"
+        />
         <span
-          v-if="w.isDefault"
-          class="flex-none font-mono font-semibold text-tool"
-          :title="t('panels.workspaces.default')"
-          >*</span
+          class="flex-none font-card text-secondary"
+          :class="w.name === current ? 'font-semibold text-ink' : 'text-ink-2'"
+          >{{ w.name }}</span
         >
-        <span class="flex-none font-mono text-secondary text-tool">{{ w.name }}</span>
-        <span class="flex-none rounded-xs border border-line px-1 font-mono text-micro text-ink-3">{{
-          w.machine
+        <span class="min-w-0 truncate font-card text-meta text-ink-3" :title="where(w)">{{ where(w) }}</span>
+        <span v-if="w.read_only" class="flex-none rounded-xs border border-line px-1 text-micro text-ink-3">{{
+          t('workspaces.readOnly')
         }}</span>
-        <span class="min-w-0 truncate font-mono text-meta text-ink-2">{{ w.root }}</span>
-        <span
-          v-if="w.read_only"
-          class="flex-none rounded-xs border border-line px-1 font-mono text-micro text-ink-3"
-        >
-          {{ t('panels.workspaces.readOnly') }}
-        </span>
-      </div>
-      <div class="flex items-center gap-2 rounded-card bg-surface px-3 py-2 shadow-soft">
-        <Icon name="memory" :size="14" class="flex-none text-memory" />
-        <span
-          v-if="rumuDefault"
-          class="flex-none font-mono font-semibold text-tool"
-          :title="t('panels.workspaces.default')"
-          >*</span
-        >
-        <span class="flex-none font-mono text-secondary text-memory">{{ INTERNAL_WORKSPACE }}</span>
-        <span class="flex-none rounded-xs border border-line px-1 font-mono text-micro text-ink-3">{{
-          t('panels.workspaces.virtual')
-        }}</span>
-        <span class="min-w-0 truncate font-mono text-meta text-ink-2">{{
-          t('panels.context.virtualRoot')
-        }}</span>
-      </div>
+      </button>
+      <button
+        type="button"
+        class="icon-btn size-6 flex-none opacity-0 group-hover:opacity-100 focus-visible:opacity-100"
+        :title="t('workspaces.manage')"
+        :aria-label="t('workspaces.manage')"
+        @click="edit(w.name)"
+      >
+        <Icon name="edit" :size="12" />
+      </button>
+      <button
+        type="button"
+        class="icon-btn mr-1 size-6 flex-none"
+        :title="t('workspaces.detach')"
+        :aria-label="t('workspaces.detach')"
+        @click="detach(w.name)"
+      >
+        <Icon name="close" :size="12" />
+      </button>
     </div>
+
+    <div v-if="attached.length && others.length" class="mx-2 my-1 border-t border-line-soft" />
+    <button
+      v-for="w in others"
+      :key="w.name"
+      type="button"
+      class="flex items-center gap-2 rounded-control py-1.5 pl-2.5 pr-2 text-left text-ink-3 transition-colors duration-150 hover:bg-surface-2 hover:text-ink"
+      :title="t('workspaces.attach')"
+      @click="attach(w.name)"
+    >
+      <Icon name="plus" :size="13" class="flex-none" />
+      <span class="flex-none font-card text-secondary">{{ w.name }}</span>
+      <span class="min-w-0 truncate font-card text-meta" :title="where(w)">{{ where(w) }}</span>
+    </button>
+
+    <div class="mx-2 my-1 border-t border-line-soft" />
+    <button
+      type="button"
+      class="flex items-center gap-2 rounded-control py-1.5 pl-2.5 pr-2 text-left text-secondary text-ink-2 transition-colors duration-150 hover:bg-surface-2 hover:text-ink"
+      @click="edit()"
+    >
+      <Icon name="plus" :size="13" class="flex-none" />
+      {{ t('workspaces.add') }}
+    </button>
   </div>
 </template>

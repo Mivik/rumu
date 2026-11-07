@@ -29,8 +29,8 @@ use rumu_core::kind;
 use rumu_core::{
     Branch, BranchId, BranchKind, BranchStatus, Content, Effect, Event, HookSpec, Inbox, Node,
     NodeBody, NodeId, PathState, Plugin, Post, Runtime, SYSTEM_SOURCE, SessionId, SessionInfo,
-    SessionRoot, TaskId, ToolCall, ToolSpec, TurnError, WorkspaceCatalog, WorkspaceUse, now,
-    tool_schema,
+    SessionRoot, TaskId, ToolCall, ToolSpec, TurnError, WorkspaceSet, WorkspaceUse, Workspaces,
+    now, tool_schema,
 };
 use rumu_store::Store;
 use serde_json::{Value, json};
@@ -217,8 +217,8 @@ pub struct Kernel {
     pub(crate) system: String,
     /// All plugin tools, sorted by name (frozen).
     pub(crate) tools: Vec<ToolSpec>,
-    /// Workspace presets (config.yaml); merged into every derived state.
-    pub(crate) catalog: WorkspaceCatalog,
+    /// The workspace registry; merged into every derived state.
+    pub(crate) workspaces: Workspaces,
     pub(crate) tx: broadcast::Sender<Value>,
     pub(crate) inner: Mutex<Inner>,
     /// Bumped whenever a task's status or `post_done` changes; waiters sleep
@@ -232,14 +232,15 @@ pub struct Kernel {
 
 impl Kernel {
     /// Build a kernel from a store, an LLM backend, the loaded plugins and the
-    /// workspace preset catalog (`config.yaml`). Must run inside a Tokio
+    /// workspace registry. Must run inside a Tokio
     /// runtime (it spawns the inbox's post worker).
     pub fn new(
         store: Arc<Store>,
         llm: Arc<dyn Llm>,
         plugins: Vec<Arc<dyn Plugin>>,
-        catalog: WorkspaceCatalog,
+        workspaces: Workspaces,
     ) -> Result<Arc<Self>> {
+        let registry = workspaces.list();
         // A kernel restart loses every in-flight task, and the agent branches
         // that were running them are never resumed: close them out so the tree
         // does not claim a live sub-agent forever.
@@ -281,13 +282,14 @@ impl Kernel {
             for h in m.hooks {
                 // Compile each matcher here: a malformed predicate in any
                 // plugin manifest fails startup.
-                let pred = Pred::compile_with_catalog(&h.matcher, &catalog).map_err(|source| {
-                    Error::Hook {
-                        plugin: m.name.clone(),
-                        hook: h.id.clone(),
-                        source,
-                    }
-                })?;
+                let pred =
+                    Pred::compile_with_workspaces(&h.matcher, &registry).map_err(|source| {
+                        Error::Hook {
+                            plugin: m.name.clone(),
+                            hook: h.id.clone(),
+                            source,
+                        }
+                    })?;
                 hooks.push(RegisteredHook {
                     plugin: i,
                     plugin_name: m.name.clone(),
@@ -335,7 +337,7 @@ impl Kernel {
             routes,
             system,
             tools,
-            catalog,
+            workspaces,
             tx,
             inner: Mutex::new(Inner::default()),
             task_changed: watch::channel(0).0,
@@ -411,6 +413,15 @@ impl Kernel {
         }
     }
 
+    /// The workspace registry changed: push it, so clients re-read their
+    /// branch state (an attached workspace may have gone or changed).
+    pub fn workspaces_changed(&self) {
+        self.push(
+            "workspaces.updated",
+            json!({ "workspaces": self.workspaces.list() }),
+        );
+    }
+
     /// Does a loop run on `branch`?
     pub fn is_running(&self, branch: &BranchId) -> bool {
         self.inner.lock().unwrap().running.contains_key(branch)
@@ -464,10 +475,10 @@ impl Kernel {
         Ok((nodes, state))
     }
 
-    /// The merged path state: node-folded state plus the workspace presets
+    /// The merged path state: node-folded state plus the workspace registry
     /// (see [`merge_workspaces`]).
     pub(crate) fn state_of_nodes(&self, nodes: &[Node]) -> PathState {
-        merge_workspaces(derive_state(nodes), &self.catalog)
+        merge_workspaces(derive_state(nodes), &self.workspaces.list())
     }
 
     pub(crate) fn session_of(&self, branch: &BranchId) -> Result<SessionId> {
@@ -548,30 +559,27 @@ impl Kernel {
 
     // ---- session lifecycle ----
 
-    /// Create a session running as `assistant`, with an optional initial default
-    /// workspace. The assistant is recorded on the root node, so every path of the
-    /// session (and `session.start` hooks) sees it.
+    /// Create a session running as `assistant`, with `workspaces` attached
+    /// (the first is the default). The assistant is recorded on the root
+    /// node, so every path of the session (and `session.start` hooks) sees it.
     pub async fn create_session(
         self: &Arc<Self>,
-        default_workspace: Option<String>,
+        workspaces: Vec<String>,
         assistant: String,
     ) -> Result<(SessionInfo, Branch)> {
-        self.create_rooted_session(
-            default_workspace,
-            SessionRoot {
-                assistant,
-                asked_by: None,
-                mounts: Vec::new(),
-            },
-        )
+        self.create_rooted_session(SessionRoot {
+            assistant,
+            asked_by: None,
+            mounts: Vec::new(),
+            workspaces,
+        })
         .await
     }
 
     /// Create a session from a fully populated root marker (the deck id, the
-    /// asked-by reference, and the deck's default mounts).
+    /// asked-by reference, and the deck's default mounts and workspaces).
     pub async fn create_rooted_session(
         self: &Arc<Self>,
-        default_workspace: Option<String>,
         root_data: SessionRoot,
     ) -> Result<(SessionInfo, Branch)> {
         let assistant = root_data.assistant.clone();
@@ -619,24 +627,6 @@ impl Kernel {
         )?;
         self.dispatch(&mut ev, false).await?;
 
-        if let Some(name) = default_workspace {
-            // `name` must be a preset or `@rumu`.
-            if name != rumu_core::RUMU_WORKSPACE
-                && !self.catalog.workspaces.iter().any(|w| w.name == name)
-            {
-                return Err(Error::UnknownWorkspace {
-                    name,
-                    presets: self
-                        .catalog
-                        .workspaces
-                        .iter()
-                        .map(|w| w.name.as_str())
-                        .collect::<Vec<_>>()
-                        .join(", "),
-                });
-            }
-            self.workspace_use(&branch.id, &name).await?;
-        }
         self.store
             .get_session(&session)?
             .ok_or_else(|| Error::SessionNotFound(session.clone()))
@@ -681,22 +671,76 @@ impl Kernel {
         Ok(())
     }
 
-    /// Record a default-workspace switch: a `workspace.use` marker. Branch
-    /// state, so forks inherit it.
-    pub(crate) async fn workspace_use(
+    /// The user picks the branch's default workspace among the attached ones
+    /// (or `@rumu`): a `workspace.use` marker, as the model's `workspace_use`
+    /// writes. Branch state, so forks inherit it; queued while a turn runs.
+    pub async fn use_workspace(self: &Arc<Self>, branch: &BranchId, name: &str) -> Result<()> {
+        let state = self.state_of_nodes(&self.pending_path_nodes(branch)?);
+        if name != rumu_core::RUMU_WORKSPACE && !state.workspaces.iter().any(|w| w.name == name) {
+            return Err(Error::UnknownWorkspace {
+                name: name.to_owned(),
+                available: state.attached.join(", "),
+            });
+        }
+        let text = format!("The user made `{name}` the default workspace.");
+        self.deliver_note(branch, text, &WorkspaceUse { name: name.into() })
+            .await
+    }
+
+    /// The user attaches or detaches workspaces: `names` (registered, in
+    /// order) is the branch's list from here on (a `workspace.set` marker).
+    pub async fn set_workspaces(
         self: &Arc<Self>,
         branch: &BranchId,
-        name: &str,
+        names: Vec<String>,
     ) -> Result<()> {
-        self.append_body(
-            branch,
-            NodeBody::Note {
-                source: SYSTEM_SOURCE.into(),
-                content: Content::marker(&WorkspaceUse { name: name.into() }),
-            },
-            None,
-        )
-        .await?;
+        for (i, name) in names.iter().enumerate() {
+            if self.workspaces.get(name).is_none() || names[..i].contains(name) {
+                return Err(Error::UnknownWorkspace {
+                    name: name.clone(),
+                    available: self
+                        .workspaces
+                        .list()
+                        .iter()
+                        .map(|w| w.name.as_str())
+                        .collect::<Vec<_>>()
+                        .join(", "),
+                });
+            }
+        }
+        let listed: Vec<String> = names
+            .iter()
+            .filter_map(|n| self.workspaces.get(n))
+            .map(|w| {
+                let ro = if w.read_only { ", read-only" } else { "" };
+                format!("`{}` ({} {}{ro})", w.name, w.label(), w.root)
+            })
+            .collect();
+        let text = if listed.is_empty() {
+            "The user removed every workspace from this session; only `@rumu` remains.".to_owned()
+        } else {
+            format!(
+                "The user changed this session's workspaces to: {}.",
+                listed.join(", ")
+            )
+        };
+        self.deliver_note(branch, text, &WorkspaceSet { names })
+            .await
+    }
+
+    /// A user action recorded on the branch: the model reads `text`, the
+    /// state follows `marker`. Queued while a turn runs.
+    async fn deliver_note<T: rumu_core::Structured>(
+        self: &Arc<Self>,
+        branch: &BranchId,
+        text: String,
+        marker: &T,
+    ) -> Result<()> {
+        let body = NodeBody::Note {
+            source: SYSTEM_SOURCE.into(),
+            content: Content::note_with(text, marker),
+        };
+        self.deliver(branch, NodeId::new(), body, None).await?;
         Ok(())
     }
 
@@ -1370,11 +1414,11 @@ mod tests {
             Arc::new(Store::in_memory()),
             Arc::new(ScriptedLlm::strict(vec![])),
             vec![],
-            WorkspaceCatalog::default(),
+            Workspaces::default(),
         )
         .unwrap();
         let (_, branch) = kernel
-            .create_session(None, "assistant".into())
+            .create_session(Vec::new(), "assistant".into())
             .await
             .unwrap();
 
@@ -1505,11 +1549,11 @@ mod tests {
             Arc::new(Store::in_memory()),
             Arc::new(ScriptedLlm::strict(vec![])),
             vec![],
-            WorkspaceCatalog::default(),
+            Workspaces::default(),
         )
         .unwrap();
         let (_, branch) = kernel
-            .create_session(None, "assistant".into())
+            .create_session(Vec::new(), "assistant".into())
             .await
             .unwrap();
 

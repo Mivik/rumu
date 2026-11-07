@@ -11,6 +11,12 @@ export const layout = reactive({
   assistantSettingsOpen: false,
   /** The assistant the dialog opens on (`null`: the one in view). */
   assistantSettingsFor: null as string | null,
+  /** The workspace registry dialog. */
+  workspaceSettingsOpen: false,
+  /** The workspace it opens on (`''`: a new one). */
+  workspaceSettingsFor: '' as string,
+  /** A new workspace from the composer also joins the open branch. */
+  workspaceSettingsAttach: false,
 })
 
 export function toggleSidebar(): void {
@@ -27,6 +33,18 @@ export function closeAssistantSettings(): void {
   layout.assistantSettingsOpen = false
 }
 
+/** Open the workspace dialog on `name` (`''`: a new workspace, which joins
+ *  the open branch when `attach`). */
+export function openWorkspaceSettings(name = '', attach = false): void {
+  layout.workspaceSettingsFor = name
+  layout.workspaceSettingsAttach = attach
+  layout.workspaceSettingsOpen = true
+}
+
+export function closeWorkspaceSettings(): void {
+  layout.workspaceSettingsOpen = false
+}
+
 /** Escape: close the topmost layer. The library may sit over the assistant
  *  dialog (a deck link opens it there), so it goes first, on its own. */
 export function closePanels(): void {
@@ -38,4 +56,5 @@ export function closePanels(): void {
   }
   layout.sidebarOpen = false
   layout.assistantSettingsOpen = false
+  layout.workspaceSettingsOpen = false
 }

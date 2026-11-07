@@ -44,23 +44,22 @@ async fn main() -> Result<()> {
     let store = Arc::new(Store::open(&home.join("sessions"))?);
     let blobs = Blobs::in_home(&home)?;
     let config = rumu_plugins::load_config(&home)?;
-    let catalog = config.catalog_or_cwd()?;
-    info!(
-        workspaces = %catalog
-            .workspaces
-            .iter()
-            .map(|w| format!("{} ({} {})", w.name, w.label(), w.root))
-            .collect::<Vec<_>>()
-            .join(", "),
-        "workspaces loaded"
-    );
-    let decks = rumu_cards::Decks::load(&home)?;
-    let plugins = load_plugins(&home, &config, catalog.clone(), decks.clone()).await?;
+    let workspaces = rumu_plugins::load_workspaces(&home)?;
+    let names: Vec<String> = workspaces.list().into_iter().map(|w| w.name).collect();
+    info!(workspaces = %names.join(", "), "workspaces loaded");
+    let decks = rumu_cards::Decks::load_seeded(&home, &names)?;
+    let plugins = load_plugins(&home, &config, decks.clone()).await?;
     let llm = load_llm(blobs.clone())?;
-    let kernel = Kernel::new(store.clone(), llm, plugins, catalog.clone())?;
+    let kernel = Kernel::new(store.clone(), llm, plugins, workspaces.clone())?;
     spawn_blob_gc(store, blobs.clone());
 
-    let app = ws::router(kernel, decks, catalog, blobs);
+    let app = ws::router(ws::AppState {
+        kernel,
+        decks,
+        home: home.clone(),
+        workspaces,
+        blobs,
+    });
     let addr = SocketAddr::new(host, port);
     let listener = tokio::net::TcpListener::bind(addr).await?;
     info!(home = %home.display(), %addr, "listening on http://{addr}");
@@ -128,11 +127,9 @@ fn load_llm(blobs: Blobs) -> Result<Arc<dyn Llm>> {
 async fn load_plugins(
     home: &Path,
     config: &rumu_plugins::Config,
-    catalog: rumu_core::WorkspaceCatalog,
     decks: rumu_cards::Decks,
 ) -> Result<Vec<Arc<dyn Plugin>>> {
-    let plugins =
-        rumu_plugins::load_all(home, config, catalog, decks, &[rumu_kernel::agent_tool()]).await?;
+    let plugins = rumu_plugins::load_all(home, config, decks, &[rumu_kernel::agent_tool()]).await?;
     let names: Vec<_> = plugins.iter().map(|p| p.manifest().name).collect();
     info!(plugins = %names.join(", "), "plugins loaded");
     Ok(plugins)

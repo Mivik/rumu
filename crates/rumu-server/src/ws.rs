@@ -17,8 +17,7 @@ use futures_util::{SinkExt, StreamExt};
 use rumu_blob::Blobs;
 use rumu_cards::{Author, Cards, Decks, library};
 use rumu_core::{
-    BranchId, CardMount, Content, NodeId, RUMU_WORKSPACE, SessionId, SessionRoot, TaskId,
-    WorkspaceCatalog,
+    BranchId, CardMount, Content, NodeId, SessionId, SessionRoot, TaskId, Workspace, Workspaces,
 };
 use rumu_kernel::Kernel;
 use rumu_plugins::{Assistant, assistant_of};
@@ -87,14 +86,15 @@ impl ServerError {
 
 type Result<T> = std::result::Result<T, ServerError>;
 
-/// Shared handler state: the kernel, the deck registry, the workspace catalog
-/// and the blob store behind image attachments.
+/// Shared handler state: the kernel, the deck registry, the workspace
+/// registry (saved under `home`) and the blob store behind image attachments.
 #[derive(Clone)]
-struct AppState {
-    kernel: Arc<Kernel>,
-    decks: Decks,
-    catalog: WorkspaceCatalog,
-    blobs: Blobs,
+pub struct AppState {
+    pub kernel: Arc<Kernel>,
+    pub decks: Decks,
+    pub home: std::path::PathBuf,
+    pub workspaces: Workspaces,
+    pub blobs: Blobs,
 }
 
 /// The built frontend. Debug builds read `web/dist` from disk, release builds
@@ -104,18 +104,7 @@ struct AppState {
 #[allow_missing = true]
 struct WebAssets;
 
-pub fn router(
-    kernel: Arc<Kernel>,
-    decks: Decks,
-    catalog: WorkspaceCatalog,
-    blobs: Blobs,
-) -> Router {
-    let state = AppState {
-        kernel,
-        decks,
-        catalog,
-        blobs,
-    };
+pub fn router(state: AppState) -> Router {
     Router::new()
         .route("/ws", get(ws_upgrade))
         // Registered routes take precedence over the SPA fallback below, so
@@ -370,25 +359,17 @@ async fn dispatch(state: &AppState, method: &str, p: &Value) -> Result<Value> {
         "session.list" => Ok(json!(kernel.list_sessions()?)),
 
         "session.create" => {
-            // The assistant deck id (the default assistant when omitted); its
-            // default workspace applies unless the request names one (a preset
-            // name or `@rumu`).
+            // The assistant deck id (the default assistant when omitted),
+            // with its default mounts and workspaces.
             let deck = assistant_param(state, p)?;
-            let workspace = p
-                .get("workspace")
-                .and_then(Value::as_str)
-                .map(str::to_owned)
-                .or(deck.meta.workspace.clone());
             let mounts = state.decks.default_mounts(deck.id());
             let (session, branch) = kernel
-                .create_rooted_session(
-                    workspace,
-                    SessionRoot {
-                        assistant: deck.id().to_owned(),
-                        asked_by: None,
-                        mounts,
-                    },
-                )
+                .create_rooted_session(SessionRoot {
+                    assistant: deck.id().to_owned(),
+                    asked_by: None,
+                    mounts,
+                    workspaces: deck.meta.workspaces.clone(),
+                })
                 .await?;
             Ok(json!({ "session": session, "branch": branch }))
         }
@@ -403,18 +384,16 @@ async fn dispatch(state: &AppState, method: &str, p: &Value) -> Result<Value> {
             Ok(json!(list))
         }
 
-        // Choices for the assistant config form: decks (as mount targets) and
-        // the workspaces an assistant may default to (`@rumu` always).
+        // Choices for the assistant config form: decks (as mount targets).
+        // Workspaces come from `workspace.list`.
         "assistant.options" => {
-            let mut workspaces = vec![RUMU_WORKSPACE.to_owned()];
-            workspaces.extend(state.catalog.workspaces.iter().map(|w| w.name.clone()));
             let decks: Vec<Value> = state
                 .decks
                 .list()
                 .iter()
                 .map(|d| json!({ "id": d.id(), "name": d.meta.name, "assistant": d.assistant() }))
                 .collect();
-            Ok(json!({ "decks": decks, "workspaces": workspaces }))
+            Ok(json!({ "decks": decks }))
         }
 
         // Create or replace an assistant deck: its `deck.yaml` and, when given,
@@ -437,7 +416,7 @@ async fn dispatch(state: &AppState, method: &str, p: &Value) -> Result<Value> {
                 #[serde(default)]
                 mounts: Vec<MountReq>,
                 #[serde(default)]
-                workspace: Option<String>,
+                workspaces: Vec<String>,
                 #[serde(default)]
                 instructions: Option<String>,
                 #[serde(default)]
@@ -445,6 +424,13 @@ async fn dispatch(state: &AppState, method: &str, p: &Value) -> Result<Value> {
             }
             let req: Upsert = serde_json::from_value(p.clone())
                 .map_err(|e| ServerError::InvalidParams(e.to_string()))?;
+            for (i, name) in req.workspaces.iter().enumerate() {
+                if state.workspaces.get(name).is_none() || req.workspaces[..i].contains(name) {
+                    return Err(ServerError::InvalidParams(format!(
+                        "unknown or repeated workspace `{name}`"
+                    )));
+                }
+            }
             // No id creates a deck (refused if its directory exists); an id
             // updates exactly that deck.
             let existing = match req.id.as_deref().filter(|id| !id.is_empty()) {
@@ -472,7 +458,7 @@ async fn dispatch(state: &AppState, method: &str, p: &Value) -> Result<Value> {
                     .unwrap_or_default(),
                 name: req.name.clone(),
                 assistant: true,
-                workspace: req.workspace.filter(|w| !w.is_empty()),
+                workspaces: req.workspaces,
                 mounts,
                 allow_ask: req.allow_ask,
             };
@@ -505,6 +491,87 @@ async fn dispatch(state: &AppState, method: &str, p: &Value) -> Result<Value> {
         "assistant.set_default" => {
             let id = str_param(p, "id")?;
             state.decks.set_default_assistant(id)?;
+            Ok(json!({}))
+        }
+
+        // The workspace registry (`workspaces.yaml`). Every change is pushed
+        // as `workspaces.updated`.
+        "workspace.list" => Ok(json!(state.workspaces.list())),
+
+        // Add a workspace, or replace the one of the same name.
+        "workspace.upsert" => {
+            #[derive(Deserialize)]
+            #[serde(deny_unknown_fields)]
+            struct Upsert {
+                name: String,
+                root: String,
+                #[serde(default)]
+                ssh: Option<String>,
+                #[serde(default)]
+                read_only: bool,
+            }
+            let req: Upsert = serde_json::from_value(p.clone())
+                .map_err(|e| ServerError::InvalidParams(e.to_string()))?;
+            let ws = Workspace::new(req.name, req.ssh, req.root, req.read_only);
+            let ws = rumu_plugins::upsert_workspace(&state.home, &state.workspaces, ws)?;
+            kernel.workspaces_changed();
+            Ok(json!({ "workspace": ws }))
+        }
+
+        // Remove a workspace; assistants that attach it drop it. Sessions
+        // keep the name, so it comes back if a workspace of that name does.
+        "workspace.delete" => {
+            let name = str_param(p, "name")?;
+            rumu_plugins::remove_workspace(&state.home, &state.workspaces, name)?;
+            state.decks.forget_workspace(name)?;
+            kernel.workspaces_changed();
+            Ok(json!({}))
+        }
+
+        // The subdirectories of a local absolute path (`~` and the default
+        // are $HOME), for picking a workspace root. Dot directories are left
+        // out.
+        "fs.dirs" => {
+            let home = std::env::var("HOME").unwrap_or_else(|_| "/".into());
+            let raw = p.get("path").and_then(Value::as_str).unwrap_or("~");
+            let path = match raw.strip_prefix('~') {
+                Some(rest) if rest.is_empty() || rest.starts_with('/') => format!("{home}{rest}"),
+                _ => raw.to_owned(),
+            };
+            let path = std::path::PathBuf::from(path);
+            if !path.is_absolute() {
+                return Err(ServerError::InvalidParams(format!(
+                    "`{}` is not an absolute path",
+                    path.display()
+                )));
+            }
+            let entries = std::fs::read_dir(&path).map_err(|e| {
+                ServerError::InvalidParams(format!("cannot list `{}`: {e}", path.display()))
+            })?;
+            let mut dirs: Vec<String> = entries
+                .filter_map(|e| e.ok())
+                .filter(|e| std::fs::metadata(e.path()).is_ok_and(|m| m.is_dir()))
+                .filter_map(|e| e.file_name().into_string().ok())
+                .filter(|n| !n.starts_with('.'))
+                .collect();
+            dirs.sort_by_key(|n| n.to_lowercase());
+            Ok(json!({ "path": path, "parent": path.parent(), "dirs": dirs }))
+        }
+
+        // The branch's default workspace (an attached one or `@rumu`).
+        "branch.use_workspace" => {
+            let branch: BranchId = str_param(p, "branch")?.into();
+            kernel.use_workspace(&branch, str_param(p, "name")?).await?;
+            Ok(json!({}))
+        }
+
+        // The branch's attached workspaces from here on, in order.
+        "branch.set_workspaces" => {
+            let branch: BranchId = str_param(p, "branch")?.into();
+            let names: Vec<String> =
+                serde_json::from_value(p.get("names").cloned().unwrap_or_default())
+                    .map_err(|e| ServerError::InvalidParams(format!("names: {e}")))?;
+            kernel.set_workspaces(&branch, names).await?;
             Ok(json!({}))
         }
 

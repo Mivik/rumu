@@ -1,8 +1,4 @@
 {
-  "context": {
-    "virtualRoot": "cards · sessions",
-    "workspaces": "All workspaces"
-  },
   "diagnostics": {
     "title": "Diagnostics",
     "cache": "Cache {pct}%",
@@ -14,11 +10,6 @@
     "perTurn": "Per turn",
     "turn": "Turn {n}",
     "meterLabel": "turn {n} cache hit rate {pct}%"
-  },
-  "workspaces": {
-    "default": "default workspace",
-    "readOnly": "ro",
-    "virtual": "virtual"
   },
   "hooks": {
     "title": "Hook trace"

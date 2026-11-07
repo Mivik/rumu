@@ -28,7 +28,7 @@ import {
   viewAssistant,
 } from '../lib/store'
 import type { SessionInfo } from '../lib/types'
-import { layout, openAssistantSettings } from '../lib/layout'
+import { layout, openAssistantSettings, openWorkspaceSettings } from '../lib/layout'
 import RumuCat from './brand/RumuCat.vue'
 import RumuMark from './brand/RumuMark.vue'
 import Icon from './ui/Icon.vue'
@@ -43,6 +43,11 @@ function home(): void {
 
 function library(): void {
   openLibrary()
+  layout.sidebarOpen = false
+}
+
+function workspaces(): void {
+  openWorkspaceSettings(state.workspaces[0]?.name ?? '')
   layout.sidebarOpen = false
 }
 
@@ -233,6 +238,17 @@ const rows = computed<Row[]>(() => {
       </span>
       <span class="flex-1">{{ t('library.title') }}</span>
       <span class="text-micro text-ink-3 tabular-nums">{{ state.cards.length }}</span>
+    </button>
+
+    <button
+      class="mt-0.5 flex w-full flex-none items-center gap-2.5 rounded-control border border-transparent py-1.5 pl-2.5 pr-1.5 text-left text-secondary text-ink-2 transition-colors duration-200 hover:bg-surface-2/60 hover:text-ink lg:pr-3"
+      @click="workspaces"
+    >
+      <span class="flex size-5 flex-none items-center justify-center leading-0">
+        <Icon name="mount" :size="16" class="text-tool" />
+      </span>
+      <span class="flex-1">{{ t('workspaces.title') }}</span>
+      <span class="text-micro text-ink-3 tabular-nums">{{ state.workspaces.length }}</span>
     </button>
 
     <TransitionGroup

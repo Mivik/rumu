@@ -23,6 +23,7 @@ import type {
   ToastKind,
   LibraryDeck,
   LibraryCard,
+  Workspace,
 } from '../types'
 
 export interface HookTraceEntry {
@@ -118,6 +119,8 @@ const initial = {
    *  holds, and who new sessions run as. */
   assistant: '',
   cards: [] as Card[],
+  /** The workspace registry (`workspace.list`, kept live by `workspaces.updated`). */
+  workspaces: [] as Workspace[],
   /** Questions tool calls are waiting on, oldest first. */
   decisions: [] as PendingDecision[],
 

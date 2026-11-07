@@ -16,6 +16,7 @@ import type {
   SessionTreeResult,
   TaskId,
   TaskInfo,
+  Workspace,
 } from '../types'
 import { state } from './state'
 import { forkAt, loadPath, replaceTree } from './tree'
@@ -37,11 +38,13 @@ export function defaultAssistant(): string {
 
 export async function refreshLists(): Promise<void> {
   try {
-    const [sessions, assistants, decisions] = await Promise.all([
+    const [sessions, assistants, decisions, workspaces] = await Promise.all([
       rumu.request<SessionInfo[]>('session.list'),
       rumu.request<Assistant[]>('assistant.list'),
       rumu.request<PendingDecision[]>('decision.list'),
+      rumu.request<Workspace[]>('workspace.list'),
     ])
+    state.workspaces = workspaces
     state.sessions = sessions
     state.assistants = assistants
     if (!assistants.some((a) => a.id === state.assistant)) {
@@ -206,7 +209,9 @@ export function openTaskDetail(id: TaskId): void {
 
 export async function newSession(): Promise<boolean> {
   try {
-    const res = await rumu.request<{ session: SessionInfo }>('session.create', { assistant: state.assistant || undefined })
+    const res = await rumu.request<{ session: SessionInfo }>('session.create', {
+      assistant: state.assistant || undefined,
+    })
     // The server may have pushed session.updated for it already.
     const i = state.sessions.findIndex((s) => s.id === res.session.id)
     if (i >= 0) state.sessions[i] = res.session

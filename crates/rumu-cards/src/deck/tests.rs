@@ -11,7 +11,7 @@ fn create_deck(home: &std::path::Path, name: &str, cards: &[(&str, &str)]) -> De
             id: String::new(),
             name: name.into(),
             assistant: false,
-            workspace: None,
+            workspaces: Vec::new(),
             mounts: Vec::new(),
             allow_ask: Vec::new(),
         })
@@ -204,7 +204,7 @@ fn deck_upsert_rename_and_delete_refresh_the_registry() {
             id: String::new(),
             name: "ledger".into(),
             assistant: true,
-            workspace: Some("proj".into()),
+            workspaces: vec!["proj".into()],
             mounts: Vec::new(),
             allow_ask: Vec::new(),
         })
@@ -509,8 +509,13 @@ fn the_default_assistant_is_a_pointer_that_follows_the_roster() {
 #[test]
 fn a_fresh_home_gets_user_and_world_mounted_by_the_default_assistant() {
     let dir = tempfile::tempdir().unwrap();
-    let decks = Decks::load(dir.path()).unwrap();
+    let decks = Decks::load_seeded(dir.path(), &["proj".into()]).unwrap();
     let default = decks.get(&decks.default_assistant()).unwrap();
+    assert_eq!(
+        default.meta.workspaces,
+        ["proj"],
+        "it attaches the seed workspaces"
+    );
     let mounted: Vec<(String, String)> = default
         .meta
         .mounts
@@ -541,10 +546,33 @@ fn a_home_with_decks_but_no_assistant_gets_only_the_assistant() {
     decks.remove_assistant(&first).unwrap();
     let decks = Decks::load(dir.path()).unwrap();
     let names: BTreeSet<String> = decks.list().into_iter().map(|d| d.name).collect();
-    assert_eq!(names, BTreeSet::from(["default", "default-1", "user", "world"].map(String::from)));
+    assert_eq!(
+        names,
+        BTreeSet::from(["default", "default-1", "user", "world"].map(String::from))
+    );
     let default = decks.get(&decks.default_assistant()).unwrap();
     assert_eq!(default.name, "default-1");
     assert!(default.meta.mounts.is_empty());
+}
+
+#[test]
+fn a_forgotten_workspace_leaves_every_deck_yaml() {
+    let (dir, decks, _main) = deck_home();
+    let mut ids = Vec::new();
+    for (name, workspaces) in [("a", vec!["proj", "blog"]), ("b", vec!["blog"])] {
+        let deck = decks
+            .upsert(DeckMeta {
+                workspaces: workspaces.into_iter().map(String::from).collect(),
+                assistant: true,
+                ..empty_meta(String::new(), name.into())
+            })
+            .unwrap();
+        ids.push(deck.meta.id);
+    }
+    decks.forget_workspace("blog").unwrap();
+    let decks = Decks::load(dir.path()).unwrap();
+    assert_eq!(decks.get(&ids[0]).unwrap().meta.workspaces, ["proj"]);
+    assert!(decks.get(&ids[1]).unwrap().meta.workspaces.is_empty());
 }
 
 #[test]

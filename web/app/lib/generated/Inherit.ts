@@ -6,7 +6,7 @@ import type { InheritContext } from "./InheritContext";
  */
 export type Inherit = { context: InheritContext, 
 /**
- * `None` = every workspace; `Some(names)` writes a `workspace.scope`
- * marker so only those names resolve on the child path.
+ * `None` = every workspace of the parent; `Some(names)` attaches only
+ * those of them to the child path (a `workspace.set` marker).
  */
 workspaces?: Array<string> | null, };

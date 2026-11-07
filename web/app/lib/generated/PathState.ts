@@ -4,26 +4,25 @@ import type { Workspace } from "./Workspace";
 
 /**
  * State derived purely from the root→head path (`state = f(path)`), merged
- * with the workspace preset catalog by the kernel (see `rumu-kernel
- * state::merge_workspaces`): `workspaces` there also contains the presets
- * and `default_workspace` is fully resolved.
+ * with the workspace registry by the kernel (see `rumu-kernel
+ * state::merge_workspaces`): `workspaces` is then filled in and
+ * `default_workspace` fully resolved.
  */
 export type PathState = { 
 /**
- * Intersection of every `workspace.scope` marker on the path, when any
- * (the kernel's merge filters `workspaces` to it). `None` = unscoped.
+ * Names of the workspaces attached to the branch (the root's list, then
+ * the last `workspace.set` marker).
  */
-workspace_scope?: Array<string> | null, 
+attached: Array<string>, 
 /**
- * Workspaces available on this path: the preset catalog, filled in by
- * the kernel's merge (`rumu-kernel` `state::merge_workspaces`). Empty
- * straight out of `derive_state`.
+ * The attached workspaces that are registered, in attached order:
+ * filled in by the kernel's merge (`rumu-kernel`
+ * `state::merge_workspaces`). Empty straight out of `derive_state`.
  */
 workspaces: Array<Workspace>, 
 /**
  * Default workspace name: the last `workspace.use` marker here; after
- * the kernel's merge, resolved against the catalog (marker → preset
- * default → first available) and kept within the workspace scope.
+ * the kernel's merge, resolved (marker → first attached → `@rumu`).
  */
 default_workspace?: string | null, 
 /**

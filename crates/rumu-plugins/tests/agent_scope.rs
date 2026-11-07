@@ -5,9 +5,7 @@
 use std::sync::Arc;
 
 use async_trait::async_trait;
-use rumu_core::{
-    BranchId, Content, Node, NodeBody, ToolCall, ToolSpec, Workspace, WorkspaceCatalog,
-};
+use rumu_core::{BranchId, Content, Node, NodeBody, ToolCall, ToolSpec, Workspace, Workspaces};
 use rumu_kernel::{Kernel, Llm, LlmResponse, OnDelta};
 use rumu_plugins::WorkspacePlugin;
 use rumu_store::Store;
@@ -82,37 +80,33 @@ async fn scoped_child_cannot_read_an_out_of_scope_workspace() {
     let proj = tempfile::tempdir().unwrap();
     let other = tempfile::tempdir().unwrap();
     std::fs::write(other.path().join("secret.txt"), "top secret").unwrap();
-    let catalog = WorkspaceCatalog {
-        workspaces: vec![
-            Workspace {
-                name: "proj".into(),
-                ssh: None,
-                root: proj.path().to_string_lossy().into_owned().into(),
-                read_only: false,
-            },
-            Workspace {
-                name: "other".into(),
-                ssh: None,
-                root: other.path().to_string_lossy().into_owned().into(),
-                read_only: false,
-            },
-        ],
-        default: Some("proj".into()),
-    };
+    let workspaces = Workspaces::new(vec![
+        Workspace {
+            name: "proj".into(),
+            ssh: None,
+            root: proj.path().to_string_lossy().into_owned().into(),
+            read_only: false,
+        },
+        Workspace {
+            name: "other".into(),
+            ssh: None,
+            root: other.path().to_string_lossy().into_owned().into(),
+            read_only: false,
+        },
+    ]);
 
     let kernel = Kernel::new(
         Arc::new(Store::in_memory()),
         Arc::new(ScopedLlm),
         vec![Arc::new(WorkspacePlugin::new(
             home.path(),
-            catalog.clone(),
             rumu_cards::Decks::load(home.path()).unwrap(),
         ))],
-        catalog,
+        workspaces,
     )
     .unwrap();
     let (session, _) = kernel
-        .create_session(None, "assistant".into())
+        .create_session(vec!["proj".into(), "other".into()], "assistant".into())
         .await
         .unwrap();
     let branch = BranchId::from(session.active_branch.0.as_str());

@@ -11,7 +11,7 @@ fn test_decks() -> (tempfile::TempDir, Decks, Deck, Deck) {
         id: String::new(),
         name: name.into(),
         assistant,
-        workspace: None,
+        workspaces: Vec::new(),
         mounts: Vec::new(),
         allow_ask: Vec::new(),
     };

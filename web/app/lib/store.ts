@@ -95,4 +95,12 @@ export {
   viewAssistant,
 } from './state/sessions'
 
+export {
+  attachWorkspaces,
+  deleteWorkspace,
+  refreshWorkspaces,
+  saveWorkspace,
+  useWorkspace,
+} from './state/workspaces'
+
 export { startApp } from './state/pushes'

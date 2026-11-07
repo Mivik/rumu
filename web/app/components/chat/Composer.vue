@@ -21,7 +21,6 @@ import { isBusy, pathNodes, sendPrompt, state, stopTurn } from '../../lib/store'
 import type { PromptAttachment } from '../../lib/store'
 import type { Attachment } from '../../lib/types'
 import { uploadBlob, withLeadingAnchors } from '../../lib/attachments'
-import { INTERNAL_WORKSPACE } from '../../lib/types'
 import { openLightbox, toast } from '../../lib/state/ui'
 import Icon from '../ui/Icon.vue'
 import Popover from '../ui/Popover.vue'
@@ -205,14 +204,16 @@ const placeholder = computed(() => {
   return isBusy.value ? t('chat.composer.steerPlaceholder') : t('chat.composer.placeholder')
 })
 
-/** The default workspace of the open branch, with where it lives on hover. */
+/** The chip: the open branch's default workspace (where it lives on hover),
+ *  or the action to add one. `@rumu` is never shown. */
 const workspace = computed(() => {
   const ps = state.pathState
-  const name = ps?.default_workspace
-  if (!ps || !name) return null
-  if (name === INTERNAL_WORKSPACE) return { name, title: t('panels.context.virtualRoot') }
-  const ws = ps.workspaces.find((w) => w.name === name)
-  return { name, title: ws ? `${ws.ssh ? `ssh:${ws.ssh}` : 'local'} ${ws.root}` : name }
+  if (!ps) return null
+  const ws = ps.workspaces.find((w) => w.name === ps.default_workspace)
+  if (ws) return { name: ws.name, title: ws.ssh ? `${ws.ssh}:${ws.root}` : ws.root, icon: 'mount', own: true }
+  return ps.workspaces.length
+    ? { name: t('workspaces.title'), title: '', icon: 'mount', own: false }
+    : { name: t('workspaces.add'), title: '', icon: 'plus', own: false }
 })
 
 /** The model that answered last on this path. */
@@ -293,7 +294,7 @@ const model = computed(() => {
       @paste="onPaste"
     />
     <div class="flex min-w-0 items-center gap-2 pt-1 pr-3 pb-3 pl-4" @click.self="textareaEl?.focus()">
-      <Popover v-if="workspace" :label="t('panels.context.workspaces')" placement="top-start">
+      <Popover v-if="workspace" :label="t('workspaces.title')" placement="top-start">
         <template #trigger="{ open, toggle }">
           <button
             type="button"
@@ -303,13 +304,15 @@ const model = computed(() => {
             :aria-expanded="open"
             @click="toggle"
           >
-            <Icon name="mount" :size="14" class="text-tool" />
-            <span class="truncate">{{ workspace.name }}</span>
+            <Icon :name="workspace.icon" :size="14" class="text-tool" />
+            <span class="truncate" :class="{ 'font-card': workspace.own }">{{ workspace.name }}</span>
             <Icon name="down" :size="12" class="text-ink-3" />
           </button>
         </template>
-        <div class="panel-head">{{ t('panels.context.workspaces') }}</div>
-        <WorkspacesPanel />
+        <template #default="{ close }">
+          <div class="panel-head">{{ t('workspaces.title') }}</div>
+          <WorkspacesPanel @close="close" />
+        </template>
       </Popover>
       <span v-if="model" class="hidden min-w-0 truncate text-meta text-ink-3 sm:inline" :title="model">
         {{ model }}

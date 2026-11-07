@@ -25,9 +25,17 @@ import type {
   TurnPush,
   TurnRetryingPush,
   WarningPush,
+  Workspace,
 } from '../types'
 import { MAX_DELTA_CHARS, MAX_TRACE, state } from './state'
-import { closeSession, forgetSession, openSession, refreshCards, refreshLists } from './sessions'
+import {
+  closeSession,
+  forgetSession,
+  openSession,
+  refreshAssistants,
+  refreshCards,
+  refreshLists,
+} from './sessions'
 import { refreshLibrary } from './library'
 import { loadPath } from './tree'
 import { toast } from './ui'
@@ -53,8 +61,23 @@ function cardChanged(node: Node): boolean {
   return op === 'write' || op === 'edit'
 }
 
+/** Did this node change the branch's workspaces (attached or default)? */
+function workspaceChanged(node: Node): boolean {
+  const tag = node.body.type === 'note' ? node.body.content.data?.tag : undefined
+  return tag === 'workspace.use' || tag === 'workspace.set'
+}
+
+/** `workspaces.updated`: the registry changed. A removed workspace also left
+ *  the assistants, and drops out of the open branch. */
+function onWorkspacesUpdated(p: { workspaces: Workspace[] }): void {
+  state.workspaces = p.workspaces
+  void refreshAssistants()
+  if (state.activeBranch) void loadPath(state.activeBranch)
+}
+
 function onNodeAppended(p: NodeAppendedPush): void {
   const { branch, node } = p
+  if (branch === state.activeBranch && workspaceChanged(node)) void loadPath(branch)
   if (cardChanged(node)) {
     void refreshCards()
     // The model may be writing cards while the user browses the library.
@@ -299,6 +322,7 @@ export function startApp(): void {
   rumu.onPush('turn.retrying', (p) => onTurnRetrying(p as unknown as TurnRetryingPush))
   rumu.onPush('turn.error', (p) => onTurnError(p as unknown as TurnErrorPush))
   rumu.onPush('warning', (p) => onWarning(p as unknown as WarningPush))
+  rumu.onPush('workspaces.updated', (p) => onWorkspacesUpdated(p as unknown as { workspaces: Workspace[] }))
 
   // Browser back/forward: reopen the session the address names, or land.
   window.addEventListener('popstate', () => {

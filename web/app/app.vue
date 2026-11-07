@@ -2,6 +2,7 @@
 import { onBeforeUnmount, onMounted, ref } from 'vue'
 import Sidebar from './components/Sidebar.vue'
 import AssistantSettings from './components/AssistantSettings.vue'
+import WorkspaceSettings from './components/WorkspaceSettings.vue'
 import ChatView from './components/chat/ChatView.vue'
 import LibraryView from './components/library/LibraryView.vue'
 import AskDialog from './components/AskDialog.vue'
@@ -55,6 +56,7 @@ onBeforeUnmount(() => {
     <ChatView />
     <LibraryView />
     <AssistantSettings />
+    <WorkspaceSettings />
     <Lightbox />
     <AskDialog />
     <Toasts />

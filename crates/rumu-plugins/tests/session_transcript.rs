@@ -5,7 +5,7 @@
 use std::sync::Arc;
 
 use async_trait::async_trait;
-use rumu_core::{Plugin, ToolCall, ToolSpec, WorkspaceCatalog};
+use rumu_core::{Plugin, ToolCall, ToolSpec, Workspaces};
 use rumu_kernel::{Kernel, LlmResponse, ScriptedLlm};
 use rumu_plugins::WorkspacePlugin;
 use rumu_store::Store;
@@ -49,10 +49,6 @@ async fn agent_transcript_address_is_readable() {
         Arc::new(OtherPlugin),
         Arc::new(WorkspacePlugin::new(
             home.path(),
-            WorkspaceCatalog {
-                default: Some("@rumu".into()),
-                ..WorkspaceCatalog::default()
-            },
             rumu_cards::Decks::load(home.path()).unwrap(),
         )),
     ];
@@ -71,14 +67,11 @@ async fn agent_transcript_address_is_readable() {
             LlmResponse::text("all done"),
         ])),
         plugins,
-        WorkspaceCatalog {
-            default: Some("@rumu".into()),
-            ..WorkspaceCatalog::default()
-        },
+        Workspaces::default(),
     )
     .unwrap();
     let (session, _) = kernel
-        .create_session(None, "assistant".into())
+        .create_session(Vec::new(), "assistant".into())
         .await
         .unwrap();
     let branch = session.active_branch.clone();
@@ -113,14 +106,7 @@ async fn agent_transcript_address_is_readable() {
     // `read` opens it: the child's own nodes in root→head order — the
     // sub-agent prompt (its first own node), the skipped sibling, the
     // child's tool call + result, and the final reply.
-    let ws = WorkspacePlugin::new(
-        home.path(),
-        WorkspaceCatalog {
-            default: Some("@rumu".into()),
-            ..WorkspaceCatalog::default()
-        },
-        rumu_cards::Decks::load(home.path()).unwrap(),
-    );
+    let ws = WorkspacePlugin::new(home.path(), rumu_cards::Decks::load(home.path()).unwrap());
     let cx = rumu_core::Cx::new(
         session.id.clone(),
         branch.clone(),

@@ -15,7 +15,7 @@ use rumu_core::{
     Attachment, BranchId, BranchStatus, CodeCall, Content, Cx, Decision, Event, HookOutput,
     HookSpec, Inbox, Manifest, Node, NodeBody, PathState, Plugin, Post, Progress, SessionId,
     Tagged, TaskDone, TaskKind, TaskStatus, ToolCall, ToolOutput, ToolSpec, Workspace,
-    WorkspaceCatalog, WorkspaceUse,
+    WorkspaceUse, Workspaces,
 };
 use rumu_kernel::{Delta, Kernel, Llm, LlmError, LlmResponse, OnDelta, ScriptedLlm};
 use rumu_store::Store;
@@ -602,22 +602,24 @@ fn script_host(
 fn kernel_with(
     plugins: Vec<Arc<dyn Plugin>>,
     scripted: Vec<LlmResponse>,
-    catalog: WorkspaceCatalog,
+    workspaces: Workspaces,
 ) -> (Arc<Kernel>, Arc<FakeLlm>) {
     let store = Store::in_memory();
     let llm = Arc::new(FakeLlm::new(scripted));
-    let kernel = Kernel::new(Arc::new(store), llm.clone(), plugins, catalog).unwrap();
+    let kernel = Kernel::new(Arc::new(store), llm.clone(), plugins, workspaces).unwrap();
     (kernel, llm)
 }
 
-async fn setup_with_catalog(
+/// A kernel over `workspaces` and a session that attaches all of them.
+async fn setup_with_workspaces(
     plugins: Vec<Arc<dyn Plugin>>,
     scripted: Vec<LlmResponse>,
-    catalog: WorkspaceCatalog,
+    workspaces: Workspaces,
 ) -> (Arc<Kernel>, Arc<FakeLlm>, SessionId, BranchId) {
-    let (kernel, llm) = kernel_with(plugins, scripted, catalog);
+    let names = workspaces.list().into_iter().map(|w| w.name).collect();
+    let (kernel, llm) = kernel_with(plugins, scripted, workspaces);
     let (session, _) = kernel
-        .create_session(None, "assistant".into())
+        .create_session(names, "assistant".into())
         .await
         .unwrap();
     (
@@ -632,19 +634,16 @@ async fn setup(
     plugins: Vec<Arc<dyn Plugin>>,
     scripted: Vec<LlmResponse>,
 ) -> (Arc<Kernel>, Arc<FakeLlm>, SessionId, BranchId) {
-    setup_with_catalog(plugins, scripted, WorkspaceCatalog::default()).await
+    setup_with_workspaces(plugins, scripted, Workspaces::default()).await
 }
 
-fn project(name: &str, root: &str) -> WorkspaceCatalog {
-    WorkspaceCatalog {
-        workspaces: vec![Workspace {
-            name: name.into(),
-            ssh: None,
-            root: root.into(),
-            read_only: false,
-        }],
-        default: Some(name.into()),
-    }
+fn project(name: &str, root: &str) -> Workspaces {
+    Workspaces::new(vec![Workspace {
+        name: name.into(),
+        ssh: None,
+        root: root.into(),
+        read_only: false,
+    }])
 }
 
 /// Drive pushes until `turn.done`/`turn.error` for `branch` (or any branch
@@ -1053,11 +1052,11 @@ async fn flaky_setup(
         Arc::new(Store::in_memory()),
         llm.clone(),
         vec![],
-        WorkspaceCatalog::default(),
+        Workspaces::default(),
     )
     .unwrap();
     let (session, _) = kernel
-        .create_session(None, "assistant".into())
+        .create_session(Vec::new(), "assistant".into())
         .await
         .unwrap();
     (kernel, llm, session.active_branch.clone())
@@ -1166,11 +1165,11 @@ async fn failure_after_a_delta_is_not_retried() {
         Arc::new(Store::in_memory()),
         llm.clone(),
         vec![],
-        WorkspaceCatalog::default(),
+        Workspaces::default(),
     )
     .unwrap();
     let (session, _) = kernel
-        .create_session(None, "assistant".into())
+        .create_session(Vec::new(), "assistant".into())
         .await
         .unwrap();
     let branch = session.active_branch.clone();
@@ -1283,11 +1282,11 @@ async fn retry_refused_when_answered_or_busy() {
         Arc::new(Store::in_memory()),
         llm.clone(),
         vec![],
-        WorkspaceCatalog::default(),
+        Workspaces::default(),
     )
     .unwrap();
     let (session, _) = kernel
-        .create_session(None, "assistant".into())
+        .create_session(Vec::new(), "assistant".into())
         .await
         .unwrap();
     let branch = session.active_branch.clone();
@@ -1322,11 +1321,11 @@ async fn retry_works_behind_a_hook_note() {
         Arc::new(Store::in_memory()),
         llm.clone(),
         vec![importer],
-        WorkspaceCatalog::default(),
+        Workspaces::default(),
     )
     .unwrap();
     let (session, _) = kernel
-        .create_session(None, "assistant".into())
+        .create_session(Vec::new(), "assistant".into())
         .await
         .unwrap();
     let branch = session.active_branch.clone();
@@ -1858,15 +1857,7 @@ async fn agent_context_none_starts_at_the_root() {
 /// branch is created.
 #[tokio::test]
 async fn agent_unknown_workspace_errors_without_a_branch() {
-    let cat = WorkspaceCatalog {
-        workspaces: vec![Workspace {
-            name: "proj".into(),
-            ssh: None,
-            root: "/tmp/proj".into(),
-            read_only: false,
-        }],
-        default: Some("proj".into()),
-    };
+    let cat = project("proj", "/tmp/proj");
     let plugin = Arc::new(plugin_with(
         "branch",
         &["agent"],
@@ -1874,7 +1865,7 @@ async fn agent_unknown_workspace_errors_without_a_branch() {
         noop_hooks(),
         noop_tools(),
     ));
-    let (kernel, _llm, session, branch) = setup_with_catalog(
+    let (kernel, _llm, session, branch) = setup_with_workspaces(
         vec![plugin],
         vec![
             LlmResponse::calls(vec![ToolCall::new(
@@ -1891,8 +1882,10 @@ async fn agent_unknown_workspace_errors_without_a_branch() {
     let (_, nodes, _) = run_turn_on(&kernel, &branch, "go").await;
     let (text, err) = result_text(&nodes, "e1");
     assert!(err, "{text}");
-    assert!(text.contains("unknown workspace `ghost`"), "{text}");
-    assert!(text.contains("proj") && text.contains("@rumu"), "{text}");
+    assert!(
+        text.contains("unknown workspace `ghost` (available: proj)"),
+        "{text}"
+    );
     assert_eq!(
         kernel.session_tree(&session).unwrap().2.len(),
         1,
@@ -1900,28 +1893,25 @@ async fn agent_unknown_workspace_errors_without_a_branch() {
     );
 }
 
-/// A workspace scope marker filters the child's `PathState.workspaces`, and a
-/// default workspace inside the scope is carried over as a `workspace.use`
-/// marker.
+/// `inherit.workspaces` attaches that subset of the parent's workspaces to the
+/// child (a `workspace.set` marker), and a default the child still has is
+/// carried over as a `workspace.use` marker.
 #[tokio::test]
-async fn agent_workspace_scope_filters_child_state() {
-    let cat = WorkspaceCatalog {
-        workspaces: vec![
-            Workspace {
-                name: "proj".into(),
-                ssh: None,
-                root: "/tmp/proj".into(),
-                read_only: false,
-            },
-            Workspace {
-                name: "other".into(),
-                ssh: None,
-                root: "/tmp/other".into(),
-                read_only: false,
-            },
-        ],
-        default: Some("proj".into()),
-    };
+async fn agent_workspaces_narrow_the_child_state() {
+    let cat = Workspaces::new(vec![
+        Workspace {
+            name: "proj".into(),
+            ssh: None,
+            root: "/tmp/proj".into(),
+            read_only: false,
+        },
+        Workspace {
+            name: "other".into(),
+            ssh: None,
+            root: "/tmp/other".into(),
+            read_only: false,
+        },
+    ]);
     let plugin = Arc::new(plugin_with(
         "branch",
         &["agent"],
@@ -1929,7 +1919,7 @@ async fn agent_workspace_scope_filters_child_state() {
         noop_hooks(),
         noop_tools(),
     ));
-    let (kernel, _llm, session, branch) = setup_with_catalog(
+    let (kernel, _llm, session, branch) = setup_with_workspaces(
         vec![plugin],
         vec![
             LlmResponse::calls(vec![ToolCall::new(
@@ -1958,13 +1948,8 @@ async fn agent_workspace_scope_filters_child_state() {
     let (cnodes, cstate) = kernel.branch_path(&child.id).unwrap();
     let kinds = body_kinds(&cnodes);
     assert_eq!(
-        kinds[..4],
-        [
-            "marker[root]",
-            "marker[workspace.scope]",
-            "marker[workspace.use]",
-            "user"
-        ]
+        kinds[..3],
+        ["marker[root]", "marker[workspace.set]", "user"]
     );
     assert_eq!(
         cstate
@@ -2063,11 +2048,11 @@ async fn agent_concurrency_limit_serialises_script_fanout() {
         Arc::new(Store::in_memory()),
         llm.clone(),
         vec![plugin],
-        WorkspaceCatalog::default(),
+        Workspaces::default(),
     )
     .unwrap();
     let (session, _) = kernel
-        .create_session(None, "assistant".into())
+        .create_session(Vec::new(), "assistant".into())
         .await
         .unwrap();
     let branch = BranchId::from(session.active_branch.0.as_str());
@@ -2115,11 +2100,11 @@ async fn abort_while_waiting_for_an_agent_permit_creates_no_child() {
         Arc::new(Store::in_memory()),
         llm,
         vec![plugin],
-        WorkspaceCatalog::default(),
+        Workspaces::default(),
     )
     .unwrap();
     let (session, _) = kernel
-        .create_session(None, "assistant".into())
+        .create_session(Vec::new(), "assistant".into())
         .await
         .unwrap();
     let branch = BranchId::from(session.active_branch.0.as_str());
@@ -2234,38 +2219,98 @@ async fn abort_appends_error_results() {
 // ---------- workspaces ----------
 
 #[tokio::test]
-async fn session_default_workspace_is_branch_state() {
-    let (kernel, _llm) = kernel_with(vec![], vec![], project("proj", "/p/rumu"));
+async fn session_workspaces_are_branch_state() {
+    let registry = project("proj", "/p/rumu");
+    let (kernel, _llm) = kernel_with(vec![], vec![], registry.clone());
+    let names = |st: &rumu_core::PathState| -> Vec<String> {
+        st.workspaces.iter().map(|w| w.name.clone()).collect()
+    };
 
-    // No initial workspace → the catalog default applies.
-    let (s1, _) = kernel
-        .create_session(None, "assistant".into())
+    // The root attaches the session's list; the first is the default.
+    let (s1, b1) = kernel
+        .create_session(vec!["proj".into()], "assistant".into())
         .await
         .unwrap();
-    let (_, st1) = kernel.branch_path(&s1.active_branch).unwrap();
-    assert_eq!(st1.default_workspace.as_deref(), Some("proj"));
-    assert_eq!(st1.workspaces.len(), 1);
+    let (_, st) = kernel.branch_path(&s1.active_branch).unwrap();
+    assert_eq!(names(&st), ["proj"]);
+    assert_eq!(st.default_workspace.as_deref(), Some("proj"));
 
-    // An explicit initial default (`@rumu` is valid too) is a `workspace.use`
-    // marker on the path.
+    // Nothing attached: only `@rumu`, which is the default.
     let (s2, _) = kernel
-        .create_session(Some("@rumu".into()), "assistant".into())
+        .create_session(Vec::new(), "assistant".into())
         .await
         .unwrap();
-    let (nodes, st2) = kernel.branch_path(&s2.active_branch).unwrap();
-    assert_eq!(st2.default_workspace.as_deref(), Some("@rumu"));
+    let (_, st) = kernel.branch_path(&s2.active_branch).unwrap();
+    assert!(st.workspaces.is_empty());
+    assert_eq!(st.default_workspace.as_deref(), Some("@rumu"));
+
+    // The user picks the default among the attached ones (or `@rumu`).
+    kernel.use_workspace(&b1.id, "@rumu").await.unwrap();
+    let (nodes, st) = kernel.branch_path(&b1.id).unwrap();
+    assert_eq!(st.default_workspace.as_deref(), Some("@rumu"));
     assert!(nodes.iter().any(|n| matches!(&n.body,
         NodeBody::Note { content, .. } if content.decode::<WorkspaceUse>().is_some_and(|w| w.name == "@rumu"))));
-
-    // Unknown names are rejected outright.
-    let err = kernel
-        .create_session(Some("ghost".into()), "assistant".into())
-        .await
-        .unwrap_err();
+    let err = kernel.use_workspace(&b1.id, "ghost").await.unwrap_err();
     assert!(
         err.to_string().contains("unknown workspace `ghost`"),
         "{err:#}"
     );
+
+    // Detaching and attaching replace the list; only registered names.
+    kernel.set_workspaces(&b1.id, Vec::new()).await.unwrap();
+    let (_, st) = kernel.branch_path(&b1.id).unwrap();
+    assert!(st.workspaces.is_empty() && st.attached.is_empty());
+    for bad in [vec!["ghost"], vec!["proj", "proj"]] {
+        let bad: Vec<String> = bad.into_iter().map(String::from).collect();
+        assert!(kernel.set_workspaces(&b1.id, bad).await.is_err());
+    }
+    kernel
+        .set_workspaces(&b1.id, vec!["proj".into()])
+        .await
+        .unwrap();
+    kernel.use_workspace(&b1.id, "proj").await.unwrap();
+
+    // Each change tells the model what the user did.
+    let (nodes, _) = kernel.branch_path(&b1.id).unwrap();
+    let notes: Vec<&str> = nodes
+        .iter()
+        .filter_map(|n| match &n.body {
+            NodeBody::Note { content, .. } if !content.text.is_empty() => {
+                Some(content.text.as_str())
+            }
+            _ => None,
+        })
+        .collect();
+    assert_eq!(
+        notes,
+        [
+            "The user made `@rumu` the default workspace.",
+            "The user removed every workspace from this session; only `@rumu` remains.",
+            "The user changed this session's workspaces to: `proj` (local /p/rumu).",
+            "The user made `proj` the default workspace.",
+        ]
+    );
+
+    // A workspace removed from the registry drops out of the branch, and
+    // comes back with a workspace of the same name.
+    let saved = registry.list();
+    registry
+        .update(|list| {
+            list.clear();
+            Ok::<_, ()>(())
+        })
+        .unwrap();
+    let (_, st) = kernel.branch_path(&b1.id).unwrap();
+    assert!(st.workspaces.is_empty());
+    assert_eq!(st.default_workspace.as_deref(), Some("@rumu"));
+    registry
+        .update(|list| {
+            *list = saved;
+            Ok::<_, ()>(())
+        })
+        .unwrap();
+    let (_, st) = kernel.branch_path(&b1.id).unwrap();
+    assert_eq!(st.default_workspace.as_deref(), Some("proj"));
 }
 
 #[tokio::test]
@@ -2273,7 +2318,7 @@ async fn delete_session_removes_the_tree_and_pushes_it() {
     let (kernel, _llm, session, branch) = setup(vec![], vec![]).await;
     // Another session must be untouched.
     let (keep, _) = kernel
-        .create_session(None, "assistant".into())
+        .create_session(Vec::new(), "assistant".into())
         .await
         .unwrap();
     let mut rx = kernel.tap_pushes();
@@ -2315,7 +2360,7 @@ async fn invalid_matchers_fail_kernel_construction() {
         Arc::new(Store::in_memory()),
         Arc::new(FakeLlm::new(vec![])),
         vec![plugin],
-        WorkspaceCatalog::default(),
+        Workspaces::default(),
     )
     .err()
     .expect("kernel construction must fail on an invalid matcher");
@@ -2335,7 +2380,7 @@ async fn workspace_field_guards_pathless_calls() {
         )],
         "proj is protected",
     ));
-    let (kernel, _llm, _s, branch) = setup_with_catalog(
+    let (kernel, _llm, _s, branch) = setup_with_workspaces(
         vec![plugin],
         vec![
             LlmResponse::calls(vec![ToolCall::new("c1", "bash", json!({"command": "ls"}))]),
@@ -3154,11 +3199,11 @@ async fn fork_session_copies_the_path_into_a_new_session() {
             LlmResponse::text("done"),
         ])),
         vec![plugin],
-        WorkspaceCatalog::default(),
+        Workspaces::default(),
     )
     .unwrap();
     let (session, _) = kernel
-        .create_session(None, "assistant".into())
+        .create_session(Vec::new(), "assistant".into())
         .await
         .unwrap();
     let branch = BranchId::from(session.active_branch.0.as_str());
@@ -3707,11 +3752,11 @@ async fn steering_prompt_starts_a_new_turn_if_the_turn_ended_first() {
         Arc::new(Store::in_memory()),
         llm.clone(),
         vec![],
-        WorkspaceCatalog::default(),
+        Workspaces::default(),
     )
     .unwrap();
     let (session, _) = kernel
-        .create_session(None, "assistant".into())
+        .create_session(Vec::new(), "assistant".into())
         .await
         .unwrap();
     let branch = session.active_branch.clone();
@@ -3980,9 +4025,9 @@ async fn setup_split(
 ) -> (Arc<Kernel>, SessionId, BranchId) {
     let store = Store::in_memory();
     let llm = Arc::new(SplitLlm::new(parent, child));
-    let kernel = Kernel::new(Arc::new(store), llm, plugins, WorkspaceCatalog::default()).unwrap();
+    let kernel = Kernel::new(Arc::new(store), llm, plugins, Workspaces::default()).unwrap();
     let (session, _) = kernel
-        .create_session(None, "assistant".into())
+        .create_session(Vec::new(), "assistant".into())
         .await
         .unwrap();
     let branch = BranchId::from(session.active_branch.0.as_str());
@@ -4473,11 +4518,11 @@ async fn kernel_start_closes_out_active_agent_branches() {
         store.clone(),
         Arc::new(FakeLlm::new(vec![])),
         vec![],
-        WorkspaceCatalog::default(),
+        Workspaces::default(),
     )
     .unwrap();
     let (session, _) = kernel
-        .create_session(None, "assistant".into())
+        .create_session(Vec::new(), "assistant".into())
         .await
         .unwrap();
     let main = store.get_branch(&session.active_branch).unwrap().unwrap();
@@ -4502,7 +4547,7 @@ async fn kernel_start_closes_out_active_agent_branches() {
         store.clone(),
         Arc::new(FakeLlm::new(vec![])),
         vec![],
-        WorkspaceCatalog::default(),
+        Workspaces::default(),
     )
     .unwrap();
     let got = store.get_branch(&child.id).unwrap().unwrap();

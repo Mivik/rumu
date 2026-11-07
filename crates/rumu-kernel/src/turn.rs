@@ -10,7 +10,7 @@ use rumu_core::{
     Branch, BranchId, BranchKind, BranchStatus, CODE_DENIED_TOOLS, Call, CodeCall, Content, Cx,
     FILE_PATCH_TAG, Inherit, InheritContext, InnerCall, NodeBody, NodeId, Plugin, RUMU_WORKSPACE,
     SYSTEM_SOURCE, SessionId, ToolCall, ToolError, ToolOutput, ToolResultExt, TurnError,
-    WorkspaceScope, WorkspaceUse, now, parse_args, truncate_chars, truncate_output,
+    WorkspaceSet, WorkspaceUse, now, parse_args, truncate_chars, truncate_output,
 };
 use schemars::JsonSchema;
 use serde::Deserialize;
@@ -879,11 +879,32 @@ impl Kernel {
             .get_branch(from)?
             .ok_or_else(|| Error::BranchNotFound(from.clone()))?;
         let path = self.path_nodes(from)?;
+        let parent_state = self.state_of_nodes(&self.pending_path_nodes(from)?);
 
-        // Unknown workspace names never start a child.
-        if let Some(message) = self.check_agent_workspaces(&inherit)? {
-            return Ok(AgentRun::Refused(message));
+        // The child's workspaces: the parent's, or the named subset of them.
+        // A name the parent does not have never starts a child.
+        let available: Vec<String> = parent_state
+            .workspaces
+            .iter()
+            .map(|w| w.name.clone())
+            .collect();
+        if let Some(names) = &inherit.workspaces
+            && let Some(name) = names
+                .iter()
+                .find(|n| *n != RUMU_WORKSPACE && !available.contains(n))
+        {
+            return Ok(AgentRun::Refused(format!(
+                "agent: unknown workspace `{name}` (available: {})",
+                available.join(", ")
+            )));
         }
+        let child_workspaces: Option<Vec<String>> = inherit.workspaces.as_ref().map(|names| {
+            available
+                .iter()
+                .filter(|n| names.contains(n))
+                .cloned()
+                .collect()
+        });
 
         // Depth is computed from the Agent ancestry of the branch we are
         // forking from; 4th level and beyond is refused.
@@ -913,8 +934,8 @@ impl Kernel {
                     unreachable!("found a non-assistant node");
                 };
                 let mut initial = Vec::new();
-                if let Some(names) = &inherit.workspaces {
-                    initial.push(scope_marker(names));
+                if let Some(names) = child_workspaces {
+                    initial.push(set_marker(names));
                 }
                 for call in tool_calls {
                     let text = if call.call_id == call_id {
@@ -934,20 +955,22 @@ impl Kernel {
                 let root = path
                     .first()
                     .ok_or_else(|| Error::Internal(format!("branch {from} has no root node")))?;
+                // Forked at the root: the parent's current list, not the
+                // root's, is the starting point.
+                // Markers only where the root alone would differ.
+                let names = child_workspaces.unwrap_or(available);
                 let mut initial = Vec::new();
-                if let Some(names) = &inherit.workspaces {
-                    initial.push(scope_marker(names));
+                if names != crate::state::derive_state(std::slice::from_ref(root)).attached {
+                    initial.push(set_marker(names.clone()));
                 }
-                // Keep the parent's default workspace when the new scope
-                // still allows it; otherwise the child's merge picks one.
-                let parent_state = self.state_of_nodes(&self.pending_path_nodes(from)?);
-                let default = parent_state.default_workspace.clone();
-                if let Some(name) = default
-                    && inherit
-                        .workspaces
-                        .as_ref()
-                        .is_none_or(|names| name == RUMU_WORKSPACE || names.contains(&name))
-                {
+                // Keep the parent's default workspace when the child still
+                // has it; otherwise the child's merge picks one.
+                let natural = names.first().map_or(RUMU_WORKSPACE, String::as_str);
+                let keep = parent_state
+                    .default_workspace
+                    .clone()
+                    .filter(|n| n != natural && (n == RUMU_WORKSPACE || names.contains(n)));
+                if let Some(name) = keep {
                     initial.push(NodeBody::Note {
                         source: SYSTEM_SOURCE.into(),
                         content: Content::marker(&WorkspaceUse { name }),
@@ -1080,30 +1103,6 @@ impl Kernel {
         }
         Ok(depth)
     }
-
-    /// Reject unknown `inherit.workspaces` names before creating a branch.
-    /// `Some(message)` is a refusal naming the valid workspaces.
-    fn check_agent_workspaces(&self, inherit: &Inherit) -> Result<Option<String>> {
-        let Some(names) = &inherit.workspaces else {
-            return Ok(None);
-        };
-        let mut valid: Vec<&str> = self
-            .catalog
-            .workspaces
-            .iter()
-            .map(|w| w.name.as_str())
-            .collect();
-        valid.push(RUMU_WORKSPACE);
-        for name in names {
-            if !valid.iter().any(|v| v == name) {
-                return Ok(Some(format!(
-                    "agent: unknown workspace `{name}` (valid workspaces: {})",
-                    valid.join(", ")
-                )));
-            }
-        }
-        Ok(None)
-    }
 }
 
 /// What a sub-agent run produced.
@@ -1220,13 +1219,11 @@ enum AllLiteral {
     All,
 }
 
-/// A `workspace.scope` marker body.
-fn scope_marker(names: &[String]) -> NodeBody {
+/// A `workspace.set` marker body.
+fn set_marker(names: Vec<String>) -> NodeBody {
     NodeBody::Note {
         source: SYSTEM_SOURCE.into(),
-        content: Content::marker(&WorkspaceScope {
-            allow: names.to_vec(),
-        }),
+        content: Content::marker(&WorkspaceSet { names }),
     }
 }
 

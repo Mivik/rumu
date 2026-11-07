@@ -28,12 +28,15 @@ function isRecallNote(n: Node): boolean {
  * `card_use` record a card read/write leaves after its tool result (the
  * Context data reads it from the path; the tool row already shows the card),
  * and a `turn.error` failure record (failures are shown live only — a stored
- * marker is never rendered, so it leaves no trace in the transcript).
+ * marker is never rendered, so it leaves no trace in the transcript), and a
+ * `workspace.set` (the composer's workspace chip shows the result).
  * Kept out of the timeline entirely — as an empty context item it would
  * split the activity run around it in two. */
 function isSilentMarker(n: Node): boolean {
-  if (n.body.type !== 'note' || n.body.content.text !== '') return false
+  if (n.body.type !== 'note') return false
   const tag = n.body.content.data?.tag
+  if (tag === 'workspace.set') return true
+  if (n.body.content.text !== '') return false
   return tag === 'root' || tag === 'card_use' || tag === TURN_ERROR_TAG
 }
 

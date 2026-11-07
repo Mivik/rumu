@@ -1,0 +1,4 @@
+# The one workspace is a writable scratch directory (read_only would disable
+# bash entirely). Written by rumu: edit it from the web UI.
+scratch:
+  root: web/mock/home/scratch

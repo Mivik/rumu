@@ -19,9 +19,8 @@ use serde_json::{Value, json};
 pub struct Assistant {
     pub id: String,
     pub name: String,
-    #[serde(skip_serializing_if = "Option::is_none")]
-    #[ts(optional)]
-    pub workspace: Option<String>,
+    /// Its `deck.yaml` workspaces; the first is the default.
+    pub workspaces: Vec<String>,
     /// The body of the pinned `instructions.md`, when present.
     #[serde(skip_serializing_if = "Option::is_none")]
     #[ts(optional)]
@@ -45,7 +44,7 @@ pub fn assistant_of(decks: &Decks, deck: &Deck) -> Assistant {
     Assistant {
         id: deck.meta.id.clone(),
         name: deck.meta.name.clone(),
-        workspace: deck.meta.workspace.clone(),
+        workspaces: deck.meta.workspaces.clone(),
         instructions,
         allow_ask: deck.meta.allow_ask.clone(),
         mounts: deck.meta.mounts.clone(),
@@ -140,7 +139,7 @@ impl AskPlugin {
         let reply = cx
             .consult(Consult {
                 assistant: to.id().to_owned(),
-                workspace: to.meta.workspace.clone(),
+                workspaces: to.meta.workspaces.clone(),
                 asked_by: from.clone(),
                 mounts,
                 prompt: Content::text(prompt),

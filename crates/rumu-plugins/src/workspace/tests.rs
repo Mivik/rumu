@@ -6,7 +6,7 @@
 //! is tested in `backend.rs` (no real ssh).
 
 use super::*;
-use crate::testutil::{FakeRuntime, fixture_home};
+use crate::testutil::FakeRuntime;
 use rumu_cards::{card, usage};
 use rumu_core::{
     Node, NodeBody, PathState, RUMU_WORKSPACE, Structured, Tagged, ToolOutput, WorkspaceUse,
@@ -48,7 +48,7 @@ fn setup(
 ) {
     let home = tempfile::tempdir().unwrap();
     crate::testutil::main_deck(home.path());
-    let plugin = deck_plugin(home.path(), WorkspaceCatalog::default());
+    let plugin = deck_plugin(home.path());
     let mut wsb = ws("proj", &root.to_string_lossy());
     wsb.read_only = read_only;
     let host = FakeRuntime::arc();
@@ -64,9 +64,9 @@ fn flush_output(host: &std::sync::Arc<FakeRuntime>, call_id: &str, out: &ToolOut
 }
 
 /// A workspace plugin over the temp home's decks.
-fn deck_plugin(home: &Path, catalog: WorkspaceCatalog) -> WorkspacePlugin {
+fn deck_plugin(home: &Path) -> WorkspacePlugin {
     let decks = rumu_cards::Decks::load(home).unwrap();
-    WorkspacePlugin::new(home, catalog, decks)
+    WorkspacePlugin::new(home, decks)
 }
 
 /// One card read from a deck's `HEAD` tree.
@@ -85,7 +85,7 @@ fn deck_card(home: &Path, path: &str) -> rumu_cards::Card {
 #[tokio::test]
 async fn address_resolution_errors() {
     let home = tempfile::tempdir().unwrap();
-    let plugin = deck_plugin(home.path(), WorkspaceCatalog::default());
+    let plugin = deck_plugin(home.path());
     let host = FakeRuntime::arc();
 
     // No default workspace: the error points at `workspace_use()`.
@@ -679,14 +679,9 @@ async fn workspace_use_lists_and_switches() {
         root: "/srv/app".into(),
         read_only: true,
     };
-    let catalog = WorkspaceCatalog {
-        workspaces: vec![ws("proj", "/p/rumu"), prod],
-        default: Some("proj".into()),
-    };
-    let plugin = deck_plugin(home.path(), catalog.clone());
+    let plugin = deck_plugin(home.path());
     let host = FakeRuntime::arc();
-    *host.state.lock().unwrap() =
-        state_with(catalog.workspaces.clone(), catalog.default.as_deref());
+    *host.state.lock().unwrap() = state_with(vec![ws("proj", "/p/rumu"), prod], Some("proj"));
     let cx = host.cx();
 
     // Without `name`: just the listing, and no marker is written.
@@ -888,7 +883,7 @@ fn card_home() -> tempfile::TempDir {
 }
 
 fn card_plugin_for(home: &Path) -> (WorkspacePlugin, std::sync::Arc<FakeRuntime>, rumu_core::Cx) {
-    let plugin = deck_plugin(home, WorkspaceCatalog::default());
+    let plugin = deck_plugin(home);
     let host = FakeRuntime::arc();
     *host.state.lock().unwrap() = state_with(vec![], Some(RUMU_WORKSPACE));
     let cx = host.cx();
@@ -1383,159 +1378,6 @@ async fn card_tools_read_write_validate_and_list() {
     );
 }
 
-// ---------- config.yaml ----------
-
-fn load_catalog(home: &Path) -> crate::Result<WorkspaceCatalog> {
-    crate::load_config(home)?.catalog()
-}
-
-#[test]
-fn load_catalog_parsing() {
-    let cat = load_catalog(&fixture_home()).unwrap();
-    assert_eq!(cat.default.as_deref(), Some("proj"));
-    let proj = cat.get("proj").unwrap();
-    assert!(proj.is_local(), "string shorthand = local");
-    assert_eq!(proj.ssh, None);
-    assert!(!proj.read_only);
-    assert!(
-        proj.root.ends_with("code/proj") || proj.root.ends_with("code/proj/"),
-        "tilde expanded: {}",
-        proj.root
-    );
-
-    // Explicit names are validated. `rumu` is an ordinary name now: the
-    // internal workspace lives at `@rumu`, which no preset can take.
-    let dir = tempfile::tempdir().unwrap();
-    std::fs::write(
-        dir.path().join("config.yaml"),
-        "default: gone\nworkspaces:\n  ok: /r\n  rumu: /x\n",
-    )
-    .unwrap();
-    let cat = load_catalog(dir.path()).unwrap();
-    let names: Vec<&str> = cat.workspaces.iter().map(|w| w.name.as_str()).collect();
-    assert_eq!(names, ["ok", "rumu"], "BTreeMap order");
-    assert_eq!(cat.default, None, "default naming no preset is dropped");
-
-    for bad in ["bad/name", "sp ace", "UPPER", "x", "@rumu", "http"] {
-        std::fs::write(
-            dir.path().join("config.yaml"),
-            format!("workspaces:\n  \"{bad}\": /x\n"),
-        )
-        .unwrap();
-        let err = load_catalog(dir.path()).unwrap_err().to_string();
-        assert!(err.contains("invalid workspace name"), "{bad}: {err}");
-    }
-
-    // Missing file → empty catalog.
-    let empty = tempfile::tempdir().unwrap();
-    assert!(load_catalog(empty.path()).unwrap().workspaces.is_empty());
-
-    // String shorthand and the map form (`ssh:` + `read_only:`) coexist.
-    let dir = tempfile::tempdir().unwrap();
-    std::fs::write(
-        dir.path().join("config.yaml"),
-        "default: app\nworkspaces:\n  proj: ~/code/proj\n  app:\n    ssh: deploy@prod\n    root: /srv/app\n    read_only: true\n",
-    )
-    .unwrap();
-    let cat = load_catalog(dir.path()).unwrap();
-    let proj = cat.get("proj").unwrap();
-    assert_eq!(proj.ssh, None);
-    assert!(
-        proj.root.ends_with("code/proj") || proj.root.ends_with("code/proj/"),
-        "{}",
-        proj.root
-    );
-    let app = cat.get("app").unwrap();
-    assert_eq!(app.ssh.as_deref(), Some("deploy@prod"));
-    assert_eq!(app.root, "/srv/app", "remote roots keep their form");
-    assert_eq!(app.label(), "ssh:deploy@prod");
-    assert!(app.read_only);
-    assert_eq!(cat.default.as_deref(), Some("app"));
-
-    // Only the map form exists: a list of roots is not a workspace map.
-    std::fs::write(dir.path().join("config.yaml"), "workspaces:\n  - /srv/a\n").unwrap();
-    assert!(load_catalog(dir.path()).is_err(), "list form is rejected");
-
-    for (yaml, needle) in [
-        // machine-oriented shapes are rejected as unknown fields
-        (
-            "workspaces:\n  ab:\n    machine: ghost\n    root: /r\n",
-            "unknown field `machine`",
-        ),
-        (
-            "machines:\n  prod:\n    kind: ssh\n    host: h\nworkspaces:\n  ab: /r\n",
-            "unknown field `machines`",
-        ),
-        // `trusted:` is an unknown field.
-        (
-            "workspaces:\n  ab:\n    root: /r\n    trusted: true\n",
-            "unknown field `trusted`",
-        ),
-        (
-            "workspaces:\n  ab:\n    kind: ssh\n    host: h\n    root: /r\n",
-            "unknown field `kind`",
-        ),
-        (
-            "workspaces:\n  ab:\n    host: h\n    root: /r\n",
-            "unknown field `host`",
-        ),
-        // `name:` only existed for the list form.
-        (
-            "workspaces:\n  ab:\n    name: alias\n    root: /r\n",
-            "unknown field `name`",
-        ),
-        // ssh validation
-        (
-            "workspaces:\n  ab:\n    ssh: ''\n    root: /r\n",
-            "ssh host must be non-empty",
-        ),
-        (
-            "workspaces:\n  ab:\n    ssh: 'deploy @prod'\n    root: /r\n",
-            "ssh host must be non-empty",
-        ),
-        (
-            "workspaces:\n  ab:\n    ssh: deploy@prod\n    root: srv/app\n",
-            "ssh `root` must be an absolute path",
-        ),
-    ] {
-        std::fs::write(dir.path().join("config.yaml"), yaml).unwrap();
-        let err = load_catalog(dir.path()).unwrap_err().to_string();
-        assert!(err.contains(needle), "{yaml}: {err}");
-    }
-}
-
-#[test]
-fn catalog_or_cwd_registers_the_current_directory() {
-    // With no config file at all, the cwd becomes a local rw workspace named
-    // after the directory and is the default.
-    let empty = tempfile::tempdir().unwrap();
-    let cat = crate::load_config(empty.path())
-        .unwrap()
-        .catalog_or_cwd()
-        .unwrap();
-    let cwd = std::env::current_dir().unwrap();
-    assert_eq!(cat.workspaces.len(), 1);
-    let ws = &cat.workspaces[0];
-    assert!(ws.is_local());
-    assert_eq!(ws.root.as_str(), cwd.to_string_lossy());
-    assert!(!ws.read_only);
-    assert_eq!(cat.default.as_deref(), Some(ws.name.as_str()));
-    assert!(
-        rumu_core::valid_workspace_name(&ws.name),
-        "derived an addressable name: {}",
-        ws.name
-    );
-
-    // A config file disables the fallback.
-    let dir = tempfile::tempdir().unwrap();
-    std::fs::write(dir.path().join("config.yaml"), "workspaces:\n  proj: /p\n").unwrap();
-    let cat = crate::load_config(dir.path())
-        .unwrap()
-        .catalog_or_cwd()
-        .unwrap();
-    assert_eq!(cat.get("proj").unwrap().root, "/p");
-}
-
 // ---------- the `@rumu` workspace: /sessions ----------
 
 /// A staged session: root marker R, then user U1 → assistant A1 (with a
@@ -1705,7 +1547,7 @@ fn session_plugin() -> WorkspacePlugin {
     // Leak the tempdir: the plugin only reads RUMU_HOME lazily and the tests
     // finish long before /tmp cleanup matters.
     let home = home.keep();
-    deck_plugin(&home, WorkspaceCatalog::default())
+    deck_plugin(&home)
 }
 
 /// Parse a rendered timestamp and assert it denotes `ms` since the epoch.
@@ -1800,7 +1642,7 @@ async fn mounted_assistant_sessions_are_visible() {
         Some(&format!("id: {LEDGER}\nname: ledger\nassistant: true\n")),
         &[],
     );
-    let plugin = deck_plugin(home.path(), WorkspaceCatalog::default());
+    let plugin = deck_plugin(home.path());
 
     let (info, nodes, branches) = staged_session();
     let host = session_host(info, nodes, branches);
@@ -2890,7 +2732,7 @@ async fn search_sessions_and_cards_by_scope() {
         "gateway",
         "---\ntitle: Gateway\n---\nthe example server runs nginx and sshd\n",
     );
-    let plugin = deck_plugin(home.path(), WorkspaceCatalog::default());
+    let plugin = deck_plugin(home.path());
 
     // Default scope = cards; hits are `@rumu:/cards/self/<id>` addresses.
     let out = plugin
@@ -3087,7 +2929,7 @@ async fn search_sessions_snippet_cjk_queries() {
         vec![],
     ));
     let home = tempfile::tempdir().unwrap();
-    let plugin = deck_plugin(home.path(), WorkspaceCatalog::default());
+    let plugin = deck_plugin(home.path());
     let cx = host.cx();
 
     let out = plugin
@@ -3196,7 +3038,7 @@ async fn search_downweights_tool_results_and_breaks_ties_by_time() {
         vec![],
     ));
     let home = tempfile::tempdir().unwrap();
-    let plugin = deck_plugin(home.path(), WorkspaceCatalog::default());
+    let plugin = deck_plugin(home.path());
     let cx = host.cx();
     let out = plugin
         .call_tool(
@@ -3308,7 +3150,7 @@ async fn background_bash_is_killed_when_dropped() {
 async fn task_read_renders_status_and_output() {
     use rumu_core::{Content, TaskId, TaskInfo, TaskKind, TaskStatus};
     let home = tempfile::tempdir().unwrap();
-    let plugin = deck_plugin(home.path(), WorkspaceCatalog::default());
+    let plugin = deck_plugin(home.path());
     let host = FakeRuntime::arc();
     let cx = host.cx();
     let info = TaskInfo {

@@ -1,3 +1,5 @@
+use std::sync::{Arc, RwLock};
+
 use serde::{Deserialize, Serialize};
 use typed_path::{PathType, Utf8TypedPathBuf};
 
@@ -10,8 +12,8 @@ const PLATFORM_PATH_TYPE: PathType = PathType::Unix;
 /// A workspace: one project (a directory of files) the model can read/write
 /// files in and run commands in.
 ///
-/// Workspaces are **user presets** defined in `RUMU_HOME/config.yaml` and
-/// available to every session. Files are addressed as `<name>:<path>`
+/// Workspaces are registered by the user ([`Workspaces`]) and attached per
+/// branch, like card mounts. Files are addressed as `<name>:<path>`
 /// (see [`crate::addr`]); the implicit `@rumu` workspace holds rumu's own
 /// data and is never a preset (its `@` is not a valid preset-name character).
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, ts_rs::TS)]
@@ -109,21 +111,44 @@ impl Workspace {
     }
 }
 
-/// The workspace presets from `RUMU_HOME/config.yaml`. Every preset is
-/// available to every session; `default` is the initial default workspace.
-#[derive(Debug, Clone, Default, Serialize, Deserialize)]
-pub struct WorkspaceCatalog {
-    /// Presets in file order.
-    #[serde(default)]
-    pub workspaces: Vec<Workspace>,
-    /// `default:` from config.yaml, if it names a preset (or `@rumu`).
-    #[serde(default, skip_serializing_if = "Option::is_none")]
-    pub default: Option<String>,
-}
+/// The workspace registry: every workspace the user added
+/// (`RUMU_HOME/workspaces.yaml`, written only by rumu). A session sees the
+/// ones attached to its branch (see [`crate::PathState`]). Cheap to clone;
+/// every handle sees the same list, so edits apply to running sessions.
+#[derive(Debug, Clone, Default)]
+pub struct Workspaces(Arc<RwLock<Vec<Workspace>>>);
 
-impl WorkspaceCatalog {
-    pub fn get(&self, name: &str) -> Option<&Workspace> {
-        self.workspaces.iter().find(|w| w.name == name)
+impl Workspaces {
+    pub fn new(list: Vec<Workspace>) -> Self {
+        Self(Arc::new(RwLock::new(list)))
+    }
+
+    /// The registered workspaces, in name order.
+    pub fn list(&self) -> Vec<Workspace> {
+        self.0.read().unwrap().clone()
+    }
+
+    pub fn get(&self, name: &str) -> Option<Workspace> {
+        self.0
+            .read()
+            .unwrap()
+            .iter()
+            .find(|w| w.name == name)
+            .cloned()
+    }
+
+    /// Replace the list through `change`, under the write lock; nothing
+    /// changes when it fails (so a failed save leaves the old list).
+    pub fn update<E>(
+        &self,
+        change: impl FnOnce(&mut Vec<Workspace>) -> Result<(), E>,
+    ) -> Result<(), E> {
+        let mut guard = self.0.write().unwrap();
+        let mut next = guard.clone();
+        change(&mut next)?;
+        next.sort_by(|a, b| a.name.cmp(&b.name));
+        *guard = next;
+        Ok(())
     }
 }
 

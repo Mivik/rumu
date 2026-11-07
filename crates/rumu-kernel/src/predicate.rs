@@ -4,7 +4,7 @@
 
 use globset::{Glob, GlobMatcher};
 use regex::Regex;
-use rumu_core::{Fields, RUMU_WORKSPACE, WorkspaceCatalog, valid_workspace_name};
+use rumu_core::{Fields, RUMU_WORKSPACE, Workspace, valid_workspace_name};
 use serde_json::Value;
 
 /// A matcher that failed validation.
@@ -111,23 +111,23 @@ enum Op {
 impl Pred {
     /// Compile a matcher (`HookSpec.matcher`, written as YAML by users).
     /// A predicate is a map (AND of entries); any other shape is an error.
-    /// Workspace-qualified `paths` patterns are not expanded (there is no
-    /// catalog); use [`Pred::compile_with_catalog`] to resolve them.
+    /// Workspace-qualified `paths` patterns are not expanded (there are no
+    /// workspaces); use [`Pred::compile_with_workspaces`] to resolve them.
     pub fn compile(v: &Value) -> Result<Pred, PredicateError> {
-        Self::compile_with_catalog(v, &WorkspaceCatalog::default())
+        Self::compile_with_workspaces(v, &[])
     }
 
-    /// Compile with the workspace preset catalog, so `paths` patterns written
+    /// Compile with the workspace registry, so `paths` patterns written
     /// as `<workspace>:<path>` expand to machine paths (`proj:web/**` →
     /// `<proj.root>/web/**`; `@rumu:/cards/**` stays rooted at `/`).
-    pub fn compile_with_catalog(
+    pub fn compile_with_workspaces(
         v: &Value,
-        catalog: &WorkspaceCatalog,
+        workspaces: &[Workspace],
     ) -> Result<Pred, PredicateError> {
-        Self::compile_inner(v, catalog).map_err(PredicateError::from)
+        Self::compile_inner(v, workspaces).map_err(PredicateError::from)
     }
 
-    fn compile_inner(v: &Value, catalog: &WorkspaceCatalog) -> Result<Pred, String> {
+    fn compile_inner(v: &Value, workspaces: &[Workspace]) -> Result<Pred, String> {
         let Value::Object(map) = v else {
             return Err(match v {
                 Value::Array(_) => "a list is not a predicate — use `any: [ ... ]` for OR".into(),
@@ -141,7 +141,7 @@ impl Pred {
         for (k, cond) in map {
             all.push(match k.as_str() {
                 "not" => Pred::Not(Box::new(
-                    Pred::compile_inner(cond, catalog).map_err(|e| format!("in `not`: {e}"))?,
+                    Pred::compile_inner(cond, workspaces).map_err(|e| format!("in `not`: {e}"))?,
                 )),
                 "any" | "all" => {
                     let Some(list) = cond.as_array() else {
@@ -150,7 +150,7 @@ impl Pred {
                     let preds = list
                         .iter()
                         .map(|p| {
-                            Pred::compile_inner(p, catalog).map_err(|e| format!("in `{k}`: {e}"))
+                            Pred::compile_inner(p, workspaces).map_err(|e| format!("in `{k}`: {e}"))
                         })
                         .collect::<Result<Vec<_>, _>>()?;
                     if k == "any" {
@@ -161,7 +161,7 @@ impl Pred {
                 }
                 field => Pred::Field {
                     field: Field::parse(field)?,
-                    conds: compile_conds(cond, field, catalog)?,
+                    conds: compile_conds(cond, field, workspaces)?,
                 },
             });
         }
@@ -183,23 +183,23 @@ impl Pred {
 
 /// A field condition: a plain string (= eq), a map of operators (AND), or a
 /// list of those (OR).
-fn compile_conds(v: &Value, field: &str, catalog: &WorkspaceCatalog) -> Result<Vec<Cond>, String> {
+fn compile_conds(v: &Value, field: &str, workspaces: &[Workspace]) -> Result<Vec<Cond>, String> {
     match v {
         Value::Array(list) => list
             .iter()
-            .map(|c| Cond::compile(c, field, catalog))
+            .map(|c| Cond::compile(c, field, workspaces))
             .collect(),
-        _ => Ok(vec![Cond::compile(v, field, catalog)?]),
+        _ => Ok(vec![Cond::compile(v, field, workspaces)?]),
     }
 }
 
 impl Cond {
-    fn compile(v: &Value, field: &str, catalog: &WorkspaceCatalog) -> Result<Cond, String> {
+    fn compile(v: &Value, field: &str, workspaces: &[Workspace]) -> Result<Cond, String> {
         let path_cond = field == "paths";
         let ops = match v {
             Value::String(s) => {
                 let s = if path_cond {
-                    expand_path_pattern(s, catalog)?
+                    expand_path_pattern(s, workspaces)?
                 } else {
                     s.clone()
                 };
@@ -216,7 +216,7 @@ impl Cond {
                         "eq" => {
                             let s = arg.as_str().ok_or("`eq` expects a string")?.to_owned();
                             let s = if path_cond {
-                                expand_path_pattern(&s, catalog)?
+                                expand_path_pattern(&s, workspaces)?
                             } else {
                                 s
                             };
@@ -230,7 +230,7 @@ impl Cond {
                         "glob" => {
                             let p = arg.as_str().ok_or("`glob` expects a string pattern")?;
                             let p = if path_cond {
-                                expand_path_pattern(p, catalog)?
+                                expand_path_pattern(p, workspaces)?
                             } else {
                                 p.to_owned()
                             };
@@ -335,7 +335,7 @@ fn home() -> Option<String> {
 /// - a valid workspace name that is not a preset is a compile error;
 /// - anything else (machine paths, reserved scheme-looking names) is left
 ///   untouched.
-fn expand_path_pattern(s: &str, catalog: &WorkspaceCatalog) -> Result<String, String> {
+fn expand_path_pattern(s: &str, workspaces: &[Workspace]) -> Result<String, String> {
     let Some((name, rest)) = s.split_once(':') else {
         return Ok(s.to_owned());
     };
@@ -350,8 +350,9 @@ fn expand_path_pattern(s: &str, catalog: &WorkspaceCatalog) -> Result<String, St
     if !valid_workspace_name(name) {
         return Ok(s.to_owned());
     }
-    let ws = catalog
-        .get(name)
+    let ws = workspaces
+        .iter()
+        .find(|w| w.name == name)
         .ok_or_else(|| format!("unknown workspace `{name}` in `paths` pattern"))?;
     if rest.starts_with('/') {
         return Ok(rest.to_owned());
@@ -486,18 +487,14 @@ mod tests {
     }
 
     #[test]
-    fn paths_workspace_patterns_expand_with_the_catalog() {
-        use rumu_core::{Workspace, WorkspaceCatalog};
-        let catalog = WorkspaceCatalog {
-            workspaces: vec![Workspace {
-                name: "proj".into(),
-                ssh: None,
-                root: "/home/u/code/proj".into(),
-                read_only: false,
-            }],
-            default: None,
-        };
-        let compile = |v: Value| Pred::compile_with_catalog(&v, &catalog);
+    fn paths_workspace_patterns_expand_with_the_registry() {
+        let workspaces = [Workspace {
+            name: "proj".into(),
+            ssh: None,
+            root: "/home/u/code/proj".into(),
+            read_only: false,
+        }];
+        let compile = |v: Value| Pred::compile_with_workspaces(&v, &workspaces);
 
         let proj = fields(); // paths: /home/u/code/proj/Cargo.toml
         // `proj:web/**` joins the preset root; `proj:/abs` stays absolute.

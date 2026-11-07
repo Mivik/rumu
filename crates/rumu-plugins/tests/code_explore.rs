@@ -11,8 +11,7 @@ use std::time::Duration;
 
 use async_trait::async_trait;
 use rumu_core::{
-    BranchId, BranchKind, BranchStatus, Content, Node, NodeBody, SessionId, ToolCall,
-    WorkspaceCatalog,
+    BranchId, BranchKind, BranchStatus, Content, Node, NodeBody, SessionId, ToolCall, Workspaces,
 };
 use rumu_kernel::{Kernel, Llm, LlmResponse, OnDelta};
 use rumu_plugins::CodePlugin;
@@ -115,11 +114,11 @@ async fn setup_async(llm: Arc<AgentLlm>) -> (Arc<Kernel>, SessionId, BranchId) {
         Arc::new(Store::in_memory()),
         llm,
         vec![code],
-        WorkspaceCatalog::default(),
+        Workspaces::default(),
     )
     .unwrap();
     let (session, _) = kernel
-        .create_session(None, "assistant".into())
+        .create_session(Vec::new(), "assistant".into())
         .await
         .unwrap();
     let branch = BranchId::from(session.active_branch.0.as_str());

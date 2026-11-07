@@ -1,8 +1,4 @@
 {
-  "context": {
-    "virtualRoot": "卡片 · 会话",
-    "workspaces": "全部工作区"
-  },
   "diagnostics": {
     "title": "诊断",
     "cache": "缓存 {pct}%",
@@ -14,11 +10,6 @@
     "perTurn": "每轮",
     "turn": "第 {n} 轮",
     "meterLabel": "第 {n} 轮缓存命中率 {pct}%"
-  },
-  "workspaces": {
-    "default": "默认工作区",
-    "readOnly": "只读",
-    "virtual": "虚拟"
   },
   "hooks": {
     "title": "钩子调用"

@@ -1,17 +1,15 @@
 //! `state = f(path)`: deriving [`PathState`] by folding the root→head path,
-//! then merging in the workspace preset catalog.
+//! then merging in the workspace registry.
 
 use rumu_core::{
-    Node, NodeBody, PathState, RUMU_WORKSPACE, SessionRoot, WorkspaceCatalog, WorkspaceScope,
-    WorkspaceUse,
+    Node, NodeBody, PathState, RUMU_WORKSPACE, SessionRoot, Workspace, WorkspaceSet, WorkspaceUse,
 };
 
 /// Fold nodes (root → head, in order) into the derived path state.
 ///
-/// This is the pure node-derived half: it yields the raw last
-/// `workspace.use` marker and the intersection of every `workspace.scope`
-/// marker. `workspaces` stays empty; the kernel fills it from the preset
-/// catalog with [`merge_workspaces`].
+/// This is the pure node-derived half: it yields the attached workspace
+/// names and the raw last `workspace.use` marker. `workspaces` stays empty;
+/// the kernel fills it from the registry with [`merge_workspaces`].
 pub fn derive_state(nodes: &[Node]) -> PathState {
     let mut st = PathState::default();
     for n in nodes {
@@ -20,25 +18,22 @@ pub fn derive_state(nodes: &[Node]) -> PathState {
     st
 }
 
-/// Merge the node-derived state with the preset catalog: every preset (or,
-/// under a `workspace.scope`, every allowed preset) becomes available, and
-/// the default resolves marker → preset `default` → first available, kept
-/// within the scope. `@rumu` is always a valid default.
-pub fn merge_workspaces(mut st: PathState, catalog: &WorkspaceCatalog) -> PathState {
-    st.workspaces = catalog.workspaces.clone();
-    if let Some(scope) = &st.workspace_scope {
-        st.workspaces.retain(|w| scope.iter().any(|n| n == &w.name));
-    }
+/// Merge the node-derived state with the registry: the attached names that
+/// are registered become the available workspaces (a removed workspace just
+/// drops out), and the default resolves marker → first attached → `@rumu`.
+pub fn merge_workspaces(mut st: PathState, registry: &[Workspace]) -> PathState {
+    st.workspaces = st
+        .attached
+        .iter()
+        .filter_map(|n| registry.iter().find(|w| &w.name == n).cloned())
+        .collect();
     let available =
         |name: &str| name == RUMU_WORKSPACE || st.workspaces.iter().any(|w| w.name == name);
-    let scoped = st.workspace_scope.is_some();
     st.default_workspace = st
         .default_workspace
         .filter(|n| available(n))
-        .or_else(|| catalog.default.clone().filter(|n| available(n)))
         .or_else(|| st.workspaces.first().map(|w| w.name.clone()))
-        // `@rumu` is always allowed, so it is the fallback under any scope.
-        .or_else(|| scoped.then(|| RUMU_WORKSPACE.to_owned()));
+        .or_else(|| Some(RUMU_WORKSPACE.to_owned()));
     st
 }
 
@@ -48,9 +43,12 @@ fn fold_node(st: &mut PathState, body: &NodeBody) {
     };
     if let Some(use_) = content.decode::<WorkspaceUse>() {
         st.default_workspace = Some(use_.name);
+    } else if let Some(set) = content.decode::<WorkspaceSet>() {
+        st.attached = set.names;
     } else if let Some(root) = content.decode::<SessionRoot>() {
         st.assistant = root.assistant.clone();
         st.asked_by = root.asked_by;
+        st.attached = root.workspaces;
         // The session's own deck is always at `/cards/self`.
         st.mounts = vec![rumu_core::CardMount {
             deck: root.assistant,
@@ -63,23 +61,13 @@ fn fold_node(st: &mut PathState, body: &NodeBody) {
         st.mounts.push(mount);
     } else if let Some(unmount) = content.decode::<rumu_core::CardUnmount>() {
         st.mounts.retain(|m| m.at != unmount.at);
-    } else if let Some(scope) = content.decode::<WorkspaceScope>() {
-        // Nested scopes can only narrow: keep the intersection, in the
-        // first scope's order.
-        st.workspace_scope = Some(match st.workspace_scope.take() {
-            None => scope.allow,
-            Some(prev) => prev
-                .into_iter()
-                .filter(|n| scope.allow.iter().any(|a| a == n))
-                .collect(),
-        });
     }
 }
 
 #[cfg(test)]
 mod tests {
     use super::*;
-    use rumu_core::{NodeId, Workspace};
+    use rumu_core::NodeId;
 
     fn node(body: NodeBody) -> Node {
         Node {
@@ -98,13 +86,6 @@ mod tests {
             ssh: None,
             root: root.into(),
             read_only: false,
-        }
-    }
-
-    fn catalog(workspaces: Vec<Workspace>, default: Option<&str>) -> WorkspaceCatalog {
-        WorkspaceCatalog {
-            workspaces,
-            default: default.map(str::to_owned),
         }
     }
 
@@ -156,67 +137,19 @@ mod tests {
         assert_eq!(st.default_workspace.as_deref(), Some("b"));
     }
 
-    #[test]
-    fn merge_adds_presets_and_resolves_default() {
-        // Marker default wins over the preset default; every preset is available.
-        let st = PathState {
-            default_workspace: Some("life".into()),
-            ..Default::default()
-        };
-        let cat = catalog(
-            vec![ws("proj", "/presets/proj"), ws("life", "/presets/life")],
-            Some("proj"),
-        );
-        let merged = merge_workspaces(st, &cat);
-        assert_eq!(
-            merged
-                .workspaces
-                .iter()
-                .map(|w| (w.name.as_str(), w.root.as_str()))
-                .collect::<Vec<_>>(),
-            [("proj", "/presets/proj"), ("life", "/presets/life")]
-        );
-        assert_eq!(merged.default_workspace.as_deref(), Some("life"));
-
-        // No marker → preset default.
-        let merged = merge_workspaces(PathState::default(), &cat);
-        assert_eq!(merged.default_workspace.as_deref(), Some("proj"));
-
-        // No marker, no preset default → first preset.
-        let cat2 = catalog(
-            vec![ws("proj", "/presets/proj"), ws("life", "/presets/life")],
-            None,
-        );
-        let merged = merge_workspaces(PathState::default(), &cat2);
-        assert_eq!(merged.default_workspace.as_deref(), Some("proj"));
-
-        // No presets at all → no default.
-        let merged = merge_workspaces(PathState::default(), &WorkspaceCatalog::default());
-        assert_eq!(merged.default_workspace, None);
-
-        // A marker naming an unknown workspace is ignored in the merge.
-        let st = PathState {
-            default_workspace: Some("ghost".into()),
-            ..Default::default()
-        };
-        let merged = merge_workspaces(st, &cat);
-        assert_eq!(merged.default_workspace.as_deref(), Some("proj"));
-
-        // `@rumu` is a valid default too.
-        let st = PathState {
-            default_workspace: Some("@rumu".into()),
-            ..Default::default()
-        };
-        let merged = merge_workspaces(st, &cat);
-        assert_eq!(merged.default_workspace.as_deref(), Some("@rumu"));
-    }
-
-    fn scope(names: &[&str]) -> Node {
+    fn set(names: &[&str]) -> Node {
         node(NodeBody::Note {
             source: "system".into(),
-            content: rumu_core::Content::marker(&rumu_core::WorkspaceScope {
-                allow: names.iter().map(|n| (*n).to_owned()).collect(),
+            content: rumu_core::Content::marker(&WorkspaceSet {
+                names: names.iter().map(|n| (*n).to_owned()).collect(),
             }),
+        })
+    }
+
+    fn use_(name: &str) -> Node {
+        node(NodeBody::Note {
+            source: "system".into(),
+            content: rumu_core::Content::marker(&WorkspaceUse { name: name.into() }),
         })
     }
 
@@ -225,45 +158,46 @@ mod tests {
     }
 
     #[test]
-    fn scope_markers_filter_and_intersect() {
-        let cat = catalog(vec![ws("a", "/a"), ws("b", "/b"), ws("c", "/c")], Some("a"));
+    fn attached_workspaces_resolve_against_the_registry() {
+        let registry = [ws("a", "/a"), ws("b", "/b"), ws("c", "/c")];
 
-        // One scope: only allowed presets remain and the default is kept.
-        let st = derive_state(&[scope(&["a", "b", "@rumu"])]);
-        let merged = merge_workspaces(st, &cat);
-        assert_eq!(names(&merged), ["a", "b"]);
-        assert_eq!(merged.default_workspace.as_deref(), Some("a"));
-
-        // Nested scopes intersect; an out-of-scope preset default falls back
-        // to the first allowed workspace.
-        let st = derive_state(&[scope(&["a", "b"]), scope(&["b", "c"])]);
-        assert_eq!(
-            st.workspace_scope.as_deref(),
-            Some(["b".to_owned()].as_slice())
-        );
-        let merged = merge_workspaces(st, &cat);
-        assert_eq!(names(&merged), ["b"]);
-        assert_eq!(merged.default_workspace.as_deref(), Some("b"));
-
-        // A `workspace.use` default inside the scope wins.
-        let st = derive_state(&[
-            node(NodeBody::Note {
-                source: "system".into(),
-                content: rumu_core::Content::marker(&rumu_core::WorkspaceUse { name: "b".into() }),
-            }),
-            scope(&["a", "b"]),
-        ]);
-        let merged = merge_workspaces(st, &cat);
-        assert_eq!(merged.default_workspace.as_deref(), Some("b"));
-
-        // `@rumu` is always allowed, and is a valid default when it is the
-        // only thing in scope.
-        let merged = merge_workspaces(derive_state(&[scope(&["@rumu"])]), &cat);
+        // Nothing attached: only `@rumu`, which is the default.
+        let merged = merge_workspaces(derive_state(&[]), &registry);
         assert!(merged.workspaces.is_empty());
         assert_eq!(merged.default_workspace.as_deref(), Some("@rumu"));
 
-        // No scope: every preset stays available.
-        let merged = merge_workspaces(derive_state(&[]), &cat);
-        assert_eq!(names(&merged), ["a", "b", "c"]);
+        // The root attaches its list in order; the first is the default.
+        let root = node(NodeBody::Note {
+            source: "system".into(),
+            content: rumu_core::Content::marker(&SessionRoot {
+                assistant: "x".into(),
+                asked_by: None,
+                mounts: Vec::new(),
+                workspaces: vec!["b".into(), "a".into()],
+            }),
+        });
+        let merged = merge_workspaces(derive_state(std::slice::from_ref(&root)), &registry);
+        assert_eq!(names(&merged), ["b", "a"]);
+        assert_eq!(merged.default_workspace.as_deref(), Some("b"));
+
+        // A later set replaces the list; a marker default inside it wins.
+        let merged = merge_workspaces(
+            derive_state(&[root.clone(), use_("c"), set(&["a", "c"])]),
+            &registry,
+        );
+        assert_eq!(names(&merged), ["a", "c"]);
+        assert_eq!(merged.default_workspace.as_deref(), Some("c"));
+
+        // A default that is no longer attached falls back to the first.
+        let merged = merge_workspaces(derive_state(&[use_("b"), set(&["c"])]), &registry);
+        assert_eq!(merged.default_workspace.as_deref(), Some("c"));
+
+        // An unregistered name drops out; `@rumu` stays a valid default.
+        let merged = merge_workspaces(
+            derive_state(&[set(&["ghost", "a"]), use_("@rumu")]),
+            &registry,
+        );
+        assert_eq!(names(&merged), ["a"]);
+        assert_eq!(merged.default_workspace.as_deref(), Some("@rumu"));
     }
 }

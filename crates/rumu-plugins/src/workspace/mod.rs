@@ -41,7 +41,7 @@ use std::path::{Path, PathBuf};
 use std::sync::Mutex;
 
 use async_trait::async_trait;
-use rumu_core::{Cx, Manifest, Plugin, ToolOutput, Workspace, WorkspaceCatalog};
+use rumu_core::{Cx, Manifest, Plugin, ToolOutput, Workspace};
 use serde_json::Value;
 use tracing::warn;
 
@@ -50,7 +50,6 @@ use rumu_cards::Decks;
 
 pub struct WorkspacePlugin {
     home: PathBuf,
-    catalog: WorkspaceCatalog,
     /// The deck registry behind `@rumu:/cards`.
     decks: Decks,
     /// The blob store behind image reads (`<home>/blobs`), opened lazily on
@@ -66,10 +65,9 @@ pub struct WorkspacePlugin {
 }
 
 impl WorkspacePlugin {
-    pub fn new(home: &Path, catalog: WorkspaceCatalog, decks: Decks) -> Self {
+    pub fn new(home: &Path, decks: Decks) -> Self {
         Self {
             home: home.to_path_buf(),
-            catalog,
             decks,
             blobs: std::sync::OnceLock::new(),
             ssh_ctl_dir: ssh_ctl_dir(),
@@ -81,11 +79,6 @@ impl WorkspacePlugin {
     /// The deck registry behind `/cards`.
     pub fn decks(&self) -> &Decks {
         &self.decks
-    }
-
-    /// The catalog this plugin was built with (config.yaml presets).
-    pub fn catalog(&self) -> &WorkspaceCatalog {
-        &self.catalog
     }
 
     /// The blob store for image reads, opened on first use (creating

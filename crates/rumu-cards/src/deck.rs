@@ -98,9 +98,9 @@ pub struct DeckMeta {
     /// Listed in the roster; sessions can run as it.
     #[serde(default)]
     pub assistant: bool,
-    /// Default workspace of its new sessions.
-    #[serde(default, skip_serializing_if = "Option::is_none")]
-    pub workspace: Option<String>,
+    /// Workspaces attached to its new sessions; the first is the default.
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub workspaces: Vec<String>,
     /// Mounted at the start of each of its sessions.
     #[serde(default, skip_serializing_if = "Vec::is_empty")]
     pub mounts: Vec<DeckMount>,
@@ -410,10 +410,16 @@ pub struct Decks {
 impl Decks {
     /// Open the deck repositories under `RUMU_HOME`.
     pub fn load(home: &Path) -> Result<Self> {
+        Self::load_seeded(home, &[])
+    }
+
+    /// [`Decks::load`]; a home with no decks at all starts with a default
+    /// assistant that attaches `workspaces`.
+    pub fn load_seeded(home: &Path, workspaces: &[String]) -> Result<Self> {
         let decks_dir = home.join(DECKS_DIR);
         std::fs::create_dir_all(&decks_dir)
             .map_err(rumu_core::IoError::at("creating", &decks_dir))?;
-        let inner = load_home(home)?;
+        let inner = load_home(home, workspaces)?;
         Ok(Self {
             home: home.to_path_buf(),
             inner: Arc::new(RwLock::new(inner)),
@@ -679,6 +685,24 @@ impl Decks {
         Ok(deck)
     }
 
+    /// Drop the workspace `name` from every assistant's `deck.yaml` (it was
+    /// removed from the registry).
+    pub fn forget_workspace(&self, name: &str) -> Result<()> {
+        for mut deck in self.list() {
+            if !deck.meta.workspaces.iter().any(|w| w == name) {
+                continue;
+            }
+            deck.meta.workspaces.retain(|w| w != name);
+            write_deck_meta(&deck, "update deck.yaml", None)?;
+            self.inner
+                .write()
+                .unwrap()
+                .decks
+                .insert(deck.meta.id.clone(), deck);
+        }
+        Ok(())
+    }
+
     /// Remove a deck from the roster; cards and history are left in place.
     /// Removing the default assistant moves the default to another one, as
     /// on load (see [`fallback_default`]).
@@ -696,7 +720,7 @@ impl Decks {
         let was_default = inner.default == deck.meta.id;
         inner.decks.insert(deck.meta.id.clone(), deck);
         if was_default {
-            inner.default = fallback_default(&self.home, &mut inner.decks)?;
+            inner.default = fallback_default(&self.home, &mut inner.decks, &[])?;
         }
         Ok(())
     }
@@ -834,7 +858,7 @@ fn write_default(home: &Path, id: &str) -> Result<()> {
 /// Load `RUMU_HOME`: the decks and the default assistant. When the default
 /// file does not name an assistant deck, the first assistant deck (by
 /// directory) becomes the default; with none, a `default` deck is created.
-fn load_home(home: &Path) -> Result<Inner> {
+fn load_home(home: &Path, workspaces: &[String]) -> Result<Inner> {
     let decks_dir = home.join(DECKS_DIR);
     std::fs::create_dir_all(&decks_dir).map_err(rumu_core::IoError::at("creating", &decks_dir))?;
     let mut decks = load_decks(&decks_dir)?;
@@ -842,15 +866,20 @@ fn load_home(home: &Path) -> Result<Inner> {
     let is_assistant = |id: &str| decks.get(id).is_some_and(|d| d.meta.assistant);
     let default = match saved.filter(|id| is_assistant(id)) {
         Some(id) => id,
-        None => fallback_default(home, &mut decks)?,
+        None => fallback_default(home, &mut decks, workspaces)?,
     };
     Ok(Inner { decks, default })
 }
 
 /// A new default assistant, saved as such: the first assistant deck by
 /// directory, or a new `default` deck when there is none. A home with no
-/// decks at all also gets the `user` and `world` decks, mounted by it.
-fn fallback_default(home: &Path, decks: &mut BTreeMap<String, Deck>) -> Result<String> {
+/// decks at all also gets the `user` and `world` decks, mounted by it, and
+/// it attaches `workspaces`.
+fn fallback_default(
+    home: &Path,
+    decks: &mut BTreeMap<String, Deck>,
+    workspaces: &[String],
+) -> Result<String> {
     let first = decks
         .values()
         .filter(|d| d.meta.assistant)
@@ -861,7 +890,8 @@ fn fallback_default(home: &Path, decks: &mut BTreeMap<String, Deck>) -> Result<S
         None => {
             let decks_dir = home.join(DECKS_DIR);
             let mut mounts = Vec::new();
-            if decks.is_empty() {
+            let fresh = decks.is_empty();
+            if fresh {
                 for (name, charter) in [("user", &USER_CHARTER), ("world", &WORLD_CHARTER)] {
                     let deck = create_deck(&decks_dir, name, charter, |_| {})?;
                     mounts.push(DeckMount {
@@ -875,6 +905,9 @@ fn fallback_default(home: &Path, decks: &mut BTreeMap<String, Deck>) -> Result<S
             let deck = create_deck(&decks_dir, "default", &SELF_CHARTER, |meta| {
                 meta.assistant = true;
                 meta.mounts = mounts;
+                if fresh {
+                    meta.workspaces = workspaces.to_vec();
+                }
             })?;
             let id = deck.meta.id.clone();
             decks.insert(id.clone(), deck);
@@ -990,7 +1023,7 @@ fn empty_meta(id: String, name: String) -> DeckMeta {
         id,
         name,
         assistant: false,
-        workspace: None,
+        workspaces: Vec::new(),
         mounts: Vec::new(),
         allow_ask: Vec::new(),
     }

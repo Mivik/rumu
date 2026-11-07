@@ -4,8 +4,8 @@
  * A workspace: one project (a directory of files) the model can read/write
  * files in and run commands in.
  *
- * Workspaces are **user presets** defined in `RUMU_HOME/config.yaml` and
- * available to every session. Files are addressed as `<name>:<path>`
+ * Workspaces are registered by the user ([`Workspaces`]) and attached per
+ * branch, like card mounts. Files are addressed as `<name>:<path>`
  * (see [`crate::addr`]); the implicit `@rumu` workspace holds rumu's own
  * data and is never a preset (its `@` is not a valid preset-name character).
  */

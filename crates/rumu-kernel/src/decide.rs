@@ -134,14 +134,12 @@ impl Kernel {
     ) -> Result<ConsultReply> {
         let token = self.loop_token(from).child_token();
         let (info, branch) = self
-            .create_rooted_session(
-                consult.workspace,
-                SessionRoot {
-                    assistant: consult.assistant,
-                    asked_by: Some(consult.asked_by),
-                    mounts: consult.mounts,
-                },
-            )
+            .create_rooted_session(SessionRoot {
+                assistant: consult.assistant,
+                asked_by: Some(consult.asked_by),
+                mounts: consult.mounts,
+                workspaces: consult.workspaces,
+            })
             .await?;
         self.inner
             .lock()
