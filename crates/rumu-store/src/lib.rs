@@ -72,6 +72,8 @@ enum Record {
         active_branch: Option<BranchId>,
         #[serde(default, skip_serializing_if = "Option::is_none")]
         updated_at: Option<Timestamp>,
+        #[serde(default, skip_serializing_if = "Option::is_none")]
+        seen_at: Option<Timestamp>,
     },
     Branch(Branch),
     BranchUpdate {
@@ -217,6 +219,7 @@ impl Store {
             title: Some(s.title.clone()),
             active_branch: Some(s.active_branch.clone()),
             updated_at: Some(s.updated_at),
+            seen_at: None,
         };
         self.append(&s.id, &rec)?;
         st.apply(&s.id, rec);
@@ -225,6 +228,22 @@ impl Store {
 
     /// Bump `updated_at` (used on every node append).
     pub fn touch_session(&self, id: &SessionId, at: Timestamp) -> Result<()> {
+        self.patch_session(id, Some(at), None)
+    }
+
+    /// Record that the user looked at the session at `at`.
+    pub fn mark_seen(&self, id: &SessionId, at: Timestamp) -> Result<()> {
+        self.patch_session(id, None, Some(at))
+    }
+
+    /// Append a `meta` record moving the session's clocks (a no-op on
+    /// unknown sessions).
+    fn patch_session(
+        &self,
+        id: &SessionId,
+        updated_at: Option<Timestamp>,
+        seen_at: Option<Timestamp>,
+    ) -> Result<()> {
         let mut st = self.state.lock().unwrap();
         if st.loaded(id)?.is_none() {
             return Ok(());
@@ -232,7 +251,8 @@ impl Store {
         let rec = Record::Meta {
             title: None,
             active_branch: None,
-            updated_at: Some(at),
+            updated_at,
+            seen_at,
         };
         self.append(id, &rec)?;
         st.apply(id, rec);
@@ -594,6 +614,7 @@ impl SessionState {
                 title,
                 active_branch,
                 updated_at,
+                seen_at,
             } => {
                 if let Some(v) = title {
                     self.info.title = v;
@@ -603,6 +624,9 @@ impl SessionState {
                 }
                 if let Some(v) = updated_at {
                     self.info.updated_at = v;
+                }
+                if seen_at.is_some() {
+                    self.info.seen_at = seen_at;
                 }
             }
             Record::Branch(b) => {
@@ -749,6 +773,7 @@ mod tests {
             active_branch: branch.id.clone(),
             created_at: root.at,
             updated_at: root.at,
+            seen_at: None,
             assistant: "assistant".into(),
         };
         store.insert_session(&session).unwrap();
@@ -761,6 +786,24 @@ mod tests {
         let dir = std::env::temp_dir().join(format!("rumu-store-{tag}-{}", uuid::Uuid::new_v4()));
         std::fs::create_dir_all(&dir).unwrap();
         dir
+    }
+
+    #[test]
+    fn seen_at_survives_a_reload() {
+        let dir = temp_dir("seen");
+        let store = Store::open(&dir).unwrap();
+        let (session, _, _) = mk_session(&store);
+        store.touch_session(&session.id, 5).unwrap();
+        store.mark_seen(&session.id, 7).unwrap();
+        store.touch_session(&session.id, 9).unwrap();
+        drop(store);
+        let info = Store::open(&dir)
+            .unwrap()
+            .get_session(&session.id)
+            .unwrap()
+            .unwrap();
+        assert_eq!((info.updated_at, info.seen_at), (9, Some(7)));
+        std::fs::remove_dir_all(dir).unwrap();
     }
 
     #[test]

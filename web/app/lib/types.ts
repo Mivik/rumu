@@ -127,6 +127,8 @@ export interface SessionTreeResult {
   branches: Branch[]
   /** Internal `code` calls (trace only; never nodes). */
   code_calls?: CodeCall[]
+  /** Branches with a running turn, and what their model call streamed. */
+  live: Record<BranchId, LiveTurn>
 }
 
 export interface BranchPathResult {
@@ -145,6 +147,16 @@ export interface LlmDeltaPush {
   branch: BranchId
   text?: string
   reasoning?: string
+  /** The delta's number within its model call (1-based). */
+  seq: number
+}
+
+/** What a running branch's model call has streamed so far. */
+export interface LiveTurn {
+  text: string
+  reasoning: string
+  /** The number of the last delta folded in. */
+  seq: number
 }
 
 export interface BranchUpdatedPush {

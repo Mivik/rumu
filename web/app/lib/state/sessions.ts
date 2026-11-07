@@ -18,6 +18,7 @@ import type {
   TaskInfo,
   Workspace,
 } from '../types'
+import { isUnseen } from './derived'
 import { state } from './state'
 import { forkAt, loadPath, replaceTree } from './tree'
 import { toast } from './ui'
@@ -140,6 +141,7 @@ export async function openSession(id: SessionId, opts: { history?: OpenHistory }
     const history = opts.history ?? 'push'
     if (history !== 'none') routeSession(state.sessionId, history)
     await loadPath(tree.session.active_branch)
+    markSeen()
     void refreshTasks(tree.session.id)
     refreshLists() // background; updated_at may have changed
     return true
@@ -147,6 +149,15 @@ export async function openSession(id: SessionId, opts: { history?: OpenHistory }
     toast('error', t('errors.loadingSession'), (err as Error).message)
     return false
   }
+}
+
+/** The open session is on screen: record that its updates are seen (a session
+ *  never seen before starts being tracked). The server pushes the result. */
+export function markSeen(): void {
+  const s = state.session
+  if (!s || document.visibilityState !== 'visible') return
+  if (s.seen_at != null && !isUnseen(s)) return
+  rumu.request('session.seen', { session: s.id }).catch(() => {})
 }
 
 /** Back to the landing page by intent (the wordmark was clicked), keeping the

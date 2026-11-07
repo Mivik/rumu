@@ -589,12 +589,19 @@ async fn dispatch(state: &AppState, method: &str, p: &Value) -> Result<Value> {
             let session: SessionId = str_param(p, "session")?.into();
             let (session, nodes, branches) = kernel.session_tree(&session)?;
             let code_calls = kernel.code_calls(&session.id)?;
+            let live = kernel.live_turns(&session.id)?;
             Ok(json!({
                 "session": session,
                 "nodes": nodes,
                 "branches": branches,
                 "code_calls": code_calls,
+                "live": live,
             }))
+        }
+
+        "session.seen" => {
+            let session: SessionId = str_param(p, "session")?.into();
+            Ok(json!({ "session": kernel.mark_seen(&session)? }))
         }
 
         "session.delete" => {

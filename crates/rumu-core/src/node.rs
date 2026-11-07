@@ -569,6 +569,10 @@ pub struct SessionInfo {
     pub active_branch: BranchId,
     pub created_at: Timestamp,
     pub updated_at: Timestamp,
+    /// When the user last looked at the session: it has unseen updates while
+    /// `updated_at` is later. `None` (never recorded) counts as seen.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub seen_at: Option<Timestamp>,
     /// The assistant the session runs as.
     pub assistant: String,
 }

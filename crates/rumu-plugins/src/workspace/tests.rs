@@ -1522,6 +1522,7 @@ fn staged_session() -> (rumu_core::SessionInfo, Vec<Node>, Vec<rumu_core::Branch
         active_branch: main.id.clone(),
         created_at: 1000,
         updated_at: 8000,
+        seen_at: None,
         assistant: crate::testutil::TEST_ASSISTANT.into(),
     };
     (info, nodes, vec![main, agent])
@@ -1920,6 +1921,7 @@ async fn session_nodes_show_image_placeholders() {
         active_branch: rumu_core::BranchId::from("B1"),
         created_at: 0,
         updated_at: 0,
+        seen_at: None,
         assistant: crate::testutil::TEST_ASSISTANT.into(),
     };
     let host = session_host(info, nodes, vec![]);
@@ -2039,6 +2041,7 @@ fn staged_tree(sid: &str, nodes: Vec<Node>, head: &str) -> std::sync::Arc<FakeRu
         active_branch: rumu_core::BranchId::from("B"),
         created_at: 1,
         updated_at: nodes.iter().map(|n| n.at).max().unwrap_or(0),
+        seen_at: None,
         assistant: crate::testutil::TEST_ASSISTANT.into(),
     };
     let branch = rumu_core::Branch {
@@ -2599,6 +2602,7 @@ fn search_sessions() -> std::sync::Arc<FakeRuntime> {
         active_branch: rumu_core::BranchId::from("B"),
         created_at: 1,
         updated_at: updated,
+        seen_at: None,
         assistant: crate::testutil::TEST_ASSISTANT.into(),
     };
     let branch = |sid: &str, head: &str| rumu_core::Branch {
@@ -2905,6 +2909,7 @@ async fn search_sessions_snippet_cjk_queries() {
         active_branch: rumu_core::BranchId::from("B"),
         created_at: 1,
         updated_at: 1,
+        seen_at: None,
         assistant: crate::testutil::TEST_ASSISTANT.into(),
     };
     let mk = |nid: &str, at: i64, body: NodeBody| Node {
@@ -2979,6 +2984,7 @@ async fn search_downweights_tool_results_and_breaks_ties_by_time() {
         active_branch: rumu_core::BranchId::from("B"),
         created_at: 1,
         updated_at: 1,
+        seen_at: None,
         assistant: crate::testutil::TEST_ASSISTANT.into(),
     };
     let mk = |nid: &str, at: i64, body: NodeBody| Node {

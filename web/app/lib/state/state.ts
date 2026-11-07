@@ -23,6 +23,7 @@ import type {
   ToastKind,
   LibraryDeck,
   LibraryCard,
+  LlmDeltaPush,
   Workspace,
 } from '../types'
 
@@ -65,6 +66,11 @@ export interface DeltaBuffer {
    * measured span once the first text delta arrives (null until then). */
   reasonStart?: number
   reasonMs?: number
+  /** The number of the last delta folded in. */
+  seq: number
+  /** Deltas of a stream joined midway, kept until the `session.tree`
+   *  snapshot supplies its start (see `mergeLive`). */
+  early?: LlmDeltaPush[]
 }
 
 export interface TurnCache {

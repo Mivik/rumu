@@ -4657,3 +4657,58 @@ async fn cancel_invokes_ends_running_internal_calls() {
     let (text, _) = result_text(&nodes, "c1");
     assert!(text.starts_with("cancelled:"), "{text}");
 }
+
+// ---------- joining a running turn ----------
+
+#[tokio::test]
+async fn live_turns_snapshot_the_stream_in_flight() {
+    let reply = "a reply long enough to stream in several chunks";
+    let llm =
+        ScriptedLlm::strict([LlmResponse::text(reply)]).with_chunk_delay(Duration::from_millis(20));
+    let kernel = Kernel::new(
+        Arc::new(Store::in_memory()),
+        Arc::new(llm),
+        vec![],
+        Workspaces::default(),
+    )
+    .unwrap();
+    let (session, _) = kernel
+        .create_session(vec![], "assistant".into())
+        .await
+        .unwrap();
+    let branch = session.active_branch.clone();
+    let mut rx = kernel.tap_pushes();
+    kernel.prompt(&branch, "hi").await.unwrap();
+
+    // Mid-stream, the snapshot holds at least the deltas pushed so far.
+    let mut seen = String::new();
+    let mut last_seq = 0;
+    while let Some(v) = rx.recv().await {
+        if v["method"] != "llm.delta" {
+            continue;
+        }
+        seen.push_str(v["params"]["text"].as_str().unwrap());
+        last_seq = v["params"]["seq"].as_u64().unwrap();
+        if last_seq == 2 {
+            break;
+        }
+    }
+    let live = kernel.live_turns(&session.id).unwrap();
+    let streamed = &live[&branch];
+    assert!(streamed.text.starts_with(&seen), "{streamed:?} vs {seen:?}");
+    assert!(streamed.seq >= last_seq);
+
+    // The loop's end clears it and announces the session's new activity.
+    wait_turn(&mut rx, None).await;
+    let announced = loop {
+        let v = rx.recv().await.expect("session.updated at the loop's end");
+        if v["method"] == "session.updated" {
+            break v["params"]["session"].clone();
+        }
+    };
+    assert!(announced["updated_at"].as_i64() > announced["seen_at"].as_i64());
+    assert!(kernel.live_turns(&session.id).unwrap().is_empty());
+
+    let info = kernel.mark_seen(&session.id).unwrap();
+    assert!(info.seen_at >= Some(info.updated_at));
+}

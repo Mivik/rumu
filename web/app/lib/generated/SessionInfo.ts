@@ -4,6 +4,11 @@ import type { SessionId } from "./SessionId";
 
 export type SessionInfo = { id: SessionId, title: string, active_branch: BranchId, created_at: number, updated_at: number, 
 /**
+ * When the user last looked at the session: it has unseen updates while
+ * `updated_at` is later. `None` (never recorded) counts as seen.
+ */
+seen_at?: number | null, 
+/**
  * The assistant the session runs as.
  */
 assistant: string, };

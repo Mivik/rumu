@@ -21,6 +21,7 @@ export {
   connected,
   hookTraceForSession,
   isBusy,
+  isUnseen,
   owedReply,
   pathNodes,
   queuedPrompts,

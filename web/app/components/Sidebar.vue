@@ -21,6 +21,7 @@ import {
   deleteSession,
   goHome,
   isBusy,
+  isUnseen,
   openLibrary,
   openSession,
   sortedSessions,
@@ -292,6 +293,11 @@ const rows = computed<Row[]>(() => {
               v-else-if="r.s.id === state.sessionId && isBusy"
               class="dot-live size-1.5 flex-none rounded-full bg-brand"
               :title="t('common.working')"
+            />
+            <span
+              v-else-if="r.s.id !== state.sessionId && isUnseen(r.s)"
+              class="size-1.5 flex-none rounded-full bg-brand"
+              :title="t('chat.sidebar.unseen')"
             />
           </button>
           <Popover

@@ -149,9 +149,22 @@ pub(crate) struct PostRequest {
     pub ack: Option<tokio::sync::oneshot::Sender<()>>,
 }
 
+/// The streamed part of a model call in flight (see [`Kernel::live_turns`]).
+#[derive(Debug, Clone, Default, serde::Serialize)]
+pub struct Streamed {
+    pub text: String,
+    pub reasoning: String,
+    /// How many deltas are folded in; each `llm.delta` push carries its own
+    /// number, so a client can merge this snapshot with pushes in flight.
+    pub seq: u64,
+}
+
 pub(crate) struct Inner {
     /// One active loop per branch; the token aborts it.
     pub running: HashMap<BranchId, CancellationToken>,
+    /// What the model call in flight on a branch has streamed so far (the
+    /// sum of its `llm.delta` pushes), until its Assistant node lands.
+    pub streaming: HashMap<BranchId, Streamed>,
     pub queue: HashMap<BranchId, Vec<Queued>>,
     /// Wake items queued but not yet seen by an LLM call.
     pub wake_pending: HashMap<BranchId, WakePending>,
@@ -185,6 +198,7 @@ impl Default for Inner {
     fn default() -> Self {
         Self {
             running: HashMap::new(),
+            streaming: HashMap::new(),
             queue: HashMap::new(),
             wake_pending: HashMap::new(),
             storm: HashMap::new(),
@@ -422,6 +436,51 @@ impl Kernel {
         );
     }
 
+    /// The branches of `session` with a running loop, each with what its
+    /// model call in flight has streamed so far: a client opening the session
+    /// mid-turn starts from this and follows the `llm.delta` pushes.
+    pub fn live_turns(&self, session: &SessionId) -> Result<HashMap<BranchId, Streamed>> {
+        let running: Vec<(BranchId, Streamed)> = {
+            let inner = self.inner.lock().unwrap();
+            inner
+                .running
+                .keys()
+                .map(|b| {
+                    (
+                        b.clone(),
+                        inner.streaming.get(b).cloned().unwrap_or_default(),
+                    )
+                })
+                .collect()
+        };
+        let mut live = HashMap::new();
+        for (branch, streamed) in running {
+            if self
+                .store
+                .get_branch(&branch)?
+                .is_some_and(|b| &b.session == session)
+            {
+                live.insert(branch, streamed);
+            }
+        }
+        Ok(live)
+    }
+
+    /// The user looked at `session`: everything up to now is seen.
+    pub fn mark_seen(&self, session: &SessionId) -> Result<SessionInfo> {
+        let info = self
+            .store
+            .get_session(session)?
+            .ok_or_else(|| Error::SessionNotFound(session.clone()))?;
+        self.store.mark_seen(session, now().max(info.updated_at))?;
+        let info = self
+            .store
+            .get_session(session)?
+            .ok_or_else(|| Error::SessionNotFound(session.clone()))?;
+        self.push("session.updated", json!({ "session": info }));
+        Ok(info)
+    }
+
     /// Does a loop run on `branch`?
     pub fn is_running(&self, branch: &BranchId) -> bool {
         self.inner.lock().unwrap().running.contains_key(branch)
@@ -611,6 +670,7 @@ impl Kernel {
             active_branch: branch.id.clone(),
             created_at: at,
             updated_at: at,
+            seen_at: Some(at),
             assistant,
         };
         self.store.insert_session(&info)?;
@@ -1037,8 +1097,16 @@ impl Kernel {
         let pending = {
             let mut inner = self.inner.lock().unwrap();
             inner.running.remove(branch);
+            inner.streaming.remove(branch);
             inner.wake_pending.get(branch).is_some_and(|p| p.active)
         };
+        // Node appends only touch `updated_at`; announce it once per loop so
+        // session lists see the new activity.
+        if let Ok(session) = self.session_of(branch)
+            && let Ok(Some(info)) = self.store.get_session(&session)
+        {
+            self.push("session.updated", json!({ "session": info }));
+        }
         if pending {
             self.request_wake(branch, None, false);
         }
@@ -1295,6 +1363,7 @@ impl Kernel {
             active_branch: branch.id.clone(),
             created_at: at,
             updated_at: at,
+            seen_at: Some(at),
             assistant: src.assistant.clone(),
         };
         // The session row first: the store drops writes for unknown sessions.

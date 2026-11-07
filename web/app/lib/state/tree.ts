@@ -7,6 +7,7 @@ import { t } from '../../i18n'
 import type { MessageKey } from '../../i18n'
 import type { Branch, BranchId, CodeCall, Node, NodeId, PathState, SessionTreeResult } from '../types'
 import { state } from './state'
+import { syncLive } from './stream'
 import { toast } from './ui'
 
 /** Replace the internal-call trace with a session.tree snapshot. */
@@ -27,6 +28,7 @@ export function replaceTree(tree: SessionTreeResult): void {
   for (const n of tree.nodes) state.nodes[n.id] = n
   for (const b of tree.branches) state.branches[b.id] = b
   setCodeCalls(tree.code_calls ?? [])
+  syncLive(tree)
 }
 
 /** Re-fetch the open session's tree (authoritative after mutating ops). */

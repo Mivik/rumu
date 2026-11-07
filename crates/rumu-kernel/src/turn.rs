@@ -367,12 +367,26 @@ impl Kernel {
                 let streamed = streamed.clone();
                 Some(Arc::new(move |d: Delta| {
                     streamed.store(true, Ordering::Relaxed);
+                    // Pushed under the lock so `live_turns` snapshots exactly
+                    // the deltas already broadcast.
+                    let mut inner = k.inner.lock().unwrap();
+                    let buf = inner.streaming.entry(dbranch.clone()).or_default();
+                    buf.seq += 1;
+                    let seq = buf.seq;
                     match d {
                         Delta::Text(t) => {
-                            k.push("llm.delta", json!({ "branch": dbranch, "text": t }))
+                            buf.text.push_str(&t);
+                            k.push(
+                                "llm.delta",
+                                json!({ "branch": dbranch, "text": t, "seq": seq }),
+                            )
                         }
                         Delta::Reasoning(r) => {
-                            k.push("llm.delta", json!({ "branch": dbranch, "reasoning": r }))
+                            buf.reasoning.push_str(&r);
+                            k.push(
+                                "llm.delta",
+                                json!({ "branch": dbranch, "reasoning": r, "seq": seq }),
+                            )
                         }
                     }
                 }) as crate::OnDelta)
@@ -424,6 +438,8 @@ impl Kernel {
             let Some(resp) = resp else {
                 break;
             };
+            // The Assistant node below replaces the streamed text.
+            self.inner.lock().unwrap().streaming.remove(&branch);
             let llm_ms = llm_started.elapsed().as_millis() as u64;
 
             self.append_body_dur(

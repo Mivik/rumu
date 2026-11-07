@@ -2,13 +2,18 @@
 
 import { computed } from 'vue'
 import { rumu } from '../api'
-import type { Branch, BranchId, Node, NodeId, TaskInfo } from '../types'
+import type { Branch, BranchId, Node, NodeId, SessionInfo, TaskInfo } from '../types'
 import type { DeltaBuffer, TurnCache } from './state'
 import { state } from './state'
 
 export const connected = rumu.connected
 
 export const sortedSessions = computed(() => [...state.sessions].sort((a, b) => b.updated_at - a.updated_at))
+
+/** Did the session change since the user last looked at it? */
+export function isUnseen(s: SessionInfo): boolean {
+  return s.seen_at != null && s.updated_at > s.seen_at
+}
 
 export const currentBranch = computed<Branch | null>(() =>
   state.activeBranch ? (state.branches[state.activeBranch] ?? null) : null,

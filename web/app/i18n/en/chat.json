@@ -4,6 +4,7 @@
     "close": "Close sessions",
     "new": "Start session",
     "delete": "Delete session",
+    "unseen": "New activity",
     "deleteConfirm": "Delete",
     "deletePrompt": "Delete this session?",
     "deleteWarning": "This can't be undone.",

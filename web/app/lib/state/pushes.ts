@@ -27,10 +27,12 @@ import type {
   WarningPush,
   Workspace,
 } from '../types'
-import { MAX_DELTA_CHARS, MAX_TRACE, state } from './state'
+import { MAX_TRACE, state } from './state'
+import { applyDelta } from './stream'
 import {
   closeSession,
   forgetSession,
+  markSeen,
   openSession,
   refreshAssistants,
   refreshCards,
@@ -118,21 +120,7 @@ function onPromptQueued(p: PromptQueuedPush): void {
 function onLlmDelta(p: LlmDeltaPush): void {
   // The attempt is live again; its retry notice stops applying.
   delete state.retrying[p.branch]
-  let buf = state.deltas[p.branch]
-  if (!buf) {
-    buf = { text: '', reasoning: '' }
-    state.deltas[p.branch] = buf
-  }
-  if (p.reasoning) {
-    buf.reasonStart ??= Date.now()
-    buf.reasoning = (buf.reasoning + p.reasoning).slice(-MAX_DELTA_CHARS)
-  }
-  if (p.text) {
-    if (buf.reasonStart !== undefined && buf.reasonMs === undefined) {
-      buf.reasonMs = Date.now() - buf.reasonStart
-    }
-    buf.text = (buf.text + p.text).slice(-MAX_DELTA_CHARS)
-  }
+  applyDelta(p)
 }
 
 /** A foreground tool's live output (used by the running-tool rows). */
@@ -175,6 +163,7 @@ function onSessionUpdated(p: SessionUpdatedPush): void {
   else state.sessions.push(s)
   if (state.sessionId === s.id) {
     state.session = s
+    markSeen()
     if (
       s.active_branch !== state.activeBranch &&
       state.branches[s.active_branch] &&
@@ -323,6 +312,9 @@ export function startApp(): void {
   rumu.onPush('turn.error', (p) => onTurnError(p as unknown as TurnErrorPush))
   rumu.onPush('warning', (p) => onWarning(p as unknown as WarningPush))
   rumu.onPush('workspaces.updated', (p) => onWorkspacesUpdated(p as unknown as { workspaces: Workspace[] }))
+
+  // Updates that landed while the tab was hidden are seen once it shows.
+  document.addEventListener('visibilitychange', markSeen)
 
   // Browser back/forward: reopen the session the address names, or land.
   window.addEventListener('popstate', () => {
