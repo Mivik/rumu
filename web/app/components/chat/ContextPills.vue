@@ -217,7 +217,7 @@ function label(names: string[]): string {
         <!-- set like the fold lines around it (.reason-toggle); the row sits
              on the titles' baseline, which are larger and in the card face -->
         <span class="inline-flex items-baseline gap-1.5 text-micro font-semibold text-ink-3">
-          <Icon name="memory" :size="12" class="self-center text-memory" />
+          <Icon name="memory" :size="12" class="text-memory" />
           {{ t('cards.pills.imported') }}
         </span>
         <template v-for="(c, i) in memoryShown(p)" :key="c.node.id">

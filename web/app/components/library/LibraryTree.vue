@@ -559,7 +559,13 @@ const isFolder = (node: TreeNode): node is FolderNode => node.kind === 'folder'
         :aria-expanded="isBranch(node) ? isExpanded(node) : undefined"
         :aria-selected="node.kind === 'card' ? isSelected(node) : undefined"
         :tabindex="i === focused ? 0 : -1"
-        :title="node.kind === 'card' ? cardTitle(node.card) : node.kind === 'deck' ? (node.deck.description ?? undefined) : undefined"
+        :title="
+          node.kind === 'card'
+            ? cardTitle(node.card)
+            : node.kind === 'deck'
+              ? (node.deck.description ?? undefined)
+              : undefined
+        "
         :draggable="canDrag(node)"
         class="group flex min-h-8 cursor-pointer items-center gap-1.5 rounded-control border pr-1 font-card outline-none transition-colors duration-150 hover:bg-surface-2/60 focus-visible:ring-2 focus-visible:ring-brand/25"
         :class="[
@@ -591,7 +597,7 @@ const isFolder = (node: TreeNode): node is FolderNode => node.kind === 'folder'
         <span v-else class="w-3 flex-none" />
         <Icon
           :name="node.kind === 'deck' ? 'memory' : node.kind === 'folder' ? 'mount' : 'file'"
-          :size="13"
+          :size="14"
           class="flex-none"
           :class="node.kind === 'deck' || isSelected(node) ? 'text-memory' : 'text-ink-3/70'"
         />
@@ -628,15 +634,15 @@ const isFolder = (node: TreeNode): node is FolderNode => node.kind === 'folder'
               <Icon
                 v-if="node.card.pinned"
                 name="pin"
-                :size="13"
-                class="flex-none translate-y-px text-memory"
+                :size="14"
+                class="text-memory"
                 :aria-label="t('library.pinned')"
               />
               <Icon
                 v-if="node.card.link || node.card.dangling"
                 name="link"
-                :size="13"
-                class="flex-none translate-y-px"
+                :size="14"
+                class="flex-none"
                 :class="node.card.dangling ? 'text-danger' : 'text-ink-3'"
                 :aria-label="t(node.card.dangling ? 'library.dangling' : 'library.link')"
               />
@@ -657,7 +663,7 @@ const isFolder = (node: TreeNode): node is FolderNode => node.kind === 'folder'
           :title="t('library.assistantLink')"
           @click.stop="openAssistant(node.deck.id)"
         >
-          <Icon name="link" :size="11" />
+          <Icon name="link" :size="12" />
           {{ t('library.assistant') }}
         </button>
 
@@ -687,7 +693,7 @@ const isFolder = (node: TreeNode): node is FolderNode => node.kind === 'folder'
                       pick(close, () => newCard(place(node).deck, isFolder(node) ? `${node.path}/` : ''))
                     "
                   >
-                    <Icon name="plus" :size="13" />
+                    <Icon name="plus" :size="14" />
                     {{ t('library.newCard') }}
                   </button>
                   <button
@@ -696,7 +702,7 @@ const isFolder = (node: TreeNode): node is FolderNode => node.kind === 'folder'
                     :class="MENU_ITEM"
                     @click="pick(close, () => beginNewFolder(node))"
                   >
-                    <Icon name="mount" :size="13" />
+                    <Icon name="mount" :size="14" />
                     {{ t('library.newFolder') }}
                   </button>
                 </template>
@@ -706,13 +712,13 @@ const isFolder = (node: TreeNode): node is FolderNode => node.kind === 'folder'
                   :class="MENU_ITEM"
                   @click="pick(close, () => beginRename(node))"
                 >
-                  <Icon name="edit" :size="13" />
+                  <Icon name="edit" :size="14" />
                   {{ t('library.rename') }}
                 </button>
                 <template v-if="node.kind !== 'deck' || !node.deck.assistant">
                   <div class="mx-1 my-1 h-px bg-line-soft/70" />
                   <button type="button" role="menuitem" :class="MENU_DANGER" @click="askDelete(node)">
-                    <Icon name="trash" :size="13" />
+                    <Icon name="trash" :size="14" />
                     {{ t('library.delete') }}
                   </button>
                 </template>
@@ -753,7 +759,7 @@ const isFolder = (node: TreeNode): node is FolderNode => node.kind === 'folder'
         :style="{ paddingLeft: `${6 + (depth + 1) * 14}px` }"
       >
         <span class="w-3 flex-none" />
-        <Icon name="mount" :size="13" class="mt-2 flex-none text-ink-3/70" />
+        <Icon name="mount" :size="14" class="mt-2 flex-none text-ink-3/70" />
         <span class="min-w-0 flex-1">
           <input
             :ref="setDraftInput"
@@ -775,7 +781,7 @@ const isFolder = (node: TreeNode): node is FolderNode => node.kind === 'folder'
 
     <div v-if="!searching" class="mt-1 border-t border-line-soft/60 pt-1">
       <div v-if="draft?.kind === 'deck'" class="flex items-start gap-1.5 px-1.5 py-1">
-        <Icon name="memory" :size="13" class="mt-2 flex-none text-memory" />
+        <Icon name="memory" :size="14" class="mt-2 flex-none text-memory" />
         <span class="min-w-0 flex-1">
           <input
             :ref="setDraftInput"
@@ -812,7 +818,7 @@ const isFolder = (node: TreeNode): node is FolderNode => node.kind === 'folder'
         class="flex w-full items-center gap-2 rounded-control px-2 py-1.5 text-meta text-ink-3 transition-colors duration-150 hover:bg-surface-2/60 hover:text-ink"
         @click="beginNewDeck"
       >
-        <Icon name="plus" :size="13" />
+        <Icon name="plus" :size="14" />
         {{ t('library.newDeckRow') }}
       </button>
     </div>

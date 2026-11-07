@@ -213,12 +213,12 @@ onBeforeUnmount(() => document.removeEventListener('pointerdown', onPointer, tru
             @pointerenter="active = i"
             @click="pick(i)"
           >
-            <Icon v-if="o.icon" :name="o.icon" :size="13" class="flex-none text-ink-3" />
+            <Icon v-if="o.icon" :name="o.icon" :size="14" class="flex-none text-ink-3" />
             <span class="min-w-0 flex-1 truncate">{{ o.label }}</span>
             <span v-if="o.hint" class="flex-none text-micro text-ink-3">{{ o.hint }}</span>
             <Icon
               name="ok"
-              :size="13"
+              :size="14"
               class="flex-none text-brand"
               :class="o.value === model ? '' : 'invisible'"
             />

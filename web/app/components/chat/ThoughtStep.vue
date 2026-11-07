@@ -62,7 +62,7 @@ const label = computed(() => {
       <span v-if="thinking" class="dot-live size-1.5 rounded-full bg-brand" />
       <Icon v-else name="brain" :size="12" />
       {{ label }}
-      <Icon name="chevron" :size="10" class="reason-chevron" :class="{ 'rotate-90': open }" />
+      <Icon name="chevron" :size="12" class="reason-chevron" :class="{ 'rotate-90': open }" />
     </button>
     <div v-if="open" v-follow="!node" class="reason-body reveal">{{ reasoning }}</div>
   </div>

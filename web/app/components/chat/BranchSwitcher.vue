@@ -39,7 +39,7 @@ function step(delta: number): void {
       :disabled="isBusy || current <= 0"
       @click="step(-1)"
     >
-      <Icon name="chevron" :size="10" class="rotate-180" />
+      <Icon name="chevron" :size="12" class="rotate-180" />
     </button>
     <span :title="t('chat.alternatives.title', { current: position, total: alternatives.length })">
       {{ position }}/{{ alternatives.length }}
@@ -51,7 +51,7 @@ function step(delta: number): void {
       :disabled="isBusy || current >= alternatives.length - 1"
       @click="step(1)"
     >
-      <Icon name="chevron" :size="10" />
+      <Icon name="chevron" :size="12" />
     </button>
   </span>
 </template>

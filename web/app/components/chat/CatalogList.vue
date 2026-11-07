@@ -58,9 +58,9 @@ function foldedLabel(names: string[]): string {
       :aria-expanded="open"
       @click="open = !open"
     >
-      <Icon name="memory" :size="12" class="relative top-px flex-none text-memory" />
+      <Icon name="memory" :size="12" class="text-memory" />
       <span class="min-w-0 truncate">{{ heading }}</span>
-      <Icon name="chevron" :size="10" class="reason-chevron flex-none" :class="{ 'rotate-90': open }" />
+      <Icon name="chevron" :size="12" class="reason-chevron flex-none" :class="{ 'rotate-90': open }" />
     </button>
     <div v-if="open" class="reveal mt-1">
       <ul class="flex flex-col gap-0.5">

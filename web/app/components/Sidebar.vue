@@ -165,7 +165,7 @@ const rows = computed<Row[]>(() => {
       <span class="ml-auto flex items-center gap-1">
         <button
           type="button"
-          class="icon-btn h-7 w-auto min-w-7 px-1.5 text-micro font-bold"
+          class="icon-btn h-7 w-auto min-w-7 px-1.5 text-micro leading-none font-bold"
           :title="LOCALE_LABELS[otherLocale]"
           :aria-label="LOCALE_LABELS[otherLocale]"
           @click="setLocale(otherLocale)"
@@ -178,7 +178,7 @@ const rows = computed<Row[]>(() => {
           :aria-label="t('chat.sidebar.close')"
           @click="layout.sidebarOpen = false"
         >
-          <Icon name="close" :size="13" />
+          <Icon name="close" :size="14" />
         </button>
       </span>
     </div>
@@ -210,7 +210,7 @@ const rows = computed<Row[]>(() => {
         :aria-label="t('assistants.manage')"
         @click="openAssistantSettings()"
       >
-        <Icon name="edit" :size="13" />
+        <Icon name="edit" :size="14" />
       </button>
     </div>
 
@@ -218,7 +218,7 @@ const rows = computed<Row[]>(() => {
       class="flex w-full flex-none items-center gap-2.5 rounded-control border border-transparent py-1.5 pl-2.5 pr-1.5 text-left text-secondary text-ink-2 transition-colors duration-200 hover:bg-surface-2/60 hover:text-ink lg:pr-3"
       @click="home"
     >
-      <span class="flex size-5 flex-none items-center justify-center">
+      <span class="flex size-5 flex-none items-center justify-center leading-0">
         <Icon name="plus" :size="16" />
       </span>
       {{ t('chat.sidebar.new') }}
@@ -228,7 +228,7 @@ const rows = computed<Row[]>(() => {
       class="mt-0.5 flex w-full flex-none items-center gap-2.5 rounded-control border border-transparent py-1.5 pl-2.5 pr-1.5 text-left text-secondary text-ink-2 transition-colors duration-200 hover:bg-surface-2/60 hover:text-ink lg:pr-3"
       @click="library"
     >
-      <span class="flex size-5 flex-none items-center justify-center">
+      <span class="flex size-5 flex-none items-center justify-center leading-0">
         <Icon name="memory" :size="16" class="text-memory" />
       </span>
       <span class="flex-1">{{ t('library.title') }}</span>
@@ -299,7 +299,7 @@ const rows = computed<Row[]>(() => {
                   class="flex w-full items-center gap-2 rounded-control px-2.5 py-1.5 text-left text-secondary text-ink-2 transition-colors duration-150 hover:bg-danger-soft hover:text-danger focus-visible:bg-danger-soft focus-visible:text-danger"
                   @click="askDelete(r.s.id)"
                 >
-                  <Icon name="trash" :size="13" />
+                  <Icon name="trash" :size="14" />
                   {{ t('chat.sidebar.delete') }}
                 </button>
               </template>

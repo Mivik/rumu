@@ -126,8 +126,8 @@ const iconTone: Record<Status, string> = {
         >
           <Icon
             :name="status(c) === 'ok' ? 'tool' : status(c) === 'blocked' ? 'blocked' : 'error'"
-            :size="11"
-            :class="[iconTone[status(c)], { 'mt-[3px]': c.name === 'bash' && isOpen(c.seq) }]"
+            :size="12"
+            :class="iconTone[status(c)]"
           />
           <span
             class="font-mono text-micro font-medium"
@@ -155,7 +155,7 @@ const iconTone: Record<Status, string> = {
             }}</span>
             <Icon
               name="chevron"
-              :size="10"
+              :size="12"
               class="text-ink-3/70 transition-transform duration-100"
               :class="{ 'rotate-90': isOpen(c.seq) }"
             />
@@ -217,7 +217,7 @@ const iconTone: Record<Status, string> = {
       class="flex items-center gap-1.5 self-start rounded-xs px-1.5 py-0.5 text-micro text-ink-3 transition-colors hover:bg-surface-2 hover:text-ink-2"
       @click="showTrace = !showTrace"
     >
-      <Icon name="chevron" :size="9" :class="{ 'rotate-90': showTrace }" />
+      <Icon name="chevron" :size="12" :class="{ 'rotate-90': showTrace }" />
       {{ t('tools.detail.hookTrace', { count: traces.length }) }}
     </button>
     <div v-if="showTrace" class="flex flex-col gap-1 pl-1">

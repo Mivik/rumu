@@ -136,7 +136,7 @@ function liveTaskOutput(id: string | null): string {
         <Icon
           :name="v.status === 'ok' ? 'tool' : v.status === 'blocked' ? 'blocked' : 'error'"
           :size="12"
-          :class="[iconClass(v), { 'mt-[3px]': isShellOpen(v) }]"
+          :class="iconClass(v)"
         />
         <span class="max-w-[40%] flex-none truncate font-mono text-meta font-medium" :class="nameClass(v)">{{
           v.name === 'bash' ? '$' : v.name
@@ -210,7 +210,7 @@ function liveTaskOutput(id: string | null): string {
           >
           <Icon
             name="chevron"
-            :size="11"
+            :size="12"
             class="text-ink-3/70 transition-transform duration-100"
             :class="{ 'rotate-90': isOpen(v) }"
           />

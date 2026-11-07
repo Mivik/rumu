@@ -45,7 +45,7 @@ const items = computed<Recalled[]>(() => {
 <template>
   <div v-if="items.length" class="flex flex-wrap items-baseline gap-x-1.5 gap-y-1 text-meta">
     <span class="inline-flex items-baseline gap-1.5 text-micro font-semibold text-ink-3">
-      <Icon name="memory" :size="12" class="relative top-px flex-none self-center text-memory" />
+      <Icon name="memory" :size="12" class="text-memory" />
       <span>{{ t('cards.pills.recalledList', { count: items.length }) }}</span>
     </span>
     <template v-for="(c, i) in items" :key="c.node.id">

@@ -28,7 +28,7 @@ const cachePct = computed(() => {
         :aria-expanded="open"
         @click="toggle"
       >
-        <Icon name="gauge" :size="15" class="text-ink-3" />
+        <Icon name="gauge" :size="16" class="text-ink-3" />
         <span v-if="cachePct !== null" class="hidden tabular-nums sm:inline">{{
           t('panels.diagnostics.cache', { pct: cachePct })
         }}</span>

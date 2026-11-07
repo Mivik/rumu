@@ -494,7 +494,7 @@ const draftDiff = computed(() =>
         :aria-label="t('library.back')"
         @click="backToList"
       >
-        <Icon name="chevron" :size="15" class="rotate-180" />
+        <Icon name="chevron" :size="16" class="rotate-180" />
       </button>
       <h2 v-if="mode === 'edit'" class="min-w-0 flex-1 truncate text-title font-bold">
         {{ detail ? title : t('library.newCard') }}
@@ -510,7 +510,7 @@ const draftDiff = computed(() =>
           :aria-label="t('library.edit')"
           @click="edit"
         >
-          <Icon name="edit" :size="15" />
+          <Icon name="edit" :size="16" />
         </button>
         <button
           type="button"
@@ -519,7 +519,7 @@ const draftDiff = computed(() =>
           :aria-label="t('library.history')"
           @click="openHistory"
         >
-          <Icon name="history" :size="15" />
+          <Icon name="history" :size="16" />
         </button>
         <Popover menu role="menu" :label="t('library.more')" :to="overlay">
           <template #trigger="{ open, toggle: toggleMenu }">
@@ -543,7 +543,7 @@ const draftDiff = computed(() =>
               :class="MENU_ITEM"
               @click="openInLibrary(close)"
             >
-              <Icon name="external" :size="13" />
+              <Icon name="external" :size="14" />
               {{ t('library.openInLibrary') }}
             </button>
             <div v-if="!inLibrary" class="mx-1 my-1 h-px bg-line-soft/70" />
@@ -554,7 +554,7 @@ const draftDiff = computed(() =>
               :class="MENU_DANGER"
               @click="pendingDelete = true"
             >
-              <Icon name="trash" :size="13" />
+              <Icon name="trash" :size="14" />
               {{ t('library.delete') }}
             </button>
             <div v-else class="flex max-w-64 flex-col gap-1.5 px-1.5 py-1">
@@ -621,7 +621,7 @@ const draftDiff = computed(() =>
               <template #meta>
                 <slot name="meta">
                   <p v-if="shown.pinned" class="mt-3 flex items-center gap-1.5 text-meta text-memory">
-                    <Icon name="pin" :size="13" />
+                    <Icon name="pin" :size="14" />
                     {{ t('library.pinned') }}
                   </p>
                 </slot>
@@ -747,7 +747,7 @@ const draftDiff = computed(() =>
                   :aria-label="t('common.cancel')"
                   @click="removeKeyword(i)"
                 >
-                  <Icon name="close" :size="10" />
+                  <Icon name="close" :size="12" />
                 </button>
               </span>
               <input

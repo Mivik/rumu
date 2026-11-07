@@ -36,6 +36,6 @@ defineEmits<{ click: [e: MouseEvent] }>()
     <span class="min-w-0 overflow-hidden text-ellipsis">
       <slot>{{ label }}</slot>
     </span>
-    <Icon v-if="iconAfter" :name="iconAfter" :size="11" />
+    <Icon v-if="iconAfter" :name="iconAfter" :size="12" />
   </component>
 </template>

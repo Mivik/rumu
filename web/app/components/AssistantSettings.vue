@@ -426,11 +426,11 @@ onBeforeUnmount(() => window.removeEventListener('keydown', onKey, true))
                     :title="t('library.openInLibrary')"
                     @click="openDeck(form.id)"
                   >
-                    <Icon name="memory" :size="13" class="flex-none text-ink-3" />
+                    <Icon name="memory" :size="14" class="flex-none text-ink-3" />
                     <span class="truncate">{{ form.name }}</span>
                   </button>
                   <span v-else class="flex min-w-0 items-center gap-1.5 font-card text-secondary">
-                    <Icon name="memory" :size="13" class="flex-none text-ink-3" />
+                    <Icon name="memory" :size="14" class="flex-none text-ink-3" />
                     <span class="truncate">{{ form.name || '—' }}</span>
                   </span>
                   <span class="truncate border border-transparent px-2.5 font-mono text-meta"
@@ -464,7 +464,7 @@ onBeforeUnmount(() => window.removeEventListener('keydown', onKey, true))
                       :title="t('library.openInLibrary')"
                       @click="openDeck(mount.deck)"
                     >
-                      <Icon name="memory" :size="13" class="flex-none text-ink-3" />
+                      <Icon name="memory" :size="14" class="flex-none text-ink-3" />
                       <span class="truncate">{{ deckName(mount.deck) }}</span>
                     </button>
                     <button
@@ -534,7 +534,7 @@ onBeforeUnmount(() => window.removeEventListener('keydown', onKey, true))
                   :aria-pressed="form.allow_ask.includes(assistant.id)"
                   @click="toggle(form.allow_ask, assistant.id)"
                 >
-                  <Icon :name="form.allow_ask.includes(assistant.id) ? 'ok' : 'plus'" :size="11" />
+                  <Icon :name="form.allow_ask.includes(assistant.id) ? 'ok' : 'plus'" :size="12" />
                   {{ assistant.name }}
                 </button>
               </div>
@@ -563,7 +563,7 @@ onBeforeUnmount(() => window.removeEventListener('keydown', onKey, true))
               class="-ml-2 flex items-center gap-1.5 rounded-control px-2 py-1.5 text-meta font-semibold text-ink-3 transition-colors duration-150 hover:bg-danger-soft hover:text-danger"
               @click="pendingDelete = true"
             >
-              <Icon name="trash" :size="13" />
+              <Icon name="trash" :size="14" />
               {{ t('assistants.delete') }}
             </button>
             <button

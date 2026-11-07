@@ -43,7 +43,7 @@ const rumuDefault = computed(() => state.pathState?.default_workspace === INTERN
         class="flex items-center gap-2 rounded-card bg-surface px-3 py-2 shadow-soft"
         :title="`${w.machine} · ${w.root}`"
       >
-        <Icon name="mount" :size="13" class="flex-none text-tool" />
+        <Icon name="mount" :size="14" class="flex-none text-tool" />
         <span
           v-if="w.isDefault"
           class="flex-none font-mono font-semibold text-tool"
@@ -63,7 +63,7 @@ const rumuDefault = computed(() => state.pathState?.default_workspace === INTERN
         </span>
       </div>
       <div class="flex items-center gap-2 rounded-card bg-surface px-3 py-2 shadow-soft">
-        <Icon name="memory" :size="13" class="flex-none text-memory" />
+        <Icon name="memory" :size="14" class="flex-none text-memory" />
         <span
           v-if="rumuDefault"
           class="flex-none font-mono font-semibold text-tool"

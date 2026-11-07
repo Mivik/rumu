@@ -45,7 +45,7 @@ function decisionTone(d: Decision): string {
         >
           <Icon
             name="chevron"
-            :size="10"
+            :size="12"
             class="text-ink-3 transition-transform group-open/trace:rotate-90"
           />
           <span class="font-mono text-tool">{{ e.event }}</span>

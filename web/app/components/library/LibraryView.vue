@@ -67,7 +67,7 @@ onBeforeUnmount(() => clearTimeout(searchTimer))
     >
       <h2 class="flex items-center gap-2.5 text-title font-bold">
         <span
-          class="flex size-8 flex-none items-center justify-center rounded-control bg-memory-soft text-memory"
+          class="flex size-8 flex-none items-center justify-center rounded-control bg-memory-soft leading-0 text-memory"
         >
           <Icon name="memory" :size="16" />
         </span>

@@ -426,6 +426,7 @@
   /* small ghost icon buttons (hover actions) */
   .icon-btn {
     display: inline-flex;
+    line-height: 0; /* an icon alone centres on its own box, not on a text baseline */
     align-items: center;
     justify-content: center;
     width: 24px;
@@ -1454,6 +1455,7 @@
   /* attach: a quiet picture key beside send */
   .composer-attach {
     display: inline-flex;
+    line-height: 0;
     flex: none;
     align-items: center;
     justify-content: center;
@@ -1481,6 +1483,7 @@
   .composer-send,
   .composer-stop {
     display: inline-flex;
+    line-height: 0;
     flex: none;
     align-items: center;
     justify-content: center;

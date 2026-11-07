@@ -143,7 +143,7 @@ function toggleOpen(): void {
           class="flex-none rotate-[-4deg] rounded-xs border-[1.5px] border-danger/60 px-1.5 font-bold tracking-wide text-danger"
           >{{ t('tools.activity.blocked', { count: blockedCount }) }}</span
         >
-        <Icon name="chevron" :size="10" class="reason-chevron flex-none" :class="{ 'rotate-90': open }" />
+        <Icon name="chevron" :size="12" class="reason-chevron flex-none" :class="{ 'rotate-90': open }" />
       </button>
       <template v-if="!open">
         <Chip

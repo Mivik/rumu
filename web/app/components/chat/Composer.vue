@@ -278,7 +278,7 @@ const model = computed(() => {
           :aria-label="t('chat.composer.removeImage')"
           @click="removeAt(i)"
         >
-          <Icon name="close" :size="9" :stroke="2.4" />
+          <Icon name="close" :size="12" />
         </button>
       </div>
     </div>
@@ -303,9 +303,9 @@ const model = computed(() => {
             :aria-expanded="open"
             @click="toggle"
           >
-            <Icon name="mount" :size="13" class="text-tool" />
+            <Icon name="mount" :size="14" class="text-tool" />
             <span class="truncate">{{ workspace.name }}</span>
-            <Icon name="down" :size="11" class="text-ink-3" />
+            <Icon name="down" :size="12" class="text-ink-3" />
           </button>
         </template>
         <div class="panel-head">{{ t('panels.context.workspaces') }}</div>
@@ -355,7 +355,7 @@ const model = computed(() => {
         :aria-label="isBusy ? t('chat.composer.steer') : t('chat.composer.send')"
         @click="submit"
       >
-        <Icon name="send" :size="18" :stroke="2.4" />
+        <Icon name="send" :size="18" />
       </button>
     </div>
   </div>

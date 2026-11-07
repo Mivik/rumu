@@ -43,7 +43,7 @@ function elapsed(t: (typeof branchTasks.value)[number]): string {
       </span>
       <span v-for="tk in runningTasks" :key="tk.id" class="chip tone-tool text-micro" :title="taskLabel(tk)">
         <button type="button" class="flex min-w-0 items-center gap-1.5" @click="openTaskDetail(tk.id)">
-          <Icon name="tool" :size="11" />
+          <Icon name="tool" :size="12" />
           <span class="font-mono font-semibold">{{ tk.id }}</span>
           <span class="max-w-[220px] truncate font-mono text-ink-2">{{ taskLabel(tk) }}</span>
           <span class="font-mono text-ink-3">{{ elapsed(tk) }}</span>
@@ -55,7 +55,7 @@ function elapsed(t: (typeof branchTasks.value)[number]): string {
           :aria-label="t('tools.tasks.killAria', { id: tk.id })"
           @click="killTask(tk.id)"
         >
-          <Icon name="close" :size="10" />
+          <Icon name="close" :size="12" />
         </button>
       </span>
     </div>
@@ -76,7 +76,7 @@ function elapsed(t: (typeof branchTasks.value)[number]): string {
             :title="t('tools.tasks.kill', { id: detail.id })"
             @click="killTask(detail.id)"
           >
-            <Icon name="close" :size="11" />
+            <Icon name="close" :size="12" />
           </button>
           <button
             type="button"
@@ -84,7 +84,7 @@ function elapsed(t: (typeof branchTasks.value)[number]): string {
             :title="t('tools.tasks.close')"
             @click="state.taskDetail = null"
           >
-            <Icon name="close" :size="11" />
+            <Icon name="close" :size="12" />
           </button>
         </span>
       </div>

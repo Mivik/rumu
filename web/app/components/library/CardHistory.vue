@@ -92,7 +92,7 @@ const session = computed(() => {
         :aria-label="t('library.back')"
         @click="$emit('back')"
       >
-        <Icon name="chevron" :size="15" class="rotate-180" />
+        <Icon name="chevron" :size="16" class="rotate-180" />
       </button>
       <h3 class="text-title font-bold">{{ t('library.history') }}</h3>
       <span v-if="commits.length" class="text-meta text-ink-3 tabular-nums">{{ commits.length }}</span>
