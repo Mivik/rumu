@@ -234,12 +234,22 @@ impl FakeRuntime {
     /// A `Cx` on a fresh branch with this runtime and call id `call-1`; the
     /// staged nodes back [`Cx::index`] as well as [`Cx::path`].
     pub fn cx(self: &Arc<Self>) -> Cx {
-        self.cx_with(false)
+        self.cx_for(SessionId::new())
+    }
+
+    /// Like [`FakeRuntime::cx`], running as `session` (for tools that tell
+    /// the current session apart).
+    pub fn cx_for(self: &Arc<Self>, session: SessionId) -> Cx {
+        self.cx_in(session, false)
     }
 
     /// Like [`FakeRuntime::cx`], optionally as a background task's call.
     /// Progress updates are recorded in `progress`.
     pub fn cx_with(self: &Arc<Self>, background: bool) -> Cx {
+        self.cx_in(SessionId::new(), background)
+    }
+
+    fn cx_in(self: &Arc<Self>, session: SessionId, background: bool) -> Cx {
         let runtime: Arc<dyn Runtime> = self.clone();
         let branch = BranchId::new();
         let sink: ProgressSink = {
@@ -253,7 +263,7 @@ impl FakeRuntime {
             })
         };
         Cx::new(
-            SessionId::new(),
+            session,
             branch,
             Some(Call::new("call-1".into(), None, background, sink)),
             Some("test".into()),

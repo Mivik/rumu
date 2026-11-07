@@ -1582,6 +1582,16 @@ async fn session_listing_and_overview() {
     );
     assert_stamp(fields.next().unwrap(), 8000);
     assert_eq!(fields.next(), Some("\"config hunting\""), "{line}");
+    assert_eq!(fields.next(), None, "another session is not marked: {line}");
+
+    // The session the call runs in is marked.
+    let here = host.cx_for(rumu_core::SessionId::from("01STESTSSESSION0000000000000"));
+    let out = plugin
+        .call_tool("list", json!({ "path": "@rumu:/sessions" }), &here)
+        .await
+        .unwrap();
+    let line = out.content.text.lines().next().unwrap();
+    assert!(line.ends_with("\"config hunting\"  (current)"), "{line}");
 
     // The overview: header + one line per branch (created_at order), main
     // first with its own first node (the root), agent with its task.

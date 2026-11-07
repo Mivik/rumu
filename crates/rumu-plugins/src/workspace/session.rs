@@ -220,7 +220,8 @@ impl WorkspacePlugin {
     }
 
     /// `list /sessions[/by-assistant/<id>]`: one line per session, most
-    /// recently updated first.
+    /// recently updated first. The session this call runs in is marked
+    /// `(current)`.
     async fn session_listing(&self, assistant: Option<&str>, cx: &Cx) -> ToolResult<ToolOutput> {
         let mut sessions = visible_sessions(cx, assistant)?;
         sessions.sort_by_key(|s| Reverse(s.updated_at));
@@ -229,8 +230,13 @@ impl WorkspacePlugin {
         }
         let mut lines = Vec::with_capacity(sessions.len());
         for s in &sessions {
+            let current = if s.id == cx.session {
+                "  (current)"
+            } else {
+                ""
+            };
             lines.push(format!(
-                "{WS}:/sessions/{}  {}  \"{}\"{}",
+                "{WS}:/sessions/{}  {}  \"{}\"{current}{}",
                 s.id,
                 iso_local(s.updated_at),
                 s.title,
