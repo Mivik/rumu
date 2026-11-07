@@ -10,7 +10,10 @@
 //!   {deck, path, rev, view_rev, call_id, op}` appended right after the tool
 //!   batch —
 //!   counted only when a successful ToolResult with the same `call_id` exists
-//!   on the path (aborted calls leave stale records behind);
+//!   on the path (aborted calls leave stale records behind); a call made from
+//!   a `code` script (`<parent>.<n>`) has no ToolResult node and records only
+//!   on success, so its record counts as is — also for the script's own later
+//!   calls, and when the script throws afterwards;
 //!
 //! The latest use per card wins. This is the single source for the update
 //! notice hook and the web "On this path" view; it is mirrored in
@@ -138,6 +141,14 @@ pub(crate) fn ok_calls(nodes: &[Node]) -> HashSet<&str> {
         .collect()
 }
 
+/// A call a `code` script made (`<parent>.<n>`): it never gets a
+/// `ToolResult` node, and records a `card_use` only when it succeeded.
+fn is_script_call(call_id: &str) -> bool {
+    call_id
+        .rsplit_once('.')
+        .is_some_and(|(_, n)| !n.is_empty() && n.bytes().all(|b| b.is_ascii_digit()))
+}
+
 /// The latest `card_use` marker record of `(deck, path)` on the path
 /// (validated by a successful ToolResult). Import notes are ignored — the
 /// read-before-write check of the edit tools needs the tool read's `view_rev`,
@@ -175,7 +186,11 @@ fn fold_uses(nodes: &[Node], ok_calls: &HashSet<&str>) -> BTreeMap<(String, Stri
         let Some(u) = content.decode::<CardUse>() else {
             continue;
         };
-        if !u.call_id.as_deref().is_none_or(|c| ok_calls.contains(c)) {
+        if !u
+            .call_id
+            .as_deref()
+            .is_none_or(|c| ok_calls.contains(c) || is_script_call(c))
+        {
             continue; // aborted/unanswered call: not a real use
         }
         uses.insert(
@@ -317,5 +332,24 @@ mod tests {
         assert!(latest_tool_use(&nodes, "d", "x").is_none());
         let only_note = vec![import("x", "a1b2c3d4", "# x\nv1")];
         assert!(latest_tool_use(&only_note, "d", "x").is_none());
+    }
+
+    #[test]
+    fn script_calls_count_without_a_result() {
+        let edit = |path: &str, call: &str| {
+            use_note(
+                json!({"deck": "d", "path": path, "rev": "ff00ff00", "view_rev": "00ff00ff", "op": "edit", "call_id": call}),
+            )
+        };
+        let nodes = vec![
+            edit("a", "code1.1"), // the script is still running
+            edit("b", "code2.1"),
+            result("code2", true), // the script threw after its first edit
+            edit("c", "code3.x"),  // not a script call id
+            edit("d", "code2"),    // the failed parent itself
+        ];
+        let uses = uses_on_path(&nodes);
+        let paths: Vec<&str> = uses.keys().map(|(_, p)| p.as_str()).collect();
+        assert_eq!(paths, ["a", "b"]);
     }
 }

@@ -123,7 +123,7 @@ impl WorkspacePlugin {
                 };
                 Ok(ToolOutput::ok(text).with_data(&header).with_effect(effect))
             }
-            Err(e) => Err(ToolError::model(e).with_effect(effect)),
+            Err(e) => Err(ToolError::model(e)),
         }
     }
 

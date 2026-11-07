@@ -248,6 +248,12 @@ export interface CardUse {
   callId: string | null
 }
 
+/** The `(parent call, seq)` of a `code` script's call id (`<parent>.<n>`). */
+function scriptCallOf(callId: string): [string, number] | null {
+  const m = /^(.+)\.(\d+)$/.exec(callId)
+  return m ? [m[1]!, Number(m[2])] : null
+}
+
 /** Every recorded use of every card on the current path, in path order. */
 export const cardUsesOnPath = computed(() => {
   const okCalls = new Set<string>()
@@ -286,14 +292,21 @@ export const cardUsesOnPath = computed(() => {
     if (!u) continue
     const callId = u.call_id ?? null
     if (!u.deck || !u.path || !u.rev) continue
-    // Abort-path guard: only count records whose call succeeded.
-    if (callId && !okCalls.has(callId)) continue
+    // Abort-path guard: only count records whose call succeeded. A `code`
+    // script's call (`<parent>.<n>`) has no result node and records only on
+    // success.
+    const script = callId ? scriptCallOf(callId) : null
+    if (callId && !script && !okCalls.has(callId)) continue
+    const inner = script ? state.codeCalls[script[0]]?.find((c) => c.seq === script[1]) : undefined
     const op = u.op === 'read' ? 'read' : 'write'
     // Write snapshots come from the call args (`content`, the editable view).
+    const args = script ? inner?.args : calls.get(callId ?? '')?.call.args
     const snapshot =
       op === 'write'
-        ? String((calls.get(callId ?? '')?.call.args as { content?: unknown } | undefined)?.content ?? '')
-        : (resultText.get(callId ?? '') ?? '')
+        ? String((args as { content?: unknown } | undefined)?.content ?? '')
+        : script
+          ? (inner?.output ?? '')
+          : (resultText.get(callId ?? '') ?? '')
     push(`${u.deck}:${u.path}`, { kind: op, rev: u.rev, node: n, snapshot, callId })
   }
   return uses

@@ -222,3 +222,73 @@ async fn update_notices_only_follow_actual_reads() {
         update_notices(&nodes_f)
     );
 }
+
+#[tokio::test]
+async fn script_edits_count_as_reads() {
+    let (_dir, home) = card_home();
+    let decks = rumu_cards::Decks::load(&home).unwrap();
+    let main = decks
+        .list()
+        .into_iter()
+        .find(|d| d.name == "main")
+        .unwrap()
+        .id()
+        .to_owned();
+    let memory: Arc<dyn Plugin> = Arc::new(MemoryPlugin::new(decks.clone()));
+    let workspace: Arc<dyn Plugin> = Arc::new(WorkspacePlugin::new(&home, decks));
+    let code = Arc::new(rumu_plugins::CodePlugin::new(&workspace.manifest().tools));
+    let edit = |old: &str, new: &str| json!({ "path": "@rumu:/cards/self/x", "old_string": old, "new_string": new });
+    // read; a script with two edits in a row, then one that throws after an
+    // edit; a direct edit; a reply; a second turn.
+    let kernel = Kernel::new(
+        Arc::new(Store::in_memory()),
+        Arc::new(ScriptedLlm::strict([
+            resp_call("r", "read", json!({ "path": "@rumu:/cards/self/x" })),
+            resp_call(
+                "c1",
+                "code",
+                json!({ "code": format!(
+                    "await rumu.edit({}); await rumu.edit({}); return 'ok';",
+                    edit("v1", "v2"),
+                    edit("body", "text"),
+                ) }),
+            ),
+            resp_call(
+                "c2",
+                "code",
+                json!({ "code": format!(
+                    "await rumu.edit({}); throw new Error('later');",
+                    edit("v2", "v3"),
+                ) }),
+            ),
+            resp_call("e", "edit", edit("v3", "v4")),
+            LlmResponse::text("done-1"),
+            LlmResponse::text("done-2"),
+        ])),
+        vec![memory, workspace, code],
+        Workspaces::default(),
+    )
+    .unwrap();
+    let (s, _) = kernel.create_session(Vec::new(), main).await.unwrap();
+    let b = s.active_branch.clone();
+    run_turn(&kernel, &b, "edit card x").await;
+    run_turn(&kernel, &b, "again").await;
+
+    let text = rumu_cards::open_deck(&home, "main")
+        .unwrap()
+        .unwrap()
+        .read("x")
+        .unwrap()
+        .unwrap();
+    assert!(text.contains("v4 text"), "every edit landed: {text}");
+    let (nodes, _) = kernel.branch_path(&b).unwrap();
+    let e = ok_tool_results(&nodes)
+        .into_iter()
+        .find(|(id, _)| id == "e");
+    assert!(e.is_some(), "the direct edit after the scripts passed CAS");
+    assert!(
+        update_notices(&nodes).is_empty(),
+        "the branch's own edits are not updates: {:?}",
+        update_notices(&nodes)
+    );
+}
