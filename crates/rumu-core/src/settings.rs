@@ -320,6 +320,9 @@ pub struct ModelInfo {
     pub efforts: Vec<Effort>,
     #[ts(type = "number | null")]
     pub context: Option<u64>,
+    /// The most tokens it may write in one reply.
+    #[ts(type = "number | null")]
+    pub output: Option<u64>,
     pub image_input: bool,
     /// USD per million input / output tokens.
     pub cost: Option<ModelCost>,

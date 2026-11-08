@@ -90,6 +90,8 @@ struct Target {
     model_id: String,
     /// `None` when the model does not reason.
     effort: Option<Effort>,
+    /// The catalog's output limit; `None` leaves genai's default.
+    max_tokens: Option<u64>,
 }
 
 impl GenaiLlm {
@@ -222,6 +224,7 @@ pub fn model_info(
             None => protocol.map(catalog::default_efforts).unwrap_or_default(),
         },
         context: known.and_then(|m| m.context),
+        output: known.and_then(|m| m.output),
         image_input: known.is_none_or(|m| m.image_input),
         cost: known.and_then(|m| m.cost),
         known: known.is_some(),
@@ -314,6 +317,7 @@ impl Resolved {
             model_ref: model_ref.to_owned(),
             model_id: model_id.to_owned(),
             effort: effort.unwrap_or(Effort::High).nearest(&info.efforts),
+            max_tokens: info.output,
         })
     }
 }
@@ -327,6 +331,13 @@ impl Target {
             .with_stream_read_timeout(std::time::Duration::from_secs(120));
         match (self.protocol, self.effort) {
             (Protocol::Anthropic, effort) => {
+                // Anthropic requires `max_tokens`; genai otherwise guesses it
+                // from the model name, which a gateway prefix (`g/claude-…`)
+                // defeats.
+                let opts = match self.max_tokens.and_then(|n| u32::try_from(n).ok()) {
+                    Some(n) => opts.with_max_tokens(n),
+                    None => opts,
+                };
                 // Any explicit effort stops genai from inferring one from a
                 // model-name suffix (`…-high`). `Zero` adds nothing of its own
                 // but a `thinking: disabled`, which `extra_body` replaces.

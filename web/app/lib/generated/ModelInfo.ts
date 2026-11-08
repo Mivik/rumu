@@ -24,7 +24,11 @@ native: Protocol | null, pinned: boolean,
 /**
  * The efforts it takes; empty when it does not reason.
  */
-efforts: Array<Effort>, context: number | null, image_input: boolean, 
+efforts: Array<Effort>, context: number | null, 
+/**
+ * The most tokens it may write in one reply.
+ */
+output: number | null, image_input: boolean, 
 /**
  * USD per million input / output tokens.
  */

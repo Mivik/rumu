@@ -38,6 +38,7 @@ pub struct CatalogModel {
     pub name: String,
     pub efforts: Vec<Effort>,
     pub context: Option<u64>,
+    pub output: Option<u64>,
     pub image_input: bool,
     pub cost: Option<ModelCost>,
 }
@@ -88,6 +89,8 @@ struct RawModalities {
 struct RawLimit {
     #[serde(default)]
     context: Option<u64>,
+    #[serde(default)]
+    output: Option<u64>,
 }
 
 #[derive(Deserialize)]
@@ -188,6 +191,7 @@ impl Catalog {
                             },
                             efforts: efforts_of(&m),
                             context: m.limit.as_ref().and_then(|l| l.context),
+                            output: m.limit.as_ref().and_then(|l| l.output),
                             image_input: m
                                 .modalities
                                 .as_ref()
