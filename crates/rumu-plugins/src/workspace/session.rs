@@ -507,18 +507,31 @@ impl<'a> SessionView<'a> {
                 call_id,
                 content,
                 is_error,
+                invoke,
             } => {
                 let call = self.matching_call(n, call_id);
                 let mut attrs = format!(" call=\"{}\"", escape_attr(call_id));
-                if let Some(c) = call {
-                    attrs.push_str(&format!(" tool=\"{}\"", escape_attr(&c.name)));
-                }
+                // An invoke's name/args live on the node (there is no model
+                // call to look up); `parent` names the enclosing call.
+                let folds = if let Some(inv) = invoke {
+                    attrs.push_str(&format!(
+                        " tool=\"{}\" parent=\"{}\"",
+                        escape_attr(&inv.name),
+                        escape_attr(&inv.parent)
+                    ));
+                    folds_session_read_args(&inv.name, &inv.args)
+                } else {
+                    if let Some(c) = call {
+                        attrs.push_str(&format!(" tool=\"{}\"", escape_attr(&c.name)));
+                    }
+                    call.is_some_and(folds_session_read)
+                };
                 if *is_error {
                     attrs.push_str(" error=\"true\"");
                 }
                 // The elided size counts what the full read would show, so
                 // the image placeholders count too.
-                let body = if range && call.is_some_and(folds_session_read) {
+                let body = if range && folds {
                     format!(
                         "<elided chars=\"{}\" read=\"{WS}:/sessions/{}/{short}\"/>",
                         content.rendered().chars().count(),
@@ -613,9 +626,15 @@ fn render_call(call: &ToolCall, range: bool) -> String {
 /// are recognized; relative or default-workspace forms (e.g. `sessions/…`)
 /// are not detected — accepted.
 fn folds_session_read(call: &ToolCall) -> bool {
-    let arg = match call.name.as_str() {
-        "read" | "list" => call.args.get("path"),
-        "search" => call.args.get("scope"),
+    folds_session_read_args(&call.name, &call.args)
+}
+
+/// [`folds_session_read`] over a bare name/args pair (an invoke carries those
+/// without a model [`ToolCall`]).
+fn folds_session_read_args(name: &str, args: &Value) -> bool {
+    let arg = match name {
+        "read" | "list" => args.get("path"),
+        "search" => args.get("scope"),
         _ => return false,
     };
     arg.and_then(Value::as_str)

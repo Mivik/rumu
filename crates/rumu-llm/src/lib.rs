@@ -853,7 +853,10 @@ fn project_from(
                 }
             }
             NodeBody::ToolResult {
-                call_id, content, ..
+                call_id,
+                content,
+                invoke: None,
+                ..
             } => {
                 // A plain result is a ToolResponse (string content). One with
                 // attachments needs Anthropic's block form — genai's adapter
@@ -913,6 +916,11 @@ fn project_from(
                     ]))),
                 }
             }
+            // A plugin invoke's result is trace-only: it has no model
+            // tool_use to answer, so projecting it would be an orphan result.
+            NodeBody::ToolResult {
+                invoke: Some(_), ..
+            } => {}
             NodeBody::Note {
                 source, content, ..
             } => {
@@ -957,6 +965,9 @@ fn project_from(
 fn projects(body: &NodeBody) -> bool {
     match body {
         NodeBody::Note { content, .. } => !content.text.is_empty(),
+        NodeBody::ToolResult {
+            invoke: Some(_), ..
+        } => false,
         _ => true,
     }
 }
@@ -1005,7 +1016,7 @@ fn pieces(content: &Content, load: &dyn Fn(&Attachment) -> Option<Vec<u8>>) -> V
 #[cfg(test)]
 mod tests {
     use super::*;
-    use rumu_core::{NodeId, SessionId, now};
+    use rumu_core::{Invoke, NodeId, SessionId, now};
     use serde_json::json;
 
     const ANTHROPIC: Projection<'static> = Projection {
@@ -1056,6 +1067,7 @@ mod tests {
                 call_id: "c1".into(),
                 content: rumu_core::Content::text(""),
                 is_error: false,
+                invoke: None,
             }),
             node(NodeBody::Note {
                 source: "memory".into(),
@@ -1121,6 +1133,33 @@ mod tests {
         let a = serde_json::to_string(&project(ANTHROPIC, "SYSTEM", &tools, &nodes, None)).unwrap();
         let b = serde_json::to_string(&project(ANTHROPIC, "SYSTEM", &tools, &nodes, None)).unwrap();
         assert_eq!(a, b);
+    }
+
+    #[test]
+    fn invoke_results_are_not_projected() {
+        let nodes = vec![
+            assistant(vec![], false, &["c1"]),
+            node(NodeBody::ToolResult {
+                call_id: "c1.1".into(),
+                content: rumu_core::Content::text("trace only"),
+                is_error: false,
+                invoke: Some(Invoke {
+                    parent: "c1".into(),
+                    name: "read".into(),
+                    args: json!({ "path": "a.rs" }),
+                    blocked: None,
+                }),
+            }),
+            result("c1"),
+        ];
+        let m = &project(ANTHROPIC, "SYSTEM", &[], &nodes, None).messages;
+        // The assistant call and the direct result only: the invoke result
+        // would be an orphan tool_use_id with no matching call.
+        assert_eq!(m.len(), 2);
+        assert_eq!(m[1].role, ChatRole::Tool);
+        let responses = m[1].content.tool_responses();
+        assert_eq!(responses.len(), 1);
+        assert_eq!(responses[0].call_id, "c1");
     }
 
     #[test]
@@ -1421,6 +1460,7 @@ mod tests {
             call_id: "c1".into(),
             content: rumu_core::Content::text("shot [Image #1]").with_attachments(atts),
             is_error: false,
+            invoke: None,
         })];
         let m = &project(ANTHROPIC, "SYSTEM", &[], &nodes, Some(&blobs)).messages[0];
         assert_eq!(m.role, ChatRole::Tool);
@@ -1454,6 +1494,7 @@ mod tests {
                 call_id: "c1".into(),
                 content: rumu_core::Content::text("shot [Image #1]").with_attachments(atts),
                 is_error: false,
+                invoke: None,
             }),
             result("c2"),
         ];
@@ -1484,11 +1525,13 @@ mod tests {
                 call_id: "c1".into(),
                 content: rumu_core::Content::text("plain"),
                 is_error: false,
+                invoke: None,
             }),
             node(NodeBody::ToolResult {
                 call_id: "c2".into(),
                 content: rumu_core::Content::text("shot").with_attachments(atts),
                 is_error: false,
+                invoke: None,
             }),
         ];
         let m = &project(ANTHROPIC, "SYSTEM", &[], &nodes, Some(&blobs)).messages;
@@ -1538,6 +1581,7 @@ mod tests {
             call_id: "c1".into(),
             content: rumu_core::Content::text("shot [Image #1]").with_attachments([gone]),
             is_error: false,
+            invoke: None,
         })];
         let parts = project(ANTHROPIC, "SYSTEM", &[], &nodes, None).messages[0]
             .content
@@ -1570,6 +1614,7 @@ mod tests {
                 // part of the determinism contract too.
                 content: rumu_core::Content::text("shot [Image #1]").with_attachments(atts2),
                 is_error: true,
+                invoke: None,
             }),
         ];
         let a = serde_json::to_string(&project(ANTHROPIC, "SYSTEM", &[], &nodes, Some(&blobs)))
@@ -1599,6 +1644,7 @@ mod tests {
             call_id: call_id.into(),
             content: rumu_core::Content::text("ok"),
             is_error: false,
+            invoke: None,
         })
     }
 

@@ -12,10 +12,10 @@ use std::time::Duration;
 use async_trait::async_trait;
 use rumu_core::kind;
 use rumu_core::{
-    Attachment, BranchId, BranchStatus, CodeCall, Content, Cx, Decision, Event, HookOutput,
-    HookSpec, Inbox, Manifest, Node, NodeBody, PathState, Plugin, Post, Progress, SessionId,
-    Tagged, TaskDone, TaskKind, TaskStatus, ToolCall, ToolOutput, ToolSpec, Workspace,
-    WorkspaceSet, WorkspaceUse, Workspaces,
+    Attachment, BranchId, BranchStatus, Content, Cx, Decision, Event, HookOutput, HookSpec, Inbox,
+    Invoke, Manifest, Node, NodeBody, NodeId, PathState, Plugin, Post, Progress, SessionId, Tagged,
+    TaskDone, TaskKind, TaskStatus, ToolCall, ToolOutput, ToolSpec, Workspace, WorkspaceSet,
+    WorkspaceUse, Workspaces,
 };
 use rumu_kernel::{Delta, Kernel, Llm, LlmError, LlmResponse, OnDelta, ScriptedLlm};
 use rumu_store::Store;
@@ -669,7 +669,7 @@ async fn wait_turn(rx: &mut PushRx, branch: Option<&str>) -> Value {
 }
 
 /// Drive pushes until `turn.done`/`turn.error`, collecting every push seen
-/// along the way (for assertions on `code.call` / `hook.fired`).
+/// along the way (for assertions on `node.appended` / `hook.fired`).
 async fn wait_turn_collect(rx: &mut PushRx, branch: Option<&str>) -> (Value, Vec<Value>) {
     let mut seen = Vec::new();
     while let Some(v) = rx.recv().await {
@@ -761,6 +761,7 @@ fn result_text(nodes: &[Node], call_id: &str) -> (String, bool) {
             call_id: c,
             content,
             is_error,
+            ..
         } = &n.body
             && c == call_id
         {
@@ -2394,7 +2395,6 @@ async fn delete_session_removes_the_tree_and_pushes_it() {
     assert_eq!(list[0].id, keep.id);
     assert!(kernel.session_tree(&session).is_err());
     assert!(kernel.branch_path(&branch).is_err());
-    assert!(kernel.code_calls(&session).unwrap().is_empty());
 
     // An unknown id is a clear error, not a silent success.
     assert!(matches!(
@@ -2582,7 +2582,7 @@ async fn intercept_hook_timeout_fails_closed() {
 // ---------- code mode: internal calls ----------
 
 #[tokio::test]
-async fn code_inner_block_is_not_a_node() {
+async fn code_inner_block_is_a_trace_node() {
     let plugin = Arc::new(script_host(
         &["secret"],
         vec![hook(
@@ -2592,7 +2592,7 @@ async fn code_inner_block_is_not_a_node() {
         block_hook("secret stays out"),
         noop_tools(),
     ));
-    let (kernel, _llm, session, branch) = setup(
+    let (kernel, _llm, _session, branch) = setup(
         vec![plugin.clone()],
         vec![
             LlmResponse::calls(vec![ToolCall::new(
@@ -2606,23 +2606,37 @@ async fn code_inner_block_is_not_a_node() {
     .await;
     let mut rx = kernel.tap_pushes();
 
-    let (_, seen) = turn_collect(&kernel, &branch, &mut rx, "go").await;
+    let (_, _seen) = turn_collect(&kernel, &branch, &mut rx, "go").await;
 
     let (nodes, _) = kernel.branch_path(&branch).unwrap();
-    let results: Vec<&Node> = nodes
+    let invokes: Vec<&Node> = nodes
         .iter()
-        .filter(|n| matches!(&n.body, NodeBody::ToolResult { .. }))
+        .filter(|n| {
+            matches!(
+                &n.body,
+                NodeBody::ToolResult {
+                    invoke: Some(_),
+                    ..
+                }
+            )
+        })
         .collect();
-    assert_eq!(
-        results.len(),
-        1,
-        "only the outer code call has a result node"
-    );
-    assert!(
-        nodes.iter().all(|n| !matches!(&n.body,
-            NodeBody::ToolResult { call_id, .. } if call_id == "c1.1")),
-        "internal calls never become nodes"
-    );
+    assert_eq!(invokes.len(), 1, "the invoke is an ordinary node");
+    let NodeBody::ToolResult {
+        call_id,
+        content,
+        is_error,
+        invoke: Some(invoke),
+    } = &invokes[0].body
+    else {
+        unreachable!()
+    };
+    assert_eq!(call_id, "c1.1");
+    assert_eq!(invoke.parent, "c1");
+    assert_eq!(invoke.name, "secret");
+    assert_eq!(invoke.blocked.as_deref(), Some("secret stays out"));
+    assert!(*is_error);
+    assert_eq!(content.text, "Blocked by hook: secret stays out");
     let (text, err) = result_text(&nodes, "c1");
     assert!(!err, "{text}");
     let rows: Value = serde_json::from_str(&text).unwrap();
@@ -2634,29 +2648,12 @@ async fn code_inner_block_is_not_a_node() {
         "the blocked tool never ran: {:?}",
         plugin.calls()
     );
-
-    let pushes: Vec<&Value> = seen.iter().filter(|p| p["method"] == "code.call").collect();
-    assert_eq!(pushes.len(), 1);
-    assert_eq!(pushes[0]["params"]["parent_call"], "c1");
-    assert_eq!(pushes[0]["params"]["seq"], 1);
-    assert_eq!(pushes[0]["params"]["name"], "secret");
-    assert_eq!(pushes[0]["params"]["blocked"], "secret stays out");
-    assert_eq!(pushes[0]["params"]["is_error"], true);
-
-    // The trace is persisted (a side table, not nodes) and survives a reload.
-    let stored = kernel.code_calls(&session).unwrap();
-    assert_eq!(stored.len(), 1);
-    assert_eq!(stored[0].parent_call, "c1");
-    assert_eq!(stored[0].seq, 1);
-    assert_eq!(stored[0].name, "secret");
-    assert_eq!(stored[0].blocked.as_deref(), Some("secret stays out"));
-    assert!(stored[0].is_error);
 }
 
 /// The trace keeps a `write`/`edit` file patch so the UI can render the diff
 /// after a reload, but no other structured result.
 #[tokio::test]
-async fn code_trace_keeps_the_file_patch() {
+async fn code_invoke_keeps_the_file_patch() {
     let write: ToolFn = Arc::new(|_: &str, _: Value, _: &Cx| {
         let mut out = ToolOutput::ok("wrote a.rs (1 bytes)");
         out.content.data = Some(Tagged {
@@ -2667,7 +2664,7 @@ async fn code_trace_keeps_the_file_patch() {
         out
     });
     let plugin = Arc::new(script_host(&["write"], vec![], noop_hooks(), write));
-    let (kernel, _llm, session, branch) = setup(
+    let (kernel, _llm, _session, branch) = setup(
         vec![plugin],
         vec![
             LlmResponse::calls(vec![ToolCall::new(
@@ -2683,22 +2680,33 @@ async fn code_trace_keeps_the_file_patch() {
     )
     .await;
     let mut rx = kernel.tap_pushes();
-    let (_, seen) = turn_collect(&kernel, &branch, &mut rx, "go").await;
+    let (_, _seen) = turn_collect(&kernel, &branch, &mut rx, "go").await;
 
-    let pushes: Vec<&Value> = seen.iter().filter(|p| p["method"] == "code.call").collect();
-    assert_eq!(pushes.len(), 1);
-    assert_eq!(
-        pushes[0]["params"]["patch"]["tag"],
-        rumu_core::FILE_PATCH_TAG
-    );
-    assert_eq!(pushes[0]["params"]["patch"]["data"]["kind"], "update");
-
-    let stored = kernel.code_calls(&session).unwrap();
-    assert_eq!(stored.len(), 1);
-    let patch = stored[0].patch.as_ref().expect("the file patch is kept");
+    let (nodes, _) = kernel.branch_path(&branch).unwrap();
+    let node = nodes
+        .iter()
+        .find(|n| {
+            matches!(
+                &n.body,
+                NodeBody::ToolResult {
+                    invoke: Some(_),
+                    ..
+                }
+            )
+        })
+        .expect("the invoke node");
+    let NodeBody::ToolResult {
+        content, invoke, ..
+    } = &node.body
+    else {
+        unreachable!()
+    };
+    assert_eq!(invoke.as_ref().unwrap().name, "write");
+    let patch = content.data.as_ref().expect("the file patch is kept");
     assert_eq!(patch.tag, rumu_core::FILE_PATCH_TAG);
     assert_eq!(patch.v, 1);
     assert_eq!(patch.data["kind"], "update");
+    assert!(content.attachments.is_empty());
 }
 
 /// `caller` distinguishes inner (`code`) from direct (`model`) calls in both
@@ -3008,7 +3016,7 @@ async fn code_denied_tools_skip_hooks() {
     .await;
     let mut rx = kernel.tap_pushes();
 
-    let (_, pushes) = turn_collect(&kernel, &branch, &mut rx, "go").await;
+    let (_, _pushes) = turn_collect(&kernel, &branch, &mut rx, "go").await;
 
     let (nodes, _) = kernel.branch_path(&branch).unwrap();
     let (text, _) = result_text(&nodes, "c1");
@@ -3031,8 +3039,14 @@ async fn code_denied_tools_skip_hooks() {
         "no hook fires for denied tools"
     );
     assert!(
-        pushes.iter().all(|p| p["method"] != "code.call"),
-        "denied calls leave no trace row"
+        nodes.iter().all(|n| !matches!(
+            &n.body,
+            NodeBody::ToolResult {
+                invoke: Some(_),
+                ..
+            }
+        )),
+        "denied calls leave no trace node"
     );
 }
 
@@ -3244,10 +3258,10 @@ async fn activate_refuses_agent_branches_and_switches_variants() {
 }
 
 /// `session.fork` copies the root→node path into a new session: fresh node
-/// ids with parents remapped and bodies unchanged, `code` calls under tool
-/// calls on the path carried over to the new branch, sub-agent branches left
-/// behind, and the source session untouched. An assistant node whose tool
-/// calls have no safe point is refused.
+/// ids with parents remapped and bodies unchanged (plugin invoke nodes
+/// included), sub-agent branches left behind, and the source session
+/// untouched. An assistant node whose tool calls have no safe point is
+/// refused.
 #[tokio::test]
 async fn fork_session_copies_the_path_into_a_new_session() {
     let plugin = Arc::new(plugin_with(
@@ -3280,35 +3294,36 @@ async fn fork_session_copies_the_path_into_a_new_session() {
         .expect("the turn appended a tool result")
         .id
         .clone();
-    let upto = nodes.iter().position(|n| n.id == result).unwrap();
-    let path = &nodes[..=upto];
-    assert_eq!(path.len(), 4, "root, user, assistant+calls, tool result");
 
-    // An internal `code` call under the on-path tool call, and one under a
-    // call no copied node made; plus a sub-agent branch that must not carry.
-    let code = CodeCall {
-        branch: branch.clone(),
-        parent_call: "c1".into(),
-        seq: 1,
-        name: "plus".into(),
-        args: json!({"a": 2, "b": 3}),
-        output: "5".into(),
-        is_error: false,
-        blocked: None,
-        patch: None,
-        dur_ms: 3,
-        at: 9,
+    // A plugin invoke under the on-path tool call: forking at it copies the
+    // path up to it. A sub-agent branch must stay behind.
+    let invoke = Node {
+        id: NodeId::new(),
+        parent: Some(result.clone()),
+        session: session.id.clone(),
+        at: rumu_core::now(),
+        dur_ms: Some(3),
+        body: NodeBody::ToolResult {
+            call_id: "c1.1".into(),
+            content: Content::text("5"),
+            is_error: false,
+            invoke: Some(Invoke {
+                parent: "c1".into(),
+                name: "plus".into(),
+                args: json!({"a": 2, "b": 3}),
+                blocked: None,
+            }),
+        },
     };
-    store.insert_code_call(&session.id, &code).unwrap();
-    store
-        .insert_code_call(
-            &session.id,
-            &CodeCall {
-                parent_call: "zz".into(),
-                ..code.clone()
-            },
-        )
-        .unwrap();
+    store.insert_node(&invoke).unwrap();
+    let rpos = nodes.iter().position(|n| n.id == result).unwrap();
+    let mut path: Vec<&Node> = nodes[..=rpos].iter().collect();
+    path.push(&invoke);
+    assert_eq!(
+        path.len(),
+        5,
+        "root, user, assistant+calls, tool result, invoke"
+    );
     let main = store.get_branch(&session.active_branch).unwrap().unwrap();
     store
         .insert_branch(&rumu_core::Branch {
@@ -3328,7 +3343,7 @@ async fn fork_session_copies_the_path_into_a_new_session() {
         })
         .unwrap();
 
-    let forked = kernel.fork_session(&result).unwrap();
+    let forked = kernel.fork_session(&invoke.id).unwrap();
     assert_ne!(forked.id, session.id);
     assert_eq!(forked.title, "hello", "the source session's title");
 
@@ -3339,7 +3354,7 @@ async fn fork_session_copies_the_path_into_a_new_session() {
     let (info, new_nodes, new_branches) = kernel.session_tree(&forked.id).unwrap();
     assert_eq!(new_nodes.len(), path.len());
     let by_id: HashMap<&str, &Node> = new_nodes.iter().map(|n| (n.id.0.as_str(), n)).collect();
-    let old_ids: HashSet<&str> = nodes.iter().map(|n| n.id.0.as_str()).collect();
+    let old_ids: HashSet<&str> = path.iter().map(|n| n.id.0.as_str()).collect();
     assert!(
         new_nodes.iter().all(|n| !old_ids.contains(n.id.0.as_str())),
         "every copied node has a fresh id"
@@ -3372,20 +3387,11 @@ async fn fork_session_copies_the_path_into_a_new_session() {
     assert_eq!(new_branch.head, chain.last().unwrap().id);
     assert_eq!(info.active_branch, new_branch.id);
 
-    // Only the code call under an on-path tool call rode along.
-    let calls = kernel.code_calls(&forked.id).unwrap();
-    assert_eq!(calls.len(), 1);
-    assert_eq!(calls[0].parent_call, "c1");
-    assert_eq!(calls[0].branch, new_branch.id);
-    assert_eq!(calls[0].args, code.args);
-    assert_eq!(calls[0].output, "5");
-
     // The source session is untouched.
     let (src_info, src_nodes, src_branches) = kernel.session_tree(&session.id).unwrap();
     assert_eq!(src_info.active_branch, session.active_branch);
-    assert_eq!(src_nodes.len(), nodes.len());
+    assert_eq!(src_nodes.len(), path.len() + 1);
     assert_eq!(src_branches.len(), 2);
-    assert_eq!(kernel.code_calls(&session.id).unwrap().len(), 2);
 
     // Forking at an assistant node with tool calls is refused.
     let with_calls = nodes
@@ -4683,7 +4689,7 @@ async fn background_task_effects_keep_their_plugin_source() {
 #[tokio::test]
 async fn invoke_outputs_are_not_capped_to_the_model_limit() {
     let plugin = Arc::new(script_host(&["big"], vec![], noop_hooks(), noop_tools()));
-    let (kernel, _llm, session, branch) = setup(
+    let (kernel, _llm, _session, branch) = setup(
         vec![plugin],
         vec![
             LlmResponse::calls(vec![
@@ -4701,9 +4707,19 @@ async fn invoke_outputs_are_not_capped_to_the_model_limit() {
     let (inner, _) = result_text(&nodes, "c2");
     let rows: Value = serde_json::from_str(&inner).unwrap();
     assert_eq!(rows[0]["len"], 50_000);
-    // The stored trace keeps the model-sized output.
-    let stored = kernel.code_calls(&session).unwrap();
-    assert!(stored[0].output.contains("[truncated"));
+    // The stored trace node keeps the model-sized output.
+    let stored = nodes
+        .iter()
+        .find_map(|n| match &n.body {
+            NodeBody::ToolResult {
+                content,
+                invoke: Some(_),
+                ..
+            } => Some(content.text.clone()),
+            _ => None,
+        })
+        .expect("the invoke node");
+    assert!(stored.contains("[truncated"));
 }
 
 /// `Cx::cancel_invokes` ends a plugin's still-running internal calls.

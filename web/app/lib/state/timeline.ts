@@ -199,6 +199,9 @@ export const timeline = computed<TimelineEntry[]>(() => {
       const pending = b.tool_calls.some((c) => !answered.has(c.call_id))
       if (!pending) g.safeNode = n
     } else if (b.type === 'tool_result') {
+      // A plugin invoke's result is trace data, nested under its enclosing
+      // call by CodeCalls — never a top-level row.
+      if (b.invoke) continue
       const g = ensureGroup()
       if (ctx.length) {
         moveNotes(g, ctx)

@@ -1484,6 +1484,7 @@ fn staged_session() -> (rumu_core::SessionInfo, Vec<Node>, Vec<rumu_core::Branch
                 call_id: "c1".into(),
                 content: rumu_core::Content::text("file-a\nfile-b"),
                 is_error: false,
+                invoke: None,
             },
         ),
         mk(
@@ -1522,6 +1523,7 @@ fn staged_session() -> (rumu_core::SessionInfo, Vec<Node>, Vec<rumu_core::Branch
                     "You are now a sub-agent. Goal: find the config file\nDo the work, then reply with a concise summary — a reply without tool calls ends the sub-agent. Nothing you do here is visible to the main branch except that final reply.",
                 ),
                 is_error: false,
+                invoke: None,
             },
         ),
         mk(
@@ -1969,6 +1971,7 @@ async fn session_nodes_show_image_placeholders() {
                 content: rumu_core::Content::text("image proj:a.png (800×600, 9 bytes stored)")
                     .with_attachments([image]),
                 is_error: false,
+                invoke: None,
             },
         ),
     ];
@@ -2168,6 +2171,7 @@ async fn session_render_escapes_markup() {
                 call_id: "c1".into(),
                 content: rumu_core::Content::text("<truncated and <plain>"),
                 is_error: false,
+                invoke: None,
             },
         ),
         sess_node(
@@ -2281,6 +2285,7 @@ async fn session_range_folds_nested_session_reads() {
                 call_id: "c1".into(),
                 content: rumu_core::Content::text(nested),
                 is_error: false,
+                invoke: None,
             },
         ),
         sess_node(
@@ -2292,6 +2297,7 @@ async fn session_range_folds_nested_session_reads() {
                 call_id: "c2".into(),
                 content: rumu_core::Content::text("search results"),
                 is_error: false,
+                invoke: None,
             },
         ),
         sess_node(
@@ -2303,6 +2309,7 @@ async fn session_range_folds_nested_session_reads() {
                 call_id: "c3".into(),
                 content: rumu_core::Content::text("file-a"),
                 is_error: true,
+                invoke: None,
             },
         ),
     ];
@@ -2758,6 +2765,7 @@ fn search_sessions() -> std::sync::Arc<FakeRuntime> {
                             "Host server\n  Port 22\n  IdentityFile ~/.ssh/id_ed25519",
                         ),
                         is_error: false,
+                        invoke: None,
                     },
                 ),
                 mk(
@@ -3093,6 +3101,7 @@ async fn search_downweights_tool_results_and_breaks_ties_by_time() {
                     call_id: "c1".into(),
                     content: rumu_core::Content::text("widget"),
                     is_error: false,
+                    invoke: None,
                 },
             ),
         ],

@@ -5,7 +5,7 @@
 
 import type { Content, FilePatch, Tagged } from './types'
 
-/** A `workspace.file_patch` payload, from a result or a `code.call` trace. */
+/** A `workspace.file_patch` payload, from a tool result. */
 export function patchOfData(d: Tagged | null | undefined): FilePatch | null {
   return d && d.tag === 'workspace.file_patch' && d.v === 1 ? (d.data as FilePatch) : null
 }

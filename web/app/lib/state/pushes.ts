@@ -6,7 +6,6 @@ import { rumu } from '../api'
 import { routeSession, sessionIdFromLocation } from '../router'
 import type {
   BranchUpdatedPush,
-  CodeCallPush,
   PendingDecision,
   DecisionResolvedPush,
   HookFiredPush,
@@ -257,23 +256,6 @@ function onHookFired(p: HookFiredPush): void {
   if (state.hookTrace.length > MAX_TRACE) state.hookTrace.splice(0, state.hookTrace.length - MAX_TRACE)
 }
 
-/** A tool call from inside a `code` script finished. */
-function onCodeCall(p: CodeCallPush): void {
-  const known = state.branches[p.branch]
-  if (known) {
-    if (known.session !== state.sessionId) return
-  } else if (!state.sessionId || !Object.values(state.busy).some(Boolean)) {
-    return
-  }
-  const list = state.codeCalls[p.parent_call] ?? (state.codeCalls[p.parent_call] = [])
-  const i = list.findIndex((c) => c.seq === p.seq)
-  if (i >= 0) list[i] = p
-  else {
-    list.push(p)
-    list.sort((a, b) => a.seq - b.seq)
-  }
-}
-
 let started = false
 
 export function startApp(): void {
@@ -301,7 +283,6 @@ export function startApp(): void {
   })
   rumu.onPush('session.deleted', (p) => onSessionDeleted(p as unknown as SessionDeletedPush))
   rumu.onPush('hook.fired', (p) => onHookFired(p as unknown as HookFiredPush))
-  rumu.onPush('code.call', (p) => onCodeCall(p as unknown as CodeCallPush))
   rumu.onPush('tool.progress', (p) => onToolProgress(p as unknown as ToolProgressPush))
   rumu.onPush('task.started', (p) => onTaskInfo(p as unknown as TaskInfoPush))
   rumu.onPush('task.done', (p) => onTaskInfo(p as unknown as TaskInfoPush))

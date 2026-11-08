@@ -177,7 +177,6 @@ export function closeSession(): void {
   state.session = null
   state.nodes = {}
   state.branches = {}
-  state.codeCalls = {}
   state.activeBranch = null
   state.pathState = null
   state.deltas = {}

@@ -92,6 +92,7 @@ fn deck_use(deck: &str, id: &str, rev: &str, call_id: &str) -> Vec<Node> {
                 call_id: call_id.into(),
                 content: rumu_core::Content::text("ok"),
                 is_error: false,
+                invoke: None,
             },
         },
         Node {

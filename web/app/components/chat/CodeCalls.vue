@@ -2,12 +2,12 @@
 // Internal tool calls made by one `code` script: a compact list under the
 // script body. Rows expand to their args/output; the hook trace of the
 // enclosing call (tool.pre/post on internal calls) is shown underneath.
-// Internal calls are trace data, not nodes — they survive a reload via
-// session.tree `code_calls`.
+// Each invoke is an ordinary ToolResult node whose `invoke.parent` names the
+// `code` call; they nest here instead of showing as chat rows.
 import { computed, ref } from 'vue'
 import { t } from '../../i18n'
-import type { Branch, CodeCall, Content, Decision, FilePatch } from '../../lib/types'
-import { selectBranch, state } from '../../lib/store'
+import type { Branch, Content, Decision, FilePatch, Tagged } from '../../lib/types'
+import { pathNodes, selectBranch, state } from '../../lib/store'
 import { argSummary, shortId } from '../../lib/util'
 import { highlightLine, prettyJson } from '../../lib/markdown'
 import { patchOfData } from '../../lib/diff'
@@ -19,64 +19,89 @@ import FileView from './FileView.vue'
 
 const props = defineProps<{ parentCall: string }>()
 
-const calls = computed<CodeCall[]>(() => state.codeCalls[props.parentCall] ?? [])
+/** One invoke node under this `code` call, flattened for display. */
+interface CodeCallRow {
+  call_id: string
+  name: string
+  args: unknown
+  blocked: string | null
+  is_error: boolean
+  output: string
+  patch: Tagged | null
+  dur_ms: number
+}
+
+const calls = computed<CodeCallRow[]>(() => {
+  const out: CodeCallRow[] = []
+  for (const n of pathNodes.value) {
+    const b = n.body
+    if (b.type !== 'tool_result' || !b.invoke || b.invoke.parent !== props.parentCall) continue
+    out.push({
+      call_id: b.call_id,
+      name: b.invoke.name,
+      args: b.invoke.args,
+      blocked: b.invoke.blocked ?? null,
+      is_error: b.is_error,
+      output: b.content.text,
+      patch: b.content.data ?? null,
+      dur_ms: n.dur_ms ?? 0,
+    })
+  }
+  return out
+})
 const traces = computed(() => state.hookTrace.filter((e) => e.parent_call === props.parentCall))
 
-/** Sub-agent branches forked by an internal call: `call_id = "{parent}.{seq}"`. */
+/** Sub-agent branches forked by an internal call: keyed by its call id. */
 const agentChildren = computed(() => {
-  const map = new Map<number, Branch>()
-  const prefix = `${props.parentCall}.`
+  const map = new Map<string, Branch>()
   for (const b of Object.values(state.branches)) {
-    if (b.kind.type !== 'agent' || !b.kind.via_plugin) continue
-    if (!b.kind.call_id.startsWith(prefix)) continue
-    const seq = Number(b.kind.call_id.slice(prefix.length))
-    if (Number.isFinite(seq)) map.set(seq, b)
+    if (b.kind.type === 'agent' && b.kind.via_plugin) map.set(b.kind.call_id, b)
   }
   return map
 })
 function openAgent(b: Branch): void {
   void selectBranch(b.id)
 }
-const expanded = ref<Set<number>>(new Set())
+const expanded = ref<Set<string>>(new Set())
 const showTrace = ref(false)
 
 type Status = 'ok' | 'error' | 'blocked'
 
-function status(c: CodeCall): Status {
+function status(c: CodeCallRow): Status {
   return c.blocked ? 'blocked' : c.is_error ? 'error' : 'ok'
 }
-function statusLabel(c: CodeCall): string {
+function statusLabel(c: CodeCallRow): string {
   return t(`tools.row.status.${status(c)}`)
 }
-function isOpen(seq: number): boolean {
-  return expanded.value.has(seq)
+function isOpen(id: string): boolean {
+  return expanded.value.has(id)
 }
-function toggle(seq: number): void {
-  if (expanded.value.has(seq)) expanded.value.delete(seq)
-  else expanded.value.add(seq)
+function toggle(id: string): void {
+  if (expanded.value.has(id)) expanded.value.delete(id)
+  else expanded.value.add(id)
 }
-function summary(c: CodeCall): string {
+function summary(c: CodeCallRow): string {
   return argSummary({ name: c.name, args: c.args })
 }
-function output(c: CodeCall): string {
+function output(c: CodeCallRow): string {
   return c.blocked ?? c.output
 }
 
 /** A successful write/edit expands to its diff, a read to its file and a
  * bash to its terminal, like a direct call's row. */
-function patchOf(c: CodeCall): FilePatch | null {
+function patchOf(c: CodeCallRow): FilePatch | null {
   return status(c) === 'ok' ? patchOfData(c.patch) : null
 }
-function argsOf(c: CodeCall): Record<string, unknown> | null {
+function argsOf(c: CodeCallRow): Record<string, unknown> | null {
   const a = c.args
   return a && typeof a === 'object' && !Array.isArray(a) ? (a as Record<string, unknown>) : null
 }
-function pathOf(c: CodeCall): string {
+function pathOf(c: CodeCallRow): string {
   const p = argsOf(c)?.path
   return typeof p === 'string' ? p : ''
 }
 /** A bash row is its own `$ command` line, whole once open. */
-function commandOf(c: CodeCall): string {
+function commandOf(c: CodeCallRow): string {
   const cmd = argsOf(c)?.command
   return typeof cmd === 'string' ? cmd.trim() : ''
 }
@@ -114,15 +139,15 @@ const iconTone: Record<Status, string> = {
     >
       <div
         v-for="c in calls"
-        :key="c.seq"
+        :key="c.call_id"
         class="flex flex-col"
         :class="{ 'bg-danger-soft/30': status(c) !== 'ok' }"
       >
         <button
           class="flex w-full min-w-0 gap-2 px-2 py-1 text-left transition-colors hover:bg-surface-2/70"
-          :class="c.name === 'bash' && isOpen(c.seq) ? 'items-start' : 'items-center'"
+          :class="c.name === 'bash' && isOpen(c.call_id) ? 'items-start' : 'items-center'"
           :title="`${c.name} ${summary(c)} → ${statusLabel(c)}`"
-          @click="toggle(c.seq)"
+          @click="toggle(c.call_id)"
         >
           <Icon
             :name="status(c) === 'ok' ? 'tool' : status(c) === 'blocked' ? 'blocked' : 'error'"
@@ -136,7 +161,7 @@ const iconTone: Record<Status, string> = {
             {{ c.name === 'bash' ? '$' : c.name }}
           </span>
           <span
-            v-if="c.name === 'bash' && isOpen(c.seq)"
+            v-if="c.name === 'bash' && isOpen(c.call_id)"
             class="shell max-h-40 min-w-0 flex-1 overflow-y-auto font-mono text-micro break-words whitespace-pre-wrap text-ink"
             v-html="highlightLine(commandOf(c), 'bash')"
           ></span>
@@ -157,23 +182,23 @@ const iconTone: Record<Status, string> = {
               name="chevron"
               :size="12"
               class="text-ink-3/70 transition-transform duration-100"
-              :class="{ 'rotate-90': isOpen(c.seq) }"
+              :class="{ 'rotate-90': isOpen(c.call_id) }"
             />
           </span>
         </button>
         <Chip
-          v-if="agentChildren.get(c.seq)"
+          v-if="agentChildren.get(c.call_id)"
           class="mt-0.5 mb-1.5 ml-[28px] self-start"
           icon="agent"
           icon-after="external"
           tone="agent"
           clickable
-          :title="t('tools.row.subAgentTitle', { id: shortId(agentChildren.get(c.seq)!.id) })"
-          @click="openAgent(agentChildren.get(c.seq)!)"
+          :title="t('tools.row.subAgentTitle', { id: shortId(agentChildren.get(c.call_id)!.id) })"
+          @click="openAgent(agentChildren.get(c.call_id)!)"
         >
           {{ t('tools.row.openSubAgent') }}
         </Chip>
-        <div v-if="isOpen(c.seq)" class="reveal flex flex-col gap-1.5 pt-1 pr-2 pb-2 pl-[28px]">
+        <div v-if="isOpen(c.call_id)" class="reveal flex flex-col gap-1.5 pt-1 pr-2 pb-2 pl-[28px]">
           <FileDiff
             v-if="patchOf(c)"
             :patch="patchOf(c)"

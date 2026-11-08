@@ -10,7 +10,6 @@ import type {
   Card,
   Assistant,
   PendingDecision,
-  CodeCall,
   Node,
   NodeId,
   PathState,
@@ -158,8 +157,6 @@ const initial = {
   session: null as SessionInfo | null,
   nodes: {} as Record<NodeId, Node>,
   branches: {} as Record<BranchId, Branch>,
-  /** Internal `code` calls of the open session, grouped by `code` call id. */
-  codeCalls: {} as Record<string, CodeCall[]>,
   activeBranch: null as BranchId | null,
   pathState: null as PathState | null,
 

@@ -5,29 +5,18 @@
 import { rumu } from '../api'
 import { t } from '../../i18n'
 import type { MessageKey } from '../../i18n'
-import type { Branch, BranchId, CodeCall, Node, NodeId, PathState, SessionTreeResult } from '../types'
+import type { Branch, BranchId, Node, NodeId, PathState, SessionTreeResult } from '../types'
 import { state } from './state'
 import { syncLive } from './stream'
 import { toast } from './ui'
 
-/** Replace the internal-call trace with a session.tree snapshot. */
-function setCodeCalls(calls: CodeCall[]): void {
-  state.codeCalls = {}
-  for (const c of calls) {
-    const list = state.codeCalls[c.parent_call] ?? (state.codeCalls[c.parent_call] = [])
-    list.push(c)
-  }
-  for (const list of Object.values(state.codeCalls)) list.sort((a, b) => a.seq - b.seq)
-}
-
-/** Replace nodes/branches/code calls with an authoritative `session.tree`. */
+/** Replace nodes/branches with an authoritative `session.tree`. */
 export function replaceTree(tree: SessionTreeResult): void {
   state.session = tree.session
   state.nodes = {}
   state.branches = {}
   for (const n of tree.nodes) state.nodes[n.id] = n
   for (const b of tree.branches) state.branches[b.id] = b
-  setCodeCalls(tree.code_calls ?? [])
   syncLive(tree)
 }
 

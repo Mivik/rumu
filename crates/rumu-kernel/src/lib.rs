@@ -251,6 +251,9 @@ pub struct Kernel {
     pub(crate) workspaces: Workspaces,
     pub(crate) tx: broadcast::Sender<Value>,
     pub(crate) inner: Mutex<Inner>,
+    /// Serializes node appends: a script's concurrent invokes (`Promise.all`)
+    /// must chain onto the branch head in completion order, not race for it.
+    pub(crate) append_lock: Mutex<()>,
     /// Bumped whenever a task's status or `post_done` changes; waiters sleep
     /// on it instead of polling.
     pub(crate) task_changed: watch::Sender<u64>,
@@ -370,6 +373,7 @@ impl Kernel {
             workspaces,
             tx,
             inner: Mutex::new(Inner::default()),
+            append_lock: Mutex::new(()),
             task_changed: watch::channel(0).0,
             post_tx,
             tap: Mutex::new(None),
@@ -541,12 +545,6 @@ impl Kernel {
             self.store.nodes_of_session(session)?,
             self.store.branches_of_session(session)?,
         ))
-    }
-
-    /// Stored internal `code` calls of a session (trace, never part of the
-    /// node tree). Delivered alongside `session.tree`.
-    pub fn code_calls(&self, session: &SessionId) -> Result<Vec<rumu_core::CodeCall>> {
-        Ok(self.store.code_calls_of_session(session)?)
     }
 
     /// Nodes from root to the branch head, plus the derived state.
@@ -921,6 +919,9 @@ impl Kernel {
         id: Option<NodeId>,
         dur_ms: Option<u64>,
     ) -> Result<Node> {
+        // No await inside: holding this plain mutex covers the whole
+        // read-head → insert → update-head sequence.
+        let _append = self.append_lock.lock().unwrap();
         let mut b = self
             .store
             .get_branch(branch)?
@@ -1288,6 +1289,7 @@ impl Kernel {
                     call_id: c.call_id.clone(),
                     content: Content::text(text),
                     is_error: true,
+                    invoke: None,
                 },
                 None,
             )
@@ -1454,25 +1456,6 @@ impl Kernel {
             })?;
         }
         self.store.insert_branch(&branch)?;
-
-        // Code calls whose parent tool call is on the copied path; the call
-        // ids they hang off ride along unchanged inside the copied bodies.
-        let on_path: HashSet<&str> = path
-            .iter()
-            .filter_map(|old| match &old.body {
-                NodeBody::Assistant { tool_calls, .. } => {
-                    Some(tool_calls.iter().map(|c| c.call_id.as_str()))
-                }
-                _ => None,
-            })
-            .flatten()
-            .collect();
-        for mut call in self.store.code_calls_of_session(&n.session)? {
-            if on_path.contains(call.parent_call.as_str()) {
-                call.branch = branch.id.clone();
-                self.store.insert_code_call(&session, &call)?;
-            }
-        }
 
         self.push("session.updated", json!({ "session": info.clone() }));
         self.push("branch.updated", json!({ "branch": branch }));
@@ -1657,6 +1640,7 @@ mod tests {
                     call_id: "c3".into(),
                     content: Content::text("ok"),
                     is_error: false,
+                    invoke: None,
                 },
                 None,
             )
@@ -1727,6 +1711,7 @@ mod tests {
                     call_id: "c1".into(),
                     content: Content::text("ok"),
                     is_error: false,
+                    invoke: None,
                 },
                 None,
             )

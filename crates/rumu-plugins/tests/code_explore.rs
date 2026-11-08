@@ -136,14 +136,14 @@ async fn script_promise_all_agents_fan_out() {
     let done = wait_turn(&mut rx, &branch.0).await;
     assert_eq!(done["method"], "turn.done", "{done}");
 
-    // The parent only sees the single `code` result; internal calls (and the
-    // two sub-agents) never become nodes on its path.
+    // The model sees only the single `code` result; the two sub-agents'
+    // invoke results are trace nodes nested under it.
     let (nodes, _) = kernel.branch_path(&branch).unwrap();
     let results: Vec<&Node> = nodes
         .iter()
-        .filter(|n| matches!(&n.body, NodeBody::ToolResult { .. }))
+        .filter(|n| matches!(&n.body, NodeBody::ToolResult { invoke: None, .. }))
         .collect();
-    assert_eq!(results.len(), 1, "only the code call has a result node");
+    assert_eq!(results.len(), 1, "only the code call is model-visible");
     let text = match &results[0].body {
         NodeBody::ToolResult { content, .. } => content_text(content),
         _ => unreachable!(),
@@ -161,15 +161,21 @@ async fn script_promise_all_agents_fan_out() {
 
     // Both sub-agents finished, labelled with the internal call id allocated by
     // the kernel (order is completion order for concurrent agents, but each
-    // branch points at its own trace row).
+    // branch points at its own trace node).
     let branches = kernel.session_tree(&session).unwrap().2;
-    let trace = kernel.code_calls(&session).unwrap();
+    let trace: Vec<&Node> = nodes
+        .iter()
+        .filter(|n| {
+            matches!(&n.body, NodeBody::ToolResult { invoke: Some(inv), .. } if inv.name == "agent")
+        })
+        .collect();
+    assert_eq!(trace.len(), 2, "both invokes are trace nodes");
     let agents: Vec<_> = branches
         .iter()
         .filter(|b| matches!(b.kind, BranchKind::Agent { .. }))
         .collect();
     assert_eq!(agents.len(), 2);
-    let mut seqs = Vec::new();
+    let mut ids = Vec::new();
     for b in &agents {
         assert_eq!(b.status, BranchStatus::Done);
         let BranchKind::Agent {
@@ -181,32 +187,21 @@ async fn script_promise_all_agents_fan_out() {
         else {
             unreachable!()
         };
-        let row = trace
-            .iter()
-            .find(|c| c.name == "agent" && c.output.starts_with(&format!("{task}-summary")))
-            .expect("trace row for the sub-agent");
         assert!(via_plugin, "issued from the code script");
-        assert_eq!(
-            call_id,
-            &format!("c1.{}", row.seq),
-            "the branch is labelled with its internal call id"
+        assert!(
+            trace.iter().any(|n| matches!(&n.body,
+                NodeBody::ToolResult { call_id: c, content, .. }
+                if c == call_id
+                    && content.text.starts_with(&format!("{task}-summary")))),
+            "the branch is labelled with its own invoke node"
         );
-        seqs.push(row.seq);
+        ids.push(call_id.clone());
     }
-    seqs.sort_unstable();
-    assert_eq!(seqs, [1, 2]);
+    ids.sort();
+    assert_eq!(ids, ["c1.1", "c1.2"]);
     assert!(
         llm.max_active.load(Ordering::SeqCst) >= 2,
         "the two sub-agents' LLM calls overlapped"
-    );
-
-    // Trace rows exist for both internal calls.
-    assert_eq!(trace.len(), 2);
-    assert!(trace.iter().all(|c| c.name == "agent"));
-    assert!(
-        trace
-            .iter()
-            .all(|c| c.output.starts_with("alpha-summary") || c.output.starts_with("beta-summary"))
     );
 }
 

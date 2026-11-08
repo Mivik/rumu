@@ -143,6 +143,7 @@ async fn scoped_child_cannot_read_an_out_of_scope_workspace() {
                 call_id,
                 content,
                 is_error,
+                ..
             } if call_id == "r1" => Some((content_text(content), *is_error)),
             _ => None,
         })

@@ -286,6 +286,7 @@ impl FakeRuntime {
                 call_id: call_id.into(),
                 content: rumu_core::Content::text("ok"),
                 is_error: false,
+                invoke: None,
             },
         });
         for effect in &out.effects {

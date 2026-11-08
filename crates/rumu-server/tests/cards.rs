@@ -27,6 +27,7 @@ fn ok_tool_results(nodes: &[Node]) -> Vec<(String, String)> {
                 call_id,
                 content,
                 is_error: false,
+                ..
             } => Some((call_id.clone(), content.text.clone())),
             _ => None,
         })

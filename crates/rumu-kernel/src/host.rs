@@ -57,7 +57,7 @@ impl Runtime for KernelRuntime {
         args: Value,
     ) -> Result<InnerCall> {
         self.0
-            .exec_inner_call(branch, caller, parent_call, depth, name, args)
+            .exec_invoke(branch, caller, parent_call, depth, name, args)
             .await
             .map_err(Into::into)
     }

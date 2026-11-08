@@ -10,16 +10,15 @@
 //! {"t":"node","id":"7c9e…","parent":null,"session":"7c9e…","at":1,"body":{"type":"note","source":"system","content":{"text":"","data":{"tag":"root","v":1,"data":{}}}}}
 //! {"t":"branch_update","id":"7c9e…","head":"7c9e…","status":"done"}
 //! {"t":"meta","title":"refactor","updated_at":2}
-//! {"t":"code_call","branch":"7c9e…","parent_call":"c1","seq":1,"name":"read",…}
 //! ```
 //!
 //! Loading a file folds the records into memory: `session` is the header
 //! (the initial [`SessionInfo`]), `meta` patches it (title /
 //! active_branch / updated_at — whatever the mutating call changed),
-//! `branch` adds a branch and `branch_update` moves its head/status, `node`
-//! appends a node, and a `code_call` with an already-seen `(parent_call,
-//! seq)` replaces the earlier one. Optional fields are `#[serde(default)]`
-//! and skipped when unset, so the format can grow without migrations.
+//! `branch` adds a branch and `branch_update` moves its head/status, and
+//! `node` appends a node. Optional fields are `#[serde(default)]` and
+//! skipped when unset, so the format can grow without migrations; records
+//! with an unknown tag (e.g. a retired record type) are ignored.
 //!
 //! [`Store::open`] scans the directory once and folds every file up front —
 //! the simple robust option at this scale (a session is a few hundred lines).
@@ -46,8 +45,8 @@ use std::path::{Path, PathBuf};
 use std::sync::Mutex;
 
 use rumu_core::{
-    Branch, BranchId, BranchStatus, CodeCall, IoError, Node, NodeBody, NodeId, SessionId,
-    SessionInfo, Timestamp,
+    Branch, BranchId, BranchStatus, IoError, Node, NodeBody, NodeId, SessionId, SessionInfo,
+    Timestamp,
 };
 use serde::{Deserialize, Serialize};
 use serde_json::Value;
@@ -86,7 +85,10 @@ enum Record {
     // Boxed: `Node` dwarfs the other variants and every record is built once
     // per mutation.
     Node(Box<Node>),
-    CodeCall(CodeCall),
+    /// A record tag this build does not know (e.g. a retired record type):
+    /// parsed and dropped so old journals still load.
+    #[serde(other)]
+    Unknown,
 }
 
 #[derive(Default)]
@@ -109,9 +111,6 @@ struct SessionState {
     info: SessionInfo,
     branches: HashMap<BranchId, Branch>,
     nodes: HashMap<NodeId, Node>,
-    /// Keyed by (parent_call, seq): a later record with the same key
-    /// replaces the earlier one.
-    code_calls: HashMap<(String, u32), CodeCall>,
 }
 
 impl Store {
@@ -391,41 +390,6 @@ impl Store {
         })
     }
 
-    // ---- internal `code` calls (trace only) ----
-
-    /// Record one tool call made from inside a `code` script. `output` is
-    /// already capped by the caller (20k chars). A later call with the same
-    /// `(parent_call, seq)` replaces this one.
-    pub fn insert_code_call(&self, session: &SessionId, c: &CodeCall) -> Result<()> {
-        let mut st = self.state.lock().unwrap();
-        // See `insert_branch`: a deleted session stays deleted.
-        if st.loaded(session)?.is_none() {
-            return Ok(());
-        }
-        let rec = Record::CodeCall(c.clone());
-        self.append(session, &rec)?;
-        st.apply(session, rec);
-        Ok(())
-    }
-
-    /// Every stored internal call of a session, oldest first.
-    pub fn code_calls_of_session(&self, session: &SessionId) -> Result<Vec<CodeCall>> {
-        let st = self.state.lock().unwrap();
-        Ok(match st.sessions.get(session) {
-            Some(Entry::Loaded(s)) => {
-                let mut v: Vec<CodeCall> = s.code_calls.values().cloned().collect();
-                v.sort_by(|a, b| {
-                    a.at.cmp(&b.at)
-                        .then_with(|| a.parent_call.cmp(&b.parent_call))
-                        .then_with(|| a.seq.cmp(&b.seq))
-                });
-                v
-            }
-            Some(Entry::Corrupt(msg)) => return Err(unreadable(session, msg)),
-            None => vec![],
-        })
-    }
-
     /// Every blob hash referenced by a node of any session — every `Content`
     /// of every body variant, on every branch, referenced or not. This is the
     /// live set the blob store's GC keeps. An unreadable session is an error
@@ -603,7 +567,6 @@ impl SessionState {
             info,
             branches: HashMap::new(),
             nodes: HashMap::new(),
-            code_calls: HashMap::new(),
         }
     }
 
@@ -645,9 +608,7 @@ impl SessionState {
             Record::Node(n) => {
                 self.nodes.insert(n.id.clone(), *n);
             }
-            Record::CodeCall(c) => {
-                self.code_calls.insert((c.parent_call.clone(), c.seq), c);
-            }
+            Record::Unknown => {}
         }
     }
 }
@@ -969,53 +930,33 @@ mod tests {
         std::fs::remove_dir_all(&dir).ok();
     }
 
+    /// A retired record tag (the old internal-call side table) is ignored on
+    /// load instead of making the session unreadable.
     #[test]
-    fn code_calls_roundtrip() {
-        let store = Store::in_memory();
-        let (session, branch, _) = mk_session(&store);
-        let call = CodeCall {
-            branch: branch.id.clone(),
-            parent_call: "c1".into(),
-            seq: 1,
-            name: "read".into(),
-            args: serde_json::json!({ "path": "a.rs" }),
-            output: "contents".into(),
-            is_error: false,
-            blocked: None,
-            patch: None,
-            dur_ms: 12,
-            at: now(),
-        };
-        store.insert_code_call(&session.id, &call).unwrap();
-        let blocked = CodeCall {
-            seq: 2,
-            name: "bash".into(),
-            args: serde_json::json!({ "command": "rm -rf /" }),
-            output: "Blocked by hook: nope".into(),
-            is_error: true,
-            blocked: Some("nope".into()),
-            ..call.clone()
-        };
-        store.insert_code_call(&session.id, &blocked).unwrap();
-        // The same (parent_call, seq) again: the later record replaces it.
-        let mut rerun = call.clone();
-        rerun.output = "contents v2".into();
-        rerun.at = now();
-        store.insert_code_call(&session.id, &rerun).unwrap();
-
-        let got = store.code_calls_of_session(&session.id).unwrap();
-        assert_eq!(got.len(), 2);
-        assert_eq!(got[0].name, "read");
-        assert_eq!(got[0].args["path"], "a.rs");
-        assert_eq!(got[0].seq, 1);
-        assert_eq!(got[0].output, "contents v2");
-        assert!(got[0].blocked.is_none());
-        assert_eq!(got[1].seq, 2);
-        assert_eq!(got[1].blocked.as_deref(), Some("nope"));
-        assert!(got[1].is_error);
-        // Another session sees nothing.
-        let (other, _, _) = mk_session(&store);
-        assert!(store.code_calls_of_session(&other.id).unwrap().is_empty());
+    fn retired_code_call_records_are_ignored() {
+        let dir = temp_dir("retired-code-call");
+        let sid;
+        {
+            let store = Store::open(&dir).unwrap();
+            let (session, _, _) = mk_session(&store);
+            sid = session.id.0.clone();
+            let mut file = std::fs::OpenOptions::new()
+                .append(true)
+                .open(dir.join(format!("{sid}.jsonl")))
+                .unwrap();
+            file.write_all(
+                br#"{"t":"code_call","branch":"b","parent_call":"c1","seq":1,"name":"read","args":{},"output":"x","is_error":false,"blocked":null,"dur_ms":0,"at":1}
+"#,
+            )
+            .unwrap();
+        }
+        let store = Store::open(&dir).unwrap();
+        let session = store
+            .get_session(&SessionId::from(sid.as_str()))
+            .unwrap()
+            .expect("old journals still load");
+        assert_eq!(store.nodes_of_session(&session.id).unwrap().len(), 1);
+        std::fs::remove_dir_all(&dir).ok();
     }
 
     fn attachment(hash: &str) -> rumu_core::Attachment {
@@ -1080,6 +1021,7 @@ mod tests {
                         content: rumu_core::Content::text("shot")
                             .with_attachments([attachment("cc")]),
                         is_error: false,
+                        invoke: None,
                     },
                 ))
                 .unwrap();

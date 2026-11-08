@@ -264,23 +264,15 @@ export interface CardUse {
   callId: string | null
 }
 
-/** The `(parent call, seq)` of a `code` script's call id (`<parent>.<n>`). */
-function scriptCallOf(callId: string): [string, number] | null {
-  const m = /^(.+)\.(\d+)$/.exec(callId)
-  return m ? [m[1]!, Number(m[2])] : null
-}
-
 /** Every recorded use of every card on the current path, in path order. */
 export const cardUsesOnPath = computed(() => {
-  const okCalls = new Set<string>()
-  for (const n of pathNodes.value) {
-    if (n.body.type === 'tool_result' && !n.body.is_error) okCalls.add(n.body.call_id)
-  }
+  // Successful call id → result text; invoke call id → its effective args.
   const resultText = new Map<string, string>()
-  for (const n of pathNodes.value) {
-    if (n.body.type === 'tool_result' && !n.body.is_error) {
-      resultText.set(n.body.call_id, n.body.content.text)
-    }
+  const invokeArgs = new Map<string, unknown>()
+  for (const { body: b } of pathNodes.value) {
+    if (b.type !== 'tool_result') continue
+    if (!b.is_error) resultText.set(b.call_id, b.content.text)
+    if (b.invoke) invokeArgs.set(b.call_id, b.invoke.args)
   }
   const calls = callsOnPath.value
 
@@ -308,21 +300,16 @@ export const cardUsesOnPath = computed(() => {
     if (!u) continue
     const callId = u.call_id ?? null
     if (!u.deck || !u.path || !u.rev) continue
-    // Abort-path guard: only count records whose call succeeded. A `code`
-    // script's call (`<parent>.<n>`) has no result node and records only on
-    // success.
-    const script = callId ? scriptCallOf(callId) : null
-    if (callId && !script && !okCalls.has(callId)) continue
-    const inner = script ? state.codeCalls[script[0]]?.find((c) => c.seq === script[1]) : undefined
+    // Abort-path guard: only count records whose call succeeded — an invoke
+    // has its own result node, so the same rule covers it.
+    if (callId && !resultText.has(callId)) continue
     const op = u.op === 'read' ? 'read' : 'write'
     // Write snapshots come from the call args (`content`, the editable view).
-    const args = script ? inner?.args : calls.get(callId ?? '')?.call.args
+    const args = calls.get(callId ?? '')?.call.args ?? invokeArgs.get(callId ?? '')
     const snapshot =
       op === 'write'
         ? String((args as { content?: unknown } | undefined)?.content ?? '')
-        : script
-          ? (inner?.output ?? '')
-          : (resultText.get(callId ?? '') ?? '')
+        : (resultText.get(callId ?? '') ?? '')
     push(`${u.deck}:${u.path}`, { kind: op, rev: u.rev, node: n, snapshot, callId })
   }
   return uses

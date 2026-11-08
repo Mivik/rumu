@@ -5,7 +5,6 @@
 //! these.
 
 mod addr;
-mod code;
 mod error;
 mod event;
 mod ids;
@@ -18,7 +17,6 @@ mod task;
 mod workspace;
 
 pub use addr::*;
-pub use code::*;
 pub use error::*;
 pub use event::*;
 pub use ids::*;

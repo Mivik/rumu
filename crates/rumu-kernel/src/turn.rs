@@ -7,10 +7,10 @@ use std::time::{Duration, Instant};
 use crate::{Error, Result};
 use rumu_core::kind;
 use rumu_core::{
-    Branch, BranchId, BranchKind, BranchStatus, CODE_DENIED_TOOLS, Call, CodeCall, Content, Cx,
-    FILE_PATCH_TAG, Inherit, InheritContext, InnerCall, ModelPick, NodeBody, NodeId, Plugin,
-    RUMU_WORKSPACE, Role, SYSTEM_SOURCE, SessionId, ToolCall, ToolError, ToolOutput, ToolResultExt,
-    TurnError, WorkspaceSet, WorkspaceUse, now, parse_args, truncate_chars, truncate_output,
+    Branch, BranchId, BranchKind, BranchStatus, CODE_DENIED_TOOLS, Call, Content, Cx,
+    FILE_PATCH_TAG, Inherit, InheritContext, InnerCall, Invoke, ModelPick, NodeBody, NodeId,
+    Plugin, RUMU_WORKSPACE, Role, SYSTEM_SOURCE, SessionId, ToolCall, ToolError, ToolOutput,
+    ToolResultExt, TurnError, WorkspaceSet, WorkspaceUse, parse_args, truncate_output,
 };
 use schemars::JsonSchema;
 use serde::Deserialize;
@@ -18,10 +18,6 @@ use serde_json::{Value, json};
 use tokio_util::sync::CancellationToken;
 
 use crate::{Choice, Delta, Kernel, MAX_INVOKE_DEPTH, MAX_LLM_RETRIES, host::KernelRuntime};
-
-/// `code.call` pushes carry at most this much output (the store keeps the
-/// full 20k-char-capped text).
-const CODE_CALL_PUSH_LIMIT: usize = 2000;
 
 /// Backoff before the first retry; doubles from there.
 const RETRY_BACKOFF_START: Duration = Duration::from_secs(1);
@@ -522,6 +518,7 @@ impl Kernel {
                         call_id: call.call_id.clone(),
                         content,
                         is_error,
+                        invoke: None,
                     },
                     None,
                     Some(dur_ms),
@@ -748,10 +745,11 @@ impl Kernel {
     /// Run a tool on behalf of a plugin (`Cx::invoke`). Dispatches
     /// `tool.pre` / `tool.post` exactly like a model call; appends made by
     /// hooks or plugins are queued for the loop's next safe point. Requires a
-    /// running loop on the branch. No node is appended for the internal call
-    /// itself. Background tasks are refused by `Cx::invoke` before reaching
-    /// this.
-    pub(crate) async fn exec_inner_call(
+    /// running loop on the branch. The result lands as a trace-only
+    /// [`NodeBody::ToolResult`] node under `parent_call`, appended on
+    /// completion (so concurrent invokes chain in completion order).
+    /// Background tasks are refused by `Cx::invoke` before reaching this.
+    pub(crate) async fn exec_invoke(
         self: &Arc<Self>,
         branch: &BranchId,
         caller: &str,
@@ -782,7 +780,7 @@ impl Kernel {
             });
         }
         let session = self.session_of(branch)?;
-        let (token, seq, call_id) = {
+        let (token, call_id) = {
             let mut inner = self.inner.lock().unwrap();
             let running =
                 inner
@@ -799,7 +797,7 @@ impl Kernel {
                 .clone();
             let n = inner.inner_seq.entry(parent_call.to_owned()).or_insert(0);
             *n += 1;
-            (token, *n, format!("{parent_call}.{n}"))
+            (token, format!("{parent_call}.{n}"))
         };
         let call = ToolCall::new(call_id, name, args.clone());
         let Some(ExecutedTool {
@@ -834,33 +832,31 @@ impl Kernel {
         let mut ev = self.make_event(kind::TOOL_POST, session.clone(), branch.clone(), payload)?;
         self.dispatch(&mut ev, false).await?;
 
-        let record = CodeCall {
-            branch: branch.clone(),
-            parent_call: parent_call.to_owned(),
-            seq,
-            name: effective_name,
-            args: effective_args,
-            // The script may see up to `INVOKE_OUTPUT_LIMIT`; the trace keeps
-            // what the model would have seen for a direct call.
-            output: truncate_output(out.content.text.clone()),
-            is_error: out.is_error,
-            blocked: blocked.clone(),
-            // Only file patches are worth tracing: they let a reloaded session
-            // render an internal write/edit exactly like a direct one.
-            patch: out.content.data.clone().filter(|d| d.tag == FILE_PATCH_TAG),
-            dur_ms,
-            at: now(),
-        };
-        // Trace only: a side table, never a node. Stored before the push so a
-        // reload can always reproduce what the live UI saw.
-        self.store.insert_code_call(&session, &record)?;
-        let mut pushed = serde_json::to_value(&record)?;
-        // The live push is display-sized.
-        pushed["output"] = json!(truncate_chars(
-            out.content.text.clone(),
-            CODE_CALL_PUSH_LIMIT
-        ));
-        self.push("code.call", pushed);
+        // The node keeps what the model would have seen for a direct call;
+        // the script already got the full output up to the invoke cap. Only
+        // the file patch is kept: it lets a reloaded session render an
+        // internal write/edit exactly like a direct one.
+        self.append_body_dur(
+            branch,
+            NodeBody::ToolResult {
+                call_id: call.call_id.clone(),
+                content: Content {
+                    text: truncate_output(out.content.text.clone()),
+                    attachments: Vec::new(),
+                    data: out.content.data.clone().filter(|d| d.tag == FILE_PATCH_TAG),
+                },
+                is_error: out.is_error,
+                invoke: Some(Invoke {
+                    parent: parent_call.to_owned(),
+                    name: effective_name,
+                    args: effective_args,
+                    blocked: blocked.clone(),
+                }),
+            },
+            None,
+            Some(dur_ms),
+        )
+        .await?;
 
         Ok(InnerCall {
             output: out,
@@ -968,6 +964,7 @@ impl Kernel {
                         call_id: call.call_id.clone(),
                         content: Content::text(text),
                         is_error: false,
+                        invoke: None,
                     });
                 }
                 (head.id.clone(), initial)

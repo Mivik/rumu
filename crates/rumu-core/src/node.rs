@@ -21,6 +21,9 @@ pub struct Node {
     pub body: NodeBody,
 }
 
+/// Tag of the `write`/`edit` result payload the UI renders as a file diff.
+pub const FILE_PATCH_TAG: &str = "workspace.file_patch";
+
 /// Versioned structured payload. Readers that don't know `tag` or don't support
 /// `v` fall back to the node's text.
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize, ts_rs::TS)]
@@ -349,6 +352,11 @@ pub enum NodeBody {
         content: Content,
         #[serde(default)]
         is_error: bool,
+        /// Set when a plugin (e.g. a `code` script) made the call through
+        /// `Cx::invoke`: never projected to the model; the UI nests it under
+        /// `parent`.
+        #[serde(default, skip_serializing_if = "Option::is_none")]
+        invoke: Option<Invoke>,
     },
     /// Plugin-written context (memory cards, workspace info, reminders,
     /// the card catalog). Non-empty `content.text` projects as
@@ -358,6 +366,22 @@ pub enum NodeBody {
         source: String,
         content: Content,
     },
+}
+
+/// A tool call a plugin made through `Cx::invoke`, nested under the model
+/// call that triggered the plugin. Carried on its [`NodeBody::ToolResult`].
+#[derive(Debug, Clone, Serialize, Deserialize, ts_rs::TS)]
+#[ts(export)]
+pub struct Invoke {
+    /// The call id of the enclosing model tool call.
+    pub parent: String,
+    /// The effective tool name (after any `tool.pre` rewrite).
+    pub name: String,
+    /// The effective args (after any `tool.pre` rewrite).
+    pub args: Value,
+    /// The hook's block reason when `tool.pre` blocked the call.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub blocked: Option<String>,
 }
 
 /// Payload of the `workspace.use` marker (v1).
