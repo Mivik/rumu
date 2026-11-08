@@ -185,14 +185,12 @@ function onSessionDeleted(p: SessionDeletedPush): void {
 function onTurnStarted(p: TurnPush): void {
   state.busy[p.branch] = true
   delete state.retrying[p.branch]
-  delete state.failedTurns[p.branch]
 }
 
 function onTurnDone(p: TurnPush): void {
   state.busy[p.branch] = false
   delete state.deltas[p.branch]
   delete state.retrying[p.branch]
-  delete state.failedTurns[p.branch]
 }
 
 function onTurnError(p: TurnErrorPush): void {
@@ -205,11 +203,11 @@ function onTurnError(p: TurnErrorPush): void {
     toast('error', p.message)
     return
   }
-  // Shown once, live, where the missing reply would be (see `owedReply`) —
-  // never rebuilt from the stored marker on a reload. A branch that is not on
-  // screen has no row to land in, so its failure still needs a toast.
-  state.failedTurns[p.branch] = p.message
-  if (p.branch !== state.activeBranch) toast('error', p.message)
+  // A recorded failure shows as the error row where the missing reply would
+  // be (`owedReply`, from its marker on the path). A branch that is not on
+  // screen has no row to land in, and an unrecorded failure no marker, so
+  // those still need a toast.
+  if (!p.recorded || p.branch !== state.activeBranch) toast('error', p.message)
 }
 
 /** `prompt.blocked`: a steering prompt was refused by a hook while the turn

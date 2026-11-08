@@ -1193,8 +1193,8 @@ impl Kernel {
     /// flush of queued items cannot bury the open calls and no new turn can
     /// append concurrently — by giving unanswered calls of the last assistant
     /// node error results, then appending a `turn.error` marker noting the
-    /// message, so the tree stays valid and the failure is on record. The UI
-    /// never renders that marker (a failure shows live only); hook-blocked
+    /// message, so the tree stays valid and the failure is on record (the UI
+    /// reads it for the error row, so it survives a reload); hook-blocked
     /// prompts never reach this: they push `turn.error` directly (a refusal,
     /// with nothing to record).
     pub(crate) async fn finish_turn(self: &Arc<Self>, branch: BranchId, error: Option<Error>) {

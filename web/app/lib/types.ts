@@ -85,9 +85,9 @@ export type { AgentsNote } from './generated/AgentsNote'
 /** Milliseconds since the Unix epoch (rumu-core's `Timestamp` alias). */
 export type Timestamp = number
 
-/** The tag of the recorded turn-failure marker. The marker carries no text
- * and the UI never renders it — the failure is shown live only (see
- * `owedReply`); the timeline just skips it. */
+/** The tag of the recorded turn-failure marker. The marker carries no text;
+ * the timeline skips it and the error row (`owedReply`) reads it while the
+ * reply is still owed. */
 export const TURN_ERROR_TAG = 'turn.error'
 
 /** A plugin-authored tail append: a note's content (an empty-text note is a
@@ -351,9 +351,8 @@ export interface PromptBlockedPush {
 export interface TurnErrorPush {
   branch: BranchId
   message: string
-  /** The failure was recorded as a `turn.error` marker on the branch. A
-   * server-side record only: the UI shows the failure live (`owedReply`) and
-   * never renders the stored marker, so it does not branch on this. */
+  /** The failure was recorded as a `turn.error` marker on the branch, which
+   * the error row (`owedReply`) reads; an unrecorded one is a toast. */
   recorded?: boolean
   /** True when a prompt hook refused the turn before it started: nothing was
    * recorded and no reply is owed, so the refusal is a toast, not a failure

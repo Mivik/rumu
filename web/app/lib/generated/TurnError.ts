@@ -4,6 +4,6 @@
  * Payload of the `turn.error` marker (v1): a turn that failed terminally
  * after its retries ran out. Recorded at the branch head as a durable record
  * of the failure; the marker's empty text keeps it out of the model's
- * projection, and the UI never renders it (failures are shown live only).
+ * projection. The UI shows it as the error row while the reply is owed.
  */
 export type TurnError = { message: string, };

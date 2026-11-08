@@ -3,6 +3,8 @@
 import { computed } from 'vue'
 import { rumu } from '../api'
 import type { Branch, BranchId, Node, NodeId, SessionInfo, TaskInfo } from '../types'
+import type { TurnError } from '../generated/TurnError'
+import { TURN_ERROR_TAG } from '../types'
 import type { DeltaBuffer, TurnCache } from './state'
 import { state } from './state'
 
@@ -53,21 +55,32 @@ export const activeDelta = computed<DeltaBuffer | null>(() =>
 export const isBusy = computed(() => !!state.activeBranch && !!state.busy[state.activeBranch])
 
 export interface OwedReply {
-  /** The live failure's message (empty when the server sent none) — then the
+  /** The recorded failure's message (empty when there is none) — then the
    * generic interruption text applies. */
   message: string
 }
 
-/** The failure the active branch hit during this page's lifetime, if any:
- * shown as the error row at the end of the conversation while the branch is
- * idle. Deliberately not derived from the tree — a stored `turn.error`
- * marker never brings the row back, so history stays quiet. A hook-refused
- * prompt (a blocked `turn.error`) never lands here either: it is a toast. */
+/** The active branch's unanswered failure, shown as the error row at the end
+ * of the conversation while the branch is idle. Read from the path, so it
+ * survives a reload: a `turn.error` marker behind the head's last real node
+ * (a user message or tool result still owed its reply). The same rule the
+ * server's `branch.retry` accepts. An answered or re-prompted failure is
+ * history and stays quiet; a hook-refused prompt records nothing (a toast). */
 export const owedReply = computed<OwedReply | null>(() => {
   const branch = state.activeBranch
   if (!branch || state.busy[branch]) return null
-  const message = state.failedTurns[branch]
-  return message === undefined ? null : { message }
+  let failure: OwedReply | null = null
+  for (const n of [...pathNodes.value].reverse()) {
+    if (n.body.type !== 'note') {
+      const owes = n.body.type === 'user' || n.body.type === 'tool_result'
+      return owes ? failure : null
+    }
+    const data = n.body.content.data
+    if (!failure && data?.tag === TURN_ERROR_TAG) {
+      failure = { message: (data.data as TurnError | null)?.message ?? '' }
+    }
+  }
+  return null
 })
 
 /** Steering prompts waiting to be written on the active branch. */

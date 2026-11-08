@@ -2,9 +2,10 @@
 // The row shown where an owed reply would be: the branch's last turn failed
 // and never got its answer. Shaped like an assistant turn — the mascot heads
 // it on its own line — so the failure reads as the reply that is missing, not
-// as a floating banner. Live only: it comes from the failure that just
-// happened (`owedReply`), never from a stored marker or a hook-refused
-// prompt, so history stays quiet. Retry runs the turn again in place.
+// as a floating banner. It comes from the branch's recorded failure while the
+// reply is still owed (`owedReply`), so it survives a reload; answered
+// failures and hook-refused prompts stay quiet. Retry runs the turn again in
+// place.
 import { ref } from 'vue'
 import { t } from '../../i18n'
 import type { OwedReply } from '../../lib/store'

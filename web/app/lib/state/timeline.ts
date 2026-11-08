@@ -27,8 +27,8 @@ function isRecallNote(n: Node): boolean {
 /** A bookkeeping marker with nothing to show: the root marker, the
  * `card_use` record a card read/write leaves after its tool result (the
  * Context data reads it from the path; the tool row already shows the card),
- * and a `turn.error` failure record (failures are shown live only — a stored
- * marker is never rendered, so it leaves no trace in the transcript), and a
+ * and a `turn.error` failure record (the error row at the end shows an
+ * unanswered one; in the transcript it leaves no trace), and a
  * `workspace.set` (the composer's workspace chip shows the result).
  * Kept out of the timeline entirely — as an empty context item it would
  * split the activity run around it in two. */

@@ -152,11 +152,6 @@ const initial = {
   /** Pending automatic retry of the model call, keyed by branch; cleared by
    * the next turn event or the branch's first delta. */
   retrying: {} as Record<BranchId, RetryState>,
-  /** A branch's turn failed terminally (a recorded `turn.error`, never a
-   * hook-refused prompt), keyed by branch. Live only: never rebuilt from
-   * stored markers, so a reloaded history shows no failure row; cleared when
-   * the branch's next turn starts or ends, and when a session is opened. */
-  failedTurns: {} as Record<BranchId, string>,
 
   /** Live foreground tool output, keyed by `${branch}:${call_id}`. */
   toolProgress: {} as Record<

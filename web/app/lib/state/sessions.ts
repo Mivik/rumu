@@ -139,9 +139,6 @@ export async function openSession(id: SessionId, opts: { history?: OpenHistory }
     state.sessionId = tree.session.id
     viewAssistant(tree.session.assistant)
     replaceTree(tree)
-    // A newly loaded history has no live failures; anything still listed here
-    // belonged to the view we just left.
-    state.failedTurns = {}
     state.activeBranch = tree.session.active_branch
     const history = opts.history ?? 'push'
     if (history !== 'none') routeSession(state.sessionId, history)
@@ -187,7 +184,6 @@ export function closeSession(): void {
   state.busy = {}
   state.queuedPrompts = {}
   state.retrying = {}
-  state.failedTurns = {}
   state.toolProgress = {}
   state.tasks = {}
   state.taskOutput = {}
