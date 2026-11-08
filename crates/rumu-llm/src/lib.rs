@@ -574,11 +574,18 @@ fn dropped_thinking(frame: &Value) -> usize {
         .unwrap_or(0)
 }
 
-/// A 400 about replayed thinking (`Invalid signature in thinking block`,
-/// `Invalid data in redacted_thinking block`, `cannot be modified`).
+/// A 400 about replayed reasoning: Anthropic's `thinking` blocks (`Invalid
+/// signature in thinking block`, `Invalid data in redacted_thinking block`,
+/// `cannot be modified`), Gemini's `thought_signature`, OpenAI's
+/// `encrypted_content`.
 fn rejects_reasoning(e: &LlmError) -> bool {
     match e {
-        LlmError::Request(m) | LlmError::Stream(m) => m.contains("400") && m.contains("thinking"),
+        LlmError::Request(m) | LlmError::Stream(m) => {
+            m.contains("400")
+                && ["thinking", "thought_signature", "encrypted_content"]
+                    .iter()
+                    .any(|k| m.contains(k))
+        }
         _ => false,
     }
 }
@@ -637,14 +644,11 @@ fn replay_from(nodes: &[Node]) -> usize {
 }
 
 /// The thinking blocks genai captured, in the reply's original order: a
-/// `ThoughtSignature` and the `ReasoningContent` after it are one signed block,
-/// a `redacted_thinking` custom part is an opaque one. Without captured blocks
-/// the streamed text is kept for display only (unsigned).
-///
-/// This covers the two shapes genai produces for leading reasoning blocks —
-/// Anthropic's `thinking`/`redacted_thinking` and OpenAI Responses' encrypted
-/// reasoning. A provider that attaches a signature to each part instead
-/// (Gemini) is out of scope until an adapter for it is wired.
+/// `ThoughtSignature` and the `ReasoningContent` after it are one signed block
+/// (Anthropic `thinking`, an OpenAI Responses encrypted item, a Gemini
+/// signature); a `redacted_thinking` or OpenAI chat `reasoning.*` detail
+/// custom part is an opaque one. When no block carries text, the streamed text
+/// is kept for display on the first block, or on an unsigned one of its own.
 fn reasoning_blocks(end: &genai::chat::StreamEnd, text: String) -> Vec<ReasoningBlock> {
     let mut blocks = Vec::new();
     let parts: &[ContentPart] = end
@@ -669,7 +673,11 @@ fn reasoning_blocks(end: &genai::chat::StreamEnd, text: String) -> Vec<Reasoning
                 text: t.clone(),
                 signature: signature.take(),
             }),
-            ContentPart::Custom(custom) if custom.typ() == Some("redacted_thinking") => {
+            ContentPart::Custom(custom)
+                if custom
+                    .typ()
+                    .is_some_and(|t| t == "redacted_thinking" || t.starts_with("reasoning.")) =>
+            {
                 blocks.push(ReasoningBlock::Redacted {
                     data: custom.data().clone(),
                 });
@@ -684,20 +692,18 @@ fn reasoning_blocks(end: &genai::chat::StreamEnd, text: String) -> Vec<Reasoning
             signature: Some(signature),
         });
     }
-    if text.is_empty() {
+    if text.is_empty() || blocks_have_text(&blocks) {
         return blocks;
     }
-    // Gemini signs without returning the text in its parts: keep the
-    // streamed text on the first block, for display.
-    if blocks.is_empty() {
-        blocks.push(ReasoningBlock::Thinking {
-            text,
-            signature: None,
-        });
-    } else if !blocks_have_text(&blocks)
-        && let Some(ReasoningBlock::Thinking { text: t, .. }) = blocks.first_mut()
-    {
-        *t = text;
+    match blocks.first_mut() {
+        Some(ReasoningBlock::Thinking { text: t, .. }) => *t = text,
+        _ => blocks.insert(
+            0,
+            ReasoningBlock::Thinking {
+                text,
+                signature: None,
+            },
+        ),
     }
     blocks
 }
@@ -1205,6 +1211,57 @@ mod tests {
     }
 
     #[test]
+    fn chat_reasoning_details_replay_verbatim() {
+        // OpenAI chat completions (through OpenRouter-style gateways) carry
+        // encrypted reasoning only in `reasoning_details`; the streamed text,
+        // when there is any, stays for display beside it.
+        let detail = json!({"type": "reasoning.encrypted", "data": "gAAA", "id": "rs_1"});
+        let end = genai::chat::StreamEnd {
+            captured_usage: None,
+            captured_stop_reason: None,
+            captured_content: Some(MessageContent::from_parts(vec![
+                ContentPart::Custom(CustomPart {
+                    model_iden: None,
+                    data: detail.clone(),
+                }),
+                ContentPart::Text("hi".into()),
+            ])),
+            captured_reasoning_content: None,
+            captured_response_id: None,
+        };
+        let blocks = reasoning_blocks(&end, "thought".into());
+        assert_eq!(
+            blocks,
+            vec![
+                ReasoningBlock::Thinking {
+                    text: "thought".into(),
+                    signature: None,
+                },
+                ReasoningBlock::Redacted {
+                    data: detail.clone()
+                },
+            ]
+        );
+        let nodes = vec![node(NodeBody::Assistant {
+            content: rumu_core::Content::text("hi"),
+            reasoning: blocks,
+            reason_ms: None,
+            reasoning_reset: false,
+            tool_calls: vec![],
+            model: "m".into(),
+            usage: Usage::default(),
+        })];
+        let to = Projection {
+            protocol: Protocol::Openai,
+            model: "m",
+        };
+        let req = project(to, "SYSTEM", &[], &nodes, None);
+        let parts = req.messages[0].content.parts();
+        assert!(matches!(&parts[0], ContentPart::ReasoningContent(t) if t == "thought"));
+        assert!(matches!(&parts[1], ContentPart::Custom(c) if c.data == detail));
+    }
+
+    #[test]
     fn unsigned_reasoning_is_display_only() {
         // A provider that returns plain reasoning with no signature: kept for
         // the UI, never replayed (Anthropic rejects an unsigned block).
@@ -1653,6 +1710,13 @@ mod tests {
                 .into(),
         );
         assert!(rejects_reasoning(&rejected));
+        // Gemini (through ZenMux's Vertex endpoint), verbatim.
+        assert!(rejects_reasoning(&LlmError::Stream(
+            "Status: 400 Bad Request Bad Request\nBody: {\"error\":{\"code\":\"400\",\
+             \"message\":\"Invalid value at 'contents[1].parts[0].thought_signature' \
+             (TYPE_BYTES),  (request_id: x)\"}}"
+                .into()
+        )));
         assert!(!rejects_reasoning(&LlmError::Stream(
             "Status: 400 Bad Request: max_tokens".into()
         )));
