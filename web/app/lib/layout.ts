@@ -28,6 +28,8 @@ export const layout = reactive({
   /** The open section's page, when below the section's own: its crumbs,
    *  each but the last going back to its page. */
   settingsTrail: [] as { label: string; go?: () => void }[],
+  /** A settings edit in flight: the dialog stays on its page until done. */
+  settingsBusy: false,
 })
 
 export function toggleSidebar(): void {
@@ -54,7 +56,7 @@ export function openWorkspaceSettings(name = '', attach = false): void {
 
 export function closeWorkspaceSettings(): void {
   layout.workspaceSettingsOpen = false
-  layout.settingsOpen = false
+  closeSettings()
 }
 
 export function openSettings(): void {
@@ -76,6 +78,7 @@ export function showModel(ref: string): void {
 }
 
 export function closeSettings(): void {
+  if (layout.settingsBusy) return
   layout.settingsOpen = false
 }
 
@@ -91,5 +94,5 @@ export function closePanels(): void {
   layout.sidebarOpen = false
   layout.assistantSettingsOpen = false
   layout.workspaceSettingsOpen = false
-  layout.settingsOpen = false
+  closeSettings()
 }

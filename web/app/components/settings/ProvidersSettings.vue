@@ -55,7 +55,12 @@ const saved = computed(() => providers.value.find((p) => p.id === editing.value)
 const isNew = computed(() => editing.value === '')
 const dirty = computed(() => JSON.stringify(form) !== pristine.value)
 const busy = ref(false)
+/** Listing the provider's models: on saving, or on request. */
+const listing = ref(false)
 const pendingDelete = ref(false)
+
+watchEffect(() => (layout.settingsBusy = busy.value))
+onBeforeUnmount(() => (layout.settingsBusy = false))
 
 const formShown = computed(() => editing.value !== null && !picking.value)
 
@@ -345,13 +350,22 @@ async function save(): Promise<void> {
   const params: Record<string, unknown> = { id, endpoints, models: form.models, protocols }
   if (form.preset) params.preset = form.preset
   if (form.api_key) params.api_key = form.api_key
+  // Its list changes only with where it is reached and how.
+  const relist =
+    !saved.value || !!form.api_key || PROTOCOLS.some((p) => endpoints[p] !== saved.value!.endpoints[p])
   const ok = await editSettings('settings.set_provider', params)
+  const p = ok ? providers.value.find((x) => x.id === id) : undefined
+  if (p) {
+    open(p)
+    if (relist) await listModels(id)
+  } else if (ok) editing.value = null
   busy.value = false
-  if (ok) {
-    const p = providers.value.find((x) => x.id === id)
-    if (p) open(p)
-    else editing.value = null
-  }
+}
+
+async function listModels(id: string): Promise<void> {
+  listing.value = true
+  await editSettings('settings.refresh_models', { id })
+  listing.value = false
 }
 
 async function remove(): Promise<void> {
@@ -395,7 +409,7 @@ watch(
 async function refreshModels(): Promise<void> {
   if (!saved.value || busy.value) return
   busy.value = true
-  await editSettings('settings.refresh_models', { id: saved.value.id })
+  await listModels(saved.value.id)
   busy.value = false
 }
 </script>
@@ -571,7 +585,7 @@ async function refreshModels(): Promise<void> {
               :aria-label="t('settings.refreshModels')"
               @click="refreshModels"
             >
-              <Icon name="regenerate" :size="13" />
+              <Icon name="regenerate" :size="13" :class="{ 'animate-spin': listing }" />
             </button>
           </div>
           <p v-if="saved.list_error" class="flex items-start gap-1.5 text-meta text-danger">
@@ -690,7 +704,14 @@ async function refreshModels(): Promise<void> {
                 {{ t('settings.moreModels', { n: rows.more }) }}
               </p>
               <p
-                v-if="!rows.ids.length && !searchRules.length && !customId"
+                v-if="listing && !listed.length"
+                class="flex items-center justify-center gap-2 px-3 py-3 text-meta text-ink-3"
+              >
+                <span class="size-3.5 animate-spin rounded-full border-2 border-brand border-t-transparent" />
+                {{ t('settings.loadingModels') }}
+              </p>
+              <p
+                v-else-if="!rows.ids.length && !searchRules.length && !customId"
                 class="px-3 py-3 text-center text-meta text-ink-3 italic"
               >
                 {{ t('settings.noModels') }}
@@ -704,7 +725,7 @@ async function refreshModels(): Promise<void> {
     <footer v-if="formShown" class="flex flex-none items-center gap-2 border-t border-line-soft px-6 py-3">
       <template v-if="saved">
         <div v-if="pendingDelete" class="flex items-center gap-2">
-          <button type="button" class="btn" @click="pendingDelete = false">
+          <button type="button" class="btn" :disabled="busy" @click="pendingDelete = false">
             {{ t('common.cancel') }}
           </button>
           <button type="button" class="btn btn-danger" :disabled="busy" @click="remove">
@@ -716,16 +737,21 @@ async function refreshModels(): Promise<void> {
           type="button"
           class="icon-btn size-8"
           :title="t('settings.deleteProvider', { name: saved.name })"
+          :disabled="busy"
           @click="pendingDelete = true"
         >
           <Icon name="trash" :size="14" />
         </button>
       </template>
       <span class="flex-1" />
-      <button v-if="dirty && saved" type="button" class="btn" @click="open(saved)">
+      <button v-if="dirty && saved" type="button" class="btn" :disabled="busy" @click="open(saved)">
         {{ t('settings.discard') }}
       </button>
       <button type="button" class="btn btn-primary" :disabled="!canSave" @click="save">
+        <span
+          v-if="busy"
+          class="size-3.5 animate-spin rounded-full border-2 border-current border-t-transparent"
+        />
         {{ isNew ? t('settings.add') : t('settings.save') }}
       </button>
     </footer>

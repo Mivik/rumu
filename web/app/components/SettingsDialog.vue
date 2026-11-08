@@ -64,6 +64,7 @@ watch(
                 : 'text-ink-2 hover:bg-surface/70 hover:text-ink'
             "
             :aria-current="s.key === layout.settingsSection ? 'page' : undefined"
+            :disabled="layout.settingsBusy"
             @click="openSection(s.key)"
           >
             <Icon :name="s.icon" :size="15" class="text-ink-3" />
@@ -81,6 +82,7 @@ watch(
                 v-if="c.go"
                 type="button"
                 class="flex-none text-ink-3 transition-colors hover:text-ink"
+                :disabled="layout.settingsBusy"
                 @click="c.go"
               >
                 {{ c.label }}
@@ -93,6 +95,7 @@ watch(
             class="icon-btn ml-auto size-8 flex-none"
             :title="t('common.close')"
             :aria-label="t('common.close')"
+            :disabled="layout.settingsBusy"
             @click="closeSettings"
           >
             <Icon name="close" :size="14" />

@@ -51,6 +51,7 @@
   "modelsSummary": "{n} enabled, {m} listed",
   "moreModels": "{n} more, search to narrow",
   "noModels": "No models",
+  "loadingModels": "Loading models…",
   "detectDenied": "The key was refused",
   "enable_prefix": "Enable the {n} starting with {q}",
   "enable_contains": "Enable the {n} containing {q}",

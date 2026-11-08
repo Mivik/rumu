@@ -51,6 +51,7 @@
   "modelsSummary": "已启用 {n} 个，共 {m} 个",
   "moreModels": "还有 {n} 个，搜索以缩小范围",
   "noModels": "没有模型",
+  "loadingModels": "正在加载模型…",
   "detectDenied": "API 密钥被拒绝",
   "enable_prefix": "启用以 {q} 开头的 {n} 个",
   "enable_contains": "启用包含 {q} 的 {n} 个",
