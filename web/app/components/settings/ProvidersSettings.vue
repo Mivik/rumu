@@ -3,7 +3,7 @@
 // endpoints are detected; its key; which of its listed models are enabled
 // (one by one, or every match of a search, new ones included); and the
 // protocol a model is held to.
-import { computed, onBeforeUnmount, reactive, ref, watch, watchEffect } from 'vue'
+import { computed, nextTick, onBeforeUnmount, onMounted, reactive, ref, watch, watchEffect } from 'vue'
 import { t } from '../../i18n'
 import { rumu } from '../../lib/api'
 import { layout } from '../../lib/layout'
@@ -21,6 +21,7 @@ import type { PresetInfo } from '../../lib/generated/PresetInfo'
 import type { Protocol } from '../../lib/generated/Protocol'
 import type { ProviderInfo } from '../../lib/generated/ProviderInfo'
 import Icon from '../ui/Icon.vue'
+import Modal from '../ui/Modal.vue'
 import ModelSettings from './ModelSettings.vue'
 
 interface Form {
@@ -79,7 +80,7 @@ function fill(p: ProviderInfo | null): void {
   pristine.value = JSON.stringify(form)
   query.value = ''
   address.value = ''
-  addressShown.value = !!p && !p.preset && !protocolsOf(p.endpoints).length
+  detectOpen.value = false
   probeMissed.value = false
 }
 
@@ -120,7 +121,6 @@ function choosePreset(p: PresetInfo | null): void {
   form.id = p?.id ?? ''
   form.endpoints = { ...p?.endpoints }
   form.models = [...DEFAULT_RULES]
-  addressShown.value = !p
 }
 
 function protocolsOf(endpoints: Partial<Record<Protocol, string>>): Protocol[] {
@@ -135,17 +135,31 @@ const usableProtocols = computed(() => PROTOCOLS.filter((p) => form.endpoints[p]
 
 /** A custom provider's one address, its endpoints detected from it. */
 const address = ref('')
-/** Asked for until endpoints are found, then on request. */
-const addressShown = ref(false)
+/** The address dialog, on request. */
+const detectOpen = ref(false)
+const addressInput = ref<HTMLInputElement | null>(null)
 const probing = ref(false)
 /** Nothing detected: `denied` when the key was refused. */
 const probeMissed = ref<false | 'none' | 'denied'>(false)
-let probed = ''
+/** Counts detections, so a closed dialog drops the one in flight. */
+let probeId = 0
+
+function openDetect(): void {
+  probeMissed.value = false
+  detectOpen.value = true
+  void nextTick(() => addressInput.value?.focus())
+}
+
+function closeDetect(): void {
+  probeId += 1
+  probing.value = false
+  detectOpen.value = false
+}
 
 async function detect(): Promise<void> {
   const url = address.value.trim()
   if (!url || probing.value) return
-  probed = url
+  const id = ++probeId
   probing.value = true
   probeMissed.value = false
   try {
@@ -156,18 +170,25 @@ async function detect(): Promise<void> {
       'settings.probe',
       params,
     )
+    if (id !== probeId) return
     if (protocolsOf(r.endpoints).length) {
       form.endpoints = r.endpoints
-      addressShown.value = false
+      closeDetect()
     } else probeMissed.value = r.denied ? 'denied' : 'none'
   } finally {
-    probing.value = false
+    if (id === probeId) probing.value = false
   }
 }
 
-function detectIfChanged(): void {
-  if (address.value.trim() !== probed) void detect()
+// Escape closes the dialog, not the settings around it.
+function onKey(e: KeyboardEvent): void {
+  if (e.key !== 'Escape' || !detectOpen.value) return
+  e.stopPropagation()
+  closeDetect()
 }
+
+onMounted(() => window.addEventListener('keydown', onKey, true))
+onBeforeUnmount(() => window.removeEventListener('keydown', onKey, true))
 
 // -- models
 
@@ -467,40 +488,16 @@ async function refreshModels(): Promise<void> {
           <div class="flex items-center gap-2">
             <span class="field-label">{{ t('settings.endpoints') }}</span>
             <button
-              v-if="!form.preset && !addressShown"
+              v-if="!form.preset"
               type="button"
-              class="ml-auto flex items-center gap-1 rounded-control px-2 py-0.5 text-meta text-ink-3 transition-colors hover:bg-surface-2 hover:text-ink"
-              @click="addressShown = true"
+              class="ml-auto inline-flex items-center gap-1.5 rounded-control border border-brand/40 bg-brand-soft px-2.5 py-1 text-meta font-semibold text-brand-strong transition-colors hover:border-brand/60 hover:bg-brand-soft/70"
+              @click="openDetect"
             >
               <Icon name="search" :size="12" />
               {{ t('settings.detectFromAddress') }}
             </button>
           </div>
           <div class="grid grid-cols-[8rem_minmax(0,1fr)_auto] items-center gap-x-3 gap-y-2">
-            <template v-if="!form.preset && addressShown">
-              <span class="text-meta text-ink-3">{{ t('settings.address') }}</span>
-              <input
-                v-model="address"
-                type="url"
-                class="w-full font-mono text-meta"
-                placeholder="https://gateway.example/v1"
-                autocomplete="off"
-                spellcheck="false"
-                @keydown.enter.prevent="detect"
-                @blur="detectIfChanged"
-              />
-              <button type="button" class="btn" :disabled="probing || !address.trim()" @click="detect">
-                <Icon name="search" :size="13" />
-                {{ probing ? t('settings.detecting') : t('settings.detect') }}
-              </button>
-              <p
-                v-if="probeMissed"
-                class="col-start-2 col-end-4 flex items-center gap-1.5 text-meta text-danger"
-              >
-                <Icon name="error" :size="13" />
-                {{ probeMissed === 'denied' ? t('settings.detectDenied') : t('settings.detectNone') }}
-              </p>
-            </template>
             <template v-for="protocol in shownProtocols" :key="protocol">
               <span class="text-meta text-ink-3">{{ PROTOCOL_LABELS[protocol] }}</span>
               <input
@@ -717,5 +714,52 @@ async function refreshModels(): Promise<void> {
         {{ isNew ? t('settings.add') : t('settings.save') }}
       </button>
     </footer>
+
+    <Modal
+      :open="detectOpen"
+      :label="t('settings.detectFromAddress')"
+      :z="60"
+      wrapper-class="p-3 sm:p-6"
+      panel-class="w-full max-w-[440px] rounded-sheet"
+      @close="closeDetect"
+    >
+      <form class="flex flex-col gap-4 p-5" @submit.prevent="detect">
+        <header class="flex items-center gap-2">
+          <h3 class="text-title font-bold">{{ t('settings.detectFromAddress') }}</h3>
+          <button
+            type="button"
+            class="icon-btn ml-auto size-7"
+            :title="t('common.close')"
+            :aria-label="t('common.close')"
+            @click="closeDetect"
+          >
+            <Icon name="close" :size="13" />
+          </button>
+        </header>
+        <label class="flex flex-col gap-1.5">
+          <span class="field-label">{{ t('settings.address') }}</span>
+          <input
+            ref="addressInput"
+            v-model="address"
+            type="url"
+            class="w-full font-mono text-meta"
+            placeholder="https://gateway.example/v1"
+            autocomplete="off"
+            spellcheck="false"
+          />
+        </label>
+        <p v-if="probeMissed" class="flex items-start gap-1.5 text-meta text-danger">
+          <Icon name="error" :size="13" class="mt-0.5 flex-none" />
+          {{ probeMissed === 'denied' ? t('settings.detectDenied') : t('settings.detectNone') }}
+        </p>
+        <footer class="flex items-center justify-end gap-2">
+          <button type="button" class="btn" @click="closeDetect">{{ t('common.cancel') }}</button>
+          <button type="submit" class="btn btn-primary" :disabled="probing || !address.trim()">
+            <Icon name="search" :size="13" />
+            {{ probing ? t('settings.detecting') : t('settings.detect') }}
+          </button>
+        </footer>
+      </form>
+    </Modal>
   </div>
 </template>
