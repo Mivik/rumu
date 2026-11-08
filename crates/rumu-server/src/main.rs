@@ -1,5 +1,6 @@
 //! The `rumu` binary: axum WebSocket server + static frontend.
 
+mod settings;
 mod ws;
 
 use std::net::{IpAddr, Ipv4Addr, SocketAddr};
@@ -49,9 +50,13 @@ async fn main() -> Result<()> {
     info!(workspaces = %names.join(", "), "workspaces loaded");
     let decks = rumu_cards::Decks::load_seeded(&home, &names)?;
     let plugins = load_plugins(&home, &config, decks.clone()).await?;
-    let llm = load_llm(blobs.clone())?;
+    let genai = Arc::new(GenaiLlm::default().with_blobs(blobs.clone()));
+    let settings = Arc::new(settings::Settings::load(&home, genai.clone())?);
+    let llm = load_llm(genai)?;
     let kernel = Kernel::new(store.clone(), llm, plugins, workspaces.clone())?;
     spawn_blob_gc(store, blobs.clone());
+    let stale = settings.stale_lists();
+    settings::spawn_refresh(&settings, &kernel, settings.catalog_stale(), stale);
 
     let app = ws::router(ws::AppState {
         kernel,
@@ -59,6 +64,7 @@ async fn main() -> Result<()> {
         home: home.clone(),
         workspaces,
         blobs,
+        settings,
     });
     let addr = SocketAddr::new(host, port);
     let listener = tokio::net::TcpListener::bind(addr).await?;
@@ -105,11 +111,10 @@ fn dirs_home() -> Option<PathBuf> {
 
 /// The model backend. `RUMU_LLM=script:<path>` replays a YAML/JSON turn
 /// script through [`ScriptedLlm`] (no model endpoint is needed); otherwise
-/// the genai adapter reads `RUMU_MODEL` / `ANTHROPIC_*` from the env and
-/// projects image attachments from `blobs`.
-fn load_llm(blobs: Blobs) -> Result<Arc<dyn Llm>> {
+/// it is `genai`, configured from `settings.yaml`.
+fn load_llm(genai: Arc<GenaiLlm>) -> Result<Arc<dyn Llm>> {
     let Some(spec) = std::env::var("RUMU_LLM").ok() else {
-        return Ok(Arc::new(GenaiLlm::from_env()?.with_blobs(blobs)));
+        return Ok(genai);
     };
     let Some(path) = spec.strip_prefix("script:") else {
         bail!("RUMU_LLM must be `script:<path>` (got `{spec}`)");

@@ -17,6 +17,14 @@ export const layout = reactive({
   workspaceSettingsFor: '' as string,
   /** A new workspace from the composer also joins the open branch. */
   workspaceSettingsAttach: false,
+  /** The settings dialog. */
+  settingsOpen: false,
+  settingsSection: 'profiles' as 'profiles' | 'providers',
+  /** Set to open the providers section at adding one; taken by it. */
+  addingProvider: false,
+  /** The open section's page, when below the section's own: its crumbs,
+   *  each but the last going back to its page. */
+  settingsTrail: [] as { label: string; go?: () => void }[],
 })
 
 export function toggleSidebar(): void {
@@ -43,6 +51,22 @@ export function openWorkspaceSettings(name = '', attach = false): void {
 
 export function closeWorkspaceSettings(): void {
   layout.workspaceSettingsOpen = false
+  layout.settingsOpen = false
+}
+
+export function openSettings(): void {
+  layout.settingsOpen = true
+}
+
+/** Settings, at adding a provider. */
+export function addProvider(): void {
+  layout.settingsSection = 'providers'
+  layout.addingProvider = true
+  layout.settingsOpen = true
+}
+
+export function closeSettings(): void {
+  layout.settingsOpen = false
 }
 
 /** Escape: close the topmost layer. The library may sit over the assistant
@@ -57,4 +81,5 @@ export function closePanels(): void {
   layout.sidebarOpen = false
   layout.assistantSettingsOpen = false
   layout.workspaceSettingsOpen = false
+  layout.settingsOpen = false
 }

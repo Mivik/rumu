@@ -64,6 +64,7 @@ fn child_task(nodes: &[Node]) -> Option<String> {
 impl Llm for AgentLlm {
     async fn complete(
         &self,
+        _pick: rumu_core::ModelPick<'_>,
         _system: &str,
         _tools: &[rumu_core::ToolSpec],
         nodes: &[Node],

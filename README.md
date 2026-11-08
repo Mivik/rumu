@@ -11,13 +11,33 @@ runs on a small Rust core, and lives in a quiet, carefully made web interface.
 cargo build
 (cd web && pnpm install && pnpm build)
 
-# Anthropic-compatible endpoint; token is sent as x-api-key
-export ANTHROPIC_BASE_URL=... ANTHROPIC_AUTH_TOKEN=...
-RUMU_MODEL=your-model-id ./target/debug/rumu
+./target/debug/rumu
 # → http://127.0.0.1:7878 (RUMU_PORT overrides the port, RUMU_HOST the bind address)
-# RUMU_EFFORT sets the reasoning effort: low, medium, high (default), xhigh, max.
 # RUST_LOG overrides the default `info` log level (logs go to stderr).
 ```
+
+Models are set in the web UI's Settings (the gear at the foot of the
+sidebar). A **provider** is a built-in one (Anthropic, OpenAI, Google,
+DeepSeek, Moonshot, Zhipu / Z.AI, Alibaba, MiniMax, xAI; the routers
+OpenRouter, ZenMux, Requesty) or a custom one: an API key and an endpoint
+per protocol it speaks (Anthropic, OpenAI chat completions, OpenAI
+Responses, Gemini), detected from any one address of it. Its model list is
+fetched from those endpoints; rules enable models (`*`, every one, by
+default; `claude-*`; exact ids, listed or not; `!` before any excludes),
+and pinned ones lead the picker. A model runs on its native
+protocol when the provider has an endpoint for it, else on openai, anthropic,
+openai_responses, gemini in that order, unless it is held to one. What is
+known about models (efforts, context, prices) comes from the
+[models.dev](https://models.dev) catalog; both lists are cached in
+`RUMU_HOME/cache/` and refreshed daily. A **profile** names a model and a
+reasoning effort
+(`cheap`, `main`, …), and **roles** bind profiles to jobs: `default` for
+sessions that pick nothing, `title` for generated session titles. Sessions
+and roles name the profile, so pointing a profile at a newer model moves all
+of them. The composer picks a profile or a model (and effort) per branch; the
+pick is recorded on the branch (a `model.use` marker) when the next prompt is
+sent. Settings are saved to `RUMU_HOME/settings.yaml` (owner-only, since it
+holds the keys) and apply from the next model call, without a restart.
 
 `bash` runs unsandboxed on the machine hosting the server, so the server is
 meant to be local-only: it binds `127.0.0.1` by default and rejects
@@ -38,7 +58,8 @@ from the Rust serde types by ts-rs. After changing a wire type, run
 `cargo test` to regenerate `web/app/lib/generated`; those files are checked in
 because the web build imports them.
 
-`RUMU_HOME` (default `~/.rumu`) holds `config.yaml` (external plugins),
+`RUMU_HOME` (default `~/.rumu`) holds `settings.yaml` (providers, profiles and roles),
+`config.yaml` (external plugins),
 `workspaces.yaml` (the workspace registry), `decks/` (cards, assistants and
 their history), `grants.json` (remembered mount / ask permissions) and
 `sessions/`. With no `workspaces.yaml`, the current directory is registered

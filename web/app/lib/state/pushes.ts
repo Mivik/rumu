@@ -38,6 +38,8 @@ import {
   refreshCards,
   refreshLists,
 } from './sessions'
+import { onSettingsUpdated, refreshSettings } from './models'
+import type { SettingsInfo } from '../generated/SettingsInfo'
 import { refreshLibrary } from './library'
 import { loadPath } from './tree'
 import { toast } from './ui'
@@ -63,10 +65,10 @@ function cardChanged(node: Node): boolean {
   return op === 'write' || op === 'edit'
 }
 
-/** Did this node change the branch's workspaces (attached or default)? */
-function workspaceChanged(node: Node): boolean {
+/** Did this node change the branch's state (workspaces or model)? */
+function stateChanged(node: Node): boolean {
   const tag = node.body.type === 'note' ? node.body.content.data?.tag : undefined
-  return tag === 'workspace.use' || tag === 'workspace.set'
+  return tag === 'workspace.use' || tag === 'workspace.set' || tag === 'model.use'
 }
 
 /** `workspaces.updated`: the registry changed. A removed workspace also left
@@ -79,7 +81,7 @@ function onWorkspacesUpdated(p: { workspaces: Workspace[] }): void {
 
 function onNodeAppended(p: NodeAppendedPush): void {
   const { branch, node } = p
-  if (branch === state.activeBranch && workspaceChanged(node)) void loadPath(branch)
+  if (branch === state.activeBranch && stateChanged(node)) void loadPath(branch)
   if (cardChanged(node)) {
     void refreshCards()
     // The model may be writing cards while the user browses the library.
@@ -311,6 +313,7 @@ export function startApp(): void {
   rumu.onPush('turn.retrying', (p) => onTurnRetrying(p as unknown as TurnRetryingPush))
   rumu.onPush('turn.error', (p) => onTurnError(p as unknown as TurnErrorPush))
   rumu.onPush('warning', (p) => onWarning(p as unknown as WarningPush))
+  rumu.onPush('settings.updated', (p) => onSettingsUpdated(p as unknown as { settings: SettingsInfo }))
   rumu.onPush('workspaces.updated', (p) => onWorkspacesUpdated(p as unknown as { workspaces: Workspace[] }))
 
   // Updates that landed while the tab was hidden are seen once it shows.
@@ -326,6 +329,7 @@ export function startApp(): void {
 
   rumu.start(async () => {
     await refreshLists()
+    void refreshSettings()
     // A reconnect resyncs the open library; boot follows the session URL. A
     // URL naming an unknown session falls back to the landing page.
     if (state.library.isOpen) void refreshLibrary()

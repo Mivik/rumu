@@ -604,6 +604,9 @@ pub struct PathState {
     /// The branch's card mount table (root defaults + `card_mount` markers).
     #[serde(default)]
     pub mounts: Vec<CardMount>,
+    /// The last `model.use` marker: unset runs on the default role.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub model: Option<crate::ModelUse>,
 }
 
 #[cfg(test)]

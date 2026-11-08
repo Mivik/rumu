@@ -1,20 +1,31 @@
-//! rumu-llm: the genai adapter. Projection from a branch path
-//! and frozen system/tools into a genai `ChatRequest`, with Anthropic prompt
-//! caching breakpoints, streaming deltas and usage capture.
+//! rumu-llm: the genai adapter. Projection from a branch path and frozen
+//! system/tools into a genai `ChatRequest`, with prompt caching
+//! breakpoints, streaming deltas and usage capture.
 //!
-//! Model names like `vendor/model-id` cannot be mapped to an adapter by
-//! name, so a `ServiceTargetResolver` forces `AdapterKind::Anthropic`, the
-//! endpoint `$ANTHROPIC_BASE_URL/v1/` and the auth token from
-//! `$ANTHROPIC_AUTH_TOKEN` (sent by genai's anthropic adapter as `x-api-key`).
-//! The token is never logged.
+//! A provider has an endpoint per protocol it speaks (Anthropic, OpenAI chat
+//! completions or Responses, Gemini), each with its own genai client whose
+//! `ServiceTargetResolver` forces that protocol, API root and key: model ids
+//! such as `vendor/model` cannot be mapped to an adapter by name. A model
+//! runs on its native protocol when its provider has an endpoint for it,
+//! else the first of [`Protocol::FALLBACK`] it has, unless the settings hold
+//! it to one. The key is never logged. Which model a call runs on is
+//! resolved per call from a [`ModelPick`] through the profiles and roles of
+//! the [`ModelConfig`].
 //!
-//! Reasoning is always requested explicitly (adaptive thinking at
-//! `$RUMU_EFFORT`), with replayed thinking blocks that no longer verify
-//! dropped by the provider (`block_binding: drop_block`) instead of failing
-//! the request.
+//! On Anthropic, reasoning is always requested explicitly (adaptive thinking
+//! at the resolved effort), with replayed thinking blocks that no longer
+//! verify dropped by the provider (`block_binding: drop_block`) instead of
+//! failing the request. Reasoning is only ever replayed to the model that
+//! produced it.
 
-use std::sync::Arc;
+pub mod catalog;
+mod list;
+pub mod presets;
+mod probe;
+
+use std::collections::BTreeMap;
 use std::sync::atomic::{AtomicUsize, Ordering};
+use std::sync::{Arc, RwLock};
 
 use async_trait::async_trait;
 use base64::Engine as _;
@@ -29,27 +40,56 @@ use genai::resolver::{AuthData, Endpoint};
 use genai::{Client, ModelIden, ServiceTarget};
 use rumu_blob::Blobs;
 use rumu_core::{
-    Attachment, Content, Node, NodeBody, ReasoningBlock, Segment, ToolCall, ToolSpec, Usage,
-    image_label,
+    Attachment, Content, Effort, ModelConfig, ModelInfo, ModelPick, ModelTarget, Node, NodeBody,
+    ProfileSettings, Protocol, ProviderSettings, ReasoningBlock, Role, Roles, Segment, ToolCall,
+    ToolSpec, Usage, image_label, split_model_ref,
 };
 use rumu_kernel::{Delta, Llm, LlmError, LlmResponse, OnDelta};
 use serde_json::{Value, json};
 use tracing::warn;
 
-/// Reasoning effort when `RUMU_EFFORT` is unset.
-const DEFAULT_EFFORT: &str = "high";
-/// Accepted `RUMU_EFFORT` values (Anthropic `output_config.effort`).
-const EFFORTS: &[&str] = &["low", "medium", "high", "xhigh", "max"];
+pub use catalog::Catalog;
+pub use list::list_models;
+pub use probe::{Probe, probe};
+
 /// The beta that enables `thinking.block_binding`.
 const THINKING_BINDING_BETA: &str = "thinking-binding-controls-2026-08-01";
 
+/// The genai adapter. Its providers, profiles and roles come from the
+/// settings and can be replaced while running: a request uses the
+/// configuration it started with.
+#[derive(Default)]
 pub struct GenaiLlm {
-    client: Client,
-    model: String,
-    effort: String,
+    config: RwLock<Arc<Resolved>>,
     /// Where the projection reads attachment bytes from; `None` projects
     /// every image as its stand-in text.
     blobs: Option<Blobs>,
+}
+
+#[derive(Default)]
+struct Resolved {
+    providers: BTreeMap<String, Provider>,
+    profiles: BTreeMap<String, ProfileSettings>,
+    roles: Roles,
+    catalog: Arc<Catalog>,
+}
+
+struct Provider {
+    settings: ProviderSettings,
+    endpoints: BTreeMap<Protocol, String>,
+    clients: BTreeMap<Protocol, Client>,
+}
+
+/// One call's resolved model.
+struct Target {
+    client: Client,
+    protocol: Protocol,
+    /// `provider/model-id`: stamped on the reply, and what reasoning is
+    /// replayed to.
+    model_ref: String,
+    model_id: String,
+    /// `None` when the model does not reason.
+    effort: Option<Effort>,
 }
 
 impl GenaiLlm {
@@ -59,64 +99,258 @@ impl GenaiLlm {
         self
     }
 
-    /// Build from `RUMU_MODEL` (required), `RUMU_EFFORT` (default `high`),
-    /// `ANTHROPIC_BASE_URL` and `ANTHROPIC_AUTH_TOKEN`.
-    pub fn from_env() -> Result<Self, LlmError> {
-        let model = std::env::var("RUMU_MODEL")
-            .ok()
-            .filter(|m| !m.trim().is_empty())
-            .ok_or(LlmError::MissingModel)?;
-        let effort = std::env::var("RUMU_EFFORT")
-            .ok()
-            .filter(|e| !e.trim().is_empty())
-            .unwrap_or_else(|| DEFAULT_EFFORT.to_owned());
-        let base = std::env::var("ANTHROPIC_BASE_URL").unwrap_or_default();
-        let token = std::env::var("ANTHROPIC_AUTH_TOKEN").unwrap_or_default();
-        if base.is_empty() || token.is_empty() {
-            warn!("ANTHROPIC_BASE_URL / ANTHROPIC_AUTH_TOKEN not set; LLM calls will fail");
+    /// Use `config` from the next request on. Refused (nothing changes)
+    /// when a profile names a provider that is not configured, a role a
+    /// profile that does not exist, or a model is held to a protocol its
+    /// provider has no endpoint for.
+    pub fn configure(&self, config: &ModelConfig, catalog: Arc<Catalog>) -> Result<(), LlmError> {
+        let mut providers = BTreeMap::new();
+        for (id, p) in &config.providers {
+            let endpoints = endpoints(p);
+            if let Some((m, _)) = p.protocols.iter().find(|(_, x)| !endpoints.contains_key(x)) {
+                return Err(LlmError::NoEndpoint(format!("{id}/{m}")));
+            }
+            let clients = endpoints
+                .iter()
+                .map(|(&protocol, url)| Ok((protocol, client(protocol, url, p.api_key.clone())?)))
+                .collect::<Result<_, LlmError>>()?;
+            let provider = Provider {
+                settings: p.clone(),
+                endpoints,
+                clients,
+            };
+            providers.insert(id.clone(), provider);
         }
-        let endpoint = if base.is_empty() {
-            "https://api.anthropic.com/v1/".to_owned()
-        } else {
-            format!("{}/v1/", base.trim_end_matches('/'))
-        };
-        Self::with_target(model, effort, endpoint, token)
+        for (name, profile) in &config.profiles {
+            let known =
+                split_model_ref(&profile.model).is_some_and(|(p, _)| providers.contains_key(p));
+            if !known {
+                return Err(LlmError::UnknownModel(format!(
+                    "{} (profile `{name}`)",
+                    profile.model
+                )));
+            }
+        }
+        for role in [Role::Default, Role::Title] {
+            if let Some(name) = config.roles.get(role)
+                && !config.profiles.contains_key(name)
+            {
+                return Err(LlmError::UnknownProfile(name.to_owned()));
+            }
+        }
+        *self.config.write().expect("llm config lock") = Arc::new(Resolved {
+            providers,
+            profiles: config.profiles.clone(),
+            roles: config.roles.clone(),
+            catalog,
+        });
+        Ok(())
     }
 
-    /// Build with an explicit model / effort / endpoint / token (tests, tools).
-    pub fn with_target(
-        model: String,
-        effort: String,
-        endpoint: String,
-        token: String,
-    ) -> Result<Self, LlmError> {
-        if !EFFORTS.contains(&effort.as_str()) {
-            return Err(LlmError::InvalidEffort(effort));
+    fn resolved(&self) -> Arc<Resolved> {
+        self.config.read().expect("llm config lock").clone()
+    }
+}
+
+/// A provider's endpoints: its preset's, with its own over them (an empty
+/// one turns the preset's off).
+pub fn endpoints(p: &ProviderSettings) -> BTreeMap<Protocol, String> {
+    let mut out: BTreeMap<Protocol, String> = p
+        .preset
+        .as_deref()
+        .and_then(presets::preset)
+        .map(|pre| {
+            pre.endpoints
+                .iter()
+                .map(|(k, v)| (*k, (*v).to_owned()))
+                .collect()
+        })
+        .unwrap_or_default();
+    for (&protocol, url) in &p.endpoints {
+        let url = url.trim().trim_end_matches('/');
+        if url.is_empty() {
+            out.remove(&protocol);
+        } else {
+            out.insert(protocol, url.to_owned());
         }
-        let resolver_model = model.clone();
-        let resolver = move |mut t: ServiceTarget| -> genai::resolver::Result<ServiceTarget> {
-            if token.is_empty() {
-                return Err("ANTHROPIC_AUTH_TOKEN is not set".to_owned().into());
-            }
-            t.model = ModelIden::new(AdapterKind::Anthropic, resolver_model.as_str());
-            t.endpoint = Endpoint::from_owned(endpoint.clone());
-            t.auth = AuthData::from_single(token.clone());
-            Ok(t)
-        };
-        let client = Client::builder()
-            .with_service_target_resolver_fn(resolver)
-            .build()
-            .map_err(|e| LlmError::Client(e.to_string()))?;
-        Ok(Self {
-            client,
-            model,
-            effort,
-            blobs: None,
+    }
+    out
+}
+
+/// The protocol model `id` runs on: the one it is held to, else its native
+/// one, else the first fallback; among those `endpoints` has.
+pub fn protocol_for(
+    catalog: &Catalog,
+    p: &ProviderSettings,
+    endpoints: &BTreeMap<Protocol, String>,
+    id: &str,
+) -> Option<Protocol> {
+    if let Some(held) = p.protocols.get(id) {
+        return endpoints.contains_key(held).then_some(*held);
+    }
+    catalog
+        .native(id)
+        .into_iter()
+        .chain(Protocol::FALLBACK)
+        .find(|x| endpoints.contains_key(x))
+}
+
+/// What is known about model `id` of provider `provider`.
+pub fn model_info(
+    catalog: &Catalog,
+    provider: &str,
+    p: &ProviderSettings,
+    endpoints: &BTreeMap<Protocol, String>,
+    id: &str,
+) -> ModelInfo {
+    let protocol = protocol_for(catalog, p, endpoints, id);
+    let home = p
+        .preset
+        .as_deref()
+        .and_then(presets::preset)
+        .map(|x| x.catalog);
+    let known = catalog.lookup(home, id);
+    ModelInfo {
+        model_ref: format!("{provider}/{id}"),
+        id: id.to_owned(),
+        name: catalog.name(home, id),
+        protocol,
+        native: catalog.native(id),
+        pinned: p.pinned.iter().any(|x| x == id),
+        efforts: match known {
+            Some(m) => m.efforts.clone(),
+            None => protocol.map(catalog::default_efforts).unwrap_or_default(),
+        },
+        context: known.and_then(|m| m.context),
+        image_input: known.is_none_or(|m| m.image_input),
+        cost: known.and_then(|m| m.cost),
+        known: known.is_some(),
+    }
+}
+
+/// The URL paths are appended to: Anthropic endpoints are given without
+/// their `/v1`.
+pub(crate) fn api_root(protocol: Protocol, url: &str) -> String {
+    let url = url.trim_end_matches('/');
+    match protocol {
+        Protocol::Anthropic => format!("{url}/v1/"),
+        _ => format!("{url}/"),
+    }
+}
+
+/// A client that sends every request to `url` with `key`, speaking
+/// `protocol`.
+fn client(protocol: Protocol, url: &str, key: String) -> Result<Client, LlmError> {
+    let kind = adapter_kind(protocol);
+    let endpoint = api_root(protocol, url);
+    let resolver = move |mut t: ServiceTarget| -> genai::resolver::Result<ServiceTarget> {
+        if key.is_empty() {
+            return Err("no API key is set".to_owned().into());
+        }
+        t.model = ModelIden::new(kind, t.model.model_name.as_str());
+        t.endpoint = Endpoint::from_owned(endpoint.clone());
+        t.auth = AuthData::from_single(key.clone());
+        Ok(t)
+    };
+    Client::builder()
+        .with_service_target_resolver_fn(resolver)
+        .build()
+        .map_err(|e| LlmError::Client(e.to_string()))
+}
+
+fn adapter_kind(protocol: Protocol) -> AdapterKind {
+    match protocol {
+        Protocol::Anthropic => AdapterKind::Anthropic,
+        Protocol::Openai => AdapterKind::OpenAI,
+        Protocol::OpenaiResponses => AdapterKind::OpenAIResp,
+        Protocol::Gemini => AdapterKind::Gemini,
+    }
+}
+
+impl Resolved {
+    /// The model `pick` names: `None` for a role no profile is bound to
+    /// (the default role must be bound).
+    fn resolve(&self, pick: ModelPick<'_>) -> Result<Option<Target>, LlmError> {
+        match pick {
+            ModelPick::Role(role) => match self.roles.get(role) {
+                Some(name) => self.profile(name, None).map(Some),
+                None if role == Role::Default => Err(LlmError::MissingModel),
+                None => Ok(None),
+            },
+            ModelPick::Use(u) => match &u.target {
+                ModelTarget::Profile(name) => self.profile(name, u.effort).map(Some),
+                ModelTarget::Model(r) => self.model(r, u.effort).map(Some),
+            },
+        }
+    }
+
+    fn profile(&self, name: &str, effort: Option<Effort>) -> Result<Target, LlmError> {
+        let p = self
+            .profiles
+            .get(name)
+            .ok_or_else(|| LlmError::UnknownProfile(name.to_owned()))?;
+        self.model(&p.model, effort.or(p.effort))
+    }
+
+    /// `model_ref` at `effort` (unset is high), moved to the nearest effort
+    /// the model takes.
+    fn model(&self, model_ref: &str, effort: Option<Effort>) -> Result<Target, LlmError> {
+        let unknown = || LlmError::UnknownModel(model_ref.to_owned());
+        let (provider_id, model_id) = split_model_ref(model_ref).ok_or_else(unknown)?;
+        let provider = self.providers.get(provider_id).ok_or_else(unknown)?;
+        let info = model_info(
+            &self.catalog,
+            provider_id,
+            &provider.settings,
+            &provider.endpoints,
+            model_id,
+        );
+        let protocol = info
+            .protocol
+            .ok_or_else(|| LlmError::NoEndpoint(model_ref.to_owned()))?;
+        Ok(Target {
+            client: provider.clients[&protocol].clone(),
+            protocol,
+            model_ref: model_ref.to_owned(),
+            model_id: model_id.to_owned(),
+            effort: effort.unwrap_or(Effort::High).nearest(&info.efforts),
         })
     }
+}
 
-    pub fn model(&self) -> &str {
-        &self.model
+impl Target {
+    fn options(&self, dropped: Arc<AtomicUsize>) -> ChatOptions {
+        let opts = ChatOptions::default()
+            .with_capture_usage(true)
+            .with_capture_tool_calls(true)
+            .with_capture_reasoning_content(true)
+            .with_stream_read_timeout(std::time::Duration::from_secs(120));
+        match (self.protocol, self.effort) {
+            (Protocol::Anthropic, effort) => {
+                // Any explicit effort stops genai from inferring one from a
+                // model-name suffix (`…-high`). `Zero` adds nothing of its own
+                // but a `thinking: disabled`, which `extra_body` replaces.
+                let opts = opts.with_reasoning_effort(ReasoningEffort::Zero);
+                let opts = match effort.filter(|e| *e != Effort::None) {
+                    Some(e) => opts
+                        .with_extra_body(reasoning_body(e.as_str()))
+                        .with_extra_headers([("anthropic-beta", THINKING_BINDING_BETA)]),
+                    None => opts,
+                };
+                // Replayed thinking the provider dropped
+                // (`input_transformations` on `message_start`), counted off
+                // the raw frames.
+                opts.with_raw_frame_fn(move |_, frame| {
+                    if frame.data.contains("input_transformations")
+                        && let Some(v) = frame.json()
+                    {
+                        dropped.fetch_add(dropped_thinking(&v), Ordering::Relaxed);
+                    }
+                })
+            }
+            (_, Some(effort)) => opts.with_reasoning_effort(genai_effort(effort)),
+            (_, None) => opts,
+        }
     }
 
     /// One streamed completion. A failure carries whether any delta reached
@@ -134,30 +368,9 @@ impl GenaiLlm {
             last.cache_control = Some(CacheControl::Ephemeral);
         }
 
-        // Replayed thinking the provider dropped (`input_transformations`
-        // on `message_start`), counted off the raw frames.
         let dropped = Arc::new(AtomicUsize::new(0));
-        let counter = dropped.clone();
-        let opts = ChatOptions::default()
-            .with_capture_usage(true)
-            .with_capture_tool_calls(true)
-            .with_capture_reasoning_content(true)
-            .with_stream_read_timeout(std::time::Duration::from_secs(120))
-            // Any explicit effort stops genai from inferring one from a
-            // model-name suffix (`…-high`). `Zero` adds nothing of its own but
-            // a `thinking: disabled`, which `extra_body` replaces.
-            .with_reasoning_effort(ReasoningEffort::Zero)
-            .with_extra_body(reasoning_body(&self.effort))
-            .with_extra_headers([("anthropic-beta", THINKING_BINDING_BETA)])
-            .with_raw_frame_fn(move |_, frame| {
-                if frame.data.contains("input_transformations")
-                    && let Some(v) = frame.json()
-                {
-                    counter.fetch_add(dropped_thinking(&v), Ordering::Relaxed);
-                }
-            });
-
-        let target = ModelIden::new(AdapterKind::Anthropic, self.model.as_str());
+        let opts = self.options(dropped.clone());
+        let target = ModelIden::new(adapter_kind(self.protocol), self.model_id.as_str());
         let res = self
             .client
             .exec_chat_stream(target, req, Some(&opts))
@@ -212,10 +425,8 @@ impl GenaiLlm {
             .captured_tool_calls()
             .map(|cs| {
                 cs.iter()
-                    .map(|c| ToolCall {
-                        call_id: c.call_id.clone(),
-                        name: c.fn_name.clone(),
-                        args: c.fn_arguments.clone(),
+                    .map(|c| {
+                        ToolCall::new(c.call_id.clone(), c.fn_name.clone(), c.fn_arguments.clone())
                     })
                     .collect()
             })
@@ -254,7 +465,7 @@ impl GenaiLlm {
             reasoning_reset: dropped > 0,
             tool_calls,
             usage,
-            model: self.model.clone(),
+            model: self.model_ref.clone(),
         })
     }
 }
@@ -263,16 +474,25 @@ impl GenaiLlm {
 impl Llm for GenaiLlm {
     async fn complete(
         &self,
+        pick: ModelPick<'_>,
         system: &str,
         tools: &[ToolSpec],
         nodes: &[Node],
         on_delta: Option<OnDelta>,
     ) -> std::result::Result<LlmResponse, LlmError> {
+        let target = self
+            .resolved()
+            .resolve(pick)?
+            .ok_or(LlmError::MissingModel)?;
+        let to = Projection {
+            protocol: target.protocol,
+            model: &target.model_ref,
+        };
         let from = replay_from(nodes);
         let blobs = self.blobs.as_ref();
-        match self
+        match target
             .stream(
-                project_from(system, tools, nodes, from, blobs),
+                project_from(to, system, tools, nodes, from, blobs),
                 on_delta.clone(),
             )
             .await
@@ -281,15 +501,34 @@ impl Llm for GenaiLlm {
             // Rejected before any output because of replayed reasoning the
             // provider cannot drop (a corrupted or foreign block, a modified
             // one): retry once without any, and record the reset.
-            Err((e, false)) if rejects_reasoning(&e) && replays_reasoning(&nodes[from..]) => {
+            Err((e, false)) if rejects_reasoning(&e) && replays_reasoning(to, &nodes[from..]) => {
                 warn!(error = %e, "provider rejected replayed reasoning; retrying without it");
-                let req = project_from(system, tools, nodes, nodes.len(), blobs);
-                let mut resp = self.stream(req, on_delta).await.map_err(|(e, _)| e)?;
+                let req = project_from(to, system, tools, nodes, nodes.len(), blobs);
+                let mut resp = target.stream(req, on_delta).await.map_err(|(e, _)| e)?;
                 resp.reasoning_reset = true;
                 Ok(resp)
             }
             Err((e, _)) => Err(e),
         }
+    }
+
+    fn has_role(&self, role: Role) -> bool {
+        let r = self.resolved();
+        r.roles
+            .get(role)
+            .is_some_and(|p| r.profiles.contains_key(p))
+    }
+}
+
+fn genai_effort(effort: Effort) -> ReasoningEffort {
+    match effort {
+        Effort::None => ReasoningEffort::Zero,
+        Effort::Minimal => ReasoningEffort::Minimal,
+        Effort::Low => ReasoningEffort::Low,
+        Effort::Medium => ReasoningEffort::Medium,
+        Effort::High => ReasoningEffort::High,
+        Effort::XHigh => ReasoningEffort::XHigh,
+        Effort::Max => ReasoningEffort::Max,
     }
 }
 
@@ -334,12 +573,38 @@ fn rejects_reasoning(e: &LlmError) -> bool {
 }
 
 /// Whether projecting `nodes` replays any thinking block.
-fn replays_reasoning(nodes: &[Node]) -> bool {
+fn replays_reasoning(to: Projection<'_>, nodes: &[Node]) -> bool {
     nodes.iter().any(|n| {
-        matches!(&n.body, NodeBody::Assistant { reasoning, .. } if reasoning.iter().any(|b| {
-            !matches!(b, ReasoningBlock::Thinking { signature: None, .. })
-        }))
+        to.replayed(&n.body).iter().any(|b| {
+            !matches!(
+                b,
+                ReasoningBlock::Thinking {
+                    signature: None,
+                    ..
+                }
+            )
+        })
     })
+}
+
+/// Who a request is projected for.
+#[derive(Debug, Clone, Copy)]
+pub struct Projection<'a> {
+    pub protocol: Protocol,
+    /// The model ref: reasoning is replayed only to the model that made it
+    /// (another model cannot verify, or read, its blocks).
+    pub model: &'a str,
+}
+
+impl Projection<'_> {
+    fn replayed<'n>(&self, body: &'n NodeBody) -> &'n [ReasoningBlock] {
+        match body {
+            NodeBody::Assistant {
+                reasoning, model, ..
+            } if model == self.model => reasoning,
+            _ => &[],
+        }
+    }
 }
 
 /// Index of the latest reasoning reset on the path: reasoning before it is
@@ -408,13 +673,28 @@ fn reasoning_blocks(end: &genai::chat::StreamEnd, text: String) -> Vec<Reasoning
             signature: Some(signature),
         });
     }
-    if blocks.is_empty() && !text.is_empty() {
+    if text.is_empty() {
+        return blocks;
+    }
+    // Gemini signs without returning the text in its parts: keep the
+    // streamed text on the first block, for display.
+    if blocks.is_empty() {
         blocks.push(ReasoningBlock::Thinking {
             text,
             signature: None,
         });
+    } else if !blocks_have_text(&blocks)
+        && let Some(ReasoningBlock::Thinking { text: t, .. }) = blocks.first_mut()
+    {
+        *t = text;
     }
     blocks
+}
+
+fn blocks_have_text(blocks: &[ReasoningBlock]) -> bool {
+    blocks
+        .iter()
+        .any(|b| matches!(b, ReasoningBlock::Thinking { text, .. } if !text.is_empty()))
 }
 
 /// Deterministically project a branch path into a genai `ChatRequest`
@@ -441,16 +721,18 @@ fn reasoning_blocks(end: &genai::chat::StreamEnd, text: String) -> Vec<Reasoning
 /// - Message-level ephemeral cache breakpoints on the **last message** and the
 ///   **last user-role message**.
 pub fn project(
+    to: Projection<'_>,
     system: &str,
     tools: &[ToolSpec],
     nodes: &[Node],
     blobs: Option<&Blobs>,
 ) -> genai::chat::ChatRequest {
-    project_from(system, tools, nodes, replay_from(nodes), blobs)
+    project_from(to, system, tools, nodes, replay_from(nodes), blobs)
 }
 
 /// [`project`], replaying thinking only from `nodes[replay_from..]`.
 fn project_from(
+    to: Projection<'_>,
     system: &str,
     tools: &[ToolSpec],
     nodes: &[Node],
@@ -459,7 +741,19 @@ fn project_from(
 ) -> genai::chat::ChatRequest {
     let load = |a: &Attachment| -> Option<Vec<u8>> { blobs.and_then(|b| b.get(&a.hash).ok()) };
     let mut messages: Vec<ChatMessage> = Vec::new();
+    // Images of tool results, on protocols whose tool results are text only:
+    // sent as one user message right after the batch's results.
+    let mut deferred: Vec<ContentPart> = Vec::new();
+    let flush = |messages: &mut Vec<ChatMessage>, deferred: &mut Vec<ContentPart>| {
+        if !deferred.is_empty() {
+            let parts = std::mem::take(deferred);
+            messages.push(ChatMessage::user(MessageContent::from_parts(parts)));
+        }
+    };
     for (i, n) in nodes.iter().enumerate() {
+        if !matches!(n.body, NodeBody::ToolResult { .. }) && projects(&n.body) {
+            flush(&mut messages, &mut deferred);
+        }
         match &n.body {
             NodeBody::User { content } => {
                 if content.attachments.is_empty() {
@@ -479,7 +773,6 @@ fn project_from(
             }
             NodeBody::Assistant {
                 content,
-                reasoning,
                 tool_calls,
                 ..
             } => {
@@ -487,14 +780,25 @@ fn project_from(
                 let mut parts_out: Vec<ContentPart> = Vec::new();
                 // Anthropic requires the thinking blocks of this turn — signed
                 // or redacted — back, unchanged and ahead of text/tool_use, or
-                // it rejects the tool-use follow-up.
-                let replayed = if i < replay_from { &[][..] } else { reasoning };
+                // it rejects the tool-use follow-up. Gemini wants its
+                // signatures on the first call; OpenAI-compatible reasoners
+                // (DeepSeek, Kimi) want the plain reasoning text back.
+                let replayed = if i < replay_from {
+                    &[][..]
+                } else {
+                    to.replayed(&n.body)
+                };
+                let mut call_signatures: Vec<String> = Vec::new();
                 for block in replayed {
                     match block {
                         ReasoningBlock::Thinking {
                             text,
                             signature: Some(signature),
                         } => {
+                            if to.protocol == Protocol::Gemini && !tool_calls.is_empty() {
+                                call_signatures.push(signature.clone());
+                                continue;
+                            }
                             parts_out.push(ContentPart::ThoughtSignature(signature.clone()));
                             parts_out.push(ContentPart::ReasoningContent(text.clone()));
                         }
@@ -504,7 +808,13 @@ fn project_from(
                                 data: data.clone(),
                             }));
                         }
-                        // Unsigned thinking is display-only.
+                        ReasoningBlock::Thinking {
+                            text,
+                            signature: None,
+                        } if to.protocol == Protocol::Openai && !text.is_empty() => {
+                            parts_out.push(ContentPart::ReasoningContent(text.clone()));
+                        }
+                        // Otherwise unsigned thinking is display-only.
                         ReasoningBlock::Thinking {
                             signature: None, ..
                         } => {}
@@ -513,12 +823,14 @@ fn project_from(
                 if !text.is_empty() {
                     parts_out.push(ContentPart::Text(text));
                 }
-                for c in tool_calls {
+                for (k, c) in tool_calls.iter().enumerate() {
+                    let signatures = (k == 0 && !call_signatures.is_empty())
+                        .then(|| std::mem::take(&mut call_signatures));
                     parts_out.push(ContentPart::ToolCall(GenaiToolCall {
                         call_id: c.call_id.clone(),
                         fn_name: c.name.clone(),
                         fn_arguments: c.args.clone(),
-                        thought_signatures: None,
+                        thought_signatures: signatures,
                     }));
                 }
                 if !parts_out.is_empty() {
@@ -536,12 +848,29 @@ fn project_from(
                 // the whole `tool_result` block (text and image content
                 // blocks in segments() order, labels included) still batches
                 // with the sibling results into one message. `is_error` stays
-                // unprojected, exactly as for the plain-string form.
+                // unprojected, exactly as for the plain-string form. Other
+                // protocols get the text, with the images deferred.
                 let response = if content.attachments.is_empty() {
                     ContentPart::ToolResponse(ToolResponse::new(
                         call_id.clone(),
                         content.text.clone(),
                     ))
+                } else if to.protocol != Protocol::Anthropic {
+                    let mut text: Vec<String> = Vec::new();
+                    for piece in pieces(content, &load) {
+                        match piece {
+                            Piece::Text(t) => text.push(t),
+                            // An image always follows its `Image n:` label.
+                            Piece::Image { mime, data, name } => {
+                                let label = text.last().cloned().unwrap_or_default();
+                                deferred.push(ContentPart::Text(label));
+                                deferred.push(ContentPart::Binary(Binary::from_base64(
+                                    mime, data, name,
+                                )));
+                            }
+                        }
+                    }
+                    ContentPart::ToolResponse(ToolResponse::new(call_id.clone(), text.join("\n")))
                 } else {
                     let blocks: Vec<Value> = pieces(content, &load)
                         .into_iter()
@@ -584,6 +913,7 @@ fn project_from(
             }
         }
     }
+    flush(&mut messages, &mut deferred);
 
     if let Some(last) = messages.last_mut() {
         last.options = Some(MessageOptions::default().with_cache_control(CacheControl::Ephemeral));
@@ -608,6 +938,14 @@ fn project_from(
         }));
     }
     req
+}
+
+/// Whether a node projects to anything (markers do not).
+fn projects(body: &NodeBody) -> bool {
+    match body {
+        NodeBody::Note { content, .. } => !content.text.is_empty(),
+        _ => true,
+    }
 }
 
 /// One projected piece of a content with attachments, in `segments()` order.
@@ -657,6 +995,11 @@ mod tests {
     use rumu_core::{NodeId, SessionId, now};
     use serde_json::json;
 
+    const ANTHROPIC: Projection<'static> = Projection {
+        protocol: Protocol::Anthropic,
+        model: "m",
+    };
+
     fn node(body: NodeBody) -> Node {
         Node {
             id: NodeId::new(),
@@ -691,11 +1034,7 @@ mod tests {
                 }],
                 reason_ms: None,
                 reasoning_reset: false,
-                tool_calls: vec![ToolCall {
-                    call_id: "c1".into(),
-                    name: "shell".into(),
-                    args: json!({"command": "ls"}),
-                }],
+                tool_calls: vec![ToolCall::new("c1", "shell", json!({"command": "ls"}))],
                 model: "m".into(),
                 usage: Usage::default(),
             }),
@@ -728,7 +1067,7 @@ mod tests {
                 parallel: false,
             },
         ];
-        let req = project("SYSTEM", &tools, &nodes, None);
+        let req = project(ANTHROPIC, "SYSTEM", &tools, &nodes, None);
 
         assert_eq!(req.system.as_deref(), Some("SYSTEM"));
         // Marker dropped; notes are user messages with the exact format.
@@ -766,8 +1105,8 @@ mod tests {
         assert_eq!(names, vec!["alpha", "zeta"]);
 
         // Deterministic: identical input → byte-identical serialization.
-        let a = serde_json::to_string(&project("SYSTEM", &tools, &nodes, None)).unwrap();
-        let b = serde_json::to_string(&project("SYSTEM", &tools, &nodes, None)).unwrap();
+        let a = serde_json::to_string(&project(ANTHROPIC, "SYSTEM", &tools, &nodes, None)).unwrap();
+        let b = serde_json::to_string(&project(ANTHROPIC, "SYSTEM", &tools, &nodes, None)).unwrap();
         assert_eq!(a, b);
     }
 
@@ -790,7 +1129,7 @@ mod tests {
             model: "m".into(),
             usage: Usage::default(),
         })];
-        let req = project("SYSTEM", &[], &nodes, None);
+        let req = project(ANTHROPIC, "SYSTEM", &[], &nodes, None);
         let parts = req.messages[0].content.parts();
         // Thinking blocks lead, in the order they were captured: the signed
         // block, then the redacted one, then the text.
@@ -841,7 +1180,7 @@ mod tests {
             model: "m".into(),
             usage: Usage::default(),
         })];
-        let req = project("SYSTEM", &[], &nodes, None);
+        let req = project(ANTHROPIC, "SYSTEM", &[], &nodes, None);
         let signatures: Vec<&str> = req.messages[0]
             .content
             .parts()
@@ -882,7 +1221,7 @@ mod tests {
             model: "m".into(),
             usage: Usage::default(),
         })];
-        let req = project("SYSTEM", &[], &nodes, None);
+        let req = project(ANTHROPIC, "SYSTEM", &[], &nodes, None);
         assert_eq!(req.messages[0].content.parts().len(), 1);
     }
 
@@ -897,7 +1236,7 @@ mod tests {
             source: "memory".into(),
             content: rumu_core::Content::text(frozen).with_data(&payload),
         })];
-        let req = project("SYSTEM", &[], &nodes, None);
+        let req = project(ANTHROPIC, "SYSTEM", &[], &nodes, None);
         assert_eq!(req.messages.len(), 1);
         let text = req.messages[0].content.first_text().unwrap();
         assert_eq!(text, format!("<note source=\"memory\">\n{frozen}\n</note>"));
@@ -958,7 +1297,7 @@ mod tests {
             })]
         };
         let parts = |nodes: &[Node]| {
-            project("SYSTEM", &[], nodes, Some(&blobs)).messages[0]
+            project(ANTHROPIC, "SYSTEM", &[], nodes, Some(&blobs)).messages[0]
                 .content
                 .parts()
                 .to_vec()
@@ -1002,7 +1341,7 @@ mod tests {
         let plain = vec![node(NodeBody::User {
             content: rumu_core::Content::text("hello"),
         })];
-        let msg = project("SYSTEM", &[], &plain, Some(&blobs)).messages[0].clone();
+        let msg = project(ANTHROPIC, "SYSTEM", &[], &plain, Some(&blobs)).messages[0].clone();
         assert_eq!(msg.role, ChatRole::User);
         assert_eq!(
             serde_json::to_value(&msg.content).unwrap(),
@@ -1019,7 +1358,7 @@ mod tests {
             content: rumu_core::Content::text("shot [Image #1]").with_attachments(atts),
             is_error: false,
         })];
-        let m = &project("SYSTEM", &[], &nodes, Some(&blobs)).messages[0];
+        let m = &project(ANTHROPIC, "SYSTEM", &[], &nodes, Some(&blobs)).messages[0];
         assert_eq!(m.role, ChatRole::Tool);
         let parts = m.content.parts();
         assert_eq!(parts.len(), 1, "one Custom part holds the whole block");
@@ -1043,6 +1382,33 @@ mod tests {
     }
 
     #[test]
+    fn tool_result_images_follow_the_batch_on_other_protocols() {
+        let (_dir, blobs, atts) = blobs_with(&[b"pic"]);
+        let nodes = vec![
+            assistant(vec![], false, &["c1", "c2"]),
+            node(NodeBody::ToolResult {
+                call_id: "c1".into(),
+                content: rumu_core::Content::text("shot [Image #1]").with_attachments(atts),
+                is_error: false,
+            }),
+            result("c2"),
+        ];
+        let openai = Projection {
+            protocol: Protocol::Openai,
+            model: "m",
+        };
+        let m = &project(openai, "SYSTEM", &[], &nodes, Some(&blobs)).messages;
+        assert_eq!(m.len(), 3);
+        let responses = m[1].content.tool_responses();
+        assert_eq!(responses.len(), 2);
+        assert_eq!(responses[0].content, "shot \nImage 1:");
+        assert_eq!(m[2].role, ChatRole::User);
+        let parts = m[2].content.parts();
+        assert!(matches!(&parts[0], ContentPart::Text(t) if t == "Image 1:"));
+        assert!(matches!(&parts[1], ContentPart::Binary(_)));
+    }
+
+    #[test]
     fn mixed_tool_results_batch_into_one_message() {
         let (_dir, blobs, atts) = blobs_with(&[b"pic"]);
         let nodes = vec![
@@ -1061,7 +1427,7 @@ mod tests {
                 is_error: false,
             }),
         ];
-        let m = &project("SYSTEM", &[], &nodes, Some(&blobs)).messages;
+        let m = &project(ANTHROPIC, "SYSTEM", &[], &nodes, Some(&blobs)).messages;
         assert_eq!(m.len(), 3);
         assert_eq!(m[2].role, ChatRole::Tool);
         let parts = m[2].content.parts();
@@ -1094,7 +1460,7 @@ mod tests {
         let nodes = vec![node(NodeBody::User {
             content: rumu_core::Content::text("see [Image #1]").with_attachments([gone.clone()]),
         })];
-        let parts = project("SYSTEM", &[], &nodes, None).messages[0]
+        let parts = project(ANTHROPIC, "SYSTEM", &[], &nodes, None).messages[0]
             .content
             .parts()
             .to_vec();
@@ -1109,7 +1475,7 @@ mod tests {
             content: rumu_core::Content::text("shot [Image #1]").with_attachments([gone]),
             is_error: false,
         })];
-        let parts = project("SYSTEM", &[], &nodes, None).messages[0]
+        let parts = project(ANTHROPIC, "SYSTEM", &[], &nodes, None).messages[0]
             .content
             .parts()
             .to_vec();
@@ -1142,8 +1508,10 @@ mod tests {
                 is_error: true,
             }),
         ];
-        let a = serde_json::to_string(&project("SYSTEM", &[], &nodes, Some(&blobs))).unwrap();
-        let b = serde_json::to_string(&project("SYSTEM", &[], &nodes, Some(&blobs))).unwrap();
+        let a = serde_json::to_string(&project(ANTHROPIC, "SYSTEM", &[], &nodes, Some(&blobs)))
+            .unwrap();
+        let b = serde_json::to_string(&project(ANTHROPIC, "SYSTEM", &[], &nodes, Some(&blobs)))
+            .unwrap();
         assert_eq!(a, b);
     }
 
@@ -1155,11 +1523,7 @@ mod tests {
             reasoning_reset: reset,
             tool_calls: calls
                 .iter()
-                .map(|id| ToolCall {
-                    call_id: (*id).into(),
-                    name: "shell".into(),
-                    args: json!({}),
-                })
+                .map(|id| ToolCall::new(*id, "shell", json!({})))
                 .collect(),
             model: "m".into(),
             usage: Usage::default(),
@@ -1202,7 +1566,7 @@ mod tests {
             assistant(vec![], false, &["c3"]),
             result("c3"),
         ];
-        let req = project("SYSTEM", &[], &nodes, None);
+        let req = project(ANTHROPIC, "SYSTEM", &[], &nodes, None);
         let m = &req.messages;
         assert_eq!(m.len(), 6);
         let ids = |i: usize| -> Vec<String> {
@@ -1230,14 +1594,14 @@ mod tests {
             result("c2"),
             assistant(vec![signed("new")], false, &[]),
         ];
-        let signatures: Vec<String> = project("SYSTEM", &[], &nodes, None)
+        let signatures: Vec<String> = project(ANTHROPIC, "SYSTEM", &[], &nodes, None)
             .messages
             .iter()
             .flat_map(|m| m.content.thought_signatures())
             .map(str::to_owned)
             .collect();
         assert_eq!(signatures, ["reset", "new"]);
-        assert!(replays_reasoning(&nodes[replay_from(&nodes)..]));
+        assert!(replays_reasoning(ANTHROPIC, &nodes[replay_from(&nodes)..]));
     }
 
     #[test]
@@ -1265,7 +1629,7 @@ mod tests {
                 }),
             }),
         ];
-        let req = project("SYSTEM", &[], &nodes, None);
+        let req = project(ANTHROPIC, "SYSTEM", &[], &nodes, None);
         assert_eq!(req.messages.len(), 1);
         assert_eq!(req.messages[0].content.first_text(), Some("hello"));
     }
@@ -1286,12 +1650,166 @@ mod tests {
         )));
     }
 
+    fn config() -> ModelConfig {
+        let mut c = ModelConfig::default();
+        c.providers.insert(
+            "a".into(),
+            ProviderSettings {
+                endpoints: [(Protocol::Anthropic, "https://a.example".to_owned())].into(),
+                api_key: "k".into(),
+                models: vec!["m".into()],
+                ..Default::default()
+            },
+        );
+        c.profiles.insert(
+            "cheap".into(),
+            ProfileSettings {
+                model: "a/m".into(),
+                effort: Some(Effort::Minimal),
+            },
+        );
+        c
+    }
+
     #[test]
-    fn effort_is_validated() {
-        let build = |effort: &str| {
-            GenaiLlm::with_target("m".into(), effort.into(), "http://x/v1/".into(), "t".into())
+    fn resolves_profiles_roles_and_models() {
+        let llm = GenaiLlm::default();
+        let mut c = config();
+        llm.configure(&c, Arc::default()).unwrap();
+        let r = llm.resolved();
+        // No default role bound.
+        assert!(matches!(
+            r.resolve(ModelPick::Role(Role::Default)),
+            Err(LlmError::MissingModel)
+        ));
+        assert!(r.resolve(ModelPick::Role(Role::Title)).unwrap().is_none());
+        assert!(!llm.has_role(Role::Title));
+
+        // A profile's effort, moved to the nearest the model takes; a
+        // marker's override wins.
+        let pick = rumu_core::ModelUse {
+            target: ModelTarget::Profile("cheap".into()),
+            effort: None,
         };
-        assert!(matches!(build("extreme"), Err(LlmError::InvalidEffort(e)) if e == "extreme"));
-        assert!(build("xhigh").is_ok());
+        let t = r.resolve(ModelPick::Use(&pick)).unwrap().unwrap();
+        assert_eq!((t.model_ref.as_str(), t.effort), ("a/m", Some(Effort::Low)));
+        let pick = rumu_core::ModelUse {
+            target: ModelTarget::Model("a/custom".into()),
+            effort: Some(Effort::Max),
+        };
+        let t = r.resolve(ModelPick::Use(&pick)).unwrap().unwrap();
+        assert_eq!(
+            (t.model_id.as_str(), t.effort),
+            ("custom", Some(Effort::Max))
+        );
+        let gone = rumu_core::ModelUse {
+            target: ModelTarget::Profile("gone".into()),
+            effort: None,
+        };
+        assert!(matches!(
+            r.resolve(ModelPick::Use(&gone)),
+            Err(LlmError::UnknownProfile(_))
+        ));
+
+        c.roles.title = Some("cheap".into());
+        llm.configure(&c, Arc::default()).unwrap();
+        assert!(llm.has_role(Role::Title));
+
+        // Refused configurations leave the previous one in place.
+        c.roles.default = Some("gone".into());
+        assert!(llm.configure(&c, Arc::default()).is_err());
+        c.roles.default = None;
+        c.profiles.get_mut("cheap").unwrap().model = "b/m".into();
+        assert!(matches!(
+            llm.configure(&c, Arc::default()),
+            Err(LlmError::UnknownModel(_))
+        ));
+        assert!(llm.has_role(Role::Title));
+    }
+
+    #[test]
+    fn models_run_on_their_native_protocol_then_the_fallbacks() {
+        let catalog = Catalog::default();
+        let mut p = ProviderSettings {
+            preset: Some("openai".into()),
+            ..Default::default()
+        };
+        let mut eps = endpoints(&p);
+        assert_eq!(eps[&Protocol::OpenaiResponses], "https://api.openai.com/v1");
+        let on = |p: &ProviderSettings, eps: &BTreeMap<Protocol, String>, id: &str| {
+            protocol_for(&catalog, p, eps, id)
+        };
+        assert_eq!(on(&p, &eps, "gpt-9"), Some(Protocol::OpenaiResponses));
+        assert_eq!(on(&p, &eps, "someone/else"), Some(Protocol::Openai));
+
+        // An endpoint of its own; a native protocol the provider lacks.
+        p.endpoints
+            .insert(Protocol::Anthropic, " https://gw.example/ ".into());
+        eps = endpoints(&p);
+        assert_eq!(eps[&Protocol::Anthropic], "https://gw.example");
+        assert_eq!(on(&p, &eps, "vendor/claude-9"), Some(Protocol::Anthropic));
+        assert_eq!(on(&p, &eps, "gemini-9"), Some(Protocol::Openai));
+
+        // An empty endpoint turns the preset's off.
+        let mut off = p.clone();
+        off.endpoints
+            .insert(Protocol::OpenaiResponses, String::new());
+        assert!(!endpoints(&off).contains_key(&Protocol::OpenaiResponses));
+
+        // Held to one: only that, if there.
+        p.protocols.insert("gpt-9".into(), Protocol::Anthropic);
+        p.protocols.insert("gemini-9".into(), Protocol::Gemini);
+        assert_eq!(on(&p, &eps, "gpt-9"), Some(Protocol::Anthropic));
+        assert_eq!(on(&p, &eps, "gemini-9"), None);
+        assert_eq!(
+            api_root(Protocol::Anthropic, &eps[&Protocol::Anthropic]),
+            "https://gw.example/v1/"
+        );
+
+        let mut c = ModelConfig::default();
+        c.providers.insert("o".into(), p);
+        assert!(matches!(
+            GenaiLlm::default().configure(&c, Arc::default()),
+            Err(LlmError::NoEndpoint(_))
+        ));
+    }
+
+    #[test]
+    fn reasoning_is_replayed_only_to_its_model() {
+        let nodes = vec![
+            node(NodeBody::User {
+                content: rumu_core::Content::text("go"),
+            }),
+            assistant(vec![signed("mine")], false, &["c1"]),
+            result("c1"),
+        ];
+        let sigs = |to: Projection<'_>| -> Vec<String> {
+            project(to, "S", &[], &nodes, None)
+                .messages
+                .iter()
+                .flat_map(|m| m.content.thought_signatures())
+                .map(str::to_owned)
+                .collect()
+        };
+        assert_eq!(sigs(ANTHROPIC), ["mine"]);
+        let other = Projection {
+            protocol: Protocol::Anthropic,
+            model: "other",
+        };
+        assert!(sigs(other).is_empty());
+        assert!(!replays_reasoning(other, &nodes));
+
+        // Gemini carries the signatures on the first call instead.
+        let gemini = Projection {
+            protocol: Protocol::Gemini,
+            model: "m",
+        };
+        let req = project(gemini, "S", &[], &nodes, None);
+        let calls = req.messages[1].content.tool_calls();
+        assert_eq!(
+            calls[0].thought_signatures.as_deref(),
+            Some(&["mine".to_owned()][..])
+        );
+        assert!(req.messages[1].content.thought_signatures().is_empty());
     }
 }

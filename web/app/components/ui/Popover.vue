@@ -1,13 +1,14 @@
 <script setup lang="ts">
 // A click-open popover: a trigger (slot `trigger`, given `open` + `toggle`)
 // and a paper panel floated beside it (default slot, given `close`).
-// Placement is @floating-ui/vue (fixed strategy, flip + shift), teleported to
+// Placement is @floating-ui/vue (fixed strategy, flip + shift, its height
+// held to the room on its side), teleported to
 // <body> so no scroller or `overflow: hidden` sheet can clip it; it stays
 // hidden until placed, so it never flashes at 0,0. A pointer down outside
-// both, or Escape, closes it.
+// both, or Escape, closes it. Once placed, an `[autofocus]` inside takes focus.
 import { onBeforeUnmount, ref, watch } from 'vue'
 import type { Ref } from 'vue'
-import { autoUpdate, flip, offset, shift, useFloating } from '@floating-ui/vue'
+import { autoUpdate, flip, offset, shift, size, useFloating } from '@floating-ui/vue'
 import type { Placement } from '@floating-ui/vue'
 
 const props = withDefaults(
@@ -56,7 +57,17 @@ const { floatingStyles, isPositioned } = useFloating(
     // `translate`, and must never carry the panel in from the corner.
     transform: false,
     whileElementsMounted: autoUpdate,
-    middleware: [offset(8), flip({ padding: 8 }), shift({ padding: 8 })],
+    middleware: [
+      offset(8),
+      flip({ padding: 8 }),
+      shift({ padding: 8 }),
+      size({
+        padding: 8,
+        apply({ availableHeight, elements }) {
+          elements.floating.style.maxHeight = `${Math.min(availableHeight, 560)}px`
+        },
+      }),
+    ],
   },
 )
 
@@ -84,6 +95,16 @@ watch(open, (v) => {
   }
 })
 
+// The panel is hidden until placed, and a hidden element can't take focus:
+// wait for the render that reveals it.
+watch(
+  isPositioned,
+  (v) => {
+    if (v) panel.value?.querySelector<HTMLElement>('[autofocus]')?.focus()
+  },
+  { flush: 'post' },
+)
+
 onBeforeUnmount(close)
 </script>
 
@@ -104,7 +125,7 @@ onBeforeUnmount(close)
         :role="role"
         :aria-label="label"
         :style="{ ...floatingStyles, visibility: isPositioned ? 'visible' : 'hidden' }"
-        class="z-60 max-h-[min(70vh,560px)] overflow-y-auto rounded-card border border-line-soft bg-surface shadow-pop"
+        class="z-60 overflow-y-auto rounded-card border border-line-soft bg-surface shadow-pop"
         :class="
           menu
             ? 'w-[min(220px,calc(100vw-1rem))] p-1'

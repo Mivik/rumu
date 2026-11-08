@@ -2,7 +2,8 @@
 //! then merging in the workspace registry.
 
 use rumu_core::{
-    Node, NodeBody, PathState, RUMU_WORKSPACE, SessionRoot, Workspace, WorkspaceSet, WorkspaceUse,
+    ModelUse, Node, NodeBody, PathState, RUMU_WORKSPACE, SessionRoot, Workspace, WorkspaceSet,
+    WorkspaceUse,
 };
 
 /// Fold nodes (root → head, in order) into the derived path state.
@@ -41,7 +42,9 @@ fn fold_node(st: &mut PathState, body: &NodeBody) {
     let NodeBody::Note { content, .. } = body else {
         return;
     };
-    if let Some(use_) = content.decode::<WorkspaceUse>() {
+    if let Some(model) = content.decode::<ModelUse>() {
+        st.model = Some(model);
+    } else if let Some(use_) = content.decode::<WorkspaceUse>() {
         st.default_workspace = Some(use_.name);
     } else if let Some(set) = content.decode::<WorkspaceSet>() {
         st.attached = set.names;

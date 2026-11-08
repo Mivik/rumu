@@ -37,6 +37,7 @@ fn last_result(nodes: &[Node]) -> Option<String> {
 impl Llm for AssistantsLlm {
     async fn complete(
         &self,
+        _pick: rumu_core::ModelPick<'_>,
         _system: &str,
         _tools: &[ToolSpec],
         nodes: &[Node],
@@ -367,6 +368,7 @@ struct StuckLlm;
 impl Llm for StuckLlm {
     async fn complete(
         &self,
+        _pick: rumu_core::ModelPick<'_>,
         _system: &str,
         _tools: &[ToolSpec],
         nodes: &[Node],

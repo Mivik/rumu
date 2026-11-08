@@ -311,7 +311,10 @@ const tipStyle = computed<CSSProperties>(() => ({
         >
           <!-- record header: the request's model and timestamp -->
           <div class="flex items-baseline gap-3 px-1">
-            <div class="min-w-0 flex-1 truncate text-secondary font-bold text-ink" :title="stats.body.model">
+            <div
+              class="min-w-0 flex-1 truncate font-mono text-meta font-semibold text-ink"
+              :title="stats.body.model"
+            >
               {{ stats.body.model }}
             </div>
             <div class="flex-none text-micro tabular-nums text-ink-3">{{ whenText }}</div>

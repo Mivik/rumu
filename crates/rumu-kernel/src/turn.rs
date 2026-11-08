@@ -8,9 +8,9 @@ use crate::{Error, Result};
 use rumu_core::kind;
 use rumu_core::{
     Branch, BranchId, BranchKind, BranchStatus, CODE_DENIED_TOOLS, Call, CodeCall, Content, Cx,
-    FILE_PATCH_TAG, Inherit, InheritContext, InnerCall, NodeBody, NodeId, Plugin, RUMU_WORKSPACE,
-    SYSTEM_SOURCE, SessionId, ToolCall, ToolError, ToolOutput, ToolResultExt, TurnError,
-    WorkspaceSet, WorkspaceUse, now, parse_args, truncate_chars, truncate_output,
+    FILE_PATCH_TAG, Inherit, InheritContext, InnerCall, ModelPick, NodeBody, NodeId, Plugin,
+    RUMU_WORKSPACE, Role, SYSTEM_SOURCE, SessionId, ToolCall, ToolError, ToolOutput, ToolResultExt,
+    TurnError, WorkspaceSet, WorkspaceUse, now, parse_args, truncate_chars, truncate_output,
 };
 use schemars::JsonSchema;
 use serde::Deserialize;
@@ -360,6 +360,11 @@ impl Kernel {
             // the UI yet: once text or reasoning reached the client,
             // replaying would duplicate it, so the turn fails instead.
             let nodes = self.path_nodes(&branch)?;
+            let model = crate::state::derive_state(&nodes).model;
+            let pick = match &model {
+                Some(u) => ModelPick::Use(u),
+                None => ModelPick::Role(Role::Default),
+            };
             let streamed = Arc::new(AtomicBool::new(false));
             let on_delta = {
                 let k = self.clone();
@@ -402,7 +407,7 @@ impl Kernel {
                     // Abort wins even if the call is also ready.
                     biased;
                     _ = token.cancelled() => break None,
-                    r = self.llm.complete(&self.system, &self.tools, &nodes, on_delta.clone()) => {
+                    r = self.llm.complete(pick, &self.system, &self.tools, &nodes, on_delta.clone()) => {
                         match r {
                             Ok(resp) => break Some(resp),
                             Err(e) => {
@@ -792,11 +797,7 @@ impl Kernel {
             *n += 1;
             (token, *n, format!("{parent_call}.{n}"))
         };
-        let call = ToolCall {
-            call_id,
-            name: name.to_owned(),
-            args: args.clone(),
-        };
+        let call = ToolCall::new(call_id, name, args.clone());
         let Some(ExecutedTool {
             out,
             mut payload,
@@ -990,6 +991,13 @@ impl Kernel {
                     initial.push(NodeBody::Note {
                         source: SYSTEM_SOURCE.into(),
                         content: Content::marker(&WorkspaceUse { name }),
+                    });
+                }
+                // The child runs on the parent's model.
+                if let Some(model) = &parent_state.model {
+                    initial.push(NodeBody::Note {
+                        source: SYSTEM_SOURCE.into(),
+                        content: Content::marker(model),
                     });
                 }
                 initial.push(NodeBody::User {

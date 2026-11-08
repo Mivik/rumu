@@ -1420,11 +1420,11 @@ fn staged_session() -> (rumu_core::SessionInfo, Vec<Node>, Vec<rumu_core::Branch
                 reasoning: vec![],
                 reason_ms: None,
                 reasoning_reset: false,
-                tool_calls: vec![rumu_core::ToolCall {
-                    call_id: "c1".into(),
-                    name: "bash".into(),
-                    args: json!({ "command": "ls -la" }),
-                }],
+                tool_calls: vec![rumu_core::ToolCall::new(
+                    "c1",
+                    "bash",
+                    json!({ "command": "ls -la" }),
+                )],
                 model: "fake".into(),
                 usage: Default::default(),
             },
@@ -2103,11 +2103,11 @@ async fn session_render_escapes_markup() {
                 reasoning: vec![],
                 reason_ms: None,
                 reasoning_reset: false,
-                tool_calls: vec![rumu_core::ToolCall {
-                    call_id: "c1".into(),
-                    name: "bash".into(),
-                    args: json!({ "command": "printf '<elided>'" }),
-                }],
+                tool_calls: vec![rumu_core::ToolCall::new(
+                    "c1",
+                    "bash",
+                    json!({ "command": "printf '<elided>'" }),
+                )],
                 model: "fake".into(),
                 usage: Default::default(),
             },
@@ -2209,21 +2209,17 @@ async fn session_range_folds_nested_session_reads() {
                 reason_ms: None,
                 reasoning_reset: false,
                 tool_calls: vec![
-                    rumu_core::ToolCall {
-                        call_id: "c1".into(),
-                        name: "read".into(),
-                        args: json!({ "path": "@rumu:/sessions/other/abc" }),
-                    },
-                    rumu_core::ToolCall {
-                        call_id: "c2".into(),
-                        name: "search".into(),
-                        args: json!({ "query": "x", "scope": "@rumu:/sessions/other" }),
-                    },
-                    rumu_core::ToolCall {
-                        call_id: "c3".into(),
-                        name: "bash".into(),
-                        args: json!({ "command": "ls" }),
-                    },
+                    rumu_core::ToolCall::new(
+                        "c1",
+                        "read",
+                        json!({ "path": "@rumu:/sessions/other/abc" }),
+                    ),
+                    rumu_core::ToolCall::new(
+                        "c2",
+                        "search",
+                        json!({ "query": "x", "scope": "@rumu:/sessions/other" }),
+                    ),
+                    rumu_core::ToolCall::new("c3", "bash", json!({ "command": "ls" })),
                 ],
                 model: "fake".into(),
                 usage: Default::default(),
@@ -2344,11 +2340,11 @@ async fn session_call_args_clip_only_in_ranges() {
                 reasoning: vec![],
                 reason_ms: None,
                 reasoning_reset: false,
-                tool_calls: vec![rumu_core::ToolCall {
-                    call_id: "c1".into(),
-                    name: "bash".into(),
-                    args: json!({ "command": command }),
-                }],
+                tool_calls: vec![rumu_core::ToolCall::new(
+                    "c1",
+                    "bash",
+                    json!({ "command": command }),
+                )],
                 model: "fake".into(),
                 usage: Default::default(),
             },
@@ -2396,10 +2392,12 @@ async fn session_call_args_clip_only_in_ranges() {
 async fn session_range_truncation_keeps_call_tags_whole() {
     let sid = "01SCALLS0000000000000000000";
     let calls: Vec<rumu_core::ToolCall> = (0..10)
-        .map(|i| rumu_core::ToolCall {
-            call_id: format!("c{i}"),
-            name: "bash".into(),
-            args: json!({ "command": "y".repeat(280) }),
+        .map(|i| {
+            rumu_core::ToolCall::new(
+                format!("c{i}"),
+                "bash",
+                json!({ "command": "y".repeat(280) }),
+            )
         })
         .collect();
     let nodes = vec![
@@ -2693,11 +2691,11 @@ fn search_sessions() -> std::sync::Arc<FakeRuntime> {
                         reasoning: vec![],
                         reason_ms: None,
                         reasoning_reset: false,
-                        tool_calls: vec![rumu_core::ToolCall {
-                            call_id: "c1".into(),
-                            name: "bash".into(),
-                            args: json!({ "command": "cat ~/.ssh/config" }),
-                        }],
+                        tool_calls: vec![rumu_core::ToolCall::new(
+                            "c1",
+                            "bash",
+                            json!({ "command": "cat ~/.ssh/config" }),
+                        )],
                         model: "fake".into(),
                         usage: Default::default(),
                     },
@@ -3032,11 +3030,11 @@ async fn search_downweights_tool_results_and_breaks_ties_by_time() {
                     reasoning: vec![],
                     reason_ms: None,
                     reasoning_reset: false,
-                    tool_calls: vec![rumu_core::ToolCall {
-                        call_id: "c0".into(),
-                        name: "search".into(),
-                        args: json!({ "query": "widget" }),
-                    }],
+                    tool_calls: vec![rumu_core::ToolCall::new(
+                        "c0",
+                        "search",
+                        json!({ "query": "widget" }),
+                    )],
                     model: "fake".into(),
                     usage: Default::default(),
                 },

@@ -3,18 +3,26 @@
 use std::sync::Arc;
 
 use async_trait::async_trait;
-use rumu_core::{Node, ReasoningBlock, ToolCall, ToolSpec, Usage};
+use rumu_core::{ModelPick, Node, ReasoningBlock, Role, ToolCall, ToolSpec, Usage};
 
 /// A model-call failure.
 #[derive(Debug, thiserror::Error)]
 pub enum LlmError {
-    /// `RUMU_MODEL` was not configured.
-    #[error("RUMU_MODEL is not set; provide the model id your endpoint expects")]
+    /// No default model profile is configured.
+    #[error("no default model is configured; set one in Settings")]
     MissingModel,
 
-    /// `RUMU_EFFORT` is not a reasoning effort the adapter knows.
-    #[error("RUMU_EFFORT must be one of low, medium, high, xhigh, max (got {0:?})")]
-    InvalidEffort(String),
+    /// A model ref whose provider is not configured.
+    #[error("unknown model `{0}`")]
+    UnknownModel(String),
+
+    /// A model profile that does not exist.
+    #[error("unknown model profile `{0}`")]
+    UnknownProfile(String),
+
+    /// The model's provider has no endpoint for the protocol it runs on.
+    #[error("no endpoint of its provider can serve `{0}`")]
+    NoEndpoint(String),
 
     /// The request could not be sent.
     #[error("llm request failed: {0}")]
@@ -59,7 +67,11 @@ impl LlmError {
     /// the provider cut the stream without concluding it.
     pub fn is_transient(&self) -> bool {
         match self {
-            Self::MissingModel | Self::InvalidEffort(_) | Self::Client(_) => false,
+            Self::MissingModel
+            | Self::UnknownModel(_)
+            | Self::UnknownProfile(_)
+            | Self::NoEndpoint(_)
+            | Self::Client(_) => false,
             Self::MissingEnd => true,
             Self::Request(m) | Self::Stream(m) => transient_message(m),
         }
@@ -144,16 +156,24 @@ impl LlmResponse {
 /// One completion over the projection of a branch path.
 #[async_trait]
 pub trait Llm: Send + Sync {
-    /// `system` is the frozen system prompt, `tools` the frozen sorted tool
-    /// list, `nodes` the root→head path. `on_delta` (if set) receives
-    /// streaming deltas. Nothing is persisted by the implementation.
+    /// `pick` is the model to run on, `system` the frozen system prompt,
+    /// `tools` the frozen sorted tool list, `nodes` the root→head path.
+    /// `on_delta` (if set) receives streaming deltas. Nothing is persisted
+    /// by the implementation.
     async fn complete(
         &self,
+        pick: ModelPick<'_>,
         system: &str,
         tools: &[ToolSpec],
         nodes: &[Node],
         on_delta: Option<OnDelta>,
     ) -> std::result::Result<LlmResponse, LlmError>;
+
+    /// Whether a profile is bound to `role`: background jobs for an unbound
+    /// role are skipped.
+    fn has_role(&self, _role: Role) -> bool {
+        false
+    }
 }
 
 #[cfg(test)]
@@ -219,7 +239,7 @@ mod tests {
             .is_transient()
         );
         assert!(!LlmError::MissingModel.is_transient());
-        assert!(!LlmError::InvalidEffort("extreme".into()).is_transient());
+        assert!(!LlmError::UnknownProfile("cheap".into()).is_transient());
         assert!(!LlmError::Client("bad proxy url".into()).is_transient());
         // The provider cut the stream without concluding it: replayable.
         assert!(LlmError::MissingEnd.is_transient());

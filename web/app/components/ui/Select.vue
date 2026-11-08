@@ -13,6 +13,8 @@ export interface SelectOption<V extends string = string> {
   value: V
   label: string
   hint?: string
+  /** The hint is an identifier (a model ref, a path): set in mono. */
+  hintMono?: boolean
   icon?: string
   /** An action rather than a value: listed last, after a divider. */
   action?: boolean
@@ -215,7 +217,12 @@ onBeforeUnmount(() => document.removeEventListener('pointerdown', onPointer, tru
           >
             <Icon v-if="o.icon" :name="o.icon" :size="14" class="flex-none text-ink-3" />
             <span class="min-w-0 flex-1 truncate">{{ o.label }}</span>
-            <span v-if="o.hint" class="flex-none text-micro text-ink-3">{{ o.hint }}</span>
+            <span
+              v-if="o.hint"
+              class="flex-none text-micro text-ink-3"
+              :class="{ 'font-mono': o.hintMono }"
+              >{{ o.hint }}</span
+            >
             <Icon
               name="ok"
               :size="14"

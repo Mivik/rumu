@@ -5,8 +5,8 @@
 //
 // A sheet of paper with the writing on top and a footer that says where the
 // prompt will go: the branch's default workspace (where its commands run —
-// it opens the list of all workspaces) and the model answering it, on the
-// left; the send button on the right — solid coral once there is something
+// it opens the list of all workspaces) and the model it runs on, on the
+// left; its reasoning effort and the send button on the right — solid coral once there is something
 // to send. While rumu works, sending steers the turn and a stop button
 // joins it.
 //
@@ -20,7 +20,7 @@
 // apps, the sent message leads with its images (`withLeadingAnchors`).
 import { computed, nextTick, onBeforeUnmount, onMounted, reactive, ref, watch } from 'vue'
 import { t } from '../../i18n'
-import { isBusy, pathNodes, sendPrompt, state, stopTurn } from '../../lib/store'
+import { isBusy, sendPrompt, state, stopTurn } from '../../lib/store'
 import type { PromptAttachment } from '../../lib/store'
 import type { Attachment } from '../../lib/types'
 import { uploadBlob, withLeadingAnchors } from '../../lib/attachments'
@@ -29,6 +29,8 @@ import Icon from '../ui/Icon.vue'
 import Popover from '../ui/Popover.vue'
 import WorkspacesPanel from '../WorkspacesPanel.vue'
 import DecisionPanel from './DecisionPanel.vue'
+import EffortPicker from './EffortPicker.vue'
+import ModelPicker from './ModelPicker.vue'
 
 /** One image being attached: the file, its local preview, and where its
  * upload stands. */
@@ -219,15 +221,6 @@ const workspace = computed(() => {
     ? { name: t('workspaces.title'), title: '', icon: 'mount', own: false }
     : { name: t('workspaces.add'), title: '', icon: 'plus', own: false }
 })
-
-/** The model that answered last on this path. */
-const model = computed(() => {
-  for (let i = pathNodes.value.length - 1; i >= 0; i--) {
-    const n = pathNodes.value[i]
-    if (n.body.type === 'assistant') return n.body.model
-  }
-  return null
-})
 </script>
 
 <template>
@@ -318,9 +311,7 @@ const model = computed(() => {
           <WorkspacesPanel @close="close" />
         </template>
       </Popover>
-      <span v-if="model" class="hidden min-w-0 truncate text-meta text-ink-3 sm:inline" :title="model">
-        {{ model }}
-      </span>
+      <ModelPicker />
       <span class="flex-1" @click.self="textareaEl?.focus()" />
       <input
         ref="fileEl"
@@ -339,6 +330,7 @@ const model = computed(() => {
       >
         <Icon name="image" :size="16" />
       </button>
+      <EffortPicker />
       <Transition
         enter-active-class="transition duration-200 ease-spring"
         enter-from-class="scale-75 opacity-0"

@@ -18,6 +18,7 @@ import type {
   TaskInfo,
   Workspace,
 } from '../types'
+import { models, takePending } from './models'
 import { isUnseen } from './derived'
 import { state } from './state'
 import { forkAt, loadPath, replaceTree } from './tree'
@@ -104,7 +105,8 @@ export async function answerDecision(id: string, answer: DecisionAnswer): Promis
   state.decisions = state.decisions.filter((d) => d.id !== id)
   try {
     await rumu.request('decision.answer', { id, answer })
-    if ('scope' in answer && answer.scope === 'always') state.assistants = await rumu.request<Assistant[]>('assistant.list')
+    if ('scope' in answer && answer.scope === 'always')
+      state.assistants = await rumu.request<Assistant[]>('assistant.list')
   } catch (err) {
     toast('error', t('errors.answer'), (err as Error).message)
   }
@@ -289,7 +291,16 @@ export async function sendPrompt(text: string, attachments: PromptAttachment[] =
   if (!branch) return false
   state.busy[branch] = true
   try {
-    await rumu.request('prompt', attachments.length ? { branch, text, attachments } : { branch, text })
+    const model = takePending(branch)
+    const params: Record<string, unknown> = { branch, text }
+    if (attachments.length) params.attachments = attachments
+    if (model) params.model = model
+    try {
+      await rumu.request('prompt', params)
+    } catch (err) {
+      if (model) models.pending[branch] = model
+      throw err
+    }
     return true
   } catch (err) {
     state.busy[branch] = false

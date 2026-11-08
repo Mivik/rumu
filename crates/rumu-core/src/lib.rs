@@ -13,6 +13,7 @@ mod index;
 mod node;
 mod plugin;
 mod schema;
+mod settings;
 mod task;
 mod workspace;
 
@@ -25,6 +26,7 @@ pub use index::*;
 pub use node::*;
 pub use plugin::*;
 pub use schema::*;
+pub use settings::*;
 pub use task::*;
 pub use workspace::*;
 

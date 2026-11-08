@@ -11,6 +11,7 @@ mod predicate;
 mod scripted;
 mod state;
 mod task;
+mod title;
 mod turn;
 
 pub use error::{Error, Result};
@@ -25,6 +26,7 @@ use std::sync::{Arc, Mutex};
 use std::time::Duration;
 
 use crate::host::KernelRuntime;
+use crate::title::TITLE_CHARS;
 use rumu_core::kind;
 use rumu_core::{
     Branch, BranchId, BranchKind, BranchStatus, Content, Effect, Event, HookSpec, Inbox, Node,
@@ -427,6 +429,12 @@ impl Kernel {
         }
     }
 
+    /// The model settings changed: push them, so clients refresh their
+    /// model pickers.
+    pub fn settings_changed(&self, settings: Value) {
+        self.push("settings.updated", json!({ "settings": settings }));
+    }
+
     /// The workspace registry changed: push it, so clients re-read their
     /// branch state (an attached workspace may have gone or changed).
     pub fn workspaces_changed(&self) {
@@ -747,6 +755,27 @@ impl Kernel {
             .await
     }
 
+    /// The user sends a prompt after picking another model: a `model.use`
+    /// marker, written only when it differs from the branch's current one
+    /// (queued while a turn runs, so it lands ahead of the prompt). The
+    /// model is not told. Returns whether a marker was written.
+    pub async fn use_model(
+        self: &Arc<Self>,
+        branch: &BranchId,
+        model: rumu_core::ModelUse,
+    ) -> Result<bool> {
+        let state = derive_state(&self.pending_path_nodes(branch)?);
+        if state.model.as_ref() == Some(&model) {
+            return Ok(false);
+        }
+        let body = NodeBody::Note {
+            source: SYSTEM_SOURCE.into(),
+            content: Content::marker(&model),
+        };
+        self.deliver(branch, NodeId::new(), body, None).await?;
+        Ok(true)
+    }
+
     /// The user attaches or detaches workspaces: `names` (registered, in
     /// order) is the branch's list from here on (a `workspace.set` marker).
     pub async fn set_workspaces(
@@ -875,10 +904,13 @@ impl Kernel {
                 .get_session(&b.session)?
                 .ok_or_else(|| Error::SessionNotFound(b.session.clone()))?;
             if session.title.is_empty() {
-                session.title = content.text.chars().take(60).collect();
+                session.title = content.text.chars().take(TITLE_CHARS).collect();
                 session.updated_at = at;
                 self.store.update_session(&session)?;
-                self.push("session.updated", json!({ "session": session }));
+                self.push("session.updated", json!({ "session": session.clone() }));
+                if self.llm.has_role(rumu_core::Role::Title) && !content.text.trim().is_empty() {
+                    self.spawn_title(session, content.text.clone());
+                }
             }
         }
 

@@ -21,6 +21,8 @@ use rumu_core::{
 };
 use rumu_kernel::Kernel;
 use rumu_plugins::{Assistant, assistant_of};
+
+use crate::settings::{Settings, SettingsError};
 use rust_embed::{EmbeddedFile, RustEmbed};
 use serde::Deserialize;
 use serde_json::{Value, json};
@@ -66,6 +68,10 @@ enum ServerError {
     #[error(transparent)]
     Plugins(#[from] rumu_plugins::Error),
 
+    /// A settings edit was refused (validation or writing `settings.yaml`).
+    #[error(transparent)]
+    Settings(#[from] SettingsError),
+
     /// The request names an assistant that is not configured.
     #[error("unknown assistant `{0}`")]
     UnknownAssistant(String),
@@ -95,6 +101,7 @@ pub struct AppState {
     pub home: std::path::PathBuf,
     pub workspaces: Workspaces,
     pub blobs: Blobs,
+    pub settings: Arc<Settings>,
 }
 
 /// The built frontend. Debug builds read `web/dist` from disk, release builds
@@ -314,6 +321,20 @@ async fn handle_socket(state: AppState, socket: WebSocket) {
     writer.abort();
 }
 
+fn parse_params<T: serde::de::DeserializeOwned>(p: &Value) -> Result<T> {
+    serde_json::from_value(p.clone()).map_err(|e| ServerError::InvalidParams(e.to_string()))
+}
+
+/// Run a settings edit, and push the result to every client.
+fn settings_edit(
+    state: &AppState,
+    f: impl FnOnce(&Settings) -> std::result::Result<rumu_core::SettingsInfo, SettingsError>,
+) -> Result<Value> {
+    let info = json!(f(&state.settings)?);
+    state.kernel.settings_changed(info.clone());
+    Ok(info)
+}
+
 async fn handle_request(state: &AppState, raw: &str) -> String {
     let req: Value = match serde_json::from_str(raw) {
         Ok(v) => v,
@@ -494,6 +515,56 @@ async fn dispatch(state: &AppState, method: &str, p: &Value) -> Result<Value> {
             Ok(json!({}))
         }
 
+        // `settings.yaml`. The API key is write-only.
+        "settings.get" => Ok(json!(state.settings.info())),
+
+        // Every edit replies with, and pushes, the whole settings.
+        // Saving a provider fetches its model list in the background.
+        "settings.set_provider" => {
+            let edit: crate::settings::ProviderEdit = parse_params(p)?;
+            let id = edit.id().to_owned();
+            let info = settings_edit(state, |s| s.set_provider(edit))?;
+            crate::settings::spawn_refresh(&state.settings, kernel, false, vec![id]);
+            Ok(info)
+        }
+        "settings.refresh_models" => {
+            let id = str_param(p, "id")?;
+            state.settings.refresh_models(id).await?;
+            settings_edit(state, |s| Ok(s.info()))
+        }
+        // The endpoints an address serves, for a provider being set up.
+        "settings.probe" => {
+            let url = str_param(p, "url")?;
+            let key = p.get("api_key").and_then(Value::as_str).map(str::to_owned);
+            let id = p.get("id").and_then(Value::as_str);
+            Ok(json!(state.settings.probe(url, key, id).await))
+        }
+        "settings.model" => {
+            let model = str_param(p, "model")?;
+            Ok(json!(state.settings.model(model)?))
+        }
+        "settings.pin" => {
+            let model = str_param(p, "model")?;
+            let pinned = p.get("pinned").and_then(Value::as_bool).unwrap_or(true);
+            settings_edit(state, |s| s.pin(model, pinned))
+        }
+        "settings.remove_provider" => {
+            let id = str_param(p, "id")?;
+            settings_edit(state, |s| s.remove_provider(id))
+        }
+        "settings.set_profile" => {
+            let edit = parse_params(p)?;
+            settings_edit(state, |s| s.set_profile(edit))
+        }
+        "settings.remove_profile" => {
+            let name = str_param(p, "name")?;
+            settings_edit(state, |s| s.remove_profile(name))
+        }
+        "settings.set_roles" => {
+            let roles = parse_params(p)?;
+            settings_edit(state, |s| s.set_roles(roles))
+        }
+
         // The workspace registry (`workspaces.yaml`). Every change is pushed
         // as `workspaces.updated`.
         "workspace.list" => Ok(json!(state.workspaces.list())),
@@ -647,6 +718,13 @@ async fn dispatch(state: &AppState, method: &str, p: &Value) -> Result<Value> {
                 return Err(ServerError::MissingParam("text".into()));
             }
             let content = Content::text(text).with_attachments(attachments);
+            // `model` (optional): the picker's choice, recorded only when it
+            // changes the branch's model.
+            if let Some(model) = p.get("model").filter(|m| !m.is_null()) {
+                let model: rumu_core::ModelUse = serde_json::from_value(model.clone())
+                    .map_err(|e| ServerError::InvalidParams(format!("model: {e}")))?;
+                kernel.use_model(&branch, model).await?;
+            }
             kernel.prompt(&branch, content).await?;
             Ok(json!({}))
         }

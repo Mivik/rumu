@@ -28,6 +28,7 @@ fn is_child(nodes: &[Node]) -> bool {
 impl Llm for ScopedLlm {
     async fn complete(
         &self,
+        _pick: rumu_core::ModelPick<'_>,
         _system: &str,
         _tools: &[ToolSpec],
         nodes: &[Node],

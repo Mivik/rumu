@@ -73,12 +73,16 @@ impl FakeLlm {
 impl Llm for FakeLlm {
     async fn complete(
         &self,
+        pick: rumu_core::ModelPick<'_>,
         system: &str,
         tools: &[ToolSpec],
         nodes: &[Node],
         on_delta: Option<OnDelta>,
     ) -> std::result::Result<LlmResponse, rumu_kernel::LlmError> {
-        let mut resp = self.inner.complete(system, tools, nodes, on_delta).await?;
+        let mut resp = self
+            .inner
+            .complete(pick, system, tools, nodes, on_delta)
+            .await?;
         fill_task_id(&mut resp, nodes);
         Ok(resp)
     }
@@ -130,6 +134,7 @@ impl TrackedLlm {
 impl Llm for TrackedLlm {
     async fn complete(
         &self,
+        pick: rumu_core::ModelPick<'_>,
         system: &str,
         tools: &[ToolSpec],
         nodes: &[Node],
@@ -148,7 +153,9 @@ impl Llm for TrackedLlm {
             tokio::time::sleep(self.child_sleep).await;
             self.active.fetch_sub(1, Ordering::SeqCst);
         }
-        self.inner.complete(system, tools, nodes, on_delta).await
+        self.inner
+            .complete(pick, system, tools, nodes, on_delta)
+            .await
     }
 }
 
@@ -201,6 +208,7 @@ impl FlakyLlm {
 impl Llm for FlakyLlm {
     async fn complete(
         &self,
+        _pick: rumu_core::ModelPick<'_>,
         _system: &str,
         _tools: &[ToolSpec],
         nodes: &[Node],
@@ -3723,6 +3731,7 @@ struct GatedLlm {
 impl Llm for GatedLlm {
     async fn complete(
         &self,
+        pick: rumu_core::ModelPick<'_>,
         system: &str,
         tools: &[ToolSpec],
         nodes: &[Node],
@@ -3731,7 +3740,9 @@ impl Llm for GatedLlm {
         let _ = self.started.send(());
         let permit = self.release.acquire().await.expect("semaphore open");
         permit.forget();
-        self.inner.complete(system, tools, nodes, on_delta).await
+        self.inner
+            .complete(pick, system, tools, nodes, on_delta)
+            .await
     }
 }
 
@@ -4001,6 +4012,7 @@ impl SplitLlm {
 impl Llm for SplitLlm {
     async fn complete(
         &self,
+        pick: rumu_core::ModelPick<'_>,
         system: &str,
         tools: &[ToolSpec],
         nodes: &[Node],
@@ -4014,7 +4026,7 @@ impl Llm for SplitLlm {
             _ => false,
         });
         let llm = if is_child { &self.child } else { &self.parent };
-        llm.complete(system, tools, nodes, on_delta).await
+        llm.complete(pick, system, tools, nodes, on_delta).await
     }
 }
 
@@ -4711,4 +4723,39 @@ async fn live_turns_snapshot_the_stream_in_flight() {
 
     let info = kernel.mark_seen(&session.id).unwrap();
     assert!(info.seen_at >= Some(info.updated_at));
+}
+
+#[tokio::test]
+async fn model_use_marker_is_written_only_when_the_pick_changes() {
+    use rumu_core::{Effort, ModelTarget, ModelUse};
+    let (kernel, llm, _s, b) = setup(vec![], vec![LlmResponse::text("ok")]).await;
+    let cheap = ModelUse {
+        target: ModelTarget::Profile("cheap".into()),
+        effort: Some(Effort::Low),
+    };
+    assert!(kernel.use_model(&b, cheap.clone()).await.unwrap());
+    // The same pick again writes nothing.
+    assert!(!kernel.use_model(&b, cheap.clone()).await.unwrap());
+    let (_, nodes, state) = run_turn(&kernel, &b, "hi").await;
+    assert_eq!(state.model.as_ref(), Some(&cheap));
+    let markers = nodes
+        .iter()
+        .filter(|n| {
+            matches!(&n.body,
+            NodeBody::Note { content, .. } if content.decode::<ModelUse>().is_some())
+        })
+        .count();
+    assert_eq!(markers, 1);
+    // The marker is state, never model-visible text.
+    let seen = &llm.projections()[0];
+    assert!(seen.iter().all(|n| !matches!(&n.body,
+        NodeBody::Note { content, .. } if !content.text.is_empty())));
+
+    let other = ModelUse {
+        target: ModelTarget::Model("p/m".into()),
+        effort: None,
+    };
+    assert!(kernel.use_model(&b, other.clone()).await.unwrap());
+    let (_, st) = kernel.branch_path(&b).unwrap();
+    assert_eq!(st.model, Some(other));
 }

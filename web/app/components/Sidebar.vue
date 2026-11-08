@@ -6,8 +6,8 @@
 // Below lg it is the drawer; at lg it is the desk's second sheet of paper
 // (the card's edge lives on the <aside> in app.vue).
 //
-// Alignment: the column pads 12px; session rows add 12px more, so every
-// line of text starts 24px in from the card's edge on both sides.
+// Alignment: the column pads 8px; session rows add 12px more, so every
+// line of text starts 20px in from the card's edge on both sides.
 // The wordmark (RumuMark) breathes while a turn runs, goes hollow when the
 // connection drops, and doubles as the way home: clicking it returns to the
 // landing page, as does the new-session button — the first prompt typed there
@@ -29,7 +29,7 @@ import {
   viewAssistant,
 } from '../lib/store'
 import type { SessionInfo } from '../lib/types'
-import { layout, openAssistantSettings, openWorkspaceSettings } from '../lib/layout'
+import { layout, openAssistantSettings, openSettings, openWorkspaceSettings } from '../lib/layout'
 import RumuCat from './brand/RumuCat.vue'
 import RumuMark from './brand/RumuMark.vue'
 import Icon from './ui/Icon.vue'
@@ -49,6 +49,11 @@ function library(): void {
 
 function workspaces(): void {
   openWorkspaceSettings(state.workspaces[0]?.name ?? '')
+  layout.sidebarOpen = false
+}
+
+function settings(): void {
+  openSettings()
   layout.sidebarOpen = false
 }
 
@@ -164,7 +169,7 @@ const rows = computed<Row[]>(() => {
 </script>
 
 <template>
-  <aside class="flex min-h-0 min-w-0 flex-col px-3">
+  <aside class="flex min-h-0 min-w-0 flex-col px-2">
     <div class="flex h-16 flex-none items-center gap-2 pl-3 pr-1.5 lg:pr-3">
       <button
         class="flex items-center rounded-md transition duration-200 ease-soft hover:opacity-70 active:scale-[.97]"
@@ -260,7 +265,7 @@ const rows = computed<Row[]>(() => {
 
     <TransitionGroup
       tag="div"
-      class="scroll-fade -mx-3 mt-2 flex flex-1 flex-col gap-0.5 overflow-y-auto px-3 pt-2 pb-3"
+      class="scroll-fade -mx-2 mt-2 flex flex-1 flex-col gap-0.5 overflow-y-auto px-2 pt-2 pb-3"
       move-class="transition-transform duration-300 ease-soft"
       enter-active-class="transition duration-300 ease-soft"
       enter-from-class="-translate-y-1 opacity-0"
@@ -366,9 +371,20 @@ const rows = computed<Row[]>(() => {
     <!-- the connection, at the foot -->
     <div class="flex flex-none items-center gap-2 border-t border-line-soft px-3 py-3 text-meta text-ink-3">
       <span class="size-2 flex-none rounded-full" :class="[presence.dot, { 'dot-live': presence.live }]" />
-      <span class="first-letter:uppercase" :class="{ 'font-semibold text-danger': presence.offline }">{{
-        presence.title
-      }}</span>
+      <span
+        class="flex-1 first-letter:uppercase"
+        :class="{ 'font-semibold text-danger': presence.offline }"
+        >{{ presence.title }}</span
+      >
+      <button
+        type="button"
+        class="icon-btn -my-1 size-7 flex-none"
+        :title="t('settings.title')"
+        :aria-label="t('settings.title')"
+        @click="settings"
+      >
+        <Icon name="settings" :size="15" />
+      </button>
     </div>
   </aside>
 </template>

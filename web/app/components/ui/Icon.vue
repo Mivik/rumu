@@ -14,6 +14,8 @@ import {
   mdiChevronRight,
   mdiClose,
   mdiCloseCircleOutline,
+  mdiCogOutline,
+  mdiCreationOutline,
   mdiCompassOutline,
   mdiConsole,
   mdiContentCopy,
@@ -75,6 +77,8 @@ const paths: Record<string, string> = {
   image: mdiImageOutline,
   stop: mdiStop,
   brain: mdiLightbulbOutline,
+  model: mdiCreationOutline,
+  settings: mdiCogOutline,
 }
 </script>
 
