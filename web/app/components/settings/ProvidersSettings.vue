@@ -377,6 +377,21 @@ watch(
   { immediate: true },
 )
 
+// Opened at a model (a usage card's link): its provider, searched for it.
+watch(
+  () => layout.showingModel,
+  (ref) => {
+    if (!ref) return
+    layout.showingModel = null
+    const slash = ref.indexOf('/')
+    const p = providers.value.find((x) => x.id === ref.slice(0, slash))
+    if (!p) return
+    open(p)
+    query.value = ref.slice(slash + 1)
+  },
+  { immediate: true },
+)
+
 async function refreshModels(): Promise<void> {
   if (!saved.value || busy.value) return
   busy.value = true

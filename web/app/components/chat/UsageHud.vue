@@ -1,7 +1,8 @@
 <script setup lang="ts">
 // Per-reply usage line: a quiet "N tok · X tok/s" under an assistant turn.
 // Hover, focus or tap opens a record card for the latest request (model, time,
-// tokens, cache, latency, speed, and the turn's totals).
+// tokens, cache, latency, speed, and the turn's totals); the model opens its
+// provider in settings.
 //
 // Hovering waits OPEN_DELAY before opening, so sweeping the pointer across the
 // timeline does not flash the card; focus and tap open immediately.
@@ -13,10 +14,13 @@ import { computed, onBeforeUnmount, ref, useId, watch } from 'vue'
 import { t } from '../../i18n'
 import type { CSSProperties, Ref } from 'vue'
 import { autoUpdate, flip, offset, shift, useFloating } from '@floating-ui/vue'
+import { showModel } from '../../lib/layout'
+import { modelByRef } from '../../lib/state/models'
 import { pathNodes } from '../../lib/store'
 import type { TimelineGroup } from '../../lib/store'
 import type { Node as RumuNode } from '../../lib/types'
 import { fmtDuration, fmtTokens } from '../../lib/util'
+import Icon from '../ui/Icon.vue'
 
 const props = defineProps<{ group: TimelineGroup }>()
 
@@ -170,6 +174,20 @@ watch(stats, (s) => {
   }
 })
 
+/** The model's catalog name; the id when it is no longer enabled. */
+const modelName = computed(() => {
+  const ref = stats.value?.body.model ?? ''
+  return modelByRef(ref)?.name ?? ref.slice(ref.indexOf('/') + 1)
+})
+
+function openModel(): void {
+  if (!stats.value) return
+  cancelOpen()
+  hover.value = false
+  pinned.value = false
+  showModel(stats.value.body.model)
+}
+
 const whenText = computed(() => {
   const s = stats.value
   if (!s) return ''
@@ -309,15 +327,24 @@ const tipStyle = computed<CSSProperties>(() => ({
           @mouseenter="enter"
           @mouseleave="leave"
         >
-          <!-- record header: the request's model and timestamp -->
-          <div class="flex items-baseline gap-3 px-1">
-            <div
-              class="min-w-0 flex-1 truncate font-mono text-meta font-semibold text-ink"
-              :title="stats.body.model"
+          <!-- record header: the request's model, to its settings -->
+          <div class="flex">
+            <button
+              type="button"
+              class="group flex min-w-0 flex-col items-start rounded-control px-1 py-0.5 text-left transition-colors hover:bg-surface-2"
+              :title="t('settings.modelSettings')"
+              @click="openModel"
             >
-              {{ stats.body.model }}
-            </div>
-            <div class="flex-none text-micro tabular-nums text-ink-3">{{ whenText }}</div>
+              <span class="flex max-w-full items-center gap-1 text-meta font-semibold text-ink">
+                <span class="truncate">{{ modelName }}</span>
+                <Icon
+                  name="chevron"
+                  :size="12"
+                  class="flex-none text-ink-3 opacity-0 transition-opacity group-hover:opacity-100"
+                />
+              </span>
+              <span class="max-w-full truncate font-mono text-micro text-ink-3">{{ stats.body.model }}</span>
+            </button>
           </div>
 
           <!-- the three numbers worth reading at a glance -->
@@ -342,6 +369,10 @@ const tipStyle = computed<CSSProperties>(() => ({
               <dd class="mt-0.5 text-meta font-semibold tabular-nums text-ink">{{ turnTokens }}</dd>
             </div>
           </dl>
+
+          <div class="mt-3 border-t border-line-soft px-1 pt-2 text-micro tabular-nums text-ink-3">
+            {{ whenText }}
+          </div>
         </div>
       </Transition>
     </Teleport>

@@ -22,6 +22,9 @@ export const layout = reactive({
   settingsSection: 'profiles' as 'profiles' | 'providers',
   /** Set to open the providers section at adding one; taken by it. */
   addingProvider: false,
+  /** Set to open the providers section at a model (`provider/model-id`);
+   *  taken by it. */
+  showingModel: null as string | null,
   /** The open section's page, when below the section's own: its crumbs,
    *  each but the last going back to its page. */
   settingsTrail: [] as { label: string; go?: () => void }[],
@@ -62,6 +65,13 @@ export function openSettings(): void {
 export function addProvider(): void {
   layout.settingsSection = 'providers'
   layout.addingProvider = true
+  layout.settingsOpen = true
+}
+
+/** Settings, at a model's provider, searched for the model. */
+export function showModel(ref: string): void {
+  layout.settingsSection = 'providers'
+  layout.showingModel = ref
   layout.settingsOpen = true
 }
 
