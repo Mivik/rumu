@@ -1,5 +1,5 @@
-// The open session's node tree and branches: loading, switching, forking and
-// regenerating. Everything that replaces the tree goes through `replaceTree`,
+// The open session's node tree and branches: loading, switching and
+// forking. Everything that replaces the tree goes through `replaceTree`,
 // so the derived views always see a consistent snapshot.
 
 import { rumu } from '../api'
@@ -32,7 +32,7 @@ export function replaceTree(tree: SessionTreeResult): void {
 }
 
 /** Re-fetch the open session's tree (authoritative after mutating ops). */
-async function resyncTree(): Promise<void> {
+export async function resyncTree(): Promise<void> {
   const id = state.sessionId
   if (!id) return
   const tree = await rumu.request<SessionTreeResult>('session.tree', { session: id })
@@ -91,46 +91,6 @@ export async function forkAt(nodeId: NodeId, label = 'edit'): Promise<Branch | n
       (err as Error).message,
     )
     return null
-  }
-}
-
-/**
- * Regenerate the reply to a prompt: the server forks at the user message,
- * replays its prompt (hooks and memory injection included) and streams a new
- * answer on that branch, replacing the branch it leaves. The old reply stays
- * reachable from the message's variant switcher.
- */
-export async function regenerateFrom(nodeId: NodeId): Promise<void> {
-  try {
-    const res = await rumu.request<{ branch: Branch }>('branch.regenerate', {
-      node: nodeId,
-    })
-    await resyncTree()
-    state.activeBranch = res.branch.id
-    if (state.session) state.session.active_branch = res.branch.id
-    state.busy[res.branch.id] = true
-    await loadPath(res.branch.id)
-  } catch (err) {
-    toast('error', t('errors.regenerate'), (err as Error).message)
-  }
-}
-
-/**
- * `branch.retry`: run the turn again on the active branch, in place — no
- * prompt event, no new user node; the failed marker stays on the path.
- * The server refuses branches that already have their reply.
- */
-export async function retryBranch(): Promise<boolean> {
-  const branch = state.activeBranch
-  if (!branch) return false
-  state.busy[branch] = true
-  try {
-    await rumu.request('branch.retry', { branch })
-    return true
-  } catch (err) {
-    state.busy[branch] = false
-    toast('error', t('errors.retry'), (err as Error).message)
-    return false
   }
 }
 

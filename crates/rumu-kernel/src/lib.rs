@@ -218,6 +218,20 @@ impl Default for Inner {
     }
 }
 
+/// The composer's pick a prompt or regeneration carries; see
+/// [`Kernel::apply_choice`]. Absent parts leave the branch as it is.
+#[derive(Debug, Clone, Default, serde::Deserialize)]
+pub struct Choice {
+    /// The attached workspaces, in order.
+    #[serde(default)]
+    pub workspaces: Option<Vec<String>>,
+    /// The default workspace.
+    #[serde(default)]
+    pub workspace: Option<String>,
+    #[serde(default)]
+    pub model: Option<rumu_core::ModelUse>,
+}
+
 pub struct Kernel {
     pub(crate) store: Arc<Store>,
     pub(crate) llm: Arc<dyn Llm>,
@@ -774,6 +788,35 @@ impl Kernel {
         };
         self.deliver(branch, NodeId::new(), body, None).await?;
         Ok(true)
+    }
+
+    /// Bring the branch to what the composer shows when the user sends or
+    /// regenerates: each part of `choice` that differs from the branch's
+    /// state is recorded (workspace changes with a note, so the model is
+    /// told). A prompt replayed on an older point of the conversation thus
+    /// runs on the user's current pick, not the one it was first sent with.
+    pub async fn apply_choice(self: &Arc<Self>, branch: &BranchId, choice: Choice) -> Result<()> {
+        // Against the registered ones: a name gone from the registry is no
+        // difference the user could have picked.
+        let attached: Vec<String> = self
+            .state_of_nodes(&self.pending_path_nodes(branch)?)
+            .workspaces
+            .into_iter()
+            .map(|w| w.name)
+            .collect();
+        if let Some(names) = choice.workspaces.filter(|n| *n != attached) {
+            self.set_workspaces(branch, names).await?;
+        }
+        if let Some(name) = choice.workspace {
+            let state = self.state_of_nodes(&self.pending_path_nodes(branch)?);
+            if state.default_workspace.as_ref() != Some(&name) {
+                self.use_workspace(branch, &name).await?;
+            }
+        }
+        if let Some(model) = choice.model {
+            self.use_model(branch, model).await?;
+        }
+        Ok(())
     }
 
     /// The user attaches or detaches workspaces: `names` (registered, in

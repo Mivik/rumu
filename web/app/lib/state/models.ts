@@ -1,7 +1,8 @@
 // Model settings (`settings.*`) and the composer's model pick. A branch runs
-// on its last `model.use` marker, or the default profile. A pick made in
-// the composer stays pending until the next prompt carries it; the server
-// records it only when it changes the branch's model.
+// on its last `model.use` marker, or the default profile. A pick made in a
+// session stays pending until the next prompt or regeneration carries it;
+// the server records it only when it changes the branch's model. Every pick
+// is also remembered (prefs) as the one a new session starts on.
 
 import { reactive } from 'vue'
 import { t } from '../../i18n'
@@ -11,6 +12,7 @@ import type { ModelInfo } from '../generated/ModelInfo'
 import type { ModelUse } from '../generated/ModelUse'
 import type { Protocol } from '../generated/Protocol'
 import type { SettingsInfo } from '../generated/SettingsInfo'
+import { prefs } from './prefs'
 import { state } from './state'
 import { toast } from './ui'
 
@@ -29,7 +31,7 @@ export const PROTOCOL_LABELS: Record<Protocol, string> = {
 
 export const models = reactive({
   settings: null as SettingsInfo | null,
-  /** Pending picks by branch id; `''` is the landing composer's. */
+  /** Unsent picks by session id. */
   pending: {} as Record<string, ModelUse>,
 })
 
@@ -101,29 +103,29 @@ export function modelByRef(ref: string): ModelInfo | null {
   return null
 }
 
-function branchKey(): string {
-  return state.activeBranch ?? ''
+/** What the next prompt runs on: the session's unsent pick or its branch's
+ *  marker; on the landing page the remembered pick, while it still exists.
+ *  `null` is the default profile. */
+export function currentPick(): ModelUse | null {
+  const session = state.sessionId
+  if (session) return models.pending[session] ?? state.pathState?.model ?? null
+  return prefs.model && exists(prefs.model) ? prefs.model : null
 }
 
-/** What the next prompt runs on: the pending pick, the branch's marker, or
- *  `null` for the default profile. */
-export function currentPick(): ModelUse | null {
-  return models.pending[branchKey()] ?? state.pathState?.model ?? null
+function exists(use: ModelUse): boolean {
+  const s = models.settings
+  if (!s) return true
+  const target = use.target
+  return 'profile' in target ? s.profiles.some((p) => p.name === target.profile) : !!modelByRef(target.model)
 }
 
 export function pick(use: ModelUse): void {
+  prefs.model = use
+  const session = state.sessionId
+  if (!session) return
   const recorded = state.pathState?.model
-  if (recorded && sameUse(recorded, use)) delete models.pending[branchKey()]
-  else models.pending[branchKey()] = use
-}
-
-/** Take the pending pick for a prompt on `branch` (the landing pick moves
- *  to the session's first branch). */
-export function takePending(branch: string): ModelUse | undefined {
-  const use = models.pending[branch] ?? models.pending['']
-  delete models.pending[branch]
-  delete models.pending['']
-  return use
+  if (recorded && sameUse(recorded, use)) delete models.pending[session]
+  else models.pending[session] = use
 }
 
 export function sameUse(a: ModelUse, b: ModelUse): boolean {

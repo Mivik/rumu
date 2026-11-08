@@ -14,7 +14,7 @@
   "local": "本机",
   "ssh": "SSH",
   "host": "主机",
-  "root": "根目录",
+  "root": "文件夹",
   "create": "添加",
   "save": "保存",
   "discard": "放弃",

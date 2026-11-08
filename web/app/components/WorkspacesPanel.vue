@@ -1,20 +1,20 @@
 <script setup lang="ts">
-// The open branch's workspaces, from the composer: pick the default, remove
-// one from the session, add a registered one, or open the registry. `@rumu`
-// is always there for the model and never listed.
+// The composer's workspaces (the open branch's, or the new session's on the
+// landing page): pick the default, remove one, add a registered one, or open
+// the registry. `@rumu` is always there for the model and never listed.
 import { computed } from 'vue'
 import { t } from '../i18n'
 import { openWorkspaceSettings } from '../lib/layout'
-import { attachWorkspaces, state, useWorkspace } from '../lib/store'
+import { attachWorkspaces, composerWorkspaces, state, useWorkspace } from '../lib/store'
 import type { Workspace } from '../lib/types'
 import Icon from './ui/Icon.vue'
 
 const emit = defineEmits<{ close: [] }>()
 
-const attached = computed(() => state.pathState?.workspaces ?? [])
+const attached = computed(() => composerWorkspaces.value?.workspaces ?? [])
 const names = computed(() => attached.value.map((w) => w.name))
 const others = computed(() => state.workspaces.filter((w) => !names.value.includes(w.name)))
-const current = computed(() => state.pathState?.default_workspace ?? null)
+const current = computed(() => composerWorkspaces.value?.default ?? null)
 
 function where(w: Workspace): string {
   return w.ssh ? `${w.ssh}:${w.root}` : w.root

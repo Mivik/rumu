@@ -20,7 +20,7 @@
 // apps, the sent message leads with its images (`withLeadingAnchors`).
 import { computed, nextTick, onBeforeUnmount, onMounted, reactive, ref, watch } from 'vue'
 import { t } from '../../i18n'
-import { isBusy, sendPrompt, state, stopTurn } from '../../lib/store'
+import { composerWorkspaces, isBusy, sendPrompt, state, stopTurn } from '../../lib/store'
 import type { PromptAttachment } from '../../lib/store'
 import type { Attachment } from '../../lib/types'
 import { uploadBlob, withLeadingAnchors } from '../../lib/attachments'
@@ -210,14 +210,16 @@ const placeholder = computed(() => {
   return isBusy.value ? t('chat.composer.steerPlaceholder') : t('chat.composer.placeholder')
 })
 
-/** The chip: the open branch's default workspace (where it lives on hover),
- *  or the action to add one. `@rumu` is never shown. */
+/** The chip: the default workspace (where it lives on hover), or the action
+ *  to add one. `@rumu` is never shown. On the landing page it is the pick
+ *  the new session starts with. */
 const workspace = computed(() => {
-  const ps = state.pathState
-  if (!ps) return null
-  const ws = ps.workspaces.find((w) => w.name === ps.default_workspace)
-  if (ws) return { name: ws.name, title: ws.ssh ? `${ws.ssh}:${ws.root}` : ws.root, icon: 'mount', own: true }
-  return ps.workspaces.length
+  const ws = composerWorkspaces.value
+  if (!ws) return null
+  const own = ws.workspaces.find((w) => w.name === ws.default)
+  if (own)
+    return { name: own.name, title: own.ssh ? `${own.ssh}:${own.root}` : own.root, icon: 'mount', own: true }
+  return ws.workspaces.length
     ? { name: t('workspaces.title'), title: '', icon: 'mount', own: false }
     : { name: t('workspaces.add'), title: '', icon: 'plus', own: false }
 })

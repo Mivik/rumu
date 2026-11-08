@@ -17,7 +17,7 @@ use serde::Deserialize;
 use serde_json::{Value, json};
 use tokio_util::sync::CancellationToken;
 
-use crate::{Delta, Kernel, MAX_INVOKE_DEPTH, MAX_LLM_RETRIES, host::KernelRuntime};
+use crate::{Choice, Delta, Kernel, MAX_INVOKE_DEPTH, MAX_LLM_RETRIES, host::KernelRuntime};
 
 /// `code.call` pushes carry at most this much output (the store keeps the
 /// full 20k-char-capped text).
@@ -157,9 +157,10 @@ impl Kernel {
     /// the step loop again on the new branch, which becomes the session's
     /// active one. The prompt event is replayed so hooks and memory injection
     /// behave as they did the first time, but the message itself is not
-    /// appended again. Progress arrives via pushes; the new branch is
-    /// returned immediately.
-    pub async fn regenerate(self: &Arc<Self>, node: &NodeId) -> Result<Branch> {
+    /// appended again. `choice` is applied to the new branch first, so the
+    /// reply runs on the composer's current workspaces and model. Progress
+    /// arrives via pushes; the new branch is returned immediately.
+    pub async fn regenerate(self: &Arc<Self>, node: &NodeId, choice: Choice) -> Result<Branch> {
         let n = self
             .store
             .get_node(node)?
@@ -169,6 +170,7 @@ impl Kernel {
             _ => return Err(Error::NotAUserMessage),
         };
         let branch = self.fork(&n.id).await?;
+        self.apply_choice(&branch.id, choice).await?;
         let token = self.begin_loop(&branch.id)?;
         self.spawn_turn(branch.id.clone(), token, TurnKind::Regenerate(content));
         Ok(branch)
@@ -181,9 +183,10 @@ impl Kernel {
     /// unanswered prompt — one whose last non-note node is a user message or
     /// a tool result (notes, hook imports with text included, never answer
     /// one). A prompt-hook refusal records nothing, so it cannot be replayed
-    /// past the hook. The branch must not be running. Progress arrives via
-    /// pushes.
-    pub async fn retry(self: &Arc<Self>, branch: &BranchId) -> Result<()> {
+    /// past the hook. The branch must not be running. `choice` is recorded
+    /// first (see [`Kernel::apply_choice`]), so a failure fixed by picking
+    /// another model retries on that model. Progress arrives via pushes.
+    pub async fn retry(self: &Arc<Self>, branch: &BranchId, choice: Choice) -> Result<()> {
         self.store
             .get_branch(branch)?
             .ok_or_else(|| Error::BranchNotFound(branch.clone()))?;
@@ -207,6 +210,7 @@ impl Kernel {
         if !owes || !recorded_failure {
             return Err(Error::NothingToRetry);
         }
+        self.apply_choice(branch, choice).await?;
         let token = self.begin_loop(branch)?;
         self.spawn_turn(branch.clone(), token, TurnKind::Retry);
         Ok(())

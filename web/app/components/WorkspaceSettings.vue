@@ -1,12 +1,14 @@
 <script setup lang="ts">
 // The workspace registry dialog (`workspaces.yaml`): add, edit and delete
-// workspaces. A workspace added from the composer also joins the open
-// branch. Names are keys: an existing workspace keeps its name.
+// workspaces. Adding starts at the folder; the name follows it (made unique)
+// until typed by hand. A workspace added from the composer also joins the
+// composer's workspaces. Names are keys: an existing workspace keeps its name.
 import { computed, reactive, ref, watch } from 'vue'
 import { t } from '../i18n'
 import { closeWorkspaceSettings, layout } from '../lib/layout'
 import {
   attachWorkspaces,
+  composerWorkspaces,
   deleteWorkspace,
   refreshAssistants,
   refreshWorkspaces,
@@ -34,6 +36,8 @@ const busy = ref(false)
 const error = ref('')
 /** The folder picker is open (local roots only). */
 const browsing = ref(false)
+/** The name was typed by hand; until then it follows the folder. */
+const nameEdited = ref(false)
 
 const isNew = computed(() => !editing.value)
 const dirty = computed(() => JSON.stringify(form) !== pristine.value)
@@ -82,25 +86,40 @@ function choose(name: string): void {
   Object.assign(form, w ? fromWorkspace(w) : blank())
   pristine.value = JSON.stringify(form)
   browsing.value = !w
+  nameEdited.value = false
 }
 
 function where(w: Workspace): string {
   return w.ssh ? `${w.ssh}:${w.root}` : w.root
 }
 
-/** A folder picked in the picker; a new workspace untouched by hand takes
- *  its name from the folder. */
-function pickRoot(path: string): void {
-  if (isNew.value && (!form.name || form.name === folderName(form.root))) form.name = folderName(path)
-  form.root = path
+// A new workspace untouched by hand takes its name from the folder.
+watch(
+  () => form.root,
+  (root) => {
+    if (isNew.value && !nameEdited.value) form.name = folderName(root)
+  },
+)
+
+function onNameInput(): void {
+  nameEdited.value = !!form.name
+  if (!nameEdited.value) form.name = folderName(form.root)
 }
 
-/** The workspace name a folder suggests (its basename, folded to the name
- *  rule), or '' when it suggests none. */
+/** The workspace name a folder suggests: its basename folded to the name
+ *  rule, with a number added when taken ('' when it suggests none). */
 function folderName(path: string): string {
-  const base = path.split('/').filter(Boolean).pop() ?? ''
-  const name = base.toLowerCase().replace(/[^a-z0-9.-]+/g, '-')
-  return NAME.test(name) ? name : ''
+  const base = path.split(/[\\/]/).filter(Boolean).pop() ?? ''
+  const name = base
+    .toLowerCase()
+    .replace(/[^a-z0-9.-]+/g, '-')
+    .replace(/^[^a-z]+/, '')
+    .replace(/[.-]+$/, '')
+  if (!NAME.test(name)) return ''
+  const taken = (n: string): boolean => state.workspaces.some((w) => w.name === n)
+  let unique = name
+  for (let i = 2; taken(unique); i++) unique = `${name}-${i}`
+  return unique
 }
 
 async function save(): Promise<void> {
@@ -115,8 +134,8 @@ async function save(): Promise<void> {
       ssh: form.remote ? form.ssh.trim() : undefined,
       read_only: form.read_only,
     })
-    if (created && layout.workspaceSettingsAttach && state.pathState) {
-      await attachWorkspaces([...state.pathState.attached, ws.name])
+    if (created && layout.workspaceSettingsAttach && composerWorkspaces.value) {
+      await attachWorkspaces([...composerWorkspaces.value.workspaces.map((w) => w.name), ws.name])
       closeWorkspaceSettings()
       return
     }
@@ -219,30 +238,21 @@ watch(
         </header>
 
         <div class="flex min-h-0 flex-1 flex-col gap-5 overflow-y-auto px-6 pt-3 pb-6">
-          <label v-if="isNew" class="flex flex-col gap-1.5">
-            <span class="field-label">{{ t('workspaces.name') }}</span>
-            <input
-              v-model.trim="form.name"
-              type="text"
-              class="w-full font-card"
-              autocomplete="off"
-              spellcheck="false"
-            />
-            <span v-if="nameInvalid" class="field-hint text-danger">{{ t('workspaces.nameHint') }}</span>
-            <span v-else-if="nameTaken" class="field-hint text-danger">{{ t('workspaces.nameTaken') }}</span>
-          </label>
-
           <div class="flex flex-col gap-1.5">
-            <span class="field-label">{{ t('workspaces.location') }}</span>
             <div class="flex items-center gap-2">
-              <div class="flex flex-none rounded-control bg-surface-2 p-0.5" role="radiogroup">
+              <label for="workspace-root" class="field-label">{{ t('workspaces.root') }}</label>
+              <div
+                class="ml-auto flex flex-none rounded-control bg-surface-2 p-0.5"
+                role="radiogroup"
+                :aria-label="t('workspaces.location')"
+              >
                 <button
                   v-for="remote in [false, true]"
                   :key="String(remote)"
                   type="button"
                   role="radio"
                   :aria-checked="form.remote === remote"
-                  class="rounded-xs px-2.5 py-1 text-meta font-semibold transition-colors duration-150"
+                  class="rounded-xs px-2 py-0.5 text-micro font-semibold transition-colors duration-150"
                   :class="
                     form.remote === remote ? 'bg-surface text-ink shadow-soft' : 'text-ink-3 hover:text-ink'
                   "
@@ -251,21 +261,17 @@ watch(
                   {{ remote ? t('workspaces.ssh') : t('workspaces.local') }}
                 </button>
               </div>
-              <input
-                v-if="form.remote"
-                v-model="form.ssh"
-                type="text"
-                class="min-w-0 flex-1 font-card"
-                placeholder="user@host"
-                :aria-label="t('workspaces.host')"
-                autocomplete="off"
-                spellcheck="false"
-              />
             </div>
-          </div>
-
-          <div class="flex flex-col gap-1.5">
-            <label for="workspace-root" class="field-label">{{ t('workspaces.root') }}</label>
+            <input
+              v-if="form.remote"
+              v-model="form.ssh"
+              type="text"
+              class="w-full font-card"
+              placeholder="user@host"
+              :aria-label="t('workspaces.host')"
+              autocomplete="off"
+              spellcheck="false"
+            />
             <div class="flex items-center gap-2">
               <input
                 id="workspace-root"
@@ -293,9 +299,23 @@ watch(
               v-if="browsing && !form.remote"
               :key="editing"
               :start="form.root"
-              @pick="pickRoot"
+              @pick="form.root = $event"
             />
           </div>
+
+          <label v-if="isNew" class="flex flex-col gap-1.5">
+            <span class="field-label">{{ t('workspaces.name') }}</span>
+            <input
+              v-model.trim="form.name"
+              type="text"
+              class="w-full font-card"
+              @input="onNameInput"
+              autocomplete="off"
+              spellcheck="false"
+            />
+            <span v-if="nameInvalid" class="field-hint text-danger">{{ t('workspaces.nameHint') }}</span>
+            <span v-else-if="nameTaken" class="field-hint text-danger">{{ t('workspaces.nameTaken') }}</span>
+          </label>
 
           <label class="flex items-center gap-2 text-secondary">
             <input v-model="form.read_only" type="checkbox" />

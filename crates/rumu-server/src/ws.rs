@@ -381,15 +381,19 @@ async fn dispatch(state: &AppState, method: &str, p: &Value) -> Result<Value> {
 
         "session.create" => {
             // The assistant deck id (the default assistant when omitted),
-            // with its default mounts and workspaces.
+            // with its default mounts, and `workspaces` (the first is the
+            // default; the deck's when omitted).
             let deck = assistant_param(state, p)?;
             let mounts = state.decks.default_mounts(deck.id());
+            let workspaces: Option<Vec<String>> =
+                serde_json::from_value(p.get("workspaces").cloned().unwrap_or_default())
+                    .map_err(|e| ServerError::InvalidParams(format!("workspaces: {e}")))?;
             let (session, branch) = kernel
                 .create_rooted_session(SessionRoot {
                     assistant: deck.id().to_owned(),
                     asked_by: None,
                     mounts,
-                    workspaces: deck.meta.workspaces.clone(),
+                    workspaces: workspaces.unwrap_or_else(|| deck.meta.workspaces.clone()),
                 })
                 .await?;
             Ok(json!({ "session": session, "branch": branch }))
@@ -518,14 +522,11 @@ async fn dispatch(state: &AppState, method: &str, p: &Value) -> Result<Value> {
         // `settings.yaml`. The API key is write-only.
         "settings.get" => Ok(json!(state.settings.info())),
 
-        // Every edit replies with, and pushes, the whole settings.
-        // Saving a provider fetches its model list in the background.
+        // Every edit replies with, and pushes, the whole settings. The web
+        // lists a saved provider's models after (`settings.refresh_models`).
         "settings.set_provider" => {
             let edit: crate::settings::ProviderEdit = parse_params(p)?;
-            let id = edit.id().to_owned();
-            let info = settings_edit(state, |s| s.set_provider(edit))?;
-            crate::settings::spawn_refresh(&state.settings, kernel, false, vec![id]);
-            Ok(info)
+            settings_edit(state, |s| s.set_provider(edit))
         }
         "settings.refresh_models" => {
             let id = str_param(p, "id")?;
@@ -718,13 +719,9 @@ async fn dispatch(state: &AppState, method: &str, p: &Value) -> Result<Value> {
                 return Err(ServerError::MissingParam("text".into()));
             }
             let content = Content::text(text).with_attachments(attachments);
-            // `model` (optional): the picker's choice, recorded only when it
-            // changes the branch's model.
-            if let Some(model) = p.get("model").filter(|m| !m.is_null()) {
-                let model: rumu_core::ModelUse = serde_json::from_value(model.clone())
-                    .map_err(|e| ServerError::InvalidParams(format!("model: {e}")))?;
-                kernel.use_model(&branch, model).await?;
-            }
+            // `workspaces` / `workspace` / `model` (optional): the composer's
+            // pick, recorded where it changes the branch.
+            kernel.apply_choice(&branch, parse_params(p)?).await?;
             kernel.prompt(&branch, content).await?;
             Ok(json!({}))
         }
@@ -743,13 +740,13 @@ async fn dispatch(state: &AppState, method: &str, p: &Value) -> Result<Value> {
 
         "branch.regenerate" => {
             let node: NodeId = str_param(p, "node")?.into();
-            let branch = kernel.regenerate(&node).await?;
+            let branch = kernel.regenerate(&node, parse_params(p)?).await?;
             Ok(json!({ "branch": branch }))
         }
 
         "branch.retry" => {
             let branch: BranchId = str_param(p, "branch")?.into();
-            kernel.retry(&branch).await?;
+            kernel.retry(&branch, parse_params(p)?).await?;
             Ok(json!({}))
         }
 

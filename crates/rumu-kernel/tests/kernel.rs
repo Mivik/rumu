@@ -15,7 +15,7 @@ use rumu_core::{
     Attachment, BranchId, BranchStatus, CodeCall, Content, Cx, Decision, Event, HookOutput,
     HookSpec, Inbox, Manifest, Node, NodeBody, PathState, Plugin, Post, Progress, SessionId,
     Tagged, TaskDone, TaskKind, TaskStatus, ToolCall, ToolOutput, ToolSpec, Workspace,
-    WorkspaceUse, Workspaces,
+    WorkspaceSet, WorkspaceUse, Workspaces,
 };
 use rumu_kernel::{Delta, Kernel, Llm, LlmError, LlmResponse, OnDelta, ScriptedLlm};
 use rumu_store::Store;
@@ -1027,7 +1027,10 @@ async fn regenerate_replays_the_prompt_attachments() {
         .expect("the turn appended a user node")
         .id;
 
-    let regenerated = kernel.regenerate(&prompt_node).await.unwrap();
+    let regenerated = kernel
+        .regenerate(&prompt_node, Default::default())
+        .await
+        .unwrap();
     let _ = collect_turn(&mut rx, regenerated.id.0.as_str()).await;
 
     // Both prompt events (original + replay) carried the attachments.
@@ -1240,7 +1243,7 @@ async fn retry_after_failure_appends_after_the_marker() {
     let first_calls = llm.calls();
 
     *llm.fail.lock().unwrap() = 0; // the provider recovered
-    kernel.retry(&branch).await.unwrap();
+    kernel.retry(&branch, Default::default()).await.unwrap();
     let started = wait_push(
         &mut rx,
         |v| v["method"] == "turn.started" && v["params"]["branch"] == branch.0,
@@ -1270,13 +1273,56 @@ async fn retry_after_failure_appends_after_the_marker() {
     );
 }
 
+/// A retry carries the composer's pick: a model chosen after the failure
+/// is recorded before the loop runs again, so the retry uses it.
+#[tokio::test(start_paused = true)]
+async fn retry_applies_the_current_choice() {
+    use rumu_core::{ModelTarget, ModelUse};
+    let (kernel, llm, branch) = flaky_setup(
+        vec![LlmResponse::text("recovered")],
+        usize::MAX,
+        TRANSIENT_503,
+    )
+    .await;
+    let mut rx = kernel.tap_pushes();
+    kernel.prompt(&branch, "hello").await.unwrap();
+    let (done, _) = collect_turn(&mut rx, &branch.0).await;
+    assert_eq!(done["method"], "turn.error");
+
+    *llm.fail.lock().unwrap() = 0;
+    let cheap = ModelUse {
+        target: ModelTarget::Profile("cheap".into()),
+        effort: None,
+    };
+    let choice = rumu_kernel::Choice {
+        model: Some(cheap.clone()),
+        ..Default::default()
+    };
+    kernel.retry(&branch, choice).await.unwrap();
+    let (done, _) = collect_turn(&mut rx, &branch.0).await;
+    assert_eq!(done["method"], "turn.done", "{done}");
+
+    let (nodes, st) = kernel.branch_path(&branch).unwrap();
+    assert_eq!(st.model, Some(cheap));
+    assert_eq!(
+        body_kinds(&nodes),
+        vec![
+            "marker[root]",
+            "user",
+            "marker[turn.error]",
+            "marker[model.use]",
+            "assistant"
+        ]
+    );
+}
+
 /// `retry` is refused when the branch already has its reply, and while a
 /// turn is running.
 #[tokio::test]
 async fn retry_refused_when_answered_or_busy() {
     let (kernel, _llm, _s, branch) = setup(vec![], vec![LlmResponse::text("hi")]).await;
     run_turn(&kernel, &branch, "hello").await;
-    let err = kernel.retry(&branch).await.unwrap_err();
+    let err = kernel.retry(&branch, Default::default()).await.unwrap_err();
     assert!(matches!(err, rumu_kernel::Error::NothingToRetry), "{err:#}");
 
     // Busy with the user message still unanswered: TurnBusy.
@@ -1300,7 +1346,7 @@ async fn retry_refused_when_answered_or_busy() {
     let branch = session.active_branch.clone();
     kernel.prompt(&branch, "go").await.unwrap();
     started_rx.recv().await.expect("first LLM call in flight");
-    let err = kernel.retry(&branch).await.unwrap_err();
+    let err = kernel.retry(&branch, Default::default()).await.unwrap_err();
     assert!(matches!(err, rumu_kernel::Error::TurnBusy), "{err:#}");
     llm.release.add_permits(1);
     let mut rx = kernel.tap_pushes();
@@ -1349,7 +1395,7 @@ async fn retry_works_behind_a_hook_note() {
     );
 
     *llm.fail.lock().unwrap() = 0; // the provider recovered
-    kernel.retry(&branch).await.unwrap();
+    kernel.retry(&branch, Default::default()).await.unwrap();
     let (done, _) = collect_turn(&mut rx, &branch.0).await;
     assert_eq!(done["method"], "turn.done", "{done}");
 
@@ -1400,7 +1446,10 @@ async fn retry_does_not_bypass_a_refused_prompt() {
     let calls_after_first = llm.projections().len();
 
     let mut rx = kernel.tap_pushes();
-    let regenerated = kernel.regenerate(&prompt).await.unwrap();
+    let regenerated = kernel
+        .regenerate(&prompt, Default::default())
+        .await
+        .unwrap();
     let (done, _) = collect_turn(&mut rx, regenerated.id.0.as_str()).await;
     assert_eq!(done["method"], "turn.error");
     assert_eq!(done["params"]["blocked"], true, "{done}");
@@ -1411,7 +1460,10 @@ async fn retry_does_not_bypass_a_refused_prompt() {
     // to replay.
     let (nodes, _) = kernel.branch_path(&regenerated.id).unwrap();
     assert_eq!(body_kinds(&nodes), vec!["marker[root]", "user"]);
-    let err = kernel.retry(&regenerated.id).await.unwrap_err();
+    let err = kernel
+        .retry(&regenerated.id, Default::default())
+        .await
+        .unwrap_err();
     assert!(matches!(err, rumu_kernel::Error::NothingToRetry), "{err:#}");
     assert_eq!(llm.projections().len(), calls_after_first, "no LLM call");
 }
@@ -3017,7 +3069,10 @@ async fn regenerate_forks_at_the_prompt_and_does_not_duplicate_it() {
         .clone();
 
     let mut rx = kernel.tap_pushes();
-    let regenerated = kernel.regenerate(&prompt).await.unwrap();
+    let regenerated = kernel
+        .regenerate(&prompt, Default::default())
+        .await
+        .unwrap();
     assert_eq!(regenerated.forked_from.as_ref(), Some(&prompt));
     assert!(matches!(regenerated.kind, rumu_core::BranchKind::Main));
     wait_turn(&mut rx, Some(regenerated.id.0.as_str())).await;
@@ -3073,7 +3128,10 @@ async fn regenerate_switches_the_active_branch() {
         .clone();
 
     let mut rx = kernel.tap_pushes();
-    let regenerated = kernel.regenerate(&prompt).await.unwrap();
+    let regenerated = kernel
+        .regenerate(&prompt, Default::default())
+        .await
+        .unwrap();
     wait_turn(&mut rx, Some(regenerated.id.0.as_str())).await;
 
     let (info, _, branches) = kernel.session_tree(&session).unwrap();
@@ -4758,4 +4816,83 @@ async fn model_use_marker_is_written_only_when_the_pick_changes() {
     assert!(kernel.use_model(&b, other.clone()).await.unwrap());
     let (_, st) = kernel.branch_path(&b).unwrap();
     assert_eq!(st.model, Some(other));
+}
+
+/// Regenerating an older prompt runs on the composer's current pick: the
+/// workspaces and model chosen since are recorded on the new branch, and the
+/// model is told the workspaces changed. A pick the path already has writes
+/// nothing.
+#[tokio::test]
+async fn regenerate_applies_the_current_choice() {
+    use rumu_core::{ModelTarget, ModelUse};
+    let mut list = project("a", "/p/a").list();
+    list.extend(project("b", "/p/b").list());
+    let (kernel, llm, _s, branch) = setup_with_workspaces(
+        vec![],
+        vec![
+            LlmResponse::text("first"),
+            LlmResponse::text("second"),
+            LlmResponse::text("third"),
+        ],
+        Workspaces::new(list),
+    )
+    .await;
+    let (_, nodes, _) = run_turn(&kernel, &branch, "hello").await;
+    let prompt = nodes
+        .iter()
+        .find(|n| matches!(n.body, NodeBody::User { .. }))
+        .unwrap()
+        .id
+        .clone();
+    let notes = |b: &BranchId| -> usize {
+        let (nodes, _) = kernel.branch_path(b).unwrap();
+        nodes
+            .iter()
+            .filter(|n| matches!(&n.body, NodeBody::Note { content, .. }
+                if content.decode::<WorkspaceUse>().is_some() || content.decode::<WorkspaceSet>().is_some()))
+            .count()
+    };
+
+    // The pick the path already has: nothing recorded.
+    let same = rumu_kernel::Choice {
+        workspaces: Some(vec!["a".into(), "b".into()]),
+        workspace: Some("a".into()),
+        model: None,
+    };
+    let mut rx = kernel.tap_pushes();
+    let b1 = kernel.regenerate(&prompt, same).await.unwrap();
+    wait_turn(&mut rx, Some(b1.id.0.as_str())).await;
+    assert_eq!(notes(&b1.id), 0);
+
+    let cheap = ModelUse {
+        target: ModelTarget::Profile("cheap".into()),
+        effort: None,
+    };
+    let choice = rumu_kernel::Choice {
+        workspaces: Some(vec!["b".into()]),
+        workspace: Some("b".into()),
+        model: Some(cheap.clone()),
+    };
+    let mut rx = kernel.tap_pushes();
+    let b2 = kernel.regenerate(&prompt, choice).await.unwrap();
+    wait_turn(&mut rx, Some(b2.id.0.as_str())).await;
+    let (nodes, st) = kernel.branch_path(&b2.id).unwrap();
+    assert_eq!(st.attached, ["b"]);
+    assert_eq!(st.default_workspace.as_deref(), Some("b"));
+    assert_eq!(st.model, Some(cheap));
+    // `b` is first in the new list, so the default follows without a
+    // `workspace.use` of its own.
+    assert_eq!(notes(&b2.id), 1);
+    // The note sits between the prompt and the new reply, where the model
+    // reads it.
+    let at = |pred: &dyn Fn(&NodeBody) -> bool| nodes.iter().position(|n| pred(&n.body)).unwrap();
+    let user = at(&|b| matches!(b, NodeBody::User { .. }));
+    let note = at(
+        &|b| matches!(b, NodeBody::Note { content, .. } if content.decode::<WorkspaceSet>().is_some()),
+    );
+    let reply = at(&|b| matches!(b, NodeBody::Assistant { .. }));
+    assert!(user < note && note < reply, "{user} {note} {reply}");
+    let seen = llm.projections().pop().unwrap();
+    assert!(seen.iter().any(|n| matches!(&n.body,
+        NodeBody::Note { content, .. } if content.text.contains("`b`"))));
 }

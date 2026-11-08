@@ -86,7 +86,7 @@ onMounted(async () => {
       </div>
     </div>
     <p v-if="error" class="px-3 py-2 text-meta text-danger">{{ error }}</p>
-    <div v-if="listing?.dirs.length" class="flex max-h-52 flex-col overflow-y-auto p-1">
+    <div v-if="listing?.dirs.length" class="flex max-h-44 flex-col overflow-y-auto p-1">
       <button
         v-for="name in listing.dirs"
         :key="name"

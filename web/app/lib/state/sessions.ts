@@ -5,6 +5,7 @@ import { rumu } from '../api'
 import { t } from '../../i18n'
 import { routeSession } from '../router'
 import type {
+  Branch,
   Card,
   Assistant,
   DecisionAnswer,
@@ -18,11 +19,13 @@ import type {
   TaskInfo,
   Workspace,
 } from '../types'
-import { models, takePending } from './models'
+import type { ModelUse } from '../generated/ModelUse'
+import { currentPick, models } from './models'
 import { isUnseen } from './derived'
 import { state } from './state'
-import { forkAt, loadPath, replaceTree } from './tree'
+import { forkAt, loadPath, replaceTree, resyncTree } from './tree'
 import { toast } from './ui'
+import { composerWorkspaces } from './workspaces'
 
 /** `card.list`: what the open branch has mounted (`card_mount` included), else
  * the default mounts of the assistant in view. An assistant gone from the
@@ -220,10 +223,17 @@ export function openTaskDetail(id: TaskId): void {
   state.taskDetail = state.taskDetail === id ? null : id
 }
 
+/** Start a session of the assistant in view on the composer's workspaces
+ *  (the default first, as the session root takes it). */
 export async function newSession(): Promise<boolean> {
   try {
+    const ws = composerWorkspaces.value
+    const workspaces = ws
+      ? [...ws.attached].sort((a, b) => Number(b === ws.default) - Number(a === ws.default))
+      : undefined
     const res = await rumu.request<{ session: SessionInfo }>('session.create', {
       assistant: state.assistant || undefined,
+      workspaces,
     })
     // The server may have pushed session.updated for it already.
     const i = state.sessions.findIndex((s) => s.id === res.session.id)
@@ -277,34 +287,105 @@ export interface PromptAttachment {
   name?: string
 }
 
+/** What the composer shows, carried by a prompt or regeneration: the
+ *  server records each part that differs from the branch it lands on. */
+export interface Choice {
+  workspaces?: string[]
+  workspace?: string
+  model?: ModelUse
+}
+
+export function composerChoice(): Choice {
+  const ws = composerWorkspaces.value
+  return {
+    workspaces: ws?.workspaces.map((w) => w.name),
+    workspace: ws?.default ?? undefined,
+    model: currentPick() ?? undefined,
+  }
+}
+
+/** The session's unsent model pick is on the branch now. */
+function settlePick(): void {
+  if (state.sessionId) delete models.pending[state.sessionId]
+}
+
 /**
  * Send a message on the active branch. With no session open (the landing
  * state), start a new session first and send the text as its first prompt.
  * `attachments` name already-uploaded images the text places with
- * `[Image #N]` anchors (empty text is allowed when there is one). Returns
- * whether the prompt was accepted.
+ * `[Image #N]` anchors (empty text is allowed when there is one). `choice`
+ * is the composer's pick, taken before any fork. Returns whether the prompt
+ * was accepted.
  */
-export async function sendPrompt(text: string, attachments: PromptAttachment[] = []): Promise<boolean> {
+export async function sendPrompt(
+  text: string,
+  attachments: PromptAttachment[] = [],
+  choice: Choice = composerChoice(),
+): Promise<boolean> {
   if (!text.trim() && !attachments.length) return false
-  if (!state.sessionId && !(await newSession())) return false
+  if (!state.sessionId) {
+    if (!(await newSession())) return false
+    // The new session's root holds the workspaces already.
+    choice = { model: choice.model }
+  }
   const branch = state.activeBranch
   if (!branch) return false
   state.busy[branch] = true
   try {
-    const model = takePending(branch)
-    const params: Record<string, unknown> = { branch, text }
+    const params: Record<string, unknown> = { branch, text, ...choice }
     if (attachments.length) params.attachments = attachments
-    if (model) params.model = model
-    try {
-      await rumu.request('prompt', params)
-    } catch (err) {
-      if (model) models.pending[branch] = model
-      throw err
-    }
+    await rumu.request('prompt', params)
+    settlePick()
     return true
   } catch (err) {
     state.busy[branch] = false
     toast('error', t('errors.prompt'), (err as Error).message)
+    return false
+  }
+}
+
+/**
+ * Regenerate the reply to a prompt: the server forks at the user message,
+ * records the composer's pick where it differs (telling the model of a
+ * workspace change), replays the prompt (hooks and memory injection
+ * included) and streams a new answer on that branch, replacing the branch it
+ * leaves. The old reply stays reachable from the message's variant switcher.
+ */
+export async function regenerateFrom(nodeId: NodeId): Promise<void> {
+  try {
+    const res = await rumu.request<{ branch: Branch }>('branch.regenerate', {
+      node: nodeId,
+      ...composerChoice(),
+    })
+    settlePick()
+    await resyncTree()
+    state.activeBranch = res.branch.id
+    if (state.session) state.session.active_branch = res.branch.id
+    state.busy[res.branch.id] = true
+    await loadPath(res.branch.id)
+  } catch (err) {
+    toast('error', t('errors.regenerate'), (err as Error).message)
+  }
+}
+
+/**
+ * `branch.retry`: run the turn again on the active branch, in place — no
+ * prompt event, no new user node; the failed marker stays on the path. The
+ * composer's pick goes along, so a failure fixed by switching the model
+ * retries on the new one. The server refuses branches that already have
+ * their reply.
+ */
+export async function retryBranch(): Promise<boolean> {
+  const branch = state.activeBranch
+  if (!branch) return false
+  state.busy[branch] = true
+  try {
+    await rumu.request('branch.retry', { branch, ...composerChoice() })
+    settlePick()
+    return true
+  } catch (err) {
+    state.busy[branch] = false
+    toast('error', t('errors.retry'), (err as Error).message)
     return false
   }
 }
@@ -322,7 +403,8 @@ export async function stopTurn(): Promise<void> {
 /**
  * Edit a sent prompt: fork from just before it and send the new text there,
  * replacing the branch that held the original message and reply — its
- * alternative stays reachable from the user message's variant switcher. An
+ * alternative stays reachable from the user message's variant switcher. It
+ * runs on the composer's pick, not the one the original was sent with. An
  * edited message resends its attachments unchanged — the edited text's
  * anchors say where they sit.
  */
@@ -338,6 +420,7 @@ export async function editPrompt(
     toast('error', t('errors.editFirst'))
     return false
   }
+  const choice = composerChoice()
   if (!(await forkAt(before, 'edit'))) return false
-  return sendPrompt(next, attachments)
+  return sendPrompt(next, attachments, choice)
 }

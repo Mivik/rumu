@@ -5,8 +5,8 @@
 //   derived.ts  read-only computed views
 //   timeline.ts chat grouping (pure derivation)
 //   ui.ts       toasts / drawer / focus
-//   tree.ts     session tree: load, switch, fork, regenerate
-//   sessions.ts session lifecycle and prompting
+//   tree.ts     session tree: load, switch, fork
+//   sessions.ts session lifecycle, prompting, regenerating and retrying
 //   pushes.ts   WebSocket pushes + boot
 
 export { state } from './state/state'
@@ -51,7 +51,7 @@ export type {
 
 export { closeDrawer, dismissToast, openDrawer, openLightbox, closeLightbox } from './state/ui'
 
-export { findAgentChild, forkAt, regenerateFrom, retryBranch, selectBranch } from './state/tree'
+export { findAgentChild, forkAt, selectBranch } from './state/tree'
 export type { OpenHistory, PromptAttachment } from './state/sessions'
 
 export {
@@ -89,6 +89,8 @@ export {
   openSession,
   openTaskDetail,
   defaultAssistant,
+  regenerateFrom,
+  retryBranch,
   refreshAssistants,
   refreshTasks,
   sendPrompt,
@@ -98,6 +100,7 @@ export {
 
 export {
   attachWorkspaces,
+  composerWorkspaces,
   deleteWorkspace,
   refreshWorkspaces,
   saveWorkspace,
