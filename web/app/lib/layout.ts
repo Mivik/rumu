@@ -85,6 +85,9 @@ export function closeSettings(): void {
 /** Escape: close the topmost layer. The library may sit over the assistant
  *  dialog (a deck link opens it there), so it goes first, on its own. */
 export function closePanels(): void {
+  // A card window is a native <dialog>: its own cancel handler closes it
+  // (asking about unsaved edits first), so leave Escape to it.
+  if (state.drawers.length) return
   if (state.library.isOpen) {
     state.library.isOpen = false
     state.library.open = null

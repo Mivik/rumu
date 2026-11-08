@@ -7,7 +7,7 @@ import { cardById, mountedRef } from './cards'
 import {
   closeDrawer,
   closeLibrary,
-  openCard,
+  openCardWindow,
   openDrawer,
   openLibrary,
   openLibraryAtDeck,
@@ -18,10 +18,12 @@ import { toast } from './state/ui'
 import type { LibraryRef } from './types'
 import { copyText } from './util'
 
-/** Open a card by deck and deck-local path: in the drawer when the branch
- * mounts it, else in the library. */
+/** Open a card by deck and deck-local path. A card already on screen stays
+ *  put: the link opens its target in a new window above it. With nothing
+ *  showing, a mounted card opens in the drawer and an unmounted one in the
+ *  library. */
 function openDeckCard(ref: LibraryRef): void {
-  if (state.library.isOpen) return openCard(ref.deck, ref.path)
+  if (state.library.isOpen || state.drawers.length) return openCardWindow(ref.deck, ref.path)
   const mounted = state.cards.find((c) => c.deck === ref.deck && c.path === ref.path)
   if (mounted) return openDrawer(mounted.id)
   closeDrawer()

@@ -42,6 +42,26 @@ export interface HookTraceEntry {
   parent_call?: string
 }
 
+/** One open card window. Windows stack: a body link opens a new one over the
+ *  card it was clicked in, instead of replacing it. */
+export interface CardWindow {
+  /** Stable identity of the window in `state.drawers`. */
+  key: number
+  /** The mounted card id when the window was opened from a chip (shown as
+   *  the address); null for a card reached by a deck-local link. */
+  cardId: string | null
+  /** The card's deck and deck-local path; null only when a chip's id could
+   *  not be resolved (an unmounted or deleted card). */
+  deck: string | null
+  path: string | null
+  /** The use the window was opened from (a note node id or a tool call id):
+   *  the reader defaults to the "as seen" version when it is stale. */
+  useRef?: string
+  /** Animating closed: the entry leaves the stack a moment later, but the
+   *  window below already takes over the scrim. */
+  closing?: boolean
+}
+
 export interface Toast {
   id: number
   kind: ToastKind
@@ -168,9 +188,9 @@ const initial = {
   hookTrace: [] as HookTraceEntry[],
   toasts: [] as Toast[],
 
-  /** Card drawer (opened by any card chip): card id + the use it was opened
-   * from (a note node id or a tool call id; absent for the library). */
-  drawer: null as { cardId: string; useRef?: string } | null,
+  /** Open card windows, bottom first. Each is a native modal <dialog>, so
+   *  the last one sits on top; closing it reveals the one below. */
+  drawers: [] as CardWindow[],
   /** The image shown full-size (opened by any thumbnail). */
   lightbox: null as LightboxImage | null,
 }

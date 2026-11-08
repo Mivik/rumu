@@ -11,6 +11,7 @@
 
 export { state } from './state/state'
 export type { DeltaBuffer, HookTraceEntry, RetryState, Toast, TurnCache } from './state/state'
+export type { CardWindow } from './state/state'
 
 export {
   activeDelta,
@@ -49,7 +50,15 @@ export type {
   ToolRowInfo,
 } from './state/timeline'
 
-export { closeDrawer, dismissToast, openDrawer, openLightbox, closeLightbox } from './state/ui'
+export {
+  beginDrawerClose,
+  closeDrawer,
+  dismissToast,
+  openCardWindow,
+  openDrawer,
+  openLightbox,
+  closeLightbox,
+} from './state/ui'
 
 export { findAgentChild, forkAt, selectBranch } from './state/tree'
 export type { OpenHistory, PromptAttachment } from './state/sessions'

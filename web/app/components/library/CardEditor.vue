@@ -9,7 +9,15 @@ import { RpcError } from '../../lib/api'
 import { formOfView, viewOfForm, type CardForm, type CardView } from '../../lib/cards'
 import { diffLines } from '../../lib/diff'
 import { renderMarkdown } from '../../lib/markdown'
-import { deleteCard, loadCard, openLibrary, refreshLibrary, saveCard, state } from '../../lib/store'
+import {
+  deleteCard,
+  loadCard,
+  openCardWindow,
+  openLibrary,
+  refreshLibrary,
+  saveCard,
+  state,
+} from '../../lib/store'
 import { toast } from '../../lib/state/ui'
 import type { LibraryCardDetail } from '../../lib/types'
 import Icon from '../ui/Icon.vue'
@@ -286,11 +294,11 @@ function backToList(): void {
   if (confirmLeave()) emit('close')
 }
 
+/** A link card names its target: open it in a new window over this one. */
 function openTarget(): void {
   const link = target.value
   if (!link) return
-  if (!props.inLibrary) emit('close')
-  openLibrary(link.deck, link.path)
+  openCardWindow(link.deck, link.path)
 }
 
 function openHistory(): void {
