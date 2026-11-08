@@ -226,11 +226,11 @@ export function mountedRef(id: string): LibraryRef | null {
   return null
 }
 
-/** A card id without its deck's mount prefix, for display (`self/dev/x` →
- * `dev/x`). Clicks and requests keep the full id; a folder equal to the mount
- * head has no label left. */
-export function cardLabel(id: string): string {
-  return mountedRef(id)?.path ?? id
+/** The mounted id for a deck-local path, under the deck's first mount point
+ * (`self/dev/x`, `user/notes/y`); null when the deck is not mounted. */
+export function mountedId(deck: string, path: string): string | null {
+  const mount = cardMounts.value.find((m) => m.deck === deck)
+  return mount ? `${mount.point}/${path}` : null
 }
 
 /** card path → record from card.list (paths are what the UI opens). */

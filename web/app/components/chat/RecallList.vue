@@ -1,11 +1,11 @@
 <script setup lang="ts">
 // The cards recalled for a step (`memory.import`), listed under their count
-// by mount-free label inside an opened activity run. Each opens in the
+// by their mounted id inside an opened activity run. Each opens in the
 // CardDrawer. A card's underline draws once, the first time it is seen.
 import { computed } from 'vue'
 import { t } from '../../i18n'
 import type { Node } from '../../lib/types'
-import { cardForImport, cardLabel, importOf } from '../../lib/cards'
+import { cardForImport, importOf, mountedId } from '../../lib/cards'
 import { openDrawer } from '../../lib/store'
 import { vPlayOnce } from '../../lib/motion'
 import Icon from '../ui/Icon.vue'
@@ -34,7 +34,7 @@ const items = computed<Recalled[]>(() => {
     const key = `card:${id ?? `${imp.deck}:${imp.path}`}`
     if (seen.has(key)) continue
     seen.add(key)
-    const label = card ? cardLabel(card.id) : imp.path
+    const label = card?.id ?? mountedId(imp.deck, imp.path) ?? imp.path
     const what = card?.description ? ` — ${card.description}` : ''
     out.push({ node: n, id, key, label, hover: `#${label}${what}` })
   }

@@ -3,15 +3,7 @@
 // offers the "as seen" snapshot, and owns the native <dialog> lifecycle.
 import { computed, nextTick, onBeforeUnmount, ref, watch } from 'vue'
 import { t } from '../../i18n'
-import {
-  cardById,
-  cardKey,
-  cardLabel,
-  cardUsesOnPath,
-  mountedRef,
-  parseCardView,
-  useIsCurrent,
-} from '../../lib/cards'
+import { cardById, cardKey, cardUsesOnPath, mountedRef, parseCardView, useIsCurrent } from '../../lib/cards'
 import type { CardUse, CardView } from '../../lib/cards'
 import { closeDrawer, state } from '../../lib/store'
 import { renderMarkdown } from '../../lib/markdown'
@@ -67,10 +59,10 @@ const view = computed<CardView>(() => {
     : EMPTY_VIEW
 })
 const title = computed(() => path.value.split('/').at(-1) || path.value)
-/** The card's directory, without its deck's mount prefix. */
+/** The card's directory, prefix included. */
 const dir = computed(() => {
   const i = path.value.lastIndexOf('/')
-  return i < 0 ? '' : cardLabel(path.value.slice(0, i))
+  return i < 0 ? '' : path.value.slice(0, i)
 })
 const scope = computed(() => {
   const value = view.value.meta.scope

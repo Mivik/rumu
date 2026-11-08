@@ -7,7 +7,6 @@
 // from drawing again once they have been seen.
 import { computed, ref } from 'vue'
 import { t } from '../../i18n'
-import { cardLabel } from '../../lib/cards'
 import type { CatalogNote, Node } from '../../lib/types'
 import { CATALOG_TAG, CATALOG_VERSION } from '../../lib/types'
 import { openDrawer } from '../../lib/store'
@@ -34,10 +33,9 @@ const heading = computed(() => {
 /** Folded until asked for: the run's line is already the outer disclosure. */
 const open = ref(false)
 
-/** A folded directory without its mount prefix (`self/dev` → `dev/`). */
+/** A folded directory, prefix included (`self/dev` → `self/dev/`). */
 function folderLabel(prefix: string): string {
-  const label = cardLabel(prefix)
-  return label ? `${label}/` : ''
+  return prefix ? `${prefix}/` : ''
 }
 
 function foldedLabel(names: string[]): string {
@@ -72,7 +70,7 @@ function foldedLabel(names: string[]): string {
             :style="{ '--i': i }"
             @click="openDrawer(e.id)"
           >
-            {{ cardLabel(e.id) }}
+            {{ e.id }}
           </button>
           <span v-if="e.summary" class="text-ink-3"> — {{ e.summary }}</span>
         </li>

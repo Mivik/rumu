@@ -16,8 +16,8 @@ import {
   agentsOf,
   cardByKey,
   cardForImport,
-  cardLabel,
   importOf,
+  mountedId,
   updateOf,
   workspaceUseOf,
 } from '../../lib/cards'
@@ -66,11 +66,14 @@ const parsed = computed(() => {
     if (task) {
       add({ kind: 'task', key: `task:${task.id}`, id: task.id, status: task.status, text: b.content.text })
     } else if (b.source === 'memory' && update) {
-      const id = cardByKey.value.get(`${update.deck}:${update.path}`)?.id ?? update.path
-      add({ kind: 'update', key: `update:${id}`, id, label: cardLabel(id), text: b.content.text })
+      const id =
+        cardByKey.value.get(`${update.deck}:${update.path}`)?.id ??
+        mountedId(update.deck, update.path) ??
+        update.path
+      add({ kind: 'update', key: `update:${id}`, id, label: id, text: b.content.text })
     } else if (b.source === 'memory' && imp) {
       const card = cardForImport(imp)
-      const label = card ? cardLabel(card.id) : imp.path
+      const label = card?.id ?? mountedId(imp.deck, imp.path) ?? imp.path
       cards.push({
         node: n,
         cardId: card?.id ?? null,
