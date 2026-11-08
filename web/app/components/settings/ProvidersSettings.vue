@@ -49,6 +49,17 @@ const presets = computed(() => models.settings?.presets ?? [])
 const editing = ref<string | null>(null)
 /** Adding: pick a preset or a custom endpoint first. */
 const picking = ref(false)
+const presetQuery = ref('')
+const presetInput = ref<HTMLInputElement | null>(null)
+/** The presets the search matches, by name, id or address; the server
+ *  lists the common ones first. */
+const shownPresets = computed(() => {
+  const q = presetQuery.value.trim().toLowerCase()
+  if (!q) return presets.value
+  return presets.value.filter((p) =>
+    [p.name, p.id, ...Object.values(p.endpoints)].some((s) => s?.toLowerCase().includes(q)),
+  )
+})
 const form = reactive<Form>(blank())
 const pristine = ref('')
 const saved = computed(() => providers.value.find((p) => p.id === editing.value) ?? null)
@@ -102,6 +113,12 @@ function startAdd(): void {
   picking.value = true
   fill(null)
 }
+
+watch(picking, (v) => {
+  if (!v) return
+  presetQuery.value = ''
+  void nextTick(() => presetInput.value?.focus())
+})
 
 // The page, as crumbs in the dialog's heading.
 watchEffect(() => {
@@ -457,33 +474,55 @@ async function refreshModels(): Promise<void> {
 
       <!-- adding: pick a preset or a custom endpoint -->
       <div v-else-if="picking" class="flex flex-col gap-2">
-        <div class="-mx-2.5 flex flex-col gap-0.5">
-          <button
-            v-for="p in presets"
-            :key="p.id"
-            type="button"
-            class="flex items-center gap-2 rounded-control px-2.5 py-1.5 text-left transition-colors hover:bg-surface-2"
-            @click="choosePreset(p)"
-          >
-            <span class="text-secondary text-ink">{{ p.name }}</span>
-            <span class="flex flex-wrap gap-1">
-              <span
-                v-for="protocol in protocolsOf(p.endpoints)"
-                :key="protocol"
-                class="rounded-xs border border-line px-1 text-micro text-ink-3"
-                >{{ PROTOCOL_LABELS[protocol] }}</span
-              >
-            </span>
-          </button>
-          <button
-            type="button"
-            class="flex items-center gap-2 rounded-control px-2.5 py-1.5 text-left text-secondary text-ink-2 transition-colors hover:bg-surface-2"
-            @click="choosePreset(null)"
-          >
-            <Icon name="plus" :size="13" class="text-ink-3" />
-            {{ t('settings.customProvider') }}
-          </button>
+        <div class="overflow-hidden rounded-control border border-line-soft">
+          <div class="relative border-b border-line-soft">
+            <Icon
+              name="search"
+              :size="13"
+              class="pointer-events-none absolute top-1/2 left-3 -translate-y-1/2 text-ink-3"
+            />
+            <input
+              ref="presetInput"
+              v-model="presetQuery"
+              type="search"
+              class="w-full rounded-none border-0 bg-transparent py-2 pl-8 text-secondary"
+              :placeholder="t('settings.searchProviders')"
+              autocomplete="off"
+              spellcheck="false"
+              @keydown.enter.prevent="shownPresets[0] && choosePreset(shownPresets[0])"
+            />
+          </div>
+          <div class="max-h-96 overflow-y-auto py-1">
+            <button
+              v-for="p in shownPresets"
+              :key="p.id"
+              type="button"
+              class="flex w-full items-center gap-2 px-3 py-1.5 text-left transition-colors hover:bg-surface-2"
+              @click="choosePreset(p)"
+            >
+              <span class="min-w-0 truncate text-secondary text-ink">{{ p.name }}</span>
+              <span class="flex flex-none gap-1">
+                <span
+                  v-for="protocol in protocolsOf(p.endpoints)"
+                  :key="protocol"
+                  class="rounded-xs border border-line px-1 text-micro text-ink-3"
+                  >{{ PROTOCOL_LABELS[protocol] }}</span
+                >
+              </span>
+            </button>
+            <p v-if="!shownPresets.length" class="px-3 py-3 text-center text-meta text-ink-3 italic">
+              {{ t('settings.noProvidersFound') }}
+            </p>
+          </div>
         </div>
+        <button
+          type="button"
+          class="-mx-2.5 flex items-center gap-2 rounded-control px-2.5 py-1.5 text-left text-secondary text-ink-2 transition-colors hover:bg-surface-2"
+          @click="choosePreset(null)"
+        >
+          <Icon name="plus" :size="13" class="text-ink-3" />
+          {{ t('settings.customProvider') }}
+        </button>
       </div>
 
       <!-- the provider's form -->

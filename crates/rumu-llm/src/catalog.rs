@@ -27,6 +27,10 @@ pub struct Catalog {
 
 #[derive(Debug, Clone)]
 pub struct CatalogProvider {
+    pub name: String,
+    /// Where it serves a protocol rumu speaks, when at a plain address (not
+    /// a template, nor behind an SDK of its own).
+    pub endpoint: Option<(Protocol, String)>,
     /// The protocol its own SDK speaks; `None` for an auth scheme of its own
     /// (Vertex, Bedrock, Azure).
     pub protocol: Option<Protocol>,
@@ -48,7 +52,11 @@ pub struct CatalogModel {
 #[derive(Deserialize)]
 struct RawProvider {
     #[serde(default)]
+    name: String,
+    #[serde(default)]
     npm: String,
+    #[serde(default)]
+    api: Option<String>,
     #[serde(default)]
     models: BTreeMap<String, RawModel>,
 }
@@ -114,6 +122,24 @@ fn protocol_of(npm: &str) -> Option<Protocol> {
         }
         _ => Some(Protocol::Openai),
     }
+}
+
+/// The endpoint of a provider served at `api` by SDK `npm`; Anthropic roots
+/// are kept without `/v1`.
+fn endpoint_of(npm: &str, api: Option<&str>) -> Option<(Protocol, String)> {
+    let api = api?.trim().trim_end_matches('/');
+    if api.is_empty() || api.contains("${") {
+        return None;
+    }
+    Some(match npm {
+        "@ai-sdk/openai-compatible" => (Protocol::Openai, api.to_owned()),
+        "@ai-sdk/openai" => (Protocol::OpenaiResponses, api.to_owned()),
+        "@ai-sdk/anthropic" => (
+            Protocol::Anthropic,
+            api.strip_suffix("/v1").unwrap_or(api).to_owned(),
+        ),
+        _ => return None,
+    })
 }
 
 /// The native protocol of a model the catalog does not place, by family.
@@ -205,6 +231,12 @@ impl Catalog {
                     })
                     .collect();
                 let provider = CatalogProvider {
+                    name: if p.name.is_empty() {
+                        id.clone()
+                    } else {
+                        p.name
+                    },
+                    endpoint: endpoint_of(&p.npm, p.api.as_deref()),
                     protocol: protocol_of(&p.npm),
                     models,
                 };
@@ -212,6 +244,20 @@ impl Catalog {
             })
             .collect();
         Ok(Self { providers })
+    }
+
+    /// Provider `id`.
+    pub fn provider(&self, id: &str) -> Option<&CatalogProvider> {
+        self.providers.get(id)
+    }
+
+    /// The providers that can be added as they are: at an endpoint, with a
+    /// model that can call tools.
+    pub fn offered(&self) -> impl Iterator<Item = (&str, &CatalogProvider)> {
+        self.providers
+            .iter()
+            .filter(|(_, p)| p.endpoint.is_some() && !p.models.is_empty())
+            .map(|(id, p)| (id.as_str(), p))
     }
 
     /// What the catalog knows about model `id`, from the first of these

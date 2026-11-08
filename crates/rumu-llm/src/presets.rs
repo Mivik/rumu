@@ -1,5 +1,6 @@
 //! The built-in providers: their endpoints, and the catalog provider their
-//! model metadata is read from.
+//! model metadata is read from. They are offered first; the catalog's other
+//! providers are offered after them, a preset id then naming one of those.
 
 use rumu_core::Protocol::{self, *};
 
@@ -178,10 +179,58 @@ pub const PRESETS: &[Preset] = &[
         router: false,
         endpoints: &[(Openai, "https://api.x.ai/v1")],
     },
+    Preset {
+        id: "groq",
+        name: "Groq",
+        catalog: "groq",
+        router: true,
+        endpoints: &[(Openai, "https://api.groq.com/openai/v1")],
+    },
+    Preset {
+        id: "mistral",
+        name: "Mistral",
+        catalog: "mistral",
+        router: false,
+        endpoints: &[(Openai, "https://api.mistral.ai/v1")],
+    },
+    Preset {
+        id: "together",
+        name: "Together AI",
+        catalog: "togetherai",
+        router: true,
+        endpoints: &[(Openai, "https://api.together.xyz/v1")],
+    },
+    Preset {
+        id: "deepinfra",
+        name: "Deep Infra",
+        catalog: "deepinfra",
+        router: true,
+        endpoints: &[(Openai, "https://api.deepinfra.com/v1/openai")],
+    },
+    Preset {
+        id: "cerebras",
+        name: "Cerebras",
+        catalog: "cerebras",
+        router: true,
+        endpoints: &[(Openai, "https://api.cerebras.ai/v1")],
+    },
+    Preset {
+        id: "vercel",
+        name: "Vercel AI Gateway",
+        catalog: "vercel",
+        router: true,
+        endpoints: &[(Openai, "https://ai-gateway.vercel.sh/v1")],
+    },
 ];
 
 pub fn preset(id: &str) -> Option<&'static Preset> {
     PRESETS.iter().find(|p| p.id == id)
+}
+
+/// The catalog provider preset `id`'s model metadata is read from: a
+/// built-in's, else the catalog's provider of that id.
+pub fn home(id: &str) -> &str {
+    preset(id).map_or(id, |p| p.catalog)
 }
 
 /// The catalog providers whose models are their own: where a model's native

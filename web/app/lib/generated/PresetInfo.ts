@@ -2,6 +2,7 @@
 import type { Protocol } from "./Protocol";
 
 /**
- * A built-in provider offered when adding one.
+ * A provider offered when adding one: the built-in ones first, then the
+ * catalog's.
  */
 export type PresetInfo = { id: string, name: string, endpoints: { [key in Protocol]?: string }, };

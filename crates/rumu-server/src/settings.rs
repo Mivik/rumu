@@ -5,6 +5,7 @@
 //! providers:
 //!   deepseek:
 //!     preset: deepseek          # its endpoints, and its catalog entry
+//!                               # (a built-in, else a catalog provider)
 //!     api_key: …
 //!     models: [deepseek-*]      # patterns over the listed ids, or ids
 //!   gateway:
@@ -220,18 +221,7 @@ impl Settings {
                 })
                 .collect(),
             roles: m.roles.clone(),
-            presets: presets::PRESETS
-                .iter()
-                .map(|p| PresetInfo {
-                    id: p.id.to_owned(),
-                    name: p.name.to_owned(),
-                    endpoints: p
-                        .endpoints
-                        .iter()
-                        .map(|(k, v)| (*k, (*v).to_owned()))
-                        .collect(),
-                })
-                .collect(),
+            presets: offered(&catalog),
         }
     }
 
@@ -242,13 +232,6 @@ impl Settings {
                 "provider id `{id}` must be non-empty and without `/`"
             )));
         }
-        if let Some(p) = edit.preset.as_deref()
-            && presets::preset(p).is_none()
-        {
-            return Err(SettingsError::Invalid(format!(
-                "unknown provider preset `{p}`"
-            )));
-        }
         let mut models: Vec<String> = Vec::new();
         for m in edit.models {
             let m = m.trim().to_owned();
@@ -256,8 +239,18 @@ impl Settings {
                 models.push(m);
             }
         }
+        let catalog = self.catalog();
         self.edit(|file| {
             let old = file.providers.remove(&id).unwrap_or_default();
+            if let Some(p) = edit.preset.as_deref()
+                && presets::preset(p).is_none()
+                && catalog.provider(p).is_none()
+                && old.preset.as_deref() != Some(p)
+            {
+                return Err(SettingsError::Invalid(format!(
+                    "unknown provider preset `{p}`"
+                )));
+            }
             let api_key = match edit.api_key {
                 Some(k) => k.trim().to_owned(),
                 None => old.api_key,
@@ -509,8 +502,7 @@ fn provider_info(
         .map(|m| model_info(catalog, id, p, &eps, m))
         .collect();
     models.sort_by_key(|m| !m.pinned);
-    let preset = p.preset.as_deref().and_then(presets::preset);
-    let home = preset.map(|x| x.catalog);
+    let home = p.preset.as_deref().map(presets::home);
     let names = listing
         .ids
         .iter()
@@ -518,7 +510,12 @@ fn provider_info(
         .collect();
     ProviderInfo {
         id: id.to_owned(),
-        name: preset.map_or_else(|| id.to_owned(), |x| x.name.to_owned()),
+        name: p
+            .preset
+            .as_deref()
+            .and_then(|x| preset_name(catalog, x))
+            .unwrap_or(id)
+            .to_owned(),
         preset: p.preset.clone(),
         endpoints: eps,
         has_api_key: !p.api_key.is_empty(),
@@ -529,6 +526,48 @@ fn provider_info(
         names,
         list_error: listing.error,
     }
+}
+
+/// The presets offered: the built-in ones, then the catalog's other
+/// providers by name.
+fn offered(catalog: &Catalog) -> Vec<PresetInfo> {
+    let mut more: Vec<PresetInfo> = catalog
+        .offered()
+        .filter(|(id, _)| {
+            !presets::PRESETS
+                .iter()
+                .any(|b| b.id == *id || b.catalog == *id)
+        })
+        .filter_map(|(id, p)| {
+            let (protocol, url) = p.endpoint.clone()?;
+            Some(PresetInfo {
+                id: id.to_owned(),
+                name: p.name.clone(),
+                endpoints: BTreeMap::from([(protocol, url)]),
+            })
+        })
+        .collect();
+    more.sort_by_cached_key(|p| p.name.to_lowercase());
+    presets::PRESETS
+        .iter()
+        .map(|p| PresetInfo {
+            id: p.id.to_owned(),
+            name: p.name.to_owned(),
+            endpoints: p
+                .endpoints
+                .iter()
+                .map(|(k, v)| (*k, (*v).to_owned()))
+                .collect(),
+        })
+        .chain(more)
+        .collect()
+}
+
+/// Preset `id`'s name: a built-in's, else the catalog provider's.
+fn preset_name<'a>(catalog: &'a Catalog, id: &str) -> Option<&'a str> {
+    presets::preset(id)
+        .map(|p| p.name)
+        .or_else(|| Some(catalog.provider(id)?.name.as_str()))
 }
 
 /// What a provider stores of the endpoints it is to use: those that differ
@@ -720,5 +759,57 @@ mod tests {
                 .mode();
             assert_eq!(mode & 0o777, 0o600);
         }
+    }
+
+    #[test]
+    fn offers_the_catalogs_providers_after_the_built_in_ones() {
+        let home = tempfile::tempdir().unwrap();
+        let s = Settings::load(home.path(), Arc::new(GenaiLlm::default())).unwrap();
+        *s.catalog.write().unwrap() = Arc::new(
+            Catalog::parse(
+                br#"{
+                  "deepseek": {"name":"DeepSeek","npm":"@ai-sdk/openai-compatible",
+                    "api":"https://api.deepseek.com","models":{"m":{"tool_call":true}}},
+                  "zeta": {"name":"Zeta","npm":"@ai-sdk/openai-compatible",
+                    "api":"https://gw.example/v1","models":{"m":{"tool_call":true}}},
+                  "alpha": {"name":"alpha","npm":"@ai-sdk/anthropic",
+                    "api":"https://gw.example/anthropic/v1","models":{"m":{"tool_call":true}}},
+                  "templated": {"npm":"@ai-sdk/openai-compatible",
+                    "api":"https://${HOST}/v1","models":{"m":{"tool_call":true}}},
+                  "no-tools": {"npm":"@ai-sdk/openai-compatible",
+                    "api":"https://gw.example/v1","models":{"m":{}}}
+                }"#,
+            )
+            .unwrap(),
+        );
+
+        // Built-in ones first (the catalog's copy of one is not repeated),
+        // then the rest by name.
+        let info = s.info();
+        let n = presets::PRESETS.len();
+        assert_eq!(info.presets[0].id, presets::PRESETS[0].id);
+        let rest: Vec<_> = info.presets[n..].iter().map(|p| p.id.as_str()).collect();
+        assert_eq!(rest, ["alpha", "zeta"]);
+        assert_eq!(
+            info.presets[n].endpoints[&Protocol::Anthropic],
+            "https://gw.example/anthropic"
+        );
+
+        // Added, a catalog one keeps its endpoints whole and its name.
+        let info = s
+            .set_provider(ProviderEdit {
+                id: "zeta".into(),
+                preset: Some("zeta".into()),
+                endpoints: info.presets[n + 1].endpoints.clone(),
+                api_key: None,
+                models: vec!["*".into()],
+                protocols: BTreeMap::new(),
+            })
+            .unwrap();
+        assert_eq!(info.providers[0].name, "Zeta");
+        assert_eq!(
+            s.lock().model.providers["zeta"].endpoints[&Protocol::Openai],
+            "https://gw.example/v1"
+        );
     }
 }

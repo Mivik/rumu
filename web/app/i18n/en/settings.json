@@ -21,6 +21,8 @@
   "noProviders": "No providers yet. {link} first.",
   "addProviderLink": "Add one",
   "customProvider": "Custom endpoint",
+  "searchProviders": "Search providers",
+  "noProvidersFound": "No matching providers",
   "modelCount": "{n} models",
   "noKey": "No API key",
   "providerId": "ID",

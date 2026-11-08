@@ -206,11 +206,7 @@ pub fn model_info(
     id: &str,
 ) -> ModelInfo {
     let protocol = protocol_for(catalog, p, endpoints, id);
-    let home = p
-        .preset
-        .as_deref()
-        .and_then(presets::preset)
-        .map(|x| x.catalog);
+    let home = p.preset.as_deref().map(presets::home);
     let known = catalog.lookup(home, id);
     ModelInfo {
         model_ref: format!("{provider}/{id}"),

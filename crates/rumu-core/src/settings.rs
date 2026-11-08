@@ -100,8 +100,9 @@ impl Protocol {
 #[derive(Debug, Clone, Default, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(default, deny_unknown_fields)]
 pub struct ProviderSettings {
-    /// A built-in provider: its endpoints, and where its models are found in
-    /// the catalog.
+    /// A built-in provider, or a catalog one: its endpoints, and where its
+    /// models are found in the catalog. A catalog one's endpoints are stored
+    /// here whole.
     #[serde(skip_serializing_if = "Option::is_none")]
     pub preset: Option<String>,
     /// Endpoints by protocol, over the preset's; an empty one turns the
@@ -346,7 +347,8 @@ pub struct ProfileInfo {
     pub effort: Option<Effort>,
 }
 
-/// A built-in provider offered when adding one.
+/// A provider offered when adding one: the built-in ones first, then the
+/// catalog's.
 #[derive(Debug, Clone, Serialize, ts_rs::TS)]
 #[ts(export)]
 pub struct PresetInfo {

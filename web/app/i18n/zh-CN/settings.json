@@ -21,6 +21,8 @@
   "noProviders": "还没有服务商，请先{link}。",
   "addProviderLink": "添加服务商",
   "customProvider": "自定义端点",
+  "searchProviders": "搜索服务商",
+  "noProvidersFound": "没有匹配的服务商",
   "modelCount": "{n} 个模型",
   "noKey": "未设置 API 密钥",
   "providerId": "ID",
