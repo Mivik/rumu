@@ -5,4 +5,4 @@ Writing notes: how docs and notes are written.
 
 Related cards:
 
-- [Writing style](@rumu:/cards/writing-style)
+- [Writing style](./writing-style)

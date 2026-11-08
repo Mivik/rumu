@@ -1,9 +1,11 @@
 // Markdown rendering: marked + DOMPurify, fences highlighted by highlight.js.
 //
 // Link rewriting happens on the HTML string *before* DOMPurify (it strips
-// unknown-scheme hrefs): card links become in-app `data-card-id` anchors,
-// other workspace-qualified paths (`proj:src/a.rs`, `@rumu:/sessions/…`)
-// become inert `data-ws-ref` anchors.
+// unknown-scheme hrefs): `@rumu:` addresses (links, inline code, bare text)
+// become `data-rumu` anchors, links relative to a rendered card become
+// `data-card-deck`/`data-card-path` anchors, and other workspace-qualified
+// paths (`proj:src/a.rs`) become `data-ws-ref` anchors. lib/links.ts follows
+// them on click.
 //
 // Highlighting is synchronous once a grammar is in memory: answer text
 // re-renders on every stream chunk, so an async highlighter (shiki) would
@@ -14,7 +16,7 @@
 
 import DOMPurify from 'dompurify'
 import hljs from 'highlight.js/lib/core'
-import { marked } from 'marked'
+import { marked, type Token } from 'marked'
 import { shallowRef } from 'vue'
 import { t } from '../i18n'
 import { INTERNAL_WORKSPACE } from './types'
@@ -181,76 +183,120 @@ const EXTERNAL_SCHEMES = new Set([
   'file',
 ])
 
-/** `dev/rumu/kernel` → `dev/rumu` (the card's directory). */
-function cardDir(cardId: string): string[] {
-  const segs = cardId.split('/')
-  segs.pop()
-  return segs
+const RUMU_PREFIX = `${INTERNAL_WORKSPACE}:`
+
+/** A whole `@rumu:` address, as bare text or alone in inline code. Trailing
+ * sentence punctuation is not part of it. */
+const RUMU_ADDRESS = /^@rumu:[^\s<>()[\]`"']*[^\s<>()[\]`"'.,;:!?]/
+
+/** An address as a plain link, for the href pass in `renderMarkdown`. */
+function addressLink(address: string, inner: string): string {
+  return `<a href="${escapeHtml(address)}">${inner}</a>`
 }
 
-/** Resolve a card-body-relative link against the current card's directory. */
-function resolveRelative(cardId: string, href: string): string | null {
-  const segs = cardDir(cardId)
-  for (const part of href.split('/')) {
+/** Code spans inside link text: already links, never addresses. */
+const IN_LINK = Symbol('inLink')
+
+function markInLink(tokens: Token[] | undefined): void {
+  for (const t of tokens ?? []) {
+    ;(t as Token & { [IN_LINK]?: true })[IN_LINK] = true
+    if ('tokens' in t) markInLink(t.tokens)
+  }
+}
+
+marked.use({
+  walkTokens: (token) => {
+    if (token.type === 'link') markInLink(token.tokens)
+  },
+  renderer: {
+    // `` `@rumu:/cards/x` `` is how tool output and prompts write addresses.
+    codespan(token) {
+      const code = `<code>${escapeHtml(token.text)}</code>`
+      if ((token as Token & { [IN_LINK]?: true })[IN_LINK]) return code
+      const m = RUMU_ADDRESS.exec(token.text)
+      return m && m[0] === token.text ? addressLink(token.text, code) : code
+    },
+  },
+  extensions: [
+    {
+      name: 'rumuAddress',
+      level: 'inline',
+      start: (src) => {
+        const i = src.indexOf(RUMU_PREFIX)
+        return i < 0 ? undefined : i
+      },
+      tokenizer(src) {
+        if (this.lexer.state.inLink) return undefined
+        const m = RUMU_ADDRESS.exec(src)
+        return m ? { type: 'rumuAddress', raw: m[0] } : undefined
+      },
+      renderer: (token) => addressLink(token.raw, escapeHtml(token.raw)),
+    },
+  ],
+})
+
+/** The card a body is rendered as: relative links resolve inside its deck. */
+export interface CardBase {
+  deck: string
+  path: string
+}
+
+/** A body-relative link (`./x`, `../d/y.md`) → the deck-local card path. */
+function resolveRelative(base: CardBase, href: string): string | null {
+  const segs = base.path.split('/')
+  segs.pop()
+  for (const part of href.replace(/[?#].*$/, '').split('/')) {
     if (!part || part === '.') continue
     if (part === '..') segs.pop()
     else segs.push(part)
   }
-  const id = segs.join('/').replace(/\.md$/, '')
-  return id ? id : null
+  const path = segs.join('/').replace(/\.md$/, '')
+  return path || null
 }
 
-/** Rewrite one href to `{ cardId }` (an in-app card link) or leave it. */
-function cardLinkFor(href: string, currentCard: string | undefined): string | null {
-  // `@rumu:/cards/<id>` / `@rumu:cards/<id>`, optional `.md`.
-  const prefix = `${INTERNAL_WORKSPACE}:`
-  if (href.startsWith(prefix)) {
-    const rest = href.slice(prefix.length).replace(/^\/?/, '')
-    const m = /^cards\/([^#?]+?)(?:\.md)?(?:[?#].*)?$/.exec(rest)
-    if (m) return m[1]!
+/** The anchor attributes for one href, or null to leave it a plain link. */
+function anchorFor(href: string, base: CardBase | undefined): string | null {
+  // `@rumu:/…` / `@rumu:…`: resolved on click (lib/links.ts).
+  if (href.startsWith(RUMU_PREFIX)) {
+    const abs = `/${href.slice(RUMU_PREFIX.length).replace(/^\/+/, '')}`
+    return `data-rumu="${escapeHtml(abs)}"`
   }
-  if (!currentCard) return null
-  // Rendering a card: `/cards/<id>` and relative links resolve inside the
-  // card library, relative to the current card's directory.
-  let m = /^\/cards\/([^#?]+?)(?:\.md)?(?:[?#].*)?$/.exec(href)
-  if (m) return m[1]!
-  if (
-    href.startsWith(prefix) ||
-    /^[a-z][a-z0-9.-]*:/i.test(href) ||
-    href.startsWith('//') ||
-    href.startsWith('#')
-  ) {
-    return null
+  const scheme = /^([a-z][a-z0-9.-]*):/i.exec(href)?.[1]
+  if (scheme) {
+    // Other workspace-qualified paths (`proj:src/a.rs`): copied on click.
+    return EXTERNAL_SCHEMES.has(scheme.toLowerCase()) ? null : `data-ws-ref="${escapeHtml(href)}"`
   }
-  return resolveRelative(currentCard, decodeURI(href))
+  if (!base || href.startsWith('#') || href.startsWith('//')) return null
+  // Inside a card, `/cards/…` is the `@rumu` path.
+  if (href.startsWith('/')) return href.startsWith('/cards/') ? anchorFor(RUMU_PREFIX + href, base) : null
+  let decoded = href
+  try {
+    decoded = decodeURI(href)
+  } catch {
+    // A malformed escape: resolve the link as written.
+  }
+  const path = resolveRelative(base, decoded)
+  return path ? `data-card-deck="${escapeHtml(base.deck)}" data-card-path="${escapeHtml(path)}"` : null
 }
 
 /**
  * Chat text keeps single newlines as line breaks (`breaks`); hand-written
  * documents such as knowledge cards are hard-wrapped, so they pass
- * `breaks: false`. When rendering a card, pass its `cardId` so links
- * relative to that card (`./x`, `../x/y.md`) open cards too.
+ * `breaks: false`. When rendering a card, pass it as `base` so links
+ * relative to it (`./x`, `../x/y.md`) open cards of the same deck.
  */
 export function renderMarkdown(
   src: string,
-  { breaks = true, cardId }: { breaks?: boolean; cardId?: string } = {},
+  { breaks = true, base }: { breaks?: boolean; base?: CardBase } = {},
 ): string {
   const html = marked.parse(src ?? '', { async: false, breaks })
   const linked = html.replace(/<a href="([^"]*)"([^>]*)>/g, (whole, rawHref: string, rest: string) => {
-    const href = rawHref.replaceAll('&amp;', '&')
-    const card = cardLinkFor(href, cardId)
-    if (card) {
-      return `<a href="#" data-card-id="${card}"${rest}>`
-    }
-    // Other workspace-qualified paths (`proj:src/a.rs`, `@rumu:/sessions/…`)
-    // render as inert references.
-    const ws = href.startsWith(`${INTERNAL_WORKSPACE}:`)
-      ? INTERNAL_WORKSPACE
-      : /^([a-z][a-z0-9.-]*):/i.exec(href)?.[1]
-    if (ws && !EXTERNAL_SCHEMES.has(ws.toLowerCase())) {
-      return `<a href="#" data-ws-ref="${rawHref}" title="${rawHref}"${rest}>`
-    }
-    return whole
+    const href = rawHref.replaceAll('&amp;', '&').replaceAll('&quot;', '"')
+    const attrs = anchorFor(href, base)
+    if (!attrs) return whole
+    // Hovering shows the address, unless the link has its own title.
+    const title = rest.includes(' title=') ? '' : ` title="${rawHref}"`
+    return `<a href="#" ${attrs}${title}${rest}>`
   })
   return DOMPurify.sanitize(linked)
 }

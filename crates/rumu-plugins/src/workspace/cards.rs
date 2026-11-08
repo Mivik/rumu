@@ -332,11 +332,11 @@ impl WorkspacePlugin {
             Some(cur) => patch::update(card::view_of(cur), view).await,
             None => patch::create(),
         };
-        Ok(ToolOutput::ok(format!(
-            "wrote cards/{public}.md (rev {rev}, view rev {view_rev})"
-        ))
-        .with_data(&patch)
-        .with_effect(effect))
+        let mut text = format!("wrote cards/{public}.md (rev {rev}, view rev {view_rev})");
+        if let Some((mounted, _)) = cards.split(public).filter(|_| new_card.link().is_none()) {
+            text.push_str(&link_warnings(&mounted.deck, &content_path, &new_card.body));
+        }
+        Ok(ToolOutput::ok(text).with_data(&patch).with_effect(effect))
     }
 
     /// Read-before-write concurrency: the latest `card_use` for the card's
@@ -432,4 +432,48 @@ fn record_card_use(
         op,
         cx.call().map(|c| c.id.as_str()),
     )
+}
+
+/// Warnings for the body links of a card just written at deck-local `path`:
+/// relative links that name no card in its deck, and mount paths, which break
+/// wherever the deck is mounted elsewhere. Empty when every link is fine.
+fn link_warnings(deck: &rumu_cards::Deck, path: &str, body: &str) -> String {
+    let mut broken = Vec::new();
+    let mut mounted = Vec::new();
+    for (href, link) in card::body_links(path, body) {
+        match link {
+            Ok(target) => {
+                let exists = rumu_cards::valid_card_path(&target)
+                    && matches!(deck.read(&target), Ok(Some(_)));
+                if !exists && !broken.contains(&href) {
+                    broken.push(href);
+                }
+            }
+            Err(()) if !mounted.contains(&href) => mounted.push(href),
+            Err(()) => {}
+        }
+    }
+    let list = |hrefs: &[&str]| {
+        hrefs
+            .iter()
+            .map(|h| format!("`{h}`"))
+            .collect::<Vec<_>>()
+            .join(", ")
+    };
+    let mut out = String::new();
+    if !broken.is_empty() {
+        out.push_str(&format!(
+            "\nThese links name no card in this deck: {}.",
+            list(&broken)
+        ));
+    }
+    if !mounted.is_empty() {
+        out.push_str(&format!(
+            "\nThese links use a mount path, which differs wherever the deck is mounted: {}. \
+             Link to a card in the same deck by its path relative to this card (`./x`, `../d/y`); \
+             for a card in another deck, link to a link card in this deck.",
+            list(&mounted)
+        ));
+    }
+    out
 }

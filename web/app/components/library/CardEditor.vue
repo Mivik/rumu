@@ -32,8 +32,6 @@ const props = defineProps<{
   override?: CardView | null
   /** Teleport target for the action menu; a native dialog passes itself. */
   overlay?: string
-  /** The card's id in the session, so relative card links in the body resolve. */
-  cardId?: string
 }>()
 
 const emit = defineEmits<{ close: []; moved: [deck: string, path: string] }>()
@@ -149,10 +147,12 @@ const readView = computed<CardView>(
       body: shown.value.body,
     },
 )
-const renderedBody = computed(() =>
-  renderMarkdown(readView.value.body, { breaks: false, cardId: props.cardId }),
-)
 const target = computed(() => detail.value?.card.link ?? null)
+/** Relative links in the shown body resolve beside it: a link shows its target's. */
+const linkBase = computed(() => target.value ?? { deck: props.deck, path: props.path })
+const renderedBody = computed(() =>
+  renderMarkdown(readView.value.body, { breaks: false, base: linkBase.value }),
+)
 const targetDeckName = computed(() =>
   target.value
     ? (state.library.decks.find((deck) => deck.id === target.value!.deck)?.name ?? target.value.deck)
@@ -798,7 +798,7 @@ const draftDiff = computed(() =>
             <div
               v-else
               class="md min-h-[12rem] rounded-control border border-line-soft bg-surface px-3 py-2 text-ink"
-              v-html="renderMarkdown(form.body, { breaks: false })"
+              v-html="renderMarkdown(form.body, { breaks: false, base: linkBase })"
             />
           </div>
 

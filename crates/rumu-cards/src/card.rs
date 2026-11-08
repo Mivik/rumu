@@ -409,6 +409,80 @@ pub fn valid_card_path(id: &str) -> bool {
     })
 }
 
+/// A Markdown link in a card body, as written and as resolved against the
+/// card: `Ok(deck-local path)` for a link relative to it (`./x`, `../d/y.md`),
+/// `Err(())` for a mount path (`@rumu:/cards/…`, `/cards/…`) — those depend on
+/// where the deck is mounted.
+pub type BodyLink<'a> = (&'a str, Result<String, ()>);
+
+/// The card-relative and mount-path links in `body` (fenced and inline code
+/// skipped). External links, anchors and other workspaces are left out.
+pub fn body_links<'a>(path: &str, body: &'a str) -> Vec<BodyLink<'a>> {
+    let mut out = Vec::new();
+    let mut fence = false;
+    for line in body.lines() {
+        if line.trim_start().starts_with("```") {
+            fence = !fence;
+            continue;
+        }
+        if fence {
+            continue;
+        }
+        let mut code = false;
+        let mut rest = line;
+        while let Some(i) = rest.find(['`', ']']) {
+            let tail = &rest[i + 1..];
+            if rest.as_bytes()[i] == b'`' {
+                code = !code;
+                rest = tail;
+                continue;
+            }
+            rest = tail;
+            if code {
+                continue;
+            }
+            let Some(inner) = tail.strip_prefix('(') else {
+                continue;
+            };
+            let end = inner.find([')', ' ']).unwrap_or(inner.len());
+            let href = &inner[..end];
+            rest = &inner[end..];
+            if let Some(link) = body_link(path, href) {
+                out.push((href, link));
+            }
+        }
+    }
+    out
+}
+
+fn body_link(path: &str, href: &str) -> Option<Result<String, ()>> {
+    let href = href.trim_matches(['<', '>']);
+    if href.starts_with(crate::cards::LINK_PREFIX) || href.starts_with("/cards/") {
+        return Some(Err(()));
+    }
+    let scheme = href.split_once(':').is_some_and(|(s, _)| !s.contains('/'));
+    if href.is_empty() || href.starts_with(['/', '#']) || scheme {
+        return None;
+    }
+    let href = href.split(['#', '?']).next().unwrap_or_default();
+    let mut segs: Vec<&str> = path.split('/').collect();
+    segs.pop();
+    for part in href.split('/') {
+        match part {
+            "" | "." => {}
+            ".." => {
+                // Above the deck root resolves to "", which names no card.
+                if segs.pop().is_none() {
+                    return Some(Ok(String::new()));
+                }
+            }
+            part => segs.push(part),
+        }
+    }
+    let joined = segs.join("/");
+    Some(Ok(joined.strip_suffix(".md").unwrap_or(&joined).to_owned()))
+}
+
 /// Normalize a directory prefix for `list` (workspace `card`) /
 /// `search`: strip trailing `/`; the empty string means "everywhere".
 pub(crate) fn normalize_prefix(prefix: &str) -> String {
@@ -423,6 +497,25 @@ pub(crate) fn under_prefix(id: &str, prefix: &str) -> bool {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn body_links_resolve_against_the_card() {
+        let body = "See [loop](./loop), [y](../x/y.md#h \"t\") and [up](../../../z).\n\
+                    Mounted: [m](@rumu:/cards/self/m), [n](/cards/n).\n\
+                    Not links: [w](https://x.io), [f](proj:src/a.rs), [a](#top), `[c](./c)`.\n\
+                    ```\n[d](./d)\n```\n";
+        let links = body_links("dev/rumu/kernel", body);
+        assert_eq!(
+            links,
+            vec![
+                ("./loop", Ok("dev/rumu/loop".to_owned())),
+                ("../x/y.md#h", Ok("dev/x/y".to_owned())),
+                ("../../../z", Ok(String::new())),
+                ("@rumu:/cards/self/m", Err(())),
+                ("/cards/n", Err(())),
+            ]
+        );
+    }
 
     /// Card paths follow the path rule; malformed forms are rejected.
     #[test]

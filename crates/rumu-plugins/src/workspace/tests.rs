@@ -1045,6 +1045,53 @@ async fn rumu_workspace_edges() {
 }
 
 #[tokio::test]
+async fn card_writes_flag_broken_and_mount_path_links() {
+    let home = card_home();
+    crate::testutil::put_card(
+        home.path(),
+        "main",
+        "dev/loop",
+        "---\ndescription: d\n---\nloop\n",
+    );
+    let (plugin, host, cx) = card_plugin_for(home.path());
+
+    let write = |body: &str| {
+        plugin.call_tool(
+            "write",
+            json!({
+                "path": "@rumu:/cards/self/dev/kernel",
+                "content": format!("---\ndescription: d\n---\n{body}\n"),
+            }),
+            &cx,
+        )
+    };
+    let out = write("[loop](./loop) and [up](../dev/loop.md)")
+        .await
+        .unwrap();
+    assert!(!out.is_error, "{}", out.content.text);
+    assert!(!out.content.text.contains('\n'), "{}", out.content.text);
+    flush_output(&host, "call-1", &out);
+
+    let out = write("[gone](./gone), [m](@rumu:/cards/self/dev/loop)")
+        .await
+        .unwrap();
+    assert!(!out.is_error, "the write still lands: {}", out.content.text);
+    assert!(
+        out.content
+            .text
+            .contains("name no card in this deck: `./gone`."),
+        "{}",
+        out.content.text
+    );
+    assert!(
+        out.content.text.contains("mount path")
+            && out.content.text.contains("`@rumu:/cards/self/dev/loop`"),
+        "{}",
+        out.content.text
+    );
+}
+
+#[tokio::test]
 async fn card_tools_read_write_validate_and_list() {
     let home = card_home();
     crate::testutil::put_card(

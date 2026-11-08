@@ -17,6 +17,7 @@
   "copyFailed": "Copy failed",
   "copyCode": "Copy code",
   "copiedCode": "Copied code",
+  "copiedAddress": "Copied address",
   "time": {
     "justNow": "just now",
     "minutesAgo": "{n}m ago",

@@ -12,7 +12,15 @@
 
 import { computed } from 'vue'
 import { parse as parseYaml, stringify as stringifyYaml } from 'yaml'
-import type { Card, CardImport, CardUpdate, CardUse as CardUseRecord, Content, Node } from './types'
+import type {
+  Card,
+  CardImport,
+  CardUpdate,
+  CardUse as CardUseRecord,
+  Content,
+  LibraryRef,
+  Node,
+} from './types'
 import { callsOnPath, pathNodes, state } from './store'
 
 /** The payload tag/version decode for one Content, or null. */
@@ -191,30 +199,38 @@ export function useIsCurrent(card: Card, use: CardUse): boolean {
   return use.rev === card.revision
 }
 
-/** The mount points the current cards are addressed under (`/cards/self` →
- * `self`), longest first so a nested mount wins over its parent. */
-const cardMountPoints = computed(() => {
-  const mounts =
-    state.activeBranch && state.pathState
-      ? state.pathState.mounts
-      : (state.assistants.find((a) => a.id === state.assistant)?.mounts ?? [])
-  const points = new Set(['self'])
+/** The current mount table as `{ point, deck }` (`/cards/self` → `self`, the
+ * assistant's own deck), longest point first so a nested mount wins over its
+ * parent. */
+const cardMounts = computed(() => {
+  const live = state.activeBranch && state.pathState
+  const mounts = live
+    ? state.pathState!.mounts
+    : (state.assistants.find((a) => a.id === state.assistant)?.mounts ?? [])
+  const out = new Map([['self', live ? state.pathState!.assistant : state.assistant]])
   for (const m of mounts) {
     const point = m.at.replace(/^\/?cards\/?/, '').replace(/\/+$/, '')
-    if (point) points.add(point)
+    if (point) out.set(point, m.deck)
   }
-  return [...points].sort((a, b) => b.length - a.length)
+  return [...out].map(([point, deck]) => ({ point, deck })).sort((a, b) => b.point.length - a.point.length)
 })
+
+/** A mounted card id (`user/dev/x`) → its deck and deck-local path (`dev/x`);
+ * a mount point itself maps to the deck root (`path: ''`). Null outside every
+ * mount. */
+export function mountedRef(id: string): LibraryRef | null {
+  for (const { point, deck } of cardMounts.value) {
+    if (id === point) return { deck, path: '' }
+    if (id.startsWith(`${point}/`)) return { deck, path: id.slice(point.length + 1) }
+  }
+  return null
+}
 
 /** A card id without its deck's mount prefix, for display (`self/dev/x` →
  * `dev/x`). Clicks and requests keep the full id; a folder equal to the mount
  * head has no label left. */
 export function cardLabel(id: string): string {
-  for (const point of cardMountPoints.value) {
-    if (id === point) return ''
-    if (id.startsWith(`${point}/`)) return id.slice(point.length + 1)
-  }
-  return id
+  return mountedRef(id)?.path ?? id
 }
 
 /** card path → record from card.list (paths are what the UI opens). */

@@ -6,6 +6,6 @@ against destructive commands.
 
 Related cards:
 
-- [Service notes](@rumu:/cards/gateway)
-- [Dangerous commands](@rumu:/cards/dangerous-commands)
-- [ssh-agent setup](@rumu:/cards/ssh-agent-setup)
+- [Service notes](./gateway)
+- [Dangerous commands](./dangerous-commands)
+- [ssh-agent setup](./ssh-agent-setup)

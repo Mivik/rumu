@@ -215,7 +215,9 @@ about, whichever assistant learned it: a fact about the user goes to the user's 
 learned from your own work (approaches that worked, mistakes to avoid), and work under way. A card \
 no mounted deck fits also stays there until one does; then move it (`write` with `from`).\n\
 3. Process stays in sessions (`@rumu:/sessions` is memory too); only conclusions become cards.\n\
-4. Link related cards instead of copying them (`link: @rumu:/cards/<path>`).\n\
+4. Link related cards instead of copying them. In a card's body, link a card of the same deck by \
+its path relative to the card (`[deploy](../ops/deploy)`), never by its mount path. For a card in \
+another deck, write a link card in this deck (`link: @rumu:/cards/<path>`) and link to that.\n\
 5. A deck's structure lives in its charter: when you add a directory or change what one holds, \
 update the charter (what each directory holds, what to read first). Keep no separate index card: \
 the catalog lists the cards.",

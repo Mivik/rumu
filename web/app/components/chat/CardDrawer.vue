@@ -3,7 +3,15 @@
 // offers the "as seen" snapshot, and owns the native <dialog> lifecycle.
 import { computed, nextTick, onBeforeUnmount, ref, watch } from 'vue'
 import { t } from '../../i18n'
-import { cardById, cardKey, cardLabel, cardUsesOnPath, parseCardView, useIsCurrent } from '../../lib/cards'
+import {
+  cardById,
+  cardKey,
+  cardLabel,
+  cardUsesOnPath,
+  mountedRef,
+  parseCardView,
+  useIsCurrent,
+} from '../../lib/cards'
 import type { CardUse, CardView } from '../../lib/cards'
 import { closeDrawer, state } from '../../lib/store'
 import { renderMarkdown } from '../../lib/markdown'
@@ -73,7 +81,12 @@ const scope = computed(() => {
       : []
 })
 const revision = computed(() => (snapshot.value ? selectedUse.value?.rev : card.value?.revision))
-const shownHtml = computed(() => renderMarkdown(view.value.body, { breaks: false, cardId: path.value }))
+/** Relative links resolve beside the shown body: a link card shows its target's. */
+const linkBase = computed(() => {
+  const target = card.value?.link?.split(':')
+  return target?.length === 2 ? { deck: target[0]!, path: target[1]! } : (mountedRef(path.value) ?? undefined)
+})
+const shownHtml = computed(() => renderMarkdown(view.value.body, { breaks: false, base: linkBase.value }))
 /** 详情 rows: the card's address, the version, then its other frontmatter. */
 const detailRows = computed<[string, string][]>(() => {
   const rows: [string, string][] = [[t('cards.drawer.path'), path.value]]
@@ -149,7 +162,6 @@ function onMoved(deck: string, cardPath: string): void {
         :in-library="false"
         :override="snapshot ? view : null"
         overlay="#card-drawer"
-        :card-id="card.id"
         @close="closeDrawer"
         @moved="onMoved"
       >

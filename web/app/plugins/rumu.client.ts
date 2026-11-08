@@ -1,7 +1,8 @@
 // Boot the store (WS connection + push handlers) once, client-side.
 import { defineNuxtPlugin } from '#app'
 import { t } from '../i18n'
-import { openDrawer, startApp } from '../lib/store'
+import { followLink } from '../lib/links'
+import { startApp } from '../lib/store'
 import { toast } from '../lib/state/ui'
 import { copyText } from '../lib/util'
 
@@ -27,9 +28,8 @@ async function copyCode(btn: HTMLButtonElement): Promise<void> {
 export default defineNuxtPlugin(() => {
   startApp()
 
-  // Clicks inside rendered markdown: copy a fence; card links open the card
-  // drawer; other workspace-qualified paths (`proj:src/a.rs`, `@rumu:/sessions/…`)
-  // are inert — the click is only prevented.
+  // Clicks inside rendered markdown: copy a fence; follow rumu addresses and
+  // card links (lib/links.ts).
   document.addEventListener('click', (e) => {
     const target = e.target as HTMLElement | null
 
@@ -41,11 +41,6 @@ export default defineNuxtPlugin(() => {
 
     const link = target?.closest?.('a') as HTMLAnchorElement | null
     if (!link) return
-    if (link.dataset.cardId) {
-      e.preventDefault()
-      openDrawer(link.dataset.cardId)
-    } else if (link.dataset.wsRef !== undefined) {
-      e.preventDefault()
-    }
+    if (followLink(link)) e.preventDefault()
   })
 })

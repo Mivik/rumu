@@ -13,4 +13,4 @@ description: The agent loop, hook dispatch and projection in crates/rumu-kernel.
 - **Projection**: nodes → messages deterministically; system + tools are
   frozen per session for the cache contract.
 
-Related: [The rumu project](@rumu:/cards/rumu).
+Related: [The rumu project](../../rumu).
