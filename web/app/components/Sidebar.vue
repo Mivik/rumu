@@ -362,11 +362,13 @@ const otherLocale = computed<Locale>(
       <span class="text-micro text-ink-3 tabular-nums">{{ state.projects.length }}</span>
     </button>
 
-    <div class="scroll-fade -mx-2 mt-2 flex flex-1 flex-col gap-1 overflow-y-auto px-2 pt-2 pb-3">
+    <div class="mt-2 h-px flex-none bg-line-soft" />
+
+    <div class="scroll-fade -mx-2 flex flex-1 flex-col gap-1 overflow-y-auto px-2 pt-2 pb-3">
       <section
         v-for="group in groups"
         :key="group.key"
-        class="rounded-control transition-colors duration-150"
+        class="flex flex-col gap-0.5 rounded-control transition-colors duration-150"
         :class="{ 'bg-brand-soft/40 ring-1 ring-brand/25': dragOver === group.key }"
         @dragover="overGroup($event, group)"
         @dragleave="leaveGroup($event, group)"
@@ -422,7 +424,7 @@ const otherLocale = computed<Locale>(
           v-if="group.draft && !collapsed(group)"
           type="button"
           aria-current="page"
-          class="mb-0.5 flex w-full min-w-0 items-center rounded-control border border-line bg-surface-2 py-2 pr-1 pl-3 text-left text-secondary font-bold text-ink shadow-soft outline-none focus-visible:ring-2 focus-visible:ring-brand/25"
+          class="flex w-full min-w-0 items-center rounded-control border border-line bg-surface-2 py-2 pr-1 pl-3 text-left text-secondary font-bold text-ink shadow-soft outline-none focus-visible:ring-2 focus-visible:ring-brand/25"
           @click="openDraft"
         >
           <span class="min-w-0 flex-1 truncate">{{ t('chat.sidebar.newSession') }}</span>
