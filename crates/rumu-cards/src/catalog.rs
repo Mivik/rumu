@@ -163,7 +163,7 @@ pub fn deck_catalog(
             Ok(Some(text)) => text,
             Ok(None) => continue,
             Err(e) => {
-                tracing::warn!(deck = %deck.name, path = %path, error = %e, "skipping an unreadable card");
+                tracing::warn!(deck = %deck.meta.name, path = %path, error = %e, "skipping an unreadable card");
                 continue;
             }
         };

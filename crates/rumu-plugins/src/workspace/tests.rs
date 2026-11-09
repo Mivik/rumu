@@ -3355,7 +3355,11 @@ async fn cas_refusal_lists_changes_and_diff() {
 
     // Another assistant changes the card through the deck history.
     let decks = plugin.decks();
-    let deck = decks.list().into_iter().find(|d| d.name == "main").unwrap();
+    let deck = decks
+        .list()
+        .into_iter()
+        .find(|d| d.meta.name == "main")
+        .unwrap();
     let cards = rumu_cards::Cards::new(
         decks,
         &[rumu_core::CardMount {
@@ -3414,14 +3418,14 @@ async fn mounts_need_a_grant_and_must_not_overlap() {
     let main = decks
         .list()
         .into_iter()
-        .find(|d| d.name == "main")
+        .find(|d| d.meta.name == "main")
         .unwrap()
         .id()
         .to_owned();
     let extra = decks
         .list()
         .into_iter()
-        .find(|d| d.name == "extra")
+        .find(|d| d.meta.name == "extra")
         .unwrap()
         .id()
         .to_owned();
@@ -3542,14 +3546,14 @@ async fn links_read_their_target_and_refuse_writes() {
     let main = decks
         .list()
         .into_iter()
-        .find(|d| d.name == "main")
+        .find(|d| d.meta.name == "main")
         .unwrap()
         .id()
         .to_owned();
     let other = decks
         .list()
         .into_iter()
-        .find(|d| d.name == "other")
+        .find(|d| d.meta.name == "other")
         .unwrap()
         .id()
         .to_owned();
@@ -3669,7 +3673,7 @@ async fn history_listing_and_version_reads() {
         .decks()
         .list()
         .into_iter()
-        .find(|d| d.name == "main")
+        .find(|d| d.meta.name == "main")
         .unwrap()
         .commits(1)
         .unwrap()
@@ -3767,7 +3771,7 @@ async fn writes_to_other_decks_need_approval() {
         .decks()
         .list()
         .into_iter()
-        .find(|d| d.name == "user")
+        .find(|d| d.meta.name == "user")
         .unwrap()
         .id()
         .to_owned();
@@ -3860,7 +3864,7 @@ async fn card_paths_cannot_escape_a_mount() {
         .decks()
         .list()
         .into_iter()
-        .find(|d| d.name == "other")
+        .find(|d| d.meta.name == "other")
         .unwrap()
         .id()
         .to_owned();
@@ -3957,14 +3961,14 @@ async fn links_store_the_target_and_go_dangling_on_a_move() {
     let main = decks
         .list()
         .into_iter()
-        .find(|d| d.name == "main")
+        .find(|d| d.meta.name == "main")
         .unwrap()
         .id()
         .to_owned();
     let other = decks
         .list()
         .into_iter()
-        .find(|d| d.name == "other")
+        .find(|d| d.meta.name == "other")
         .unwrap()
         .id()
         .to_owned();
@@ -4109,7 +4113,7 @@ async fn history_lists_versions_by_path() {
         .decks()
         .list()
         .into_iter()
-        .find(|d| d.name == "main")
+        .find(|d| d.meta.name == "main")
         .unwrap()
         .commits(1)
         .unwrap()
@@ -4897,7 +4901,7 @@ async fn card_mount_moves_between_projects_and_creates_one() {
             "needs `at",
         ),
         (
-            json!({ "create": "Bad_Name", "at": "project" }),
+            json!({ "create": " ", "at": "project" }),
             "invalid project name",
         ),
     ] {

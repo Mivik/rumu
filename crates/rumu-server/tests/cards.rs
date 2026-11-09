@@ -68,6 +68,7 @@ fn card_home() -> (tempfile::TempDir, std::path::PathBuf) {
             project: false,
             mounts: Vec::new(),
             allow_ask: Vec::new(),
+            icon: None,
         })
         .unwrap();
     deck.write_file(
@@ -104,7 +105,7 @@ async fn update_notices_only_follow_actual_reads() {
     let main = decks
         .list()
         .into_iter()
-        .find(|d| d.name == "main")
+        .find(|d| d.meta.name == "main")
         .unwrap()
         .id()
         .to_owned();
@@ -225,7 +226,7 @@ async fn script_edits_count_as_reads() {
     let main = decks
         .list()
         .into_iter()
-        .find(|d| d.name == "main")
+        .find(|d| d.meta.name == "main")
         .unwrap()
         .id()
         .to_owned();

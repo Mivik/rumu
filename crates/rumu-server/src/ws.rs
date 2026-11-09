@@ -458,6 +458,8 @@ async fn dispatch(state: &AppState, method: &str, p: &Value) -> Result<Value> {
                 name: String,
                 #[serde(default)]
                 workspaces: Vec<String>,
+                #[serde(default)]
+                icon: Option<rumu_cards::DeckIcon>,
             }
             let req: Create = parse_params(p)?;
             let deck = rumu_plugins::create_project(
@@ -466,12 +468,14 @@ async fn dispatch(state: &AppState, method: &str, p: &Value) -> Result<Value> {
                 &state.workspaces,
                 &req.name,
                 req.workspaces,
+                req.icon,
             )?;
             Ok(json!({ "project": rumu_plugins::project_of(&deck, &state.workspaces) }))
         }
 
-        // Rename a project, and/or replace the workspaces it mounts (in
-        // order; the first is its default).
+        // Rename a project, set its icon (an empty one clears it), and/or
+        // replace the workspaces it mounts (in order; the first is its
+        // default).
         "project.update" => {
             #[derive(Deserialize)]
             #[serde(deny_unknown_fields)]
@@ -481,11 +485,22 @@ async fn dispatch(state: &AppState, method: &str, p: &Value) -> Result<Value> {
                 name: Option<String>,
                 #[serde(default)]
                 workspaces: Option<Vec<String>>,
+                #[serde(default)]
+                icon: Option<rumu_cards::DeckIcon>,
             }
             let req: Update = parse_params(p)?;
             let mut deck = project_deck(state, &req.id)?;
-            if let Some(name) = req.name.filter(|n| *n != deck.meta.name) {
-                library::deck_rename(&state.decks, &deck, &name)?;
+            let name = req.name.filter(|n| *n != deck.meta.name);
+            let icon = req.icon.map(rumu_cards::DeckIcon::normalized);
+            if name.is_some() || icon.as_ref().is_some_and(|i| *i != deck.meta.icon) {
+                let mut meta = deck.meta.clone();
+                if let Some(name) = name {
+                    meta.name = name;
+                }
+                if let Some(icon) = icon {
+                    meta.icon = icon;
+                }
+                state.decks.upsert(meta)?;
                 deck = project_deck(state, &req.id)?;
             }
             if let Some(names) = req.workspaces {
@@ -577,10 +592,11 @@ async fn dispatch(state: &AppState, method: &str, p: &Value) -> Result<Value> {
                 project: false,
                 mounts,
                 allow_ask: req.allow_ask,
+                icon: existing.as_ref().and_then(|d| d.meta.icon.clone()),
             };
             let deck = state.decks.upsert(meta)?;
             let cards = Cards::library(&state.decks);
-            let public = format!("{}/instructions", deck.name);
+            let public = format!("{}/instructions", deck.id());
             match req.instructions.filter(|i| !i.trim().is_empty()) {
                 Some(instructions) => {
                     let view = format!(

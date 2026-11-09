@@ -224,7 +224,8 @@ impl WorkspacePlugin {
         }
         if !valid_deck_name(name) {
             return Err(ToolError::model(format!(
-                "invalid project name `{name}` (rule: `[a-z][a-z0-9-]*`)"
+                "invalid project name `{name}` (1-{} characters, no control characters)",
+                rumu_cards::deck::DECK_NAME_MAX
             )));
         }
         let request = json!({
@@ -241,8 +242,15 @@ impl WorkspacePlugin {
                 "the user declined to create project `{name}`"
             )));
         }
-        let deck = create_project(&self.home, self.decks(), &self.workspaces, name, Vec::new())
-            .map_err(|e| ToolError::model(format!("creating project `{name}`: {e}")))?;
+        let deck = create_project(
+            &self.home,
+            self.decks(),
+            &self.workspaces,
+            name,
+            Vec::new(),
+            None,
+        )
+        .map_err(|e| ToolError::model(format!("creating project `{name}`: {e}")))?;
         self.check_mount_point(state, &deck, &at)?;
         Ok(self.mounted_output(&deck, &at, &state.assistant))
     }

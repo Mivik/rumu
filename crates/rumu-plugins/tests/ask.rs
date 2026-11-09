@@ -100,7 +100,7 @@ fn deck_id(home: &std::path::Path, name: &str) -> String {
         .unwrap()
         .list()
         .into_iter()
-        .find(|d| d.name == name)
+        .find(|d| d.meta.name == name)
         .unwrap()
         .id()
         .to_owned()
@@ -114,7 +114,6 @@ fn home() -> tempfile::TempDir {
     let finance_id = "0193a2f1-0000-7000-8000-000000000001";
     create_deck(
         home.path(),
-        "finance",
         &format!("id: {finance_id}\nname: finance\n"),
         &[(
             "budget",
@@ -132,7 +131,6 @@ fn home() -> tempfile::TempDir {
         };
         create_deck(
             home.path(),
-            name,
             &format!("id: {id}\nname: {name}\nassistant: true\n{mounts}"),
             &[],
         );
@@ -142,18 +140,15 @@ fn home() -> tempfile::TempDir {
 
 /// Create a bare deck with the given `deck.yaml` and cards, through the
 /// deck's committing write primitive.
-fn create_deck(home: &std::path::Path, name: &str, meta: &str, cards: &[(&str, &str)]) {
-    let dir = home.join("decks").join(name);
+fn create_deck(home: &std::path::Path, text: &str, cards: &[(&str, &str)]) {
+    let meta = rumu_cards::yaml::from_str::<rumu_cards::DeckMeta>(text).unwrap();
+    let dir = home.join("decks").join(&meta.id);
     rumu_cards::git::repo(&dir).init().unwrap();
-    let deck = rumu_cards::Deck {
-        meta: rumu_cards::yaml::from_str(meta).unwrap(),
-        dir,
-        name: name.to_owned(),
-    };
+    let deck = rumu_cards::Deck { meta, dir };
     deck.commit(
         &rumu_cards::Author::user(),
         "create deck",
-        &std::collections::BTreeMap::from([("deck.yaml".to_owned(), Some(meta.to_owned()))]),
+        &std::collections::BTreeMap::from([("deck.yaml".to_owned(), Some(text.to_owned()))]),
     )
     .unwrap();
     for (path, text) in cards {

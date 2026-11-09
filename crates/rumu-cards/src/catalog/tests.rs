@@ -18,6 +18,7 @@ fn deck_with(home: &Path, paths: &[String]) -> (Decks, Deck) {
             project: false,
             mounts: Vec::new(),
             allow_ask: Vec::new(),
+            icon: None,
         })
         .unwrap();
     for path in paths {

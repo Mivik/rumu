@@ -1,11 +1,11 @@
 //! Decks: bare git repositories of cards, and the registry that knows them.
 //!
-//! A deck lives at `RUMU_HOME/decks/<name>/`; its identity and defaults are in
+//! A deck lives at `RUMU_HOME/decks/<id>/`; its identity and defaults are in
 //! `deck.yaml` in the `HEAD` tree. Decks are addressed by the `id` in
-//! `deck.yaml`, never by their name. Which assistant is the default is per
-//! user, in `RUMU_HOME/default-assistant`. rumu is the only writer: a card
-//! write or a UI edit is a commit, so there is no worktree to scan or
-//! reconcile.
+//! `deck.yaml`, never by their name; the name is only a display label. Which
+//! assistant is the default is per user, in `RUMU_HOME/default-assistant`.
+//! rumu is the only writer: a card write or a UI edit is a commit, so there
+//! is no worktree to scan or reconcile.
 //!
 //! [`Decks`] loads the deck repositories and refreshes its in-memory view
 //! after rumu's own commits. A card's frontmatter `id:` is its identity: it
@@ -40,11 +40,15 @@ pub const DEFAULT_FILE: &str = "default-assistant";
 /// The author recorded for changes made by the user (UI edits).
 pub const USER: &str = "user";
 
-/// A deck name: `[a-z][a-z0-9-]*`.
+/// The longest deck display name, in characters.
+pub const DECK_NAME_MAX: usize = 80;
+
+/// A deck's display name: trimmed, 1–[`DECK_NAME_MAX`] characters, no control
+/// characters. Names are labels only — decks are stored and addressed by id,
+/// so anything readable (spaces, capitals, CJK) is fine.
 pub fn valid_deck_name(name: &str) -> bool {
-    let mut chars = name.chars();
-    chars.next().is_some_and(|c| c.is_ascii_lowercase())
-        && chars.all(|c| c.is_ascii_lowercase() || c.is_ascii_digit() || c == '-')
+    let name = name.trim();
+    !name.is_empty() && name.chars().count() <= DECK_NAME_MAX && !name.chars().any(char::is_control)
 }
 
 /// A deck's default mount entry (`deck.yaml`).
@@ -58,6 +62,55 @@ pub struct DeckMount {
     /// Writes to the deck need no approval.
     #[serde(default, skip_serializing_if = "std::ops::Not::not")]
     pub write: bool,
+}
+
+/// The tones a project's seal can take (the web's semantic colors).
+pub const ICON_TONES: &[&str] = &["brand", "tool", "pine", "memory", "agent", "ink"];
+
+/// A project's seal (`deck.yaml icon`). Either part left out falls back: the
+/// glyph to the name's first letter, the tone to one picked from the id.
+#[derive(Debug, Clone, Default, PartialEq, Eq, Serialize, Deserialize, ts_rs::TS)]
+#[ts(export)]
+pub struct DeckIcon {
+    /// A letter, a CJK character or an emoji.
+    #[ts(optional)]
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub glyph: Option<String>,
+    /// One of [`ICON_TONES`].
+    #[ts(optional)]
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub tone: Option<String>,
+}
+
+impl DeckIcon {
+    /// The icon with blank parts dropped, `None` when nothing is left.
+    pub fn normalized(self) -> Option<Self> {
+        let glyph = self
+            .glyph
+            .map(|g| g.trim().to_owned())
+            .filter(|g| !g.is_empty());
+        let tone = self.tone.filter(|t| !t.is_empty());
+        (glyph.is_some() || tone.is_some()).then_some(Self { glyph, tone })
+    }
+
+    fn check(&self) -> std::result::Result<(), String> {
+        if let Some(g) = &self.glyph
+            && (g.chars().count() > 4
+                || g.len() > 16
+                || g.chars().any(|c| c.is_whitespace() || c.is_control()))
+        {
+            return Err(format!("invalid icon glyph `{g}` (one letter or emoji)"));
+        }
+        if let Some(t) = &self.tone
+            && !ICON_TONES.contains(&t.as_str())
+        {
+            return Err(format!(
+                "invalid icon tone `{t}` (one of {})",
+                ICON_TONES.join(", ")
+            ));
+        }
+        Ok(())
+    }
 }
 
 /// What one deck may do to another without asking the user, once a grant
@@ -112,16 +165,17 @@ pub struct DeckMeta {
     /// Assistant deck ids that may ask it without a prompt.
     #[serde(default, skip_serializing_if = "Vec::is_empty")]
     pub allow_ask: Vec<String>,
+    /// A project's seal.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub icon: Option<DeckIcon>,
 }
 
 /// One loaded deck.
 #[derive(Debug, Clone)]
 pub struct Deck {
     pub meta: DeckMeta,
-    /// The deck directory under `<home>/decks/`.
+    /// The deck directory under `<home>/decks/`, named by its id.
     pub dir: PathBuf,
-    /// The directory name (where it lives; not an identity).
-    pub name: String,
 }
 
 impl Deck {
@@ -490,7 +544,7 @@ impl Decks {
             match self.check_mount(&m, &out) {
                 Ok(at) => out.push(CardMount { deck: m.deck, at }),
                 Err(message) => {
-                    warn!(deck = %deck.name, mount = %m.at, "skipping a default mount: {message}")
+                    warn!(deck = %deck.meta.name, mount = %m.at, "skipping a default mount: {message}")
                 }
             }
         }
@@ -614,17 +668,30 @@ impl Decks {
         })
     }
 
-    /// Create (empty `id`) or update a deck's `deck.yaml`. A new deck never
-    /// takes over an existing directory.
+    /// Is `name` used by a deck other than the one with id `except`? Names
+    /// compare case-insensitively, so two decks cannot look alike in a list.
+    pub fn name_taken(&self, name: &str, except: Option<&str>) -> bool {
+        let name = name.trim().to_lowercase();
+        self.inner
+            .read()
+            .unwrap()
+            .decks
+            .values()
+            .any(|d| Some(d.id()) != except && d.meta.name.to_lowercase() == name)
+    }
+
+    /// Create (empty `id`) or update a deck's `deck.yaml`. The directory is
+    /// named by the id and never moves; a rename only changes the name.
     pub fn upsert(&self, meta: DeckMeta) -> Result<Deck> {
         let mut meta = meta;
         let config_err = |message: String| Error::Config {
             path: self.home.join(DECKS_DIR),
             message,
         };
+        meta.name = meta.name.trim().to_owned();
         if !valid_deck_name(&meta.name) {
             return Err(config_err(format!(
-                "invalid deck name `{}` (rule: `[a-z][a-z0-9-]*`)",
+                "invalid deck name `{}` (1-{DECK_NAME_MAX} characters, no control characters)",
                 meta.name
             )));
         }
@@ -633,6 +700,10 @@ impl Decks {
                 "deck `{}` cannot be both an assistant and a project",
                 meta.name
             )));
+        }
+        meta.icon = meta.icon.and_then(DeckIcon::normalized);
+        if let Some(icon) = &meta.icon {
+            icon.check().map_err(config_err)?;
         }
         let mut checked: Vec<CardMount> = Vec::new();
         for m in &meta.mounts {
@@ -654,44 +725,17 @@ impl Decks {
                     .ok_or_else(|| config_err(format!("no deck with id `{}`", meta.id)))?,
             )
         };
-        let mut dir = self.home.join(DECKS_DIR).join(
-            existing
-                .as_ref()
-                .map(|d| d.name.clone())
-                .unwrap_or_else(|| meta.name.clone()),
-        );
-        if existing.is_none() && dir.exists() {
-            return Err(Error::Config {
-                path: dir,
-                message: format!("a deck directory `{}` already exists", meta.name),
-            });
+        if self.name_taken(&meta.name, Some(&meta.id)) {
+            return Err(config_err(format!(
+                "a deck named `{}` already exists",
+                meta.name
+            )));
         }
-        // Renaming a deck moves its directory; the id and history stay.
-        if let Some(old) = &existing
-            && old.name != meta.name
-        {
-            let target = self.home.join(DECKS_DIR).join(&meta.name);
-            if target.exists() && target != old.dir {
-                return Err(Error::Config {
-                    path: target,
-                    message: format!("deck directory `{}` already exists", meta.name),
-                });
-            }
-            std::fs::rename(&old.dir, &target)
-                .map_err(rumu_core::IoError::at("renaming", &old.dir))?;
-            dir = target;
-        }
-        let name = existing
-            .as_ref()
-            .map(|old| {
-                if old.name == meta.name {
-                    old.name.clone()
-                } else {
-                    meta.name.clone()
-                }
-            })
-            .unwrap_or_else(|| meta.name.clone());
-        let deck = Deck { meta, dir, name };
+        let dir = match &existing {
+            Some(deck) => deck.dir.clone(),
+            None => self.home.join(DECKS_DIR).join(&meta.id),
+        };
+        let deck = Deck { meta, dir };
         deck.repo().init()?;
         if existing.is_some() {
             write_deck_meta(&deck, "update deck.yaml", None)?;
@@ -762,25 +806,35 @@ impl Decks {
     }
 }
 
-/// Open one deck by its directory name under `RUMU_HOME`, without loading the
+/// Open one deck by its display name under `RUMU_HOME`, without loading the
 /// registry.
 pub fn open_deck(home: &Path, name: &str) -> Result<Option<Deck>> {
-    let dir = home.join(DECKS_DIR).join(name);
-    if !dir.join("HEAD").is_file() {
-        return Ok(None);
-    }
-    let Some(text) = git::repo(&dir).read(DECK_FILE)? else {
-        return Ok(None);
+    let decks_dir = home.join(DECKS_DIR);
+    let entries = match std::fs::read_dir(&decks_dir) {
+        Ok(entries) => entries,
+        Err(e) if e.kind() == std::io::ErrorKind::NotFound => return Ok(None),
+        Err(source) => return Err(rumu_core::IoError::at("reading", &decks_dir)(source).into()),
     };
-    let meta = crate::yaml::from_str::<DeckMeta>(&text).map_err(|e| Error::Config {
-        path: dir.join(DECK_FILE),
-        message: format!("parsing deck.yaml: {e}"),
-    })?;
-    Ok(Some(Deck {
-        meta,
-        dir,
-        name: name.to_owned(),
-    }))
+    for entry in entries.filter_map(|e| e.ok()) {
+        if !entry.file_type().is_ok_and(|t| t.is_dir()) {
+            continue;
+        }
+        let dir = entry.path();
+        if !dir.join("HEAD").is_file() {
+            continue;
+        }
+        let Some(text) = git::repo(&dir).read(DECK_FILE)? else {
+            continue;
+        };
+        let meta = crate::yaml::from_str::<DeckMeta>(&text).map_err(|e| Error::Config {
+            path: dir.join(DECK_FILE),
+            message: format!("parsing deck.yaml: {e}"),
+        })?;
+        if meta.name == name {
+            return Ok(Some(Deck { meta, dir }));
+        }
+    }
+    Ok(None)
 }
 
 /// `grants.json`: empty when missing, `Err` when present but unreadable.
@@ -856,8 +910,8 @@ fn write_default(home: &Path, id: &str) -> Result<()> {
 }
 
 /// Load `RUMU_HOME`: the decks and the default assistant. When the default
-/// file does not name an assistant deck, the first assistant deck (by
-/// directory) becomes the default; with none, a `default` deck is created.
+/// file does not name an assistant deck, the first assistant deck (by name)
+/// becomes the default; with none, a `default` deck is created.
 fn load_home(home: &Path) -> Result<Inner> {
     let decks_dir = home.join(DECKS_DIR);
     std::fs::create_dir_all(&decks_dir).map_err(rumu_core::IoError::at("creating", &decks_dir))?;
@@ -871,14 +925,14 @@ fn load_home(home: &Path) -> Result<Inner> {
     Ok(Inner { decks, default })
 }
 
-/// A new default assistant, saved as such: the first assistant deck by
-/// directory, or a new `default` deck when there is none. A home with no
-/// decks at all also gets the `user` and `world` decks, mounted by it.
+/// A new default assistant, saved as such: the first assistant deck by name,
+/// or a new `default` deck when there is none. A home with no decks at all
+/// also gets the `user` and `world` decks, mounted by it.
 fn fallback_default(home: &Path, decks: &mut BTreeMap<String, Deck>) -> Result<String> {
     let first = decks
         .values()
         .filter(|d| d.meta.assistant)
-        .min_by(|a, b| a.name.cmp(&b.name))
+        .min_by(|a, b| a.meta.name.cmp(&b.meta.name))
         .map(|d| d.meta.id.clone());
     let id = match first {
         Some(id) => id,
@@ -887,8 +941,9 @@ fn fallback_default(home: &Path, decks: &mut BTreeMap<String, Deck>) -> Result<S
             let mut mounts = Vec::new();
             let fresh = decks.is_empty();
             if fresh {
-                for (name, charter) in [("user", &USER_CHARTER), ("world", &WORLD_CHARTER)] {
-                    let deck = create_deck(&decks_dir, name, charter, |_| {})?;
+                for (base, charter) in [("user", &USER_CHARTER), ("world", &WORLD_CHARTER)] {
+                    let name = free_deck_name(decks, base);
+                    let deck = create_deck(&decks_dir, &name, charter, |_| {})?;
                     mounts.push(DeckMount {
                         deck: deck.meta.id.clone(),
                         at: format!("/cards/{name}"),
@@ -897,7 +952,8 @@ fn fallback_default(home: &Path, decks: &mut BTreeMap<String, Deck>) -> Result<S
                     decks.insert(deck.meta.id.clone(), deck);
                 }
             }
-            let deck = create_deck(&decks_dir, "default", &SELF_CHARTER, |meta| {
+            let name = free_deck_name(decks, "default");
+            let deck = create_deck(&decks_dir, &name, &SELF_CHARTER, |meta| {
                 meta.assistant = true;
                 meta.mounts = mounts;
             })?;
@@ -908,6 +964,22 @@ fn fallback_default(home: &Path, decks: &mut BTreeMap<String, Deck>) -> Result<S
     };
     write_default(home, &id)?;
     Ok(id)
+}
+
+/// `base`, or `base-1`, `base-2`, … that no deck in `decks` uses.
+fn free_deck_name(decks: &BTreeMap<String, Deck>, base: &str) -> String {
+    let taken = |name: &str| {
+        decks
+            .values()
+            .any(|d| d.meta.name.to_lowercase() == name.to_lowercase())
+    };
+    (0..)
+        .map(|i| match i {
+            0 => base.to_owned(),
+            i => format!("{base}-{i}"),
+        })
+        .find(|name| !taken(name))
+        .expect("some name is free")
 }
 
 const SELF_CHARTER: Charter = Charter {
@@ -931,26 +1003,19 @@ carry across projects.\n\nNot here: the user's own preferences, or the conventio
 project.\n",
 };
 
-/// A new deck in the first free `decks/<name>[-N]`, created with its
-/// charter; `init` sets the rest of its `deck.yaml`.
+/// A new deck named `name`, stored at `decks/<id>/`; `init` sets the rest of
+/// its `deck.yaml`.
 fn create_deck(
     decks_dir: &Path,
     name: &str,
     charter: &Charter,
     init: impl FnOnce(&mut DeckMeta),
 ) -> Result<Deck> {
-    let name = (0..)
-        .map(|i| match i {
-            0 => name.to_owned(),
-            i => format!("{name}-{i}"),
-        })
-        .find(|n| !decks_dir.join(n).exists())
-        .expect("some directory name is free");
-    let dir = decks_dir.join(&name);
-    let mut meta = empty_meta(new_uuid(), name.clone());
+    let mut meta = empty_meta(new_uuid(), name.to_owned());
+    let dir = decks_dir.join(&meta.id);
     init(&mut meta);
     git::repo(&dir).init()?;
-    let deck = Deck { meta, dir, name };
+    let deck = Deck { meta, dir };
     write_deck_meta(&deck, "create deck", Some(charter))?;
     Ok(deck)
 }
@@ -959,52 +1024,46 @@ fn create_deck(
 fn load_decks(decks_dir: &Path) -> Result<BTreeMap<String, Deck>> {
     let entries =
         std::fs::read_dir(decks_dir).map_err(rumu_core::IoError::at("reading", decks_dir))?;
-    let mut names: Vec<String> = entries
+    let mut dirs: Vec<(String, PathBuf)> = entries
         .filter_map(|e| e.ok())
         .filter(|e| e.file_type().is_ok_and(|t| t.is_dir()))
-        .filter_map(|e| e.file_name().to_str().map(str::to_owned))
-        .filter(|name| !name.starts_with('.'))
-        .filter(|name| {
-            let ok = valid_deck_name(name);
-            if !ok {
-                warn!(name = %name, "skipping a deck directory with an invalid name");
-            }
-            ok
+        .filter_map(|e| {
+            let dir = e.file_name().to_str()?.to_owned();
+            (!dir.starts_with('.')).then(|| (dir, e.path()))
         })
         .collect();
-    names.sort();
+    dirs.sort_by(|a, b| a.0.cmp(&b.0));
 
     let mut inner = BTreeMap::new();
-    for name in names {
-        let dir = decks_dir.join(&name);
+    for (dir_name, dir) in dirs {
         let repo = git::repo(&dir);
         let text = match repo.read(DECK_FILE) {
             Ok(Some(text)) => text,
             Ok(None) => {
-                warn!(deck = %name, "skipping a directory without deck.yaml in HEAD");
+                warn!(dir = %dir_name, "skipping a directory without deck.yaml in HEAD");
                 continue;
             }
             Err(e) => {
-                warn!(deck = %name, error = %e, "skipping a directory that is not a bare deck repository");
+                warn!(dir = %dir_name, error = %e, "skipping a directory that is not a bare deck repository");
                 continue;
             }
         };
         let meta = match crate::yaml::from_str::<DeckMeta>(&text) {
             Ok(meta) if !meta.id.trim().is_empty() => meta,
             Ok(_) => {
-                warn!(deck = %name, "skipping a deck without an id");
+                warn!(dir = %dir_name, "skipping a deck without an id");
                 continue;
             }
             Err(e) => {
-                warn!(deck = %name, error = %e, "skipping a deck whose deck.yaml does not parse");
+                warn!(dir = %dir_name, error = %e, "skipping a deck whose deck.yaml does not parse");
                 continue;
             }
         };
         if inner.contains_key(&meta.id) {
-            warn!(deck = %name, id = %meta.id, "skipping a deck with a duplicate id");
+            warn!(dir = %dir_name, id = %meta.id, "skipping a deck with a duplicate id");
             continue;
         }
-        inner.insert(meta.id.clone(), Deck { meta, dir, name });
+        inner.insert(meta.id.clone(), Deck { meta, dir });
     }
 
     Ok(inner)
@@ -1018,6 +1077,7 @@ fn empty_meta(id: String, name: String) -> DeckMeta {
         project: false,
         mounts: Vec::new(),
         allow_ask: Vec::new(),
+        icon: None,
     }
 }
 

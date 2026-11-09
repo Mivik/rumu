@@ -12,7 +12,7 @@ use rumu_core::{
 };
 use serde::{Deserialize, Deserializer, Serialize, de};
 
-use rumu_cards::{Deck, DeckMeta, Decks};
+use rumu_cards::{Deck, DeckIcon, DeckMeta, Decks};
 
 use crate::{Error, Result};
 
@@ -211,6 +211,10 @@ pub struct Project {
     pub description: Option<String>,
     /// The workspaces it mounts, in order (the first is its default).
     pub workspaces: Vec<String>,
+    /// Its seal, when set.
+    #[ts(optional)]
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub icon: Option<DeckIcon>,
 }
 
 /// Every project deck, by name.
@@ -231,6 +235,7 @@ pub fn project_of(deck: &Deck, registry: &Workspaces) -> Project {
         name: deck.meta.name.clone(),
         description: deck.summary(),
         workspaces: registry.project(deck.id()),
+        icon: deck.meta.icon.clone(),
     }
 }
 
@@ -241,6 +246,7 @@ pub fn create_project(
     registry: &Workspaces,
     name: &str,
     workspaces: Vec<String>,
+    icon: Option<DeckIcon>,
 ) -> Result<Deck> {
     let deck = decks.upsert(DeckMeta {
         id: String::new(),
@@ -249,6 +255,7 @@ pub fn create_project(
         project: true,
         mounts: Vec::new(),
         allow_ask: Vec::new(),
+        icon,
     })?;
     set_project_workspaces(home, registry, deck.id(), workspaces)?;
     Ok(deck)
@@ -261,11 +268,11 @@ pub fn seed_project(home: &Path, decks: &Decks, registry: &Workspaces) -> Result
     let Ok([ws]) = <[Workspace; 1]>::try_from(registry.list()) else {
         return Ok(());
     };
-    let name: String = ws.name.replace('.', "-");
-    if !rumu_cards::deck::valid_deck_name(&name) || decks.list().iter().any(|d| d.name == name) {
+    let name = ws.name.clone();
+    if !rumu_cards::deck::valid_deck_name(&name) || decks.name_taken(&name, None) {
         return Ok(());
     }
-    create_project(home, decks, registry, &name, vec![ws.name])?;
+    create_project(home, decks, registry, &name, vec![ws.name], None)?;
     Ok(())
 }
 

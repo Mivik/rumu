@@ -1,6 +1,6 @@
 //! rumu-cards: decks, cards and their history.
 //!
-//! A card is a markdown file in a deck (`RUMU_HOME/decks/<name>/`), a bare git
+//! A card is a markdown file in a deck (`RUMU_HOME/decks/<id>/`), a bare git
 //! repository whose `HEAD` tree is the deck's content; it is identified by the
 //! deck id and its path within the deck. A session sees the decks mounted on
 //! its branch under
@@ -44,7 +44,7 @@ pub mod yaml;
 
 pub use card::{Card, CardInfo, valid_card_path};
 pub use cards::Cards;
-pub use deck::{Author, Deck, DeckMeta, DeckMount, Decks, open_deck};
+pub use deck::{Author, Deck, DeckIcon, DeckMeta, DeckMount, Decks, open_deck};
 pub use error::{CardViewError, Error, Result};
 
 /// Run a card search over the mounted card space: hits are BM25F-ranked like
@@ -206,6 +206,7 @@ mod tests {
                 project: false,
                 mounts: Vec::new(),
                 allow_ask: Vec::new(),
+                icon: None,
             })
             .unwrap();
         for (path, text) in [

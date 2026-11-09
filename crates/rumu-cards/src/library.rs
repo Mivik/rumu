@@ -1,7 +1,7 @@
 //! The card library: the user's view of every deck, independent of any
 //! assistant's mounts. The web Library page reads and writes through these
-//! functions; the wire always uses `{deck, path}` and the deck directory name
-//! is only ever an internal address in [`Cards::library`].
+//! functions; the wire always uses `{deck, path}` and the deck id is only
+//! ever an internal address in [`Cards::library`].
 
 use std::collections::BTreeMap;
 use std::path::PathBuf;
@@ -128,14 +128,14 @@ fn not_found(what: String) -> Error {
     }
 }
 
-/// The library space (`/cards/<dir name>`) of every deck.
+/// The library space (`/cards/<id>`) of every deck.
 fn library_cards(decks: &Decks) -> Cards {
     Cards::library(decks)
 }
 
-/// A deck's public library path for one card: `<dir name>/<path>`.
+/// A deck's public library path for one card: `<id>/<path>`.
 fn public_path(deck: &Deck, path: &str) -> String {
-    format!("{}/{}", deck.name, path)
+    format!("{}/{}", deck.id(), path)
 }
 
 /// The sidebar's decks, sorted by display name.
@@ -159,7 +159,7 @@ fn library_deck(deck: &Deck) -> Result<LibraryDeck> {
     })
 }
 
-/// Create a deck from a directory name.
+/// Create a deck with a display name.
 pub fn deck_create(decks: &Decks, name: &str) -> Result<LibraryDeck> {
     let deck = decks.upsert(DeckMeta {
         id: String::new(),
@@ -168,11 +168,12 @@ pub fn deck_create(decks: &Decks, name: &str) -> Result<LibraryDeck> {
         project: false,
         mounts: Vec::new(),
         allow_ask: Vec::new(),
+        icon: None,
     })?;
     library_deck(&deck)
 }
 
-/// Rename a deck (its directory moves; its id and cards stay).
+/// Rename a deck (only its display name; its id, directory and cards stay).
 pub fn deck_rename(decks: &Decks, deck: &Deck, name: &str) -> Result<LibraryDeck> {
     let mut meta = deck.meta.clone();
     meta.name = name.to_owned();
@@ -210,7 +211,7 @@ pub fn search(decks: &Decks, query: &str, deck: Option<&Deck>) -> Result<Vec<Lib
     let cards = library_cards(decks);
     let loaded = cards.all()?;
     let selected = |public: &str| match deck {
-        Some(deck) => public.starts_with(&format!("{}/", deck.name)),
+        Some(deck) => public.starts_with(&format!("{}/", deck.id())),
         None => true,
     };
     let rankable: BTreeMap<String, Card> = loaded

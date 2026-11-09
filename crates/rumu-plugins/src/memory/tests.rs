@@ -595,7 +595,7 @@ async fn catalog_names_the_last_author() {
     let id = decks
         .list()
         .into_iter()
-        .find(|d| d.name == "main")
+        .find(|d| d.meta.name == "main")
         .unwrap()
         .id()
         .to_owned();

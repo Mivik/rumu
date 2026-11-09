@@ -117,7 +117,7 @@ pub(crate) const MAIN_DECK: &str = "0193a2f1-0000-7000-8000-00000000a1a1";
 /// `/cards/self`, as in a real session.
 pub(crate) const TEST_ASSISTANT: &str = MAIN_DECK;
 
-/// Create `<home>/decks/main` with its `deck.yaml` (id [`MAIN_DECK`]).
+/// Create a deck named `main` under its id directory, with its `deck.yaml`.
 pub(crate) fn main_deck(home: &std::path::Path) -> std::path::PathBuf {
     create_deck(
         home,
@@ -125,7 +125,7 @@ pub(crate) fn main_deck(home: &std::path::Path) -> std::path::PathBuf {
         Some(&format!("id: {MAIN_DECK}\nname: main\n")),
         &[],
     );
-    home.join("decks/main")
+    home.join("decks").join(MAIN_DECK)
 }
 
 /// Create a deck named `name`, with `deck.yaml` when given, and write its
@@ -142,13 +142,10 @@ pub(crate) fn create_deck(
     }
     let deck = match deck_yaml {
         Some(text) => {
-            let dir = home.join("decks").join(name);
+            let meta = rumu_cards::yaml::from_str::<rumu_cards::DeckMeta>(text).unwrap();
+            let dir = home.join("decks").join(&meta.id);
             rumu_cards::git::repo(&dir).init().unwrap();
-            let deck = rumu_cards::Deck {
-                meta: rumu_cards::yaml::from_str(text).unwrap(),
-                dir,
-                name: name.to_owned(),
-            };
+            let deck = rumu_cards::Deck { meta, dir };
             deck.commit(
                 &rumu_cards::Author::user(),
                 "create deck",
@@ -169,6 +166,7 @@ pub(crate) fn create_deck(
                 project: false,
                 mounts: Vec::new(),
                 allow_ask: Vec::new(),
+                icon: None,
             })
             .unwrap(),
     };
@@ -179,7 +177,7 @@ pub(crate) fn create_deck(
     deck
 }
 
-/// One deck by its directory name.
+/// One deck by its display name.
 pub(crate) fn deck_at(home: &std::path::Path, name: &str) -> rumu_cards::Deck {
     rumu_cards::open_deck(home, name)
         .unwrap()

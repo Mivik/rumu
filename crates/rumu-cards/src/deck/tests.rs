@@ -3,7 +3,7 @@
 use super::*;
 use crate::{Cards, card};
 
-/// Create `<home>/decks/<name>` and write `cards` through the deck APIs.
+/// Create a deck under `decks/<id>` and write `cards` through the deck APIs.
 fn create_deck(home: &std::path::Path, name: &str, cards: &[(&str, &str)]) -> Deck {
     let decks = Decks::load(home).unwrap();
     let deck = decks
@@ -14,6 +14,7 @@ fn create_deck(home: &std::path::Path, name: &str, cards: &[(&str, &str)]) -> De
             project: false,
             mounts: Vec::new(),
             allow_ask: Vec::new(),
+            icon: None,
         })
         .unwrap();
     for (path, text) in cards {
@@ -26,7 +27,11 @@ fn deck_home() -> (tempfile::TempDir, Decks, Deck) {
     let dir = tempfile::tempdir().unwrap();
     create_deck(dir.path(), "main", &[("a", "one\n")]);
     let decks = Decks::load(dir.path()).unwrap();
-    let deck = decks.list().into_iter().find(|d| d.name == "main").unwrap();
+    let deck = decks
+        .list()
+        .into_iter()
+        .find(|d| d.meta.name == "main")
+        .unwrap();
     (dir, decks, deck)
 }
 
@@ -75,7 +80,7 @@ fn malformed_deck_yaml_is_skipped_on_load() {
     )
     .unwrap();
     let decks = Decks::load(home.path()).unwrap();
-    assert!(decks.list().iter().all(|d| d.name != "broken"));
+    assert!(decks.list().iter().all(|d| d.meta.name != "broken"));
     assert!(
         decks
             .get(&decks.default_assistant())
@@ -151,7 +156,13 @@ fn each_write_is_one_commit_with_author_and_trailers() {
     cards
         .write("self/x", "body\n", None, None, &author)
         .unwrap();
-    let commit = latest(&decks.list().into_iter().find(|d| d.name == "main").unwrap());
+    let commit = latest(
+        &decks
+            .list()
+            .into_iter()
+            .find(|d| d.meta.name == "main")
+            .unwrap(),
+    );
     assert_eq!(commit.subject, "create x");
     assert_eq!(commit.author, "ledger");
     assert_eq!(commit.email, "deck-id@rumu");
@@ -162,7 +173,13 @@ fn each_write_is_one_commit_with_author_and_trailers() {
     let mut view = card::view_of(&cards.raw("self/x").unwrap().unwrap());
     view.push_str("more\n");
     cards.write("self/x", &view, None, None, &author).unwrap();
-    let commit = latest(&decks.list().into_iter().find(|d| d.name == "main").unwrap());
+    let commit = latest(
+        &decks
+            .list()
+            .into_iter()
+            .find(|d| d.meta.name == "main")
+            .unwrap(),
+    );
     assert_eq!(commit.subject, "update x");
     assert_eq!(commit.changed, ["x"]);
 }
@@ -184,7 +201,11 @@ fn a_moved_card_is_a_new_card_in_history() {
     cards
         .write("self/sub/y", &view, Some("self/x"), None, &Author::user())
         .unwrap();
-    let deck = decks.list().into_iter().find(|d| d.name == "main").unwrap();
+    let deck = decks
+        .list()
+        .into_iter()
+        .find(|d| d.meta.name == "main")
+        .unwrap();
     // The old path's history ends at the removal; the new path starts at the
     // move. The identity (and its usage score) carries over.
     let old = deck.touching("x", None).unwrap();
@@ -207,15 +228,16 @@ fn deck_upsert_rename_and_delete_refresh_the_registry() {
             project: false,
             mounts: Vec::new(),
             allow_ask: Vec::new(),
+            icon: None,
         })
         .unwrap();
     let id = deck.id().to_owned();
-    assert!(dir.path().join("decks/ledger/HEAD").is_file());
+    assert!(dir.path().join("decks").join(&id).join("HEAD").is_file());
     assert_eq!(
         decks
             .list()
             .into_iter()
-            .find(|d| d.name == "ledger")
+            .find(|d| d.meta.name == "ledger")
             .unwrap()
             .id(),
         id
@@ -224,13 +246,44 @@ fn deck_upsert_rename_and_delete_refresh_the_registry() {
     let mut meta = decks.get(&id).unwrap().meta.clone();
     meta.name = "ledger2".into();
     let renamed = decks.upsert(meta).unwrap();
-    assert_eq!(renamed.name, "ledger2");
-    assert!(dir.path().join("decks/ledger2/HEAD").is_file());
+    assert_eq!(renamed.meta.name, "ledger2");
+    // The directory is named by id and does not move.
+    assert!(dir.path().join("decks").join(&id).join("HEAD").is_file());
     assert!(!dir.path().join("decks/ledger").exists());
-    assert!(decks.get(&id).unwrap().dir.ends_with("ledger2"));
+    assert!(!dir.path().join("decks/ledger2").exists());
+    assert_eq!(
+        decks.get(&id).unwrap().dir,
+        dir.path().join("decks").join(&id)
+    );
 
     decks.remove_assistant(&id).unwrap();
     assert!(!decks.get(&id).unwrap().assistant());
+}
+
+#[test]
+fn deck_names_are_display_labels_and_unique() {
+    for ok in [
+        "main",
+        "My Project",
+        "我的项目",
+        "a b",
+        &"x".repeat(DECK_NAME_MAX),
+    ] {
+        assert!(valid_deck_name(ok), "{ok:?}");
+    }
+    for bad in ["", "   ", "a\nb", &"x".repeat(DECK_NAME_MAX + 1)] {
+        assert!(!valid_deck_name(bad), "{bad:?}");
+    }
+
+    let (dir, decks, _main) = deck_home();
+    // Names are unique regardless of case; trimming happens on the way in.
+    let err = decks.upsert(empty_meta(String::new(), "MAIN".into()));
+    assert!(err.is_err());
+    let deck = decks
+        .upsert(empty_meta(String::new(), "  My Project  ".into()))
+        .unwrap();
+    assert_eq!(deck.meta.name, "My Project");
+    assert_eq!(deck.dir, dir.path().join("decks").join(deck.id()));
 }
 
 #[test]
@@ -260,7 +313,7 @@ fn two_decks() -> (tempfile::TempDir, Decks, Cards) {
         decks
             .list()
             .into_iter()
-            .find(|d| d.name == name)
+            .find(|d| d.meta.name == name)
             .unwrap()
             .id()
             .to_owned()
@@ -363,11 +416,15 @@ fn cross_deck_moves_commit_each_side() {
         .unwrap();
     assert!(cards.raw("self/y").unwrap().is_some());
     assert!(cards.raw("other/x").unwrap().is_none());
-    let main = decks.list().into_iter().find(|d| d.name == "main").unwrap();
+    let main = decks
+        .list()
+        .into_iter()
+        .find(|d| d.meta.name == "main")
+        .unwrap();
     let other = decks
         .list()
         .into_iter()
-        .find(|d| d.name == "other")
+        .find(|d| d.meta.name == "other")
         .unwrap();
     assert_eq!(latest(&main).subject, "move x -> y");
     assert_eq!(latest(&other).subject, "delete x");
@@ -433,12 +490,18 @@ fn a_link_holds_only_its_target() {
 fn remove_deletes_and_commits_as_user() {
     let (_dir, decks, deck) = deck_home();
     let cards = Cards::library(&decks);
-    let public = format!("{}/a", deck.name);
+    let public = format!("{}/a", deck.id());
     let view = card::view_of(&cards.raw(&public).unwrap().unwrap());
     let rev = card::view_rev_of(&view);
     cards.remove(&public, Some(&rev), &Author::user()).unwrap();
     assert!(deck.read("a").unwrap().is_none());
-    let commit = latest(&decks.list().into_iter().find(|d| d.name == "main").unwrap());
+    let commit = latest(
+        &decks
+            .list()
+            .into_iter()
+            .find(|d| d.meta.name == "main")
+            .unwrap(),
+    );
     assert_eq!(commit.subject, "delete a");
     assert_eq!(commit.author, USER);
     assert_eq!(commit.changed, ["a"]);
@@ -448,7 +511,7 @@ fn remove_deletes_and_commits_as_user() {
 fn remove_refuses_a_stale_base() {
     let (_dir, decks, deck) = deck_home();
     let cards = Cards::library(&decks);
-    let public = format!("{}/a", deck.name);
+    let public = format!("{}/a", deck.id());
     let err = cards
         .remove(&public, Some("not-the-current-view"), &Author::user())
         .unwrap_err();
@@ -461,7 +524,7 @@ fn the_default_assistant_is_a_pointer_that_follows_the_roster() {
     let (dir, decks, main) = deck_home();
     let first = decks.default_assistant();
     assert_eq!(
-        decks.get(&first).unwrap().name,
+        decks.get(&first).unwrap().meta.name,
         "default",
         "created when no assistant exists"
     );
@@ -515,7 +578,7 @@ fn a_fresh_home_gets_user_and_world_mounted_by_the_default_assistant() {
         .meta
         .mounts
         .iter()
-        .map(|m| (decks.get(&m.deck).unwrap().name, m.at.clone()))
+        .map(|m| (decks.get(&m.deck).unwrap().meta.name.clone(), m.at.clone()))
         .collect();
     assert_eq!(
         mounted,
@@ -526,7 +589,7 @@ fn a_fresh_home_gets_user_and_world_mounted_by_the_default_assistant() {
     );
     for deck in decks.list() {
         let about = deck.pinned().unwrap();
-        assert_eq!(about.len(), 1, "{} has its charter pinned", deck.name);
+        assert_eq!(about.len(), 1, "{} has its charter pinned", deck.meta.name);
         assert_eq!(about[0].path, ABOUT);
         assert!(about[0].id().is_some());
         assert_eq!(deck.summary(), about[0].description);
@@ -540,13 +603,13 @@ fn a_home_with_decks_but_no_assistant_gets_only_the_assistant() {
     let first = decks.default_assistant();
     decks.remove_assistant(&first).unwrap();
     let decks = Decks::load(dir.path()).unwrap();
-    let names: BTreeSet<String> = decks.list().into_iter().map(|d| d.name).collect();
+    let names: BTreeSet<String> = decks.list().into_iter().map(|d| d.meta.name).collect();
     assert_eq!(
         names,
         BTreeSet::from(["default", "default-1", "user", "world"].map(String::from))
     );
     let default = decks.get(&decks.default_assistant()).unwrap();
-    assert_eq!(default.name, "default-1");
+    assert_eq!(default.meta.name, "default-1");
     assert!(default.meta.mounts.is_empty());
 }
 
@@ -582,6 +645,47 @@ fn a_project_is_never_an_assistant_and_never_a_default_mount() {
     }];
     let err = decks.upsert(meta).unwrap_err().to_string();
     assert!(err.contains("the session's project"), "{err}");
+}
+
+#[test]
+fn a_project_icon_drops_blank_parts_and_rejects_bad_ones() {
+    let (_dir, decks, _main) = deck_home();
+    let icon = |glyph: &str, tone: &str| {
+        Some(DeckIcon {
+            glyph: Some(glyph.into()),
+            tone: Some(tone.into()),
+        })
+    };
+    let project = decks
+        .upsert(DeckMeta {
+            project: true,
+            icon: icon(" 🦊 ", ""),
+            ..empty_meta(String::new(), "app".into())
+        })
+        .unwrap();
+    assert_eq!(
+        project.meta.icon,
+        Some(DeckIcon {
+            glyph: Some("🦊".into()),
+            tone: None
+        })
+    );
+    let reloaded = Decks::load(&decks.home).unwrap();
+    assert_eq!(
+        reloaded.get(project.id()).unwrap().meta.icon,
+        project.meta.icon
+    );
+
+    let mut meta = project.meta.clone();
+    meta.icon = icon(" ", "");
+    assert_eq!(decks.upsert(meta).unwrap().meta.icon, None);
+
+    for (glyph, tone, err) in [("ab cd", "pine", "glyph"), ("A", "teal", "tone")] {
+        let mut meta = project.meta.clone();
+        meta.icon = icon(glyph, tone);
+        let got = decks.upsert(meta).unwrap_err().to_string();
+        assert!(got.contains(err), "{got}");
+    }
 }
 
 #[test]

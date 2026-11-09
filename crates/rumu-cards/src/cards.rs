@@ -14,7 +14,7 @@ use rumu_core::CardMount;
 use tracing::warn;
 
 use crate::card::{self, Card, card_content, parse_card, valid_card_path};
-use crate::deck::{Author, Deck, Decks, valid_deck_name};
+use crate::deck::{Author, Deck, Decks};
 use crate::{Error, Result};
 
 /// The virtual root of every card address.
@@ -26,8 +26,16 @@ pub use rumu_core::PROJECT_MOUNT;
 /// The prefix a link target is written with.
 pub const LINK_PREFIX: &str = "@rumu:/cards/";
 
+/// One segment of a card path: `[a-z][a-z0-9-]*`. Deck names are free-form
+/// labels, but the virtual paths that name mount points stay path-safe.
+fn valid_path_segment(segment: &str) -> bool {
+    let mut chars = segment.chars();
+    chars.next().is_some_and(|c| c.is_ascii_lowercase())
+        && chars.all(|c| c.is_ascii_lowercase() || c.is_ascii_digit() || c == '-')
+}
+
 /// Normalize a mount point to `/cards/<name>[/<name>…]` (`user`, `/user` and
-/// `/cards/user` are all `/cards/user`). Each segment is a deck-style name.
+/// `/cards/user` are all `/cards/user`). Each segment is path-safe.
 pub fn normalize_mount_point(at: &str) -> std::result::Result<String, String> {
     let trimmed = at.trim_matches('/');
     let name = match trimmed {
@@ -39,7 +47,7 @@ pub fn normalize_mount_point(at: &str) -> std::result::Result<String, String> {
             "a mount point names a directory under `/cards` (for example `/cards/user`)".into(),
         );
     }
-    if !name.split('/').all(valid_deck_name) {
+    if !name.split('/').all(valid_path_segment) {
         return Err(format!(
             "invalid mount point `/cards/{name}` (each segment follows `[a-z][a-z0-9-]*`)"
         ));
@@ -122,16 +130,16 @@ impl Cards {
         }
     }
 
-    /// The user's space: every deck mounted read-write at `/cards/<dir name>`.
+    /// The user's space: every deck mounted read-write at `/cards/<id>`.
     /// The library UI reads and writes through it; public paths are
-    /// `<dir name>/<path>`.
+    /// `<id>/<path>`.
     pub fn library(decks: &Decks) -> Self {
         let mounts: Vec<CardMount> = decks
             .list()
             .iter()
             .map(|deck| CardMount {
                 deck: deck.id().to_owned(),
-                at: format!("{CARDS_ROOT}/{}", deck.name),
+                at: format!("{CARDS_ROOT}/{}", deck.id()),
             })
             .collect();
         Self::new(decks, &mounts)
@@ -308,7 +316,7 @@ impl Cards {
                     Ok(Some(text)) => text,
                     Ok(None) => continue,
                     Err(e) => {
-                        warn!(deck = %mounted.deck.name, path = %path, error = %e, "skipping an unreadable card");
+                        warn!(deck = %mounted.deck.meta.name, path = %path, error = %e, "skipping an unreadable card");
                         continue;
                     }
                 };
