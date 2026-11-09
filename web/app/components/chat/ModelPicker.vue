@@ -78,7 +78,7 @@ async function togglePin(m: ModelInfo): Promise<void> {
 
 function configure(close: () => void): void {
   close()
-  openPage('settings')
+  openPage('settings', 'profiles')
 }
 </script>
 

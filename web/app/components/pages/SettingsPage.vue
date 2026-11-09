@@ -1,7 +1,8 @@
 <script setup lang="ts">
-// The settings page (`settings.yaml`, at `/settings[/<section>]`): the
-// sections as tabs in the header, the open one below. Each section saves its
-// own edits; a section's inner pages show as crumbs above it.
+// The settings page (`settings.yaml`, at `/settings[/<section>]`): its
+// sections at the root, one section below it. The header is the trail —
+// Settings › section › the section's inner page — each crumb but the last
+// going back to its page. Each section saves its own edits.
 import { computed, watch } from 'vue'
 import { t } from '../../i18n'
 import { layout } from '../../lib/layout'
@@ -13,23 +14,22 @@ import ProvidersSettings from '../settings/ProvidersSettings.vue'
 import Icon from '../ui/Icon.vue'
 import PageSheet from './PageSheet.vue'
 
-const SECTIONS = ['profiles', 'providers'] as const
-type Section = (typeof SECTIONS)[number]
+const SECTIONS = [
+  { key: 'profiles', icon: 'model' },
+  { key: 'providers', icon: 'link' },
+] as const
+type Section = (typeof SECTIONS)[number]['key']
 
-const section = computed<Section>(() => (state.page?.item === 'providers' ? 'providers' : 'profiles'))
+const section = computed<Section | null>(() => SECTIONS.find((s) => s.key === state.page?.item)?.key ?? null)
 
-/** The heading: the section, or the trail to the page below it. */
-const trail = computed(() =>
-  layout.settingsTrail.length
-    ? layout.settingsTrail
-    : [{ label: t(`settings.${section.value}`), go: undefined }],
-)
-
-/** A section; the open one again goes back to its own page. */
-function openSection(key: Section): void {
-  if (key === section.value) layout.settingsTrail[0]?.go?.()
-  else openPage('settings', key === 'profiles' ? null : key)
-}
+/** Settings, then the section's own trail (its first crumb is the section
+ *  itself), or the section alone while it is on its own page. */
+const trail = computed<{ label: string; go?: () => void }[]>(() => {
+  const s = section.value
+  if (!s) return [{ label: t('settings.title') }]
+  const root = { label: t('settings.title'), go: () => openPage('settings') }
+  return layout.settingsTrail.length ? [root, ...layout.settingsTrail] : [root, { label: t(`settings.${s}`) }]
+})
 
 // A page booted from its address mounts before the socket is up.
 watch(connected, (up) => up && void refreshSettings(), { immediate: true })
@@ -37,42 +37,36 @@ watch(connected, (up) => up && void refreshSettings(), { immediate: true })
 
 <template>
   <PageSheet :title="t('settings.title')" icon="settings" tone="text-ink-3">
-    <template #actions>
-      <div class="flex flex-none rounded-control bg-surface-2 p-0.5" role="tablist">
+    <template #title>
+      <template v-for="(c, i) in trail" :key="i">
+        <Icon v-if="i" name="chevron" :size="14" class="-mx-1 flex-none text-ink-3" />
         <button
-          v-for="key in SECTIONS"
-          :key="key"
+          v-if="c.go && i < trail.length - 1"
           type="button"
-          role="tab"
-          :aria-selected="key === section"
-          class="rounded-xs px-2.5 py-1 text-meta font-semibold transition-colors duration-150"
-          :class="key === section ? 'bg-surface text-ink shadow-soft' : 'text-ink-3 hover:text-ink'"
+          class="flex-none text-ink-3 transition-colors hover:text-ink"
           :disabled="layout.settingsBusy"
-          @click="openSection(key)"
+          @click="c.go"
         >
-          {{ t(`settings.${key}`) }}
+          {{ c.label }}
         </button>
-      </div>
+        <span v-else class="min-w-0 truncate">{{ c.label }}</span>
+      </template>
     </template>
 
-    <header class="flex flex-none items-center gap-3 px-4 pt-5 pb-1 sm:px-6">
-      <h2 class="flex min-w-0 items-center gap-1.5 text-title font-bold">
-        <template v-for="(c, i) in trail" :key="i">
-          <Icon v-if="i" name="chevron" :size="14" class="flex-none text-ink-3" />
-          <button
-            v-if="c.go"
-            type="button"
-            class="flex-none text-ink-3 transition-colors hover:text-ink"
-            :disabled="layout.settingsBusy"
-            @click="c.go"
-          >
-            {{ c.label }}
-          </button>
-          <span v-else class="min-w-0 truncate">{{ c.label }}</span>
-        </template>
-      </h2>
-    </header>
-    <ProfilesSettings v-if="section === 'profiles'" />
+    <nav v-if="!section" class="flex w-full max-w-2xl flex-col gap-1 p-3 sm:p-4">
+      <button
+        v-for="s in SECTIONS"
+        :key="s.key"
+        type="button"
+        class="flex items-center gap-3 rounded-control px-3 py-3 text-left text-message text-ink-2 transition-colors duration-150 hover:bg-surface-2/60 hover:text-ink"
+        @click="openPage('settings', s.key)"
+      >
+        <Icon :name="s.icon" :size="17" class="flex-none text-ink-3" />
+        <span class="flex-1">{{ t(`settings.${s.key}`) }}</span>
+        <Icon name="chevron" :size="14" class="flex-none text-ink-3" />
+      </button>
+    </nav>
+    <ProfilesSettings v-else-if="section === 'profiles'" />
     <ProvidersSettings v-else />
   </PageSheet>
 </template>

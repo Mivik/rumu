@@ -6,7 +6,6 @@ import AssistantsPage from './components/pages/AssistantsPage.vue'
 import LibraryPage from './components/pages/LibraryPage.vue'
 import ProjectsPage from './components/pages/ProjectsPage.vue'
 import SettingsPage from './components/pages/SettingsPage.vue'
-import WorkspacesPage from './components/pages/WorkspacesPage.vue'
 import Lightbox from './components/Lightbox.vue'
 import Toasts from './components/Toasts.vue'
 import { closePanels, layout } from './lib/layout'
@@ -15,7 +14,7 @@ import { state } from './lib/store'
 
 const PAGES: Record<Page, Component> = {
   library: LibraryPage,
-  workspaces: WorkspacesPage,
+  workspaces: ProjectsPage,
   assistants: AssistantsPage,
   projects: ProjectsPage,
   settings: SettingsPage,

@@ -120,7 +120,7 @@ watch(picking, (v) => {
   void nextTick(() => presetInput.value?.focus())
 })
 
-// The page, as crumbs in the dialog's heading.
+// The page, as crumbs after Settings in the page header.
 watchEffect(() => {
   const root = { label: t('settings.providers'), go: () => (editing.value = null) }
   const adding = { label: t('settings.addProvider'), go: () => (picking.value = true) }
@@ -433,7 +433,7 @@ async function refreshModels(): Promise<void> {
 
 <template>
   <div class="flex min-h-0 flex-1 flex-col">
-    <div class="flex min-h-0 flex-1 flex-col gap-5 overflow-y-auto px-4 pt-3 pb-6 sm:px-6">
+    <div class="flex min-h-0 flex-1 flex-col gap-5 overflow-y-auto px-4 pt-5 pb-6 sm:px-6">
       <!-- the list -->
       <div v-if="editing === null" class="flex flex-col gap-2">
         <button

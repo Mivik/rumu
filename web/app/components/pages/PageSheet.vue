@@ -58,7 +58,9 @@ const split = !!useSlots().list
         <slot name="icon">
           <Icon v-if="icon" :name="icon" :size="16" class="flex-none" :class="tone" />
         </slot>
-        <span class="truncate">{{ title }}</span>
+        <slot name="title">
+          <span class="truncate">{{ title }}</span>
+        </slot>
         <span
           v-if="count !== undefined"
           class="flex-none rounded-full bg-surface-2 px-2 py-px text-micro font-semibold text-ink-3 tabular-nums"

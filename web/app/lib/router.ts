@@ -83,10 +83,15 @@ export function commitRoute(mode: 'push' | 'replace' = 'push', up = false): void
   else window.history.pushState({ up }, '', url)
 }
 
+/** The sheet a page shows on: workspaces share the projects page. */
+export function sheetOf(page: Page): Page {
+  return page === 'workspaces' ? 'projects' : page
+}
+
 /** Navigate to a page, at `item` when given. */
 export function openPage(page: Page, item: string | null = null, fresh = false): void {
   const from = state.page
-  const up = from?.page === page && !from.item && !from.fresh && (!!item || fresh)
+  const up = !!from && sheetOf(from.page) === sheetOf(page) && !from.item && !from.fresh && (!!item || fresh)
   state.page = { page, item, fresh }
   commitRoute('push', up)
 }

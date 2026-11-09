@@ -1,6 +1,6 @@
 <script setup lang="ts">
-// Left column: the wordmark with the language key beside it, the landing and
-// library entries, the workspace registry, and the sessions grouped by
+// Left column: the wordmark with the language key beside it, the landing,
+// library and projects entries, and the sessions grouped by
 // project (a two-level tree). Each project group carries its sessions, newest
 // first; the last group holds the sessions without a project. A drag between
 // groups moves the session. At the foot, the connection status.
@@ -31,7 +31,7 @@ import {
 } from '../lib/store'
 import type { Project, SessionInfo } from '../lib/types'
 import { layout } from '../lib/layout'
-import { openPage, type Page } from '../lib/router'
+import { openPage, sheetOf, type Page } from '../lib/router'
 import { prefs } from '../lib/state/prefs'
 import { requestComposerFocus } from '../lib/state/ui'
 import RumuMark from './brand/RumuMark.vue'
@@ -57,7 +57,7 @@ function page(name: Page): void {
 }
 
 /** The page open in the chat's place, which its entry here marks. */
-const onPage = computed(() => state.page?.page ?? null)
+const onPage = computed(() => (state.page ? sheetOf(state.page.page) : null))
 
 /** An entry under the wordmark: a sheet of paper while its page is open. */
 function navTone(name: Page | null): string[] {
@@ -90,11 +90,6 @@ function openDraft(): void {
 
 function projectSettings(project: Project): void {
   openPage('projects', project.id)
-  layout.sidebarOpen = false
-}
-
-function newProject(): void {
-  openPage('projects', null, true)
   layout.sidebarOpen = false
 }
 
@@ -356,27 +351,15 @@ const otherLocale = computed<Locale>(
 
     <button
       class="mt-0.5"
-      :class="navTone('workspaces')"
-      :aria-current="onPage === 'workspaces' ? 'page' : undefined"
-      @click="page('workspaces')"
+      :class="navTone('projects')"
+      :aria-current="onPage === 'projects' ? 'page' : undefined"
+      @click="page('projects')"
     >
       <span class="flex size-5 flex-none items-center justify-center leading-0">
         <Icon name="mount" :size="16" class="text-tool" />
       </span>
-      <span class="flex-1">{{ t('workspaces.title') }}</span>
-      <span class="text-micro text-ink-3 tabular-nums">{{ state.workspaces.length }}</span>
-    </button>
-
-    <button
-      type="button"
-      class="mt-0.5"
-      :class="navTone(state.page?.page === 'projects' && state.page.fresh ? 'projects' : null)"
-      @click="newProject"
-    >
-      <span class="flex size-5 flex-none items-center justify-center leading-0">
-        <Icon name="plus" :size="16" />
-      </span>
-      <span class="flex-1">{{ t('projects.add') }}</span>
+      <span class="flex-1">{{ t('projects.title') }}</span>
+      <span class="text-micro text-ink-3 tabular-nums">{{ state.projects.length }}</span>
     </button>
 
     <div class="scroll-fade -mx-2 mt-2 flex flex-1 flex-col gap-1 overflow-y-auto px-2 pt-2 pb-3">
