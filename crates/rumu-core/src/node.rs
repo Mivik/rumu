@@ -337,8 +337,9 @@ pub enum NodeBody {
         #[serde(default, skip_serializing_if = "Option::is_none")]
         reason_ms: Option<u64>,
         /// The provider could not use earlier reasoning on this request (it
-        /// no longer verified against the conversation), so the reasoning of
-        /// every assistant node before this one is never replayed again.
+        /// no longer verified against the conversation, or another model
+        /// produced it), so the reasoning of every assistant node before this
+        /// one is never replayed again.
         #[serde(default, skip_serializing_if = "std::ops::Not::not")]
         reasoning_reset: bool,
         #[serde(default)]

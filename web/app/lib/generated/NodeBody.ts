@@ -17,8 +17,9 @@ reasoning?: Array<ReasoningBlock>,
 reason_ms?: number | null, 
 /**
  * The provider could not use earlier reasoning on this request (it
- * no longer verified against the conversation), so the reasoning of
- * every assistant node before this one is never replayed again.
+ * no longer verified against the conversation, or another model
+ * produced it), so the reasoning of every assistant node before this
+ * one is never replayed again.
  */
 reasoning_reset?: boolean, tool_calls: Array<ToolCall>, model: string, usage: Usage, } | { "type": "tool_result", call_id: string, content: Content, is_error: boolean, 
 /**

@@ -16,7 +16,10 @@
 //! at the resolved effort), with replayed thinking blocks that no longer
 //! verify dropped by the provider (`block_binding: drop_block`) instead of
 //! failing the request. Reasoning is only ever replayed to the model that
-//! produced it.
+//! produced it. Other protocols do not report dropped input reasoning; a
+//! request they reject because of it is retried once without any. Whichever
+//! way reasoning is left out, the reply records it as a reset, so it is never
+//! replayed again and the UI can say so.
 
 pub mod catalog;
 mod list;
@@ -498,6 +501,7 @@ impl Llm for GenaiLlm {
             model: &target.model_ref,
         };
         let from = replay_from(nodes);
+        let withheld = withholds_reasoning(to, &nodes[from..]);
         let blobs = self.blobs.as_ref();
         match target
             .stream(
@@ -506,7 +510,16 @@ impl Llm for GenaiLlm {
             )
             .await
         {
-            Ok(resp) => Ok(resp),
+            Ok(mut resp) => {
+                if withheld {
+                    warn!(
+                        model = to.model,
+                        "reasoning from another model is not replayed; earlier reasoning reset"
+                    );
+                    resp.reasoning_reset = true;
+                }
+                Ok(resp)
+            }
             // Rejected before any output because of replayed reasoning the
             // provider cannot drop (a corrupted or foreign block, a modified
             // one): retry once without any, and record the reset.
@@ -629,11 +642,37 @@ fn replayable(to: Projection<'_>, block: &ReasoningBlock) -> bool {
     }
 }
 
+/// Whether `block` can only ever be replayed to the model that made it: a
+/// signed or opaque provider block. Unsigned OpenAI chat text is not bound,
+/// and some providers require it passed back, so it is never treated as lost.
+fn model_bound(block: &ReasoningBlock) -> bool {
+    matches!(
+        block,
+        ReasoningBlock::Thinking {
+            signature: Some(_),
+            ..
+        } | ReasoningBlock::Redacted { .. }
+    )
+}
+
 /// Whether projecting `nodes` replays any thinking block.
 fn replays_reasoning(to: Projection<'_>, nodes: &[Node]) -> bool {
     nodes
         .iter()
         .any(|n| to.replayed(&n.body).iter().any(|b| replayable(to, b)))
+}
+
+/// Whether `nodes` hold reasoning bound to another model. The request cannot
+/// send it (projection replays only to its author), and with another model's
+/// turn now in the conversation it can never become replayable again:
+/// recorded as a reset, like a provider drop.
+fn withholds_reasoning(to: Projection<'_>, nodes: &[Node]) -> bool {
+    nodes.iter().any(|n| match &n.body {
+        NodeBody::Assistant {
+            reasoning, model, ..
+        } => model != to.model && reasoning.iter().any(model_bound),
+        _ => false,
+    })
 }
 
 /// Who a request is projected for.
@@ -1863,6 +1902,51 @@ mod tests {
         };
         assert!(replays_reasoning(openai, &nodes));
         assert!(!replays_reasoning(ANTHROPIC, &nodes));
+    }
+
+    #[test]
+    fn reasoning_withheld_from_another_model_is_flagged() {
+        let nodes = vec![
+            node(NodeBody::User {
+                content: rumu_core::Content::text("go"),
+            }),
+            assistant(vec![signed("mine")], false, &[]),
+        ];
+        let mine = Projection {
+            protocol: Protocol::Anthropic,
+            model: "m",
+        };
+        assert!(!withholds_reasoning(mine, &nodes));
+        // Asking another model leaves the signed block behind: the reply is
+        // the point after which it is never replayed again.
+        assert!(withholds_reasoning(
+            Projection {
+                protocol: Protocol::Anthropic,
+                model: "other",
+            },
+            &nodes
+        ));
+
+        // Unsigned reasoning is not bound to a model: Anthropic never
+        // replays it, and OpenAI chat providers may require it back, so a
+        // model switch loses nothing that must be cut.
+        let unsigned = vec![assistant(
+            vec![ReasoningBlock::Thinking {
+                text: "thought".into(),
+                signature: None,
+            }],
+            false,
+            &[],
+        )];
+        for protocol in [Protocol::Anthropic, Protocol::Openai] {
+            assert!(!withholds_reasoning(
+                Projection {
+                    protocol,
+                    model: "other",
+                },
+                &unsigned
+            ));
+        }
     }
 
     fn config() -> ModelConfig {

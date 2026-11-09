@@ -136,7 +136,8 @@ pub struct LlmResponse {
     /// or stream end when there is no text), ms.
     pub reason_ms: Option<u64>,
     /// Earlier reasoning was left out of this request because the provider
-    /// rejected or dropped it; recorded on the Assistant node.
+    /// rejected or dropped it, or because it was made by another model;
+    /// recorded on the Assistant node.
     pub reasoning_reset: bool,
     pub tool_calls: Vec<ToolCall>,
     pub usage: Usage,
