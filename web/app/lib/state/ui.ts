@@ -1,8 +1,20 @@
-// Transient UI state: toasts, the card drawer, the image lightbox.
+// Transient UI state: toasts, the card drawer, the image lightbox, and the
+// composer's focus requests.
 
+import { ref } from 'vue'
 import type { Attachment, ToastKind } from '../types'
 import { blobUrl } from '../attachments'
 import { state, type LightboxImage, type Toast } from './state'
+
+/** Rising on every request, so the composer takes focus however often it is
+ *  asked — even when it was already mounted (landing → landing). */
+export const composerFocus = ref(0)
+
+/** Put the caret in the composer: returning home from the sidebar should land
+ *  the user in the writing box, not on the button they just clicked. */
+export function requestComposerFocus(): void {
+  composerFocus.value++
+}
 
 let toastSeq = 1
 

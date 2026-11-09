@@ -23,7 +23,7 @@ import { isBusy, sendPrompt, state, stopTurn } from '../../lib/store'
 import type { PromptAttachment } from '../../lib/store'
 import type { Attachment } from '../../lib/types'
 import { uploadBlob, withLeadingAnchors } from '../../lib/attachments'
-import { openLightbox, toast } from '../../lib/state/ui'
+import { composerFocus, openLightbox, toast } from '../../lib/state/ui'
 import Icon from '../ui/Icon.vue'
 import DecisionPanel from './DecisionPanel.vue'
 import EffortPicker from './EffortPicker.vue'
@@ -203,6 +203,9 @@ watch(
   () => state.sessionId,
   () => void nextTick(focusComposer),
 )
+// The sidebar's home and new-session keys land on the landing page without a
+// session change when it is already open, so their request focuses it here.
+watch(composerFocus, () => void nextTick(focusComposer))
 
 const placeholder = computed(() => {
   return isBusy.value ? t('chat.composer.steerPlaceholder') : t('chat.composer.placeholder')

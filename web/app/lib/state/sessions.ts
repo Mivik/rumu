@@ -26,7 +26,7 @@ import { currentPick, models } from './models'
 import { isUnseen } from './derived'
 import { state } from './state'
 import { forkAt, loadPath, replaceTree, resyncTree } from './tree'
-import { toast } from './ui'
+import { requestComposerFocus, toast } from './ui'
 import { chooseLandingProject, landingAssistant, landingProject, rememberSessionPicks } from './projects'
 
 /** `card.list`: what the open branch has mounted (`card_mount` included), else
@@ -168,10 +168,12 @@ export function markSeen(): void {
 }
 
 /** Back to the landing page by intent (the wordmark was clicked), keeping the
- * history entry so Back returns to the session that was open. */
+ * history entry so Back returns to the session that was open. The composer is
+ * where the user wants to be next, so it takes focus. */
 export function goHome(): void {
   closeSession()
   routeSession(null, 'chat', 'push')
+  requestComposerFocus()
 }
 
 /** Show the open session another way; Back returns to the previous view. */

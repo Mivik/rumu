@@ -21,6 +21,7 @@ import {
   goHome,
   isBusy,
   isUnseen,
+  landingProject,
   moveSession,
   openLibrary,
   openSession,
@@ -31,6 +32,7 @@ import {
 import type { Project, SessionInfo } from '../lib/types'
 import { layout, openProjectSettings, openSettings, openWorkspaceSettings } from '../lib/layout'
 import { prefs } from '../lib/state/prefs'
+import { requestComposerFocus } from '../lib/state/ui'
 import RumuMark from './brand/RumuMark.vue'
 import Icon from './ui/Icon.vue'
 import Popover from './ui/Popover.vue'
@@ -62,9 +64,17 @@ function pickSession(id: string): void {
   layout.sidebarOpen = false
 }
 
-/** Start the next session in `project` (`null`: none). */
+/** Start the next session in `project` (`null`: none). The group unfolds so
+ *  the unsent session's row is visible where it will be born. */
 function newIn(project: string | null): void {
+  prefs.collapsedProjects[project ?? ''] = false
   startSessionIn(project)
+  layout.sidebarOpen = false
+}
+
+/** The unsent new session is the landing page's composer: put the caret there. */
+function openDraft(): void {
+  requestComposerFocus()
   layout.sidebarOpen = false
 }
 
@@ -96,6 +106,9 @@ interface Group {
   name: string
   sessions: SessionRow[]
   activity: number
+  /** The landing composer is a new session of this group that sending will
+   *  create; until then it is only the intent. */
+  draft: boolean
 }
 
 /** How a session row's menu names its last activity. */
@@ -125,6 +138,7 @@ const groups = computed<Group[]>(() => {
       name: p.name,
       sessions: [],
       activity: -Infinity,
+      draft: false,
     })
   map.set('', {
     key: '',
@@ -133,23 +147,41 @@ const groups = computed<Group[]>(() => {
     name: t('chat.sidebar.noProject'),
     sessions: [],
     activity: -Infinity,
+    draft: false,
   })
   for (const s of sortedSessions.value) {
     const key = s.project ?? ''
     let group = map.get(key)
     // A project this client has not heard of yet (a model just made it).
     if (!group) {
-      group = { key, projectId: key, project: null, name: key, sessions: [], activity: -Infinity }
+      group = {
+        key,
+        projectId: key,
+        project: null,
+        name: key,
+        sessions: [],
+        activity: -Infinity,
+        draft: false,
+      }
       map.set(key, group)
     }
     group.sessions.push({ s, last: lastActive(s) })
     group.activity = Math.max(group.activity, s.updated_at)
   }
+  // The landing composer is a new session not created yet: its row sits in
+  // the group it would be born into, unless a boot is still resolving.
+  if (!state.sessionId && !state.booting) {
+    const draft = map.get(landingProject.value ?? '')
+    if (draft) draft.draft = true
+  }
   return [...map.values()].sort((a, b) => {
     if (!a.projectId !== !b.projectId) return a.projectId ? -1 : 1
-    const busyA = a.sessions.length > 0
-    const busyB = b.sessions.length > 0
+    // A group holding the unsent session counts as active, and lands above
+    // even a busy one, as a session just created would.
+    const busyA = a.sessions.length > 0 || a.draft
+    const busyB = b.sessions.length > 0 || b.draft
     if (busyA !== busyB) return busyA ? -1 : 1
+    if (a.draft !== b.draft) return a.draft ? -1 : 1
     if (busyA && a.activity !== b.activity) return b.activity - a.activity
     return a.name.localeCompare(b.name, locale.value)
   })
@@ -389,6 +421,17 @@ const otherLocale = computed<Locale>(
             </button>
           </div>
         </div>
+
+        <!-- the unsent new session: a row now, a session once a prompt is sent -->
+        <button
+          v-if="group.draft && !collapsed(group)"
+          type="button"
+          aria-current="page"
+          class="mb-0.5 flex w-full min-w-0 items-center rounded-control border border-line bg-surface-2 py-2 pr-1 pl-3 text-left text-secondary font-bold text-ink shadow-soft outline-none focus-visible:ring-2 focus-visible:ring-brand/25"
+          @click="openDraft"
+        >
+          <span class="min-w-0 flex-1 truncate">{{ t('chat.sidebar.newSession') }}</span>
+        </button>
 
         <TransitionGroup
           v-if="!collapsed(group)"
