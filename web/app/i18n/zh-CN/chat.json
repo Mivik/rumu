@@ -96,5 +96,19 @@
     "skip": "跳过",
     "next": "下一个",
     "submit": "提交"
+  },
+  "view": {
+    "label": "视图",
+    "chat": "对话",
+    "trace": "轨迹"
+  },
+  "trace": {
+    "empty": "还没有节点",
+    "nodes": "{count} 个节点",
+    "hooks": "{count} 次钩子",
+    "show": "显示",
+    "copy": "复制 JSON",
+    "copied": "已复制 JSON",
+    "more": "展开全部 {n} 个字符"
   }
 }

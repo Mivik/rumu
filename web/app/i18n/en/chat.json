@@ -96,5 +96,19 @@
     "skip": "Skip",
     "next": "Next",
     "submit": "Send"
+  },
+  "view": {
+    "label": "View",
+    "chat": "Conversation",
+    "trace": "Trace"
+  },
+  "trace": {
+    "empty": "No nodes yet",
+    "nodes": "{count} node | {count} nodes",
+    "hooks": "{count} hook | {count} hooks",
+    "show": "Show",
+    "copy": "Copy JSON",
+    "copied": "Copied JSON",
+    "more": "Show all {n} characters"
   }
 }

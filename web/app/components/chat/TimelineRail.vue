@@ -29,7 +29,7 @@ import { contentSegments } from '../../lib/attachments'
 import type { Node as RumuNode } from '../../lib/types'
 
 // The scroller, the content column and the composer arrive as getters
-// (ChatView's template refs), not elements: passing a template ref straight
+// (ConversationView's and ChatView's template refs), not elements: passing a template ref straight
 // through a prop trips vue-tsc's HTMLElement unwrap.
 const props = withDefaults(
   defineProps<{

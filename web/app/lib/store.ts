@@ -33,6 +33,8 @@ export {
 export type { OwedReply, SiblingAlternative } from './state/derived'
 
 export { pendingCalls, timeline } from './state/timeline'
+export { trace } from './state/trace'
+export type { TraceKind, TraceRow } from './state/trace'
 export type {
   ActivityCatalog,
   ActivityRecall,
@@ -93,6 +95,7 @@ export {
   forkSession,
   forgetSession,
   goHome,
+  showView,
   killTask,
   newSession,
   openSession,

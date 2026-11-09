@@ -2,6 +2,7 @@
 // every mutation has an owner in one of the sibling modules.
 
 import { reactive } from 'vue'
+import type { SessionView } from '../router'
 import type {
   Decision,
   Effect,
@@ -154,6 +155,8 @@ const initial = {
   /** The boot request is still opening the session the address names. The
    *  landing pane holds back rather than flashing before it arrives. */
   booting: false,
+  /** How the open session is shown (mirrored in the address). */
+  view: 'chat' as SessionView,
   session: null as SessionInfo | null,
   nodes: {} as Record<NodeId, Node>,
   branches: {} as Record<BranchId, Branch>,

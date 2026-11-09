@@ -3,7 +3,7 @@
 // modules rather than mutating anything itself (beyond its own slices).
 
 import { rumu } from '../api'
-import { routeSession, sessionIdFromLocation } from '../router'
+import { routeSession, sessionIdFromLocation, viewFromLocation } from '../router'
 import type {
   BranchUpdatedPush,
   PendingDecision,
@@ -266,6 +266,7 @@ export function startApp(): void {
   // paint, hold the chat pane for it instead of flashing the landing page
   // while the boot requests are in flight.
   state.booting = sessionIdFromLocation() !== null
+  state.view = viewFromLocation()
 
   rumu.onPush('node.appended', (p) => onNodeAppended(p as unknown as NodeAppendedPush))
   rumu.onPush('prompt.queued', (p) => onPromptQueued(p as unknown as PromptQueuedPush))
@@ -298,9 +299,11 @@ export function startApp(): void {
   // Updates that landed while the tab was hidden are seen once it shows.
   document.addEventListener('visibilitychange', markSeen)
 
-  // Browser back/forward: reopen the session the address names, or land.
+  // Browser back/forward: reopen the session (and view) the address names,
+  // or land.
   window.addEventListener('popstate', () => {
     const id = sessionIdFromLocation()
+    state.view = viewFromLocation()
     if (id === state.sessionId) return
     if (id) void openSession(id, { history: 'none' })
     else closeSession()
@@ -315,7 +318,8 @@ export function startApp(): void {
     const target = sessionIdFromLocation() ?? state.sessionId
     try {
       if (target && !(await openSession(target, { history: 'none' }))) {
-        routeSession(null, 'replace')
+        state.view = 'chat'
+        routeSession(null, 'chat', 'replace')
       }
     } finally {
       state.booting = false

@@ -1,6 +1,6 @@
 <script setup lang="ts">
 // A user message: right-aligned coral-tinted bubble (max ~70% of the column,
-// width fits content, no avatar); its coral ring on the thread is ChatView's.
+// width fits content, no avatar); its coral ring on the thread is ConversationView's.
 // Time only on hover; edit/copy/regenerate/fork appear left of the bubble on
 // hover. Editing swaps the bubble for a textarea and resends the prompt on a
 // branch forked from just before it; regenerate asks the same question again

@@ -4,6 +4,7 @@ import { watch } from 'vue'
 import { rumu } from '../api'
 import { t } from '../../i18n'
 import { routeSession } from '../router'
+import type { SessionView } from '../router'
 import type {
   Branch,
   Card,
@@ -141,7 +142,7 @@ export async function openSession(id: SessionId, opts: { history?: OpenHistory }
     replaceTree(tree)
     state.activeBranch = tree.session.active_branch
     const history = opts.history ?? 'push'
-    if (history !== 'none') routeSession(state.sessionId, history)
+    if (history !== 'none') routeSession(state.sessionId, state.view, history)
     await loadPath(tree.session.active_branch)
     markSeen()
     void refreshTasks(tree.session.id)
@@ -166,13 +167,21 @@ export function markSeen(): void {
  * history entry so Back returns to the session that was open. */
 export function goHome(): void {
   closeSession()
-  routeSession(null, 'push')
+  routeSession(null, 'chat', 'push')
+}
+
+/** Show the open session another way; Back returns to the previous view. */
+export function showView(view: SessionView): void {
+  if (state.view === view) return
+  state.view = view
+  routeSession(state.sessionId, view, 'push')
 }
 
 /** Back to the landing page (browser back past the first session). */
 export function closeSession(): void {
   openSeq++ // drop any in-flight open
   state.booting = false // and any boot into a session URL still pending
+  state.view = 'chat'
   state.sessionId = null
   state.session = null
   state.nodes = {}
@@ -262,7 +271,7 @@ export function forgetSession(id: SessionId): void {
   state.sessions = state.sessions.filter((s) => s.id !== id)
   if (state.sessionId !== id) return
   closeSession()
-  routeSession(null, 'replace')
+  routeSession(null, 'chat', 'replace')
 }
 
 /** Delete a session and its stored history for good. */

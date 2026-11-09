@@ -1,8 +1,7 @@
 {
   "diagnostics": {
     "title": "Diagnostics",
-    "cache": "Cache {pct}%",
-    "hooks": "{count} hook | {count} hooks"
+    "cache": "Cache {pct}%"
   },
   "cache": {
     "hitRate": "Session cache hit rate",
@@ -10,8 +9,5 @@
     "perTurn": "Per turn",
     "turn": "Turn {n}",
     "meterLabel": "turn {n} cache hit rate {pct}%"
-  },
-  "hooks": {
-    "title": "Hook trace"
   }
 }

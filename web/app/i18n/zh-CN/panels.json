@@ -1,8 +1,7 @@
 {
   "diagnostics": {
     "title": "诊断",
-    "cache": "缓存 {pct}%",
-    "hooks": "{count} 个钩子"
+    "cache": "缓存 {pct}%"
   },
   "cache": {
     "hitRate": "会话缓存命中率",
@@ -10,8 +9,5 @@
     "perTurn": "每轮",
     "turn": "第 {n} 轮",
     "meterLabel": "第 {n} 轮缓存命中率 {pct}%"
-  },
-  "hooks": {
-    "title": "钩子调用"
   }
 }

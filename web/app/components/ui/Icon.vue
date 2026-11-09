@@ -30,6 +30,7 @@ import {
   mdiLinkVariant,
   mdiMagnify,
   mdiMenu,
+  mdiMessageTextOutline,
   mdiNoteTextOutline,
   mdiPencilOutline,
   mdiPinOutline,
@@ -37,6 +38,7 @@ import {
   mdiRefresh,
   mdiSourceFork,
   mdiStop,
+  mdiTimelineTextOutline,
   mdiTrashCanOutline,
 } from '@mdi/js'
 
@@ -79,6 +81,8 @@ const paths: Record<string, string> = {
   brain: mdiLightbulbOutline,
   model: mdiCreationOutline,
   settings: mdiCogOutline,
+  chat: mdiMessageTextOutline,
+  trace: mdiTimelineTextOutline,
 }
 </script>
 

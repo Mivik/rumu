@@ -1,6 +1,6 @@
 // Entrance motion for the live timeline.
 //
-// ChatView flips `timelineLive` off while a session / branch renders all at
+// ConversationView flips `timelineLive` off while a session / branch renders all at
 // once, then back on. Elements that mount while it's on — things that just
 // happened — get a one-shot entrance class (main.css, "motion vocabulary");
 // history stays still. The class is removed once its animations finish, so
