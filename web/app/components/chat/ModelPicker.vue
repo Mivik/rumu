@@ -65,10 +65,11 @@ const selected = computed(() => {
     : { profile: null, model: u.target.model }
 })
 
-function choose(target: ModelUse['target']): void {
+function choose(target: ModelUse['target'], close: () => void): void {
   // Moving to a profile takes its effort; a model keeps the shown one.
   const effort = 'model' in target ? (resolved.value?.effort ?? undefined) : undefined
   pick(effort ? { target, effort } : { target })
+  close()
 }
 
 async function togglePin(m: ModelInfo): Promise<void> {
@@ -125,7 +126,7 @@ function configure(close: () => void): void {
               type="button"
               class="flex items-center gap-2 rounded-control px-2.5 py-1.5 text-left transition-colors duration-150 hover:bg-surface-2"
               :aria-pressed="selected.profile === p.name"
-              @click="choose({ profile: p.name })"
+              @click="choose({ profile: p.name }, close)"
             >
               <Icon
                 name="ok"
@@ -177,7 +178,7 @@ function configure(close: () => void): void {
                 type="button"
                 class="flex min-w-0 flex-1 items-center gap-2 rounded-control px-2.5 py-1.5 text-left"
                 :aria-pressed="selected.model === m.ref"
-                @click="choose({ model: m.ref })"
+                @click="choose({ model: m.ref }, close)"
               >
                 <Icon
                   name="ok"
