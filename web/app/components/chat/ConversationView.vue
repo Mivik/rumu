@@ -4,10 +4,13 @@
 // column is capped at --col-max (main.css), centered. On phones and in
 // portrait the sheet drops its card edges and becomes the page (main.css).
 //
-// The page never shrinks under you: a blank tail after the timeline (the
-// spacer) takes back whatever the column gives up — a running call's output
-// folding into its summary line, a fold closed — so what you are reading
-// stays put, and growth fills that blank before it moves the page. Its floor
+// The page never shrinks under you mid-turn: a blank tail after the timeline
+// (the spacer) takes back whatever the column gives up while a turn runs — a
+// running call's output folding into its summary line, a fold closed — so
+// what you are reading stays put, and growth fills that blank before it moves
+// the page. Between turns a fold you open and close gives back the page it
+// added, so the conversation settles onto the end again instead of leaving a
+// blank under it. Its floor
 // rises three ways: a prompt you just sent opens near the top of the sheet,
 // the reply growing down into the blank below it rather than pinning your eye
 // to the sliver above the composer; while a turn runs (and is not waiting on
@@ -149,6 +152,11 @@ let viewHeight = 0
 /** Blank the scroller took back when it shrank (the composer growing — a
  *  decision unfolding, the tasks panel), owed back when it grows again. */
 let lent = 0
+/** The column's height at the last layout. */
+let colHeight = 0
+/** Floor that idle growth (a fold opened between turns) pushed up, given
+ *  back when the column shrinks again. */
+let give = 0
 
 /** The newest prompt on the path — the one a just-started turn answers. */
 const lastPromptId = computed(() => {
@@ -199,6 +207,15 @@ function layoutTail(): void {
   }
   // A turn held up on a decision writes nothing until it is answered.
   const live = isBusy.value && !state.decisions.some((d) => d.session === state.sessionId)
+  if (isBusy.value) give = 0
+  else {
+    // Between turns, a shrink returns the floor its growth raised.
+    const drop = Math.min(Math.max(colHeight - height, 0), give)
+    floor -= drop
+    give -= drop
+    if (height > floor) give += height - floor
+  }
+  colHeight = height
   floor = Math.max(floor, height + (live ? LIVE_ROOM : 0))
   // While you follow the end, a resize of the scroller comes out of the blank
   // first, so the page under you stays put instead of riding up with it.
@@ -241,6 +258,8 @@ function resetView(): void {
   anchorPending = null
   floor = 0
   lent = 0
+  give = 0
+  colHeight = 0
   seenPrompt = lastPromptId.value
   void nextTick(() => {
     timelineLive.value = true
