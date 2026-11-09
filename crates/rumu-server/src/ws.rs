@@ -601,8 +601,8 @@ async fn dispatch(state: &AppState, method: &str, p: &Value) -> Result<Value> {
         }
 
         // The subdirectories of a local absolute path (`~` and the default
-        // are $HOME), for picking a workspace root. Dot directories are left
-        // out.
+        // are $HOME), for picking a workspace root. Dot directories are
+        // included; the picker hides them until asked.
         "fs.dirs" => {
             let home = std::env::var("HOME").unwrap_or_else(|_| "/".into());
             let raw = p.get("path").and_then(Value::as_str).unwrap_or("~");
@@ -610,7 +610,8 @@ async fn dispatch(state: &AppState, method: &str, p: &Value) -> Result<Value> {
                 Some(rest) if rest.is_empty() || rest.starts_with('/') => format!("{home}{rest}"),
                 _ => raw.to_owned(),
             };
-            let path = std::path::PathBuf::from(path);
+            // Drops trailing slashes and `.` segments.
+            let path: std::path::PathBuf = std::path::Path::new(&path).components().collect();
             if !path.is_absolute() {
                 return Err(ServerError::InvalidParams(format!(
                     "`{}` is not an absolute path",
@@ -624,7 +625,6 @@ async fn dispatch(state: &AppState, method: &str, p: &Value) -> Result<Value> {
                 .filter_map(|e| e.ok())
                 .filter(|e| std::fs::metadata(e.path()).is_ok_and(|m| m.is_dir()))
                 .filter_map(|e| e.file_name().into_string().ok())
-                .filter(|n| !n.starts_with('.'))
                 .collect();
             dirs.sort_by_key(|n| n.to_lowercase());
             Ok(json!({ "path": path, "parent": path.parent(), "dirs": dirs }))

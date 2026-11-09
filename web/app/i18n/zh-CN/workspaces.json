@@ -26,5 +26,10 @@
   "deleteError": "删除工作区失败",
   "branchError": "修改本会话的工作区失败",
   "parentFolder": "上一级",
-  "browse": "浏览文件夹"
+  "browse": "浏览文件夹",
+  "back": "后退",
+  "forward": "前进",
+  "home": "主目录",
+  "editPath": "输入路径",
+  "noFolders": "没有文件夹"
 }

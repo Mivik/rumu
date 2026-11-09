@@ -26,5 +26,10 @@
   "deleteError": "Couldn't delete the workspace",
   "branchError": "Couldn't change the session's workspaces",
   "parentFolder": "Parent folder",
-  "browse": "Browse folders"
+  "browse": "Browse folders",
+  "back": "Back",
+  "forward": "Forward",
+  "home": "Home folder",
+  "editPath": "Type a path",
+  "noFolders": "No folders"
 }

@@ -6,6 +6,8 @@
 // per-site nudging. Icon-only containers set `line-height: 0` to centre it on its own box.
 import {
   mdiAccountOutline,
+  mdiArrowLeft,
+  mdiArrowRight,
   mdiArrowTopRight,
   mdiArrowUp,
   mdiCancel,
@@ -24,6 +26,7 @@ import {
   mdiFolderOutline,
   mdiGauge,
   mdiHistory,
+  mdiHomeOutline,
   mdiImageOutline,
   mdiLayersOutline,
   mdiLightbulbOutline,
@@ -76,6 +79,9 @@ const paths: Record<string, string> = {
   plus: mdiPlus,
   send: mdiArrowUp,
   up: mdiArrowUp,
+  back: mdiArrowLeft,
+  forward: mdiArrowRight,
+  home: mdiHomeOutline,
   image: mdiImageOutline,
   stop: mdiStop,
   brain: mdiLightbulbOutline,

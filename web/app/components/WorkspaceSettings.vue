@@ -297,6 +297,7 @@ watch(
             </div>
             <FolderPicker
               v-if="browsing && !form.remote"
+              class="max-h-56"
               :key="editing"
               :start="form.root"
               @pick="form.root = $event"
