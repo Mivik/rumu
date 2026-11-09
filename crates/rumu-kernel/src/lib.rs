@@ -562,7 +562,8 @@ impl Kernel {
     /// The merged path state: node-folded state plus the workspace registry
     /// (see [`merge_workspaces`]).
     pub(crate) fn state_of_nodes(&self, nodes: &[Node]) -> PathState {
-        merge_workspaces(derive_state(nodes), &self.workspaces)
+        let session = nodes.first().map(|n| n.session.clone()).unwrap_or_default();
+        merge_workspaces(derive_state(nodes), &self.workspaces, &session)
     }
 
     pub(crate) fn session_of(&self, branch: &BranchId) -> Result<SessionId> {
@@ -755,13 +756,20 @@ impl Kernel {
             }
         }
         self.store.delete_session(session)?;
+        let scratch = self.workspaces.scratch(session).root;
+        match std::fs::remove_dir_all(scratch.as_str()) {
+            Err(e) if e.kind() != std::io::ErrorKind::NotFound => {
+                tracing::warn!(%session, error = %e, "removing the session's scratch directory");
+            }
+            _ => {}
+        }
         self.push("session.deleted", json!({ "session": info }));
         Ok(())
     }
 
     /// The user moves the session into a project (`mount`, a project deck
     /// at `/cards/project`) or out of it (`None`): the marker a model's
-    /// `card_mount` writes, then the project's first workspace (or `@rumu`)
+    /// `card_mount` writes, then the project's first workspace (or `@scratch`)
     /// as the default, with `text` telling the model. Recorded on the active
     /// branch; queued while a turn runs.
     pub async fn move_project(
@@ -785,7 +793,7 @@ impl Kernel {
         let default = mount
             .as_ref()
             .and_then(|m| self.workspaces.project(&m.deck).into_iter().next())
-            .unwrap_or_else(|| rumu_core::RUMU_WORKSPACE.to_owned());
+            .unwrap_or_else(|| rumu_core::SCRATCH_WORKSPACE.to_owned());
         let marker = match mount {
             Some(mount) => Content::marker(&mount),
             None => Content::marker(&rumu_core::CardUnmount {

@@ -32,7 +32,7 @@ restrict?: Array<string>,
 project?: string, 
 /**
  * Default workspace name: the last `workspace.use` marker here; after
- * the kernel's merge, resolved (marker → the project's first → `@rumu`).
+ * the kernel's merge, resolved (marker → the project's first → `@scratch`).
  */
 default_workspace?: string | null, 
 /**

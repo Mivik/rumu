@@ -1,11 +1,12 @@
 // Markdown rendering: marked + DOMPurify, fences highlighted by highlight.js.
 //
 // Link rewriting happens on the HTML string *before* DOMPurify (it strips
-// unknown-scheme hrefs): `@rumu:` addresses (links, inline code, bare text)
-// become `data-rumu` anchors, links relative to a rendered card become
-// `data-card-deck`/`data-card-path` anchors, and other workspace-qualified
-// paths (`proj:src/a.rs`) become `data-ws-ref` anchors. lib/links.ts follows
-// them on click.
+// unknown-scheme hrefs): workspace addresses (`@rumu:`, `@scratch:`) in
+// links, inline code and bare text become `data-rumu`/`data-ws-ref` anchors,
+// links relative to a rendered card become `data-card-deck`/
+// `data-card-path` anchors, and other workspace-qualified paths
+// (`proj:src/a.rs`) become `data-ws-ref` anchors. lib/links.ts follows them
+// on click.
 //
 // Highlighting is synchronous once a grammar is in memory: answer text
 // re-renders on every stream chunk, so an async highlighter (shiki) would
@@ -19,7 +20,7 @@ import hljs from 'highlight.js/lib/core'
 import { marked, type Token } from 'marked'
 import { shallowRef } from 'vue'
 import { t } from '../i18n'
-import { INTERNAL_WORKSPACE } from './types'
+import { INTERNAL_WORKSPACE, SCRATCH_WORKSPACE } from './types'
 
 /** One chunk per grammar, fetched on first use. Core stays in the entry
  * chunk: it's small, and every highlight needs it anyway. */
@@ -184,10 +185,13 @@ const EXTERNAL_SCHEMES = new Set([
 ])
 
 const RUMU_PREFIX = `${INTERNAL_WORKSPACE}:`
+const SCRATCH_PREFIX = `${SCRATCH_WORKSPACE}:`
 
-/** A whole `@rumu:` address, as bare text or alone in inline code. Trailing
- * sentence punctuation is not part of it. */
-const RUMU_ADDRESS = /^@rumu:[^\s<>()[\]`"']*[^\s<>()[\]`"'.,;:!?]/
+/** A whole workspace address (`@rumu:`, `@scratch:`), as bare text or alone
+ * in inline code. Trailing sentence punctuation is not part of it. */
+const ADDRESS = /^@(?:rumu|scratch):[^\s<>()[\]`"']*[^\s<>()[\]`"'.,;:!?]/
+/** Where the first workspace address starts (the tokenizer's `start`). */
+const ADDRESS_START = /@(?:rumu|scratch):/
 
 /** An address as a plain link, for the href pass in `renderMarkdown`. */
 function addressLink(address: string, inner: string): string {
@@ -213,22 +217,22 @@ marked.use({
     codespan(token) {
       const code = `<code>${escapeHtml(token.text)}</code>`
       if ((token as Token & { [IN_LINK]?: true })[IN_LINK]) return code
-      const m = RUMU_ADDRESS.exec(token.text)
+      const m = ADDRESS.exec(token.text)
       return m && m[0] === token.text ? addressLink(token.text, code) : code
     },
   },
   extensions: [
     {
-      name: 'rumuAddress',
+      name: 'workspaceAddress',
       level: 'inline',
       start: (src) => {
-        const i = src.indexOf(RUMU_PREFIX)
+        const i = src.search(ADDRESS_START)
         return i < 0 ? undefined : i
       },
       tokenizer(src) {
         if (this.lexer.state.inLink) return undefined
-        const m = RUMU_ADDRESS.exec(src)
-        return m ? { type: 'rumuAddress', raw: m[0] } : undefined
+        const m = ADDRESS.exec(src)
+        return m ? { type: 'workspaceAddress', raw: m[0] } : undefined
       },
       renderer: (token) => addressLink(token.raw, escapeHtml(token.raw)),
     },
@@ -261,6 +265,9 @@ function anchorFor(href: string, base: CardBase | undefined): string | null {
     const abs = `/${href.slice(RUMU_PREFIX.length).replace(/^\/+/, '')}`
     return `data-rumu="${escapeHtml(abs)}"`
   }
+  // `@scratch:…`: a workspace address like `proj:`, but the scheme test
+  // below does not see it (a scheme starts with a letter, not `@`).
+  if (href.startsWith(SCRATCH_PREFIX)) return `data-ws-ref="${escapeHtml(href)}"`
   const scheme = /^([a-z][a-z0-9.-]*):/i.exec(href)?.[1]
   if (scheme) {
     // Other workspace-qualified paths (`proj:src/a.rs`): copied on click.

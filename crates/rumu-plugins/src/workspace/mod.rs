@@ -42,7 +42,7 @@ use std::path::{Path, PathBuf};
 use std::sync::Mutex;
 
 use async_trait::async_trait;
-use rumu_core::{Cx, Manifest, Plugin, ToolOutput, Workspace, Workspaces};
+use rumu_core::{Cx, Manifest, Plugin, SCRATCH_WORKSPACE, ToolOutput, Workspace, Workspaces};
 use serde_json::Value;
 use tracing::warn;
 
@@ -173,6 +173,10 @@ pub(crate) fn usable_ctl_dir(dir: &Path) -> Option<PathBuf> {
 /// multiplexing keyed by host, so workspaces on one host share the
 /// connection).
 pub(crate) fn backend_for(ctl_dir: &Path, ws: &Workspace) -> std::sync::Arc<dyn Backend> {
+    if ws.name == SCRATCH_WORKSPACE {
+        // Created on first use; a failure surfaces in the operation itself.
+        let _ = std::fs::create_dir_all(ws.root.as_str());
+    }
     match &ws.ssh {
         None => std::sync::Arc::new(LocalBackend {
             root: PathBuf::from(ws.root.as_str()),

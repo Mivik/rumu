@@ -98,6 +98,10 @@ to its root, or absolute on its machine), or `<workspace>:<path>` for another wo
 `workspace_use(name)` changes the default; `workspace_use()` lists workspaces, the project's \
 first. `bash` runs in a workspace root, so relative paths mean the same thing in bash and in the \
 file tools. Read-only workspaces refuse writes and bash.\n\n\
+`@scratch` is this session's own scratch directory on this machine, shared by its branches and \
+sub-agents and deleted with the session: the default when the session has no project workspace. \
+Use it for throwaway work (scripts, downloads, clones, generated files); what should outlive the \
+session belongs in a card or a project workspace.\n\n\
 The `@rumu` workspace holds rumu's own data and has no bash. `@rumu:/cards/<mount>/<path>` are \
 cards of the decks mounted on this branch (`/cards/self` is your own deck); `read` returns an \
 editable view (YAML frontmatter, then the body), and writes are refused if the card changed \
@@ -185,7 +189,7 @@ struct SearchArgs {
 #[derive(Debug, Deserialize, JsonSchema)]
 #[serde(deny_unknown_fields)]
 struct WorkspaceUseArgs {
-    /// workspace name (any registered workspace or `@rumu`)
+    /// workspace name (any registered workspace, `@scratch`, or `@rumu`)
     name: Option<String>,
 }
 
@@ -311,7 +315,7 @@ notices."
                 description: "Set the default workspace for subsequent tool calls \
 (branch state; forks inherit it) and return the workspace listing (the project's mounted \
 workspaces first, then the others). Without `name`, just list workspaces. `name` may be any \
-registered workspace or `@rumu`."
+registered workspace, `@scratch`, or `@rumu`."
                     .into(),
                 schema: tool_schema::<WorkspaceUseArgs>(),
                 background: false,

@@ -9,7 +9,7 @@ import { INTERNAL_WORKSPACE } from './types'
 import type { ToolRowInfo } from './store'
 import { findAgentChild, state } from './store'
 import { taskIdOf, taskLabel } from './tasks'
-import { argSummary, preview } from './util'
+import { argSummary, preview, workspaceLabel } from './util'
 import { renderedContent } from './attachments'
 import { diffCounts as foldCounts, diffLines, type DiffCounts, filePatchOf } from './diff'
 import { i18n, t } from '../i18n'
@@ -118,7 +118,7 @@ function callFull(name: string, call: Call): string {
       return ws
     }
     case 'workspace_use':
-      return str('name') || 'list'
+      return workspaceLabel(str('name')) || 'list'
     case 'search': {
       const query = str('query')
       const scope = str('scope')
@@ -154,7 +154,7 @@ function callShort(name: string, call: Call): string {
     case 'code':
       return preview(str('code'), 40)
     case 'workspace_use':
-      return str('name') || 'list'
+      return workspaceLabel(str('name')) || 'list'
     case 'search':
       return preview(str('query'), 40)
     case 'agent':

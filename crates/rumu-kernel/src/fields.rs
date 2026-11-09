@@ -77,7 +77,7 @@ pub fn extract_fields(kind: &str, payload: &Value, state: &PathState) -> Fields 
 }
 
 /// The `workspace` of a `bash` call: `args.workspace` (a bare name) or the
-/// branch default, when it names a preset or `@rumu`.
+/// branch default, when it names an addressable workspace.
 fn bash_target(args: &Value, state: &PathState) -> Option<String> {
     let raw = args
         .get("workspace")
@@ -127,7 +127,7 @@ fn file_target(args: &Value, state: &PathState) -> (Option<String>, Vec<String>)
     (workspace, paths)
 }
 
-/// Does `name` address a workspace here (a preset or `@rumu`)?
+/// Does `name` address a workspace here (a preset, `@scratch`, or `@rumu`)?
 fn known(name: &str, state: &PathState) -> bool {
     name == RUMU_WORKSPACE || state.workspaces.iter().any(|w| w.name == name)
 }

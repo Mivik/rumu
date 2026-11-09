@@ -1,4 +1,4 @@
-import type { Content } from './types'
+import { SCRATCH_WORKSPACE, type Content } from './types'
 import { t } from '../i18n'
 
 /** Compact relative time: "just now", "5m", "3h", "2d", or a date. */
@@ -22,6 +22,12 @@ export function contentText(content: Content | undefined): string {
 /** Short stable label for a node id. */
 export function shortId(id: string): string {
   return id.slice(-6)
+}
+
+/** A workspace name as display copy: the session's scratch directory reads as
+ * a plain label; registered workspace names stand as they are. */
+export function workspaceLabel(name: string): string {
+  return name === SCRATCH_WORKSPACE ? t('workspaces.scratch') : name
 }
 
 /** Copy text to the clipboard; returns whether the browser allowed it. */

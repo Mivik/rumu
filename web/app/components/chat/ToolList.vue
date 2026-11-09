@@ -18,7 +18,7 @@ import { cardById } from '../../lib/cards'
 import type { ToolRowView, ToolStatus } from '../../lib/toolrows'
 import { argsOf, toolRowTitle, toolRowView } from '../../lib/toolrows'
 import { taskStatusWord } from '../../lib/tasks'
-import { shortId } from '../../lib/util'
+import { shortId, workspaceLabel } from '../../lib/util'
 import { highlightLine, prettyJson } from '../../lib/markdown'
 import { vEnter } from '../../lib/motion'
 import Icon from '../ui/Icon.vue'
@@ -157,7 +157,7 @@ function liveTaskOutput(id: string | null): string {
         <span
           v-if="v.agentScope"
           class="flex-none rounded-xs border border-agent/40 px-1 font-mono text-micro text-agent"
-          >{{ t('tools.row.scope', { names: v.agentScope.join(', ') }) }}</span
+          >{{ t('tools.row.scope', { names: v.agentScope.map(workspaceLabel).join(', ') }) }}</span
         >
         <span v-if="v.diff" class="max-w-[40%] flex-none truncate text-micro text-ink-3">
           · <span class="font-medium text-pine">+{{ v.diff.added }}</span>

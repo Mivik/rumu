@@ -1,8 +1,11 @@
 use std::collections::BTreeMap;
+use std::path::PathBuf;
 use std::sync::{Arc, RwLock};
 
 use serde::{Deserialize, Serialize};
 use typed_path::{PathType, Utf8TypedPathBuf};
+
+use crate::{SCRATCH_WORKSPACE, SessionId};
 
 /// The path style of a local workspace: the compile platform's.
 #[cfg(windows)]
@@ -126,10 +129,21 @@ pub type ProjectWorkspaces = BTreeMap<String, Vec<String>>;
 /// workspace is addressable from every session; a session's project decides
 /// which are mounted (see [`crate::PathState`]). Cheap to clone; every
 /// handle sees the same lists, so edits apply to running sessions.
-#[derive(Clone, Default)]
+///
+/// It also knows where sessions' scratch directories live (see
+/// [`crate::SCRATCH_WORKSPACE`]): `RUMU_HOME/scratch` once loaded, a
+/// directory under the system temp dir until then.
+#[derive(Clone)]
 pub struct Workspaces {
     inner: Arc<RwLock<Registry>>,
     listeners: Arc<RwLock<Vec<Listener>>>,
+    scratch: PathBuf,
+}
+
+impl Default for Workspaces {
+    fn default() -> Self {
+        Self::new(Vec::new())
+    }
 }
 
 type Listener = Box<dyn Fn() + Send + Sync>;
@@ -156,7 +170,26 @@ impl Workspaces {
         Self {
             inner: Arc::new(RwLock::new(Registry { list, projects })),
             listeners: Arc::default(),
+            scratch: std::env::temp_dir().join("rumu-scratch"),
         }
+    }
+
+    /// Keep sessions' scratch directories under `dir`.
+    pub fn with_scratch(mut self, dir: PathBuf) -> Self {
+        self.scratch = dir;
+        self
+    }
+
+    /// The scratch workspace of `session`. Nothing is created here: the
+    /// directory appears on first use.
+    pub fn scratch(&self, session: &SessionId) -> Workspace {
+        let root = self.scratch.join(session.to_string());
+        Workspace::new(
+            SCRATCH_WORKSPACE.to_owned(),
+            None,
+            root.to_string_lossy().into_owned(),
+            false,
+        )
     }
 
     /// The registered workspaces, in name order.

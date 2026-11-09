@@ -398,15 +398,15 @@ impl Structured for WorkspaceUse {
 
 /// Payload of the `workspace.set` marker (v1): a sub-agent's
 /// `inherit.workspaces`, narrowing the workspaces the branch may address from
-/// here on (every registered one otherwise). The built-in `@rumu` workspace
-/// is always addressable.
+/// here on (every registered one otherwise). The built-in `@rumu` and
+/// `@scratch` workspaces are always addressable.
 ///
 /// This is an addressing restriction, not a sandbox: `bash` in a local
 /// workspace can still `cd` anywhere on the machine (see the workspace
 /// plugin's caveat), and absolute paths are allowed inside a workspace.
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 pub struct WorkspaceSet {
-    /// Workspace names, in order (`@rumu` implicit).
+    /// Workspace names, in order (`@rumu` and `@scratch` implicit).
     pub names: Vec<String>,
 }
 
@@ -628,7 +628,7 @@ pub struct PathState {
     #[ts(optional)]
     pub project: Option<String>,
     /// Default workspace name: the last `workspace.use` marker here; after
-    /// the kernel's merge, resolved (marker → the project's first → `@rumu`).
+    /// the kernel's merge, resolved (marker → the project's first → `@scratch`).
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub default_workspace: Option<String>,
     /// The assistant from the session's root.

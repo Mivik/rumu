@@ -62,7 +62,8 @@ because the web build imports them.
 `config.yaml` (external plugins),
 `workspaces.yaml` (the workspace registry), `projects.yaml` (the workspaces
 each project mounts), `decks/` (cards, assistants, projects and their
-history), `grants.json` (remembered approvals) and `sessions/`. With no
+history), `grants.json` (remembered approvals), `scratch/` (per-session
+scratch directories) and `sessions/`. With no
 `workspaces.yaml`, the current directory is registered as the first
 workspace, in a project of its own, so it runs out of the box.
 
@@ -84,6 +85,12 @@ app:
   root: /srv/app
   read_only: true
 ```
+
+Each session also gets `@scratch`, its own directory at
+`RUMU_HOME/scratch/<session id>`, created on first use and removed with the
+session. Its branches and sub-agents share it. It is always addressable, the
+default when the session has no project workspace, local only, and never
+synced or versioned: use it for throwaway files.
 
 A **deck** is a set of cards about one subject, kept as a bare git repository
 at `RUMU_HOME/decks/<name>/`; see [docs/decks.md](docs/decks.md). Its identity

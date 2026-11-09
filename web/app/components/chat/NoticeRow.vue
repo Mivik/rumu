@@ -24,6 +24,7 @@ const ICON: Record<Notice['kind'], string> = {
 import { t } from '../../i18n'
 import { openDrawer, openTaskDetail } from '../../lib/store'
 import { taskStatusWord } from '../../lib/tasks'
+import { workspaceLabel } from '../../lib/util'
 import Icon from '../ui/Icon.vue'
 
 defineProps<{ notice: Notice }>()
@@ -33,7 +34,7 @@ defineProps<{ notice: Notice }>()
   <div class="flex max-w-full min-w-0 items-baseline gap-1.5 text-meta text-ink-3">
     <Icon :name="ICON[notice.kind]" :size="12" class="flex-none text-ink-3" />
     <span v-if="notice.kind === 'workspace'" class="min-w-0 truncate">
-      {{ t('cards.notes.workspace', { name: notice.name }) }}
+      {{ t('cards.notes.workspace', { name: workspaceLabel(notice.name) }) }}
     </span>
     <span v-else-if="notice.kind === 'agents'" class="min-w-0 truncate">
       {{ t('cards.notes.loaded', { name: notice.name }) }}

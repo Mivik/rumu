@@ -1,7 +1,7 @@
 //! Addressing: workspace names and the `<workspace>:<path>` qualification
 //! shared by the tool implementations and hook field extraction. One address
-//! space: every workspace preset plus the `@rumu` virtual workspace holding
-//! rumu's own data.
+//! space: every workspace preset, the session's `@scratch` directory and the
+//! `@rumu` virtual workspace holding rumu's own data.
 
 use std::borrow::Cow;
 
@@ -12,6 +12,12 @@ use typed_path::{Utf8TypedPath, Utf8TypedPathBuf, Utf8UnixPath, Utf8UnixPathBuf}
 /// No bash; reads and card writes only. The leading `@` is not valid in a
 /// preset name, so no user workspace can ever collide with it.
 pub const RUMU_WORKSPACE: &str = "@rumu";
+
+/// The session's scratch workspace: a real local directory of its own
+/// (`RUMU_HOME/scratch/<session id>`), created on first use and removed with
+/// the session. The default when no other workspace is. Like `@rumu`, its
+/// `@` keeps it apart from preset names.
+pub const SCRATCH_WORKSPACE: &str = "@scratch";
 
 /// Names that can never be workspaces: the common URI schemes are reserved
 /// so `http://…`-shaped text is never mistaken for a qualified path
@@ -46,23 +52,25 @@ pub fn valid_workspace_name(name: &str) -> bool {
 /// `/cards/…` or `/sessions/…` for `@rumu`).
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct Addr {
-    /// A preset name or `@rumu`.
+    /// A preset name, `@scratch`, or `@rumu`.
     pub ws: String,
     pub abs: Utf8TypedPathBuf,
 }
 
 /// Split `raw` into `(<name>, <rest>)` when it starts like a qualified
-/// address whose name could be a workspace (`@rumu` included). Reserved
-/// scheme names (`http`, …) never qualify, so `https://…`-shaped text stays
-/// a plain path.
+/// address whose name could be a workspace (`@scratch` and `@rumu` included).
+/// Reserved scheme names (`http`, …) never qualify, so `https://…`-shaped
+/// text stays a plain path.
 fn split_qualified(raw: &str) -> Option<(&str, &str)> {
     let (name, rest) = raw.split_once(':')?;
-    (name == RUMU_WORKSPACE || valid_workspace_name(name)).then_some((name, rest))
+    (name == RUMU_WORKSPACE || name == SCRATCH_WORKSPACE || valid_workspace_name(name))
+        .then_some((name, rest))
 }
 
 /// Resolve a tool `path` argument: `<name>:<rest>` selects that
-/// workspace when it is known (a preset or `@rumu`); anything else is a path
-/// in the branch's default workspace. Errors name the available workspaces.
+/// workspace when it is known (a preset, `@scratch`, or `@rumu`); anything
+/// else is a path in the branch's default workspace. Errors name the
+/// available workspaces.
 pub fn resolve(raw: &str, workspaces: &[Workspace], default: Option<&str>) -> Result<Addr> {
     if let Some((name, rest)) = split_qualified(raw) {
         if let Some(ws) = workspaces.iter().find(|w| w.name == name) {
@@ -229,6 +237,30 @@ mod tests {
         for bad in RESERVED_NAMES {
             assert!(!valid_workspace_name(bad), "`{bad}` is reserved");
         }
+    }
+
+    #[test]
+    fn scratch_qualifies_only_when_the_state_has_it() {
+        let mut st = PathState {
+            workspaces: vec![ws(SCRATCH_WORKSPACE, "/scratch/s1")],
+            default_workspace: Some(SCRATCH_WORKSPACE.into()),
+            ..Default::default()
+        };
+        // `@scratch` is a reserved qualifier: when the state carries it, it
+        // resolves to that workspace's root.
+        let a = resolve_state(&st, "@scratch:foo/bar.txt").unwrap();
+        assert_eq!(a.ws, SCRATCH_WORKSPACE);
+        assert_eq!(a.abs.as_str(), "/scratch/s1/foo/bar.txt");
+        // Unqualified paths fall to it as the default.
+        assert_eq!(
+            resolve_state(&st, "foo.txt").unwrap().abs.as_str(),
+            "/scratch/s1/foo.txt"
+        );
+        // Without it in the state, the qualifier is still parsed and then
+        // reported as unknown.
+        st.workspaces.clear();
+        let err = resolve_state(&st, "@scratch:foo").unwrap_err().to_string();
+        assert!(err.contains("unknown workspace `@scratch`"), "{err}");
     }
 
     #[test]

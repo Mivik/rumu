@@ -9,7 +9,8 @@ use super::*;
 use crate::testutil::FakeRuntime;
 use rumu_cards::{card, usage};
 use rumu_core::{
-    Node, NodeBody, PathState, RUMU_WORKSPACE, Structured, Tagged, ToolOutput, WorkspaceUse,
+    Node, NodeBody, PathState, RUMU_WORKSPACE, SCRATCH_WORKSPACE, Structured, Tagged, ToolOutput,
+    WorkspaceUse,
 };
 use serde_json::json;
 
@@ -670,6 +671,65 @@ async fn read_only_and_bash_behaviour() {
     assert!(
         out.is_error && out.content.text.contains("unknown workspace"),
         "URI forms are gone: {}",
+        out.content.text
+    );
+}
+
+/// No project workspace: `bash` runs in the session's `@scratch` directory,
+/// which the first use creates, and files it writes are readable through
+/// `@scratch:`.
+#[tokio::test]
+async fn bash_runs_in_the_scratch_workspace_and_creates_it() {
+    let home = tempfile::tempdir().unwrap();
+    let plugin = deck_plugin(home.path());
+    let host = FakeRuntime::arc();
+    let scratch = home.path().join("scratch/s1");
+    assert!(!scratch.exists(), "the scratch directory starts absent");
+    *host.state.lock().unwrap() = state_with(
+        vec![Workspace {
+            name: SCRATCH_WORKSPACE.into(),
+            ssh: None,
+            root: scratch.to_string_lossy().into_owned().into(),
+            read_only: false,
+        }],
+        Some(SCRATCH_WORKSPACE),
+    );
+    let cx = host.cx();
+
+    let out = plugin
+        .call_tool("bash", json!({ "command": "echo hi > note.txt" }), &cx)
+        .await
+        .unwrap();
+    assert!(!out.is_error, "{}", out.content.text);
+    assert!(scratch.exists(), "the first use creates the directory");
+    assert_eq!(
+        std::fs::read_to_string(scratch.join("note.txt")).unwrap(),
+        "hi\n"
+    );
+
+    let out = plugin
+        .call_tool("read", json!({ "path": "@scratch:note.txt" }), &cx)
+        .await
+        .unwrap();
+    assert!(!out.is_error, "{}", out.content.text);
+    assert_eq!(out.content.text, "hi\n");
+
+    // `@rumu` is still the one workspace without bash.
+    let out = plugin
+        .call_tool(
+            "bash",
+            json!({ "command": "true", "workspace": "@rumu" }),
+            &cx,
+        )
+        .await
+        .unwrap();
+    assert!(
+        out.is_error
+            && out
+                .content
+                .text
+                .contains("the `@rumu` workspace has no bash"),
+        "{}",
         out.content.text
     );
 }
@@ -4799,7 +4859,7 @@ async fn card_mount_moves_between_projects_and_creates_one() {
     let mount: rumu_core::CardMount = out.effects[0].decode().unwrap();
     assert_eq!(mount.deck, PROJECT2_ID);
     let use_: WorkspaceUse = out.effects[1].decode().unwrap();
-    assert_eq!(use_.name, RUMU_WORKSPACE, "it mounts no workspace");
+    assert_eq!(use_.name, SCRATCH_WORKSPACE, "it mounts no workspace");
     host.state
         .lock()
         .unwrap()
@@ -4809,7 +4869,7 @@ async fn card_mount_moves_between_projects_and_creates_one() {
             at: rumu_core::PROJECT_MOUNT.into(),
         });
 
-    // Unmounting the project leaves it and resets the default to `@rumu`.
+    // Unmounting the project leaves it and resets the default to `@scratch`.
     let out = plugin
         .call_tool("card_mount", json!({ "at": "project" }), &cx)
         .await
@@ -4823,7 +4883,7 @@ async fn card_mount_moves_between_projects_and_creates_one() {
     let unmount: rumu_core::CardUnmount = out.effects[0].decode().unwrap();
     assert_eq!(unmount.at, rumu_core::PROJECT_MOUNT);
     let use_: WorkspaceUse = out.effects[1].decode().unwrap();
-    assert_eq!(use_.name, RUMU_WORKSPACE);
+    assert_eq!(use_.name, SCRATCH_WORKSPACE);
 
     // `create` is only valid with `at: "project"`, never with a deck.
     for (args, needle) in [
@@ -4886,7 +4946,7 @@ async fn card_mount_moves_between_projects_and_creates_one() {
     let mount: rumu_core::CardMount = out.effects[0].decode().unwrap();
     assert_eq!(mount.deck, fresh.id());
     let use_: WorkspaceUse = out.effects[1].decode().unwrap();
-    assert_eq!(use_.name, RUMU_WORKSPACE);
+    assert_eq!(use_.name, SCRATCH_WORKSPACE);
 
     // An `ask` session cannot move.
     host.state.lock().unwrap().asked_by = Some(main.into());

@@ -1,5 +1,6 @@
 {
   "title": "Workspaces",
+  "scratch": "Scratch",
   "add": "Add workspace",
   "readOnly": "read-only",
   "name": "Name",

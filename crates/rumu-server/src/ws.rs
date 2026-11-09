@@ -411,7 +411,7 @@ async fn dispatch(state: &AppState, method: &str, p: &Value) -> Result<Value> {
                 Some(deck) => {
                     let workspaces = state.workspaces.project(deck.id());
                     let listed = if workspaces.is_empty() {
-                        "It mounts no workspace; `@rumu` is the default.".to_owned()
+                        "It mounts no workspace; `@scratch` is the default.".to_owned()
                     } else {
                         format!(
                             "Its workspaces: {}; `{}` is the default.",
@@ -432,7 +432,7 @@ async fn dispatch(state: &AppState, method: &str, p: &Value) -> Result<Value> {
                 }
                 None => format!(
                     "The user moved this session out of its project; `@rumu:{PROJECT_MOUNT}` is \
-                     unmounted and `@rumu` is the default workspace."
+                     unmounted and `@scratch` is the default workspace."
                 ),
             };
             let mount = project.map(|deck| CardMount {

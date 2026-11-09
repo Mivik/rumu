@@ -3,7 +3,7 @@
 
 use rumu_core::{
     CardMount, CardUnmount, ModelUse, Node, NodeBody, PROJECT_MOUNT, PathState, RUMU_WORKSPACE,
-    SessionRoot, WorkspaceSet, WorkspaceUse, Workspaces,
+    SCRATCH_WORKSPACE, SessionId, SessionRoot, WorkspaceSet, WorkspaceUse, Workspaces,
 };
 
 /// Fold nodes (root → head, in order) into the derived path state.
@@ -26,10 +26,14 @@ pub fn derive_state(nodes: &[Node]) -> PathState {
 }
 
 /// Merge the node-derived state with the registry: every registered
-/// workspace is addressable (or those a restriction names), the project's
-/// list among them is mounted, and the default resolves marker → the
-/// project's first → `@rumu`.
-pub fn merge_workspaces(mut st: PathState, registry: &Workspaces) -> PathState {
+/// workspace is addressable (or those a restriction names), then the
+/// session's `@scratch`; the project's list among them is mounted, and the
+/// default resolves marker → the project's first → `@scratch`.
+pub fn merge_workspaces(
+    mut st: PathState,
+    registry: &Workspaces,
+    session: &SessionId,
+) -> PathState {
     st.workspaces = registry
         .list()
         .into_iter()
@@ -38,6 +42,7 @@ pub fn merge_workspaces(mut st: PathState, registry: &Workspaces) -> PathState {
                 .as_ref()
                 .is_none_or(|names| names.contains(&w.name))
         })
+        .chain([registry.scratch(session)])
         .collect();
     st.mounted = st
         .project
@@ -53,7 +58,7 @@ pub fn merge_workspaces(mut st: PathState, registry: &Workspaces) -> PathState {
         .default_workspace
         .filter(|n| available(n))
         .or_else(|| st.mounted.first().cloned())
-        .or_else(|| Some(RUMU_WORKSPACE.to_owned()));
+        .or_else(|| Some(SCRATCH_WORKSPACE.to_owned()));
     st
 }
 
@@ -232,15 +237,19 @@ mod tests {
         let registry = registry();
 
         // No project: every workspace is addressable, none is mounted, and
-        // `@rumu` is the default.
-        let merged = merge_workspaces(derive_state(&[root(vec![])]), &registry);
-        assert_eq!(names(&merged), ["a", "b", "c"]);
+        // `@scratch` is the default.
+        let merged = merge_workspaces(derive_state(&[root(vec![])]), &registry, &SessionId::new());
+        assert_eq!(names(&merged), ["a", "b", "c", "@scratch"]);
         assert!(merged.mounted.is_empty() && merged.project.is_none());
-        assert_eq!(merged.default_workspace.as_deref(), Some("@rumu"));
+        assert_eq!(merged.default_workspace.as_deref(), Some("@scratch"));
 
         // A project from the root mounts its registered workspaces in its
         // order; the first is the default.
-        let merged = merge_workspaces(derive_state(&[root(vec![project("p")])]), &registry);
+        let merged = merge_workspaces(
+            derive_state(&[root(vec![project("p")])]),
+            &registry,
+            &SessionId::new(),
+        );
         assert_eq!(merged.project.as_deref(), Some("p"));
         assert_eq!(merged.mounted, ["b", "a"]);
         assert_eq!(merged.default_workspace.as_deref(), Some("b"));
@@ -249,6 +258,7 @@ mod tests {
         let merged = merge_workspaces(
             derive_state(&[root(vec![project("p")]), use_("c")]),
             &registry,
+            &SessionId::new(),
         );
         assert_eq!(merged.default_workspace.as_deref(), Some("c"));
 
@@ -270,16 +280,39 @@ mod tests {
         let merged = merge_workspaces(
             derive_state(&[root(vec![project("p")]), use_("b"), set(&["a", "ghost"])]),
             &registry,
+            &SessionId::new(),
         );
-        assert_eq!(names(&merged), ["a"]);
+        assert_eq!(names(&merged), ["a", "@scratch"]);
         assert_eq!(merged.mounted, ["a"]);
         // `b` is out of reach now, so the default falls back to the first
         // mounted one.
         assert_eq!(merged.default_workspace.as_deref(), Some("a"));
-        // `@rumu` stays a valid default.
-        let merged = merge_workspaces(derive_state(&[set(&[]), use_("@rumu")]), &registry);
-        assert!(merged.workspaces.is_empty());
+        // `@rumu` stays a valid default; `@scratch` is still addressable
+        // even though the restriction names no workspace.
+        let merged = merge_workspaces(
+            derive_state(&[set(&[]), use_("@rumu")]),
+            &registry,
+            &SessionId::new(),
+        );
+        assert_eq!(names(&merged), ["@scratch"]);
         assert_eq!(merged.default_workspace.as_deref(), Some("@rumu"));
+    }
+
+    #[test]
+    fn scratch_is_the_sessions_directory_and_survives_restrictions() {
+        let session = SessionId::new();
+        let registry = registry().with_scratch(std::path::PathBuf::from("/scratch"));
+
+        // A restriction makes it the only registered workspace plus
+        // `@scratch`, whose root is the session's own directory.
+        let merged = merge_workspaces(derive_state(&[set(&["a"])]), &registry, &session);
+        assert_eq!(names(&merged), ["a", "@scratch"]);
+        let scratch = merged.workspaces.last().expect("`@scratch` is last");
+        assert_eq!(scratch.name, SCRATCH_WORKSPACE);
+        assert_eq!(scratch.root, registry.scratch(&session).root);
+        assert!(scratch.root.ends_with(session.to_string().as_str()));
+        // No marker and no project: it is the default.
+        assert_eq!(merged.default_workspace.as_deref(), Some(SCRATCH_WORKSPACE));
     }
 
     #[test]

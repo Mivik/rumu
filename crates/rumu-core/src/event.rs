@@ -48,8 +48,8 @@ pub struct Fields {
     /// The source plugin of a `post` event.
     pub source: Option<String>,
     /// The target of a tool call (`tool.pre`/`tool.post` only), as a single
-    /// name: a workspace preset name or `@rumu`. None when the target is
-    /// unknown/unresolvable and on every other event.
+    /// name: a workspace preset name, `@scratch`, or `@rumu`. None when the
+    /// target is unknown/unresolvable and on every other event.
     pub workspace: Option<String>,
     /// The normalized absolute paths of a tool call's `path`(+`paths`) args
     /// (file tools only): on the workspace's machine in its native style

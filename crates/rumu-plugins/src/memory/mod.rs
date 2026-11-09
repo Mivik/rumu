@@ -202,7 +202,7 @@ impl MemoryPlugin {
                     .filter_map(|n| state.workspaces.iter().find(|w| &w.name == n))
                     .collect();
                 if mounted.is_empty() {
-                    text.push_str(" It mounts no workspace; `@rumu` is the default.");
+                    text.push_str(" It mounts no workspace; `@scratch` is the default.");
                 } else {
                     text.push_str(" Its workspaces (default first): ");
                     text.push_str(

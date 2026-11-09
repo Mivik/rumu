@@ -1,6 +1,7 @@
 // Following links in rendered markdown (lib/markdown.ts makes the anchors):
 // `@rumu:` addresses open what they name, links inside a card body open cards
-// of the same deck, and an address rumu cannot open is copied instead.
+// of the same deck, and a workspace address rumu cannot open (`@scratch:`,
+// `proj:`) is copied instead.
 
 import { t } from '../i18n'
 import { cardById, mountedRef } from './cards'

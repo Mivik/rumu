@@ -109,6 +109,13 @@ export const TASK_VERSION = 1
  */
 export const INTERNAL_WORKSPACE = '@rumu'
 
+/**
+ * A session's scratch directory (`RUMU_HOME/scratch/<session id>`), default
+ * when the session has no project workspace. Mirrors `SCRATCH_WORKSPACE` in
+ * rumu-core; per-session, so never registered or mounted.
+ */
+export const SCRATCH_WORKSPACE = '@scratch'
+
 // ---- WebSocket protocol ----
 
 export interface WsRequest {

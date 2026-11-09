@@ -123,14 +123,14 @@ async fn scoped_child_cannot_read_an_out_of_scope_workspace() {
         .expect("agent branch");
     let (nodes, state) = kernel.branch_path(&child.id).unwrap();
 
-    // The scope filtered the child's workspaces to `proj` (+ `@rumu`).
+    // The scope filtered the child's workspaces to `proj` (+ `@scratch`).
     assert_eq!(
         state
             .workspaces
             .iter()
             .map(|w| w.name.as_str())
             .collect::<Vec<_>>(),
-        ["proj"]
+        ["proj", "@scratch"]
     );
 
     // `read other:secret.txt` failed at address resolution.
@@ -152,7 +152,11 @@ async fn scoped_child_cannot_read_an_out_of_scope_workspace() {
         "{}",
         result.0
     );
-    assert!(result.0.contains("available: proj, @rumu"), "{}", result.0);
+    assert!(
+        result.0.contains("available: proj, @scratch, @rumu"),
+        "{}",
+        result.0
+    );
 }
 
 fn content_text(content: &Content) -> String {

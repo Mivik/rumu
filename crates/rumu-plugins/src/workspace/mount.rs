@@ -16,7 +16,7 @@ use rumu_cards::Cards;
 use rumu_cards::cards::{SELF_MOUNT, mount_points_overlap, normalize_mount_point};
 use rumu_cards::deck::{Action, Deck, valid_deck_name};
 use rumu_core::{
-    CardMount, CardUnmount, Content, Cx, PROJECT_MOUNT, PathState, RUMU_WORKSPACE, ToolError,
+    CardMount, CardUnmount, Content, Cx, PROJECT_MOUNT, PathState, SCRATCH_WORKSPACE, ToolError,
     ToolOutput, ToolResult, WorkspaceUse,
 };
 use serde_json::{Value, json};
@@ -116,10 +116,10 @@ impl WorkspacePlugin {
         let mut effects = vec![Content::marker(&CardUnmount { at: at.clone() })];
         let text = if at == PROJECT_MOUNT {
             effects.push(Content::marker(&WorkspaceUse {
-                name: RUMU_WORKSPACE.into(),
+                name: SCRATCH_WORKSPACE.into(),
             }));
             format!(
-                "`{PROJECT_MOUNT}` is unmounted; this session leaves its project and `{RUMU_WORKSPACE}` \
+                "`{PROJECT_MOUNT}` is unmounted; this session leaves its project and `{SCRATCH_WORKSPACE}` \
                  is the default workspace. Content loaded from it earlier is no longer readable, \
                  writable or updated."
             )
@@ -248,7 +248,7 @@ impl WorkspacePlugin {
     }
 
     /// The mount result and its markers: the `CardMount` marker, then (for a
-    /// project) a `WorkspaceUse` marker for its first workspace or `@rumu`.
+    /// project) a `WorkspaceUse` marker for its first workspace or `@scratch`.
     fn mounted_output(&self, deck: &Deck, at: &str, assistant: &str) -> ToolOutput {
         let point = at.trim_start_matches("/cards/");
         let mut text = format!("mounted deck `{}` at `{at}`", deck.meta.name);
@@ -256,7 +256,7 @@ impl WorkspacePlugin {
             let names = self.workspaces.project(deck.id());
             if names.is_empty() {
                 text.push_str(
-                    "\nIt mounts no workspace; `@rumu` is the default. Add some through \
+                    "\nIt mounts no workspace; `@scratch` is the default. Add some through \
                      `@rumu:/project/workspaces`.",
                 );
             } else {
@@ -300,7 +300,7 @@ impl WorkspacePlugin {
                 .project(deck.id())
                 .into_iter()
                 .next()
-                .unwrap_or_else(|| RUMU_WORKSPACE.to_owned());
+                .unwrap_or_else(|| SCRATCH_WORKSPACE.to_owned());
             effects.push(Content::marker(&WorkspaceUse { name: first }));
         }
         ToolOutput::ok(text).with_effects(effects)

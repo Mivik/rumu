@@ -14,8 +14,8 @@ use rumu_core::kind;
 use rumu_core::{
     Attachment, BranchId, BranchStatus, CardMount, Content, Cx, Decision, Event, HookOutput,
     HookSpec, Inbox, Invoke, Manifest, Node, NodeBody, NodeId, PROJECT_MOUNT, PathState, Plugin,
-    Post, Progress, RUMU_WORKSPACE, SessionId, SessionRoot, Tagged, TaskDone, TaskKind, TaskStatus,
-    ToolCall, ToolOutput, ToolSpec, Workspace, WorkspaceUse, Workspaces,
+    Post, Progress, SCRATCH_WORKSPACE, SessionId, SessionRoot, Tagged, TaskDone, TaskKind,
+    TaskStatus, ToolCall, ToolOutput, ToolSpec, Workspace, WorkspaceUse, Workspaces,
 };
 use rumu_kernel::{Delta, Kernel, Llm, LlmError, LlmResponse, OnDelta, ScriptedLlm};
 use rumu_store::Store;
@@ -1983,7 +1983,7 @@ async fn agent_unknown_workspace_errors_without_a_branch() {
     let (text, err) = result_text(&nodes, "e1");
     assert!(err, "{text}");
     assert!(
-        text.contains("unknown workspace `ghost` (available: proj)"),
+        text.contains("unknown workspace `ghost` (available: proj, @scratch)"),
         "{text}"
     );
     assert_eq!(
@@ -2065,14 +2065,14 @@ async fn agent_workspaces_narrow_the_child_state() {
                 .iter()
                 .map(|w| w.name.as_str())
                 .collect::<Vec<_>>(),
-            ["proj"],
+            ["proj", "@scratch"],
             "{task}"
         );
         assert_eq!(cstate.restrict.as_deref(), Some(&["proj".to_owned()][..]));
-        // Outside any project the (now narrower) default is `@rumu`.
+        // Outside any project the (now narrower) default is `@scratch`.
         assert_eq!(
             cstate.default_workspace.as_deref(),
-            Some(RUMU_WORKSPACE),
+            Some(SCRATCH_WORKSPACE),
             "{task}"
         );
     }
@@ -2401,12 +2401,12 @@ async fn every_workspace_is_addressable_and_the_project_mounts_its_own() {
     let (kernel, _llm) = kernel_with(vec![], vec![], registry);
 
     // Outside a project: the whole registry is addressable, none is mounted,
-    // `@rumu` is the default.
+    // `@scratch` is the default.
     let (s, _) = kernel.create_session("assistant".into()).await.unwrap();
     let (_, st) = kernel.branch_path(&s.active_branch).unwrap();
-    assert_eq!(workspace_names(&st), ["app", "lib", "proj"]);
+    assert_eq!(workspace_names(&st), ["app", "lib", "proj", "@scratch"]);
     assert!(st.mounted.is_empty() && st.project.is_none());
-    assert_eq!(st.default_workspace.as_deref(), Some(RUMU_WORKSPACE));
+    assert_eq!(st.default_workspace.as_deref(), Some(SCRATCH_WORKSPACE));
     assert_eq!(s.project, None);
 
     // In a project: its registered mounts, in its order, first is default.
@@ -2423,7 +2423,7 @@ async fn every_workspace_is_addressable_and_the_project_mounts_its_own() {
     )
     .await;
     let (_, st) = kernel.branch_path(&branch).unwrap();
-    assert_eq!(workspace_names(&st), ["app", "lib", "proj"]);
+    assert_eq!(workspace_names(&st), ["app", "lib", "proj", "@scratch"]);
     assert_eq!(st.mounted, ["proj", "lib"]);
     assert_eq!(st.project.as_deref(), Some("proj-deck"));
     assert_eq!(st.default_workspace.as_deref(), Some("proj"));
@@ -2437,7 +2437,7 @@ async fn registry_changes_are_pushed_with_projects() {
     let (kernel, _llm, _s, branch) =
         setup_in_project(vec![], vec![], registry.clone(), "proj-deck").await;
     let (_, st) = kernel.branch_path(&branch).unwrap();
-    assert_eq!(workspace_names(&st), ["app"]);
+    assert_eq!(workspace_names(&st), ["app", "@scratch"]);
     assert_eq!(st.mounted, ["app"]);
 
     let mut rx = kernel.tap_pushes();
@@ -2469,7 +2469,7 @@ async fn registry_changes_are_pushed_with_projects() {
 
     // The running branch sees the new registry and the reordered mounts.
     let (_, st) = kernel.branch_path(&branch).unwrap();
-    assert_eq!(workspace_names(&st), ["app", "lib"]);
+    assert_eq!(workspace_names(&st), ["app", "lib", "@scratch"]);
     assert_eq!(st.mounted, ["lib", "app"]);
     assert_eq!(st.default_workspace.as_deref(), Some("lib"));
 }
@@ -2526,14 +2526,14 @@ async fn move_project_records_markers_default_and_note() {
         .unwrap();
     assert_eq!(kernel.branch_path(&branch).unwrap().0.len(), len);
 
-    // Leaving writes an unmount marker and falls back to `@rumu`.
+    // Leaving writes an unmount marker and falls back to `@scratch`.
     kernel
         .move_project(&s.id, None, "The user left the project.".into())
         .await
         .unwrap();
     let (nodes, st) = kernel.branch_path(&branch).unwrap();
     assert!(st.project.is_none() && st.mounted.is_empty());
-    assert_eq!(st.default_workspace.as_deref(), Some(RUMU_WORKSPACE));
+    assert_eq!(st.default_workspace.as_deref(), Some(SCRATCH_WORKSPACE));
     assert!(matches!(&nodes[nodes.len() - 2].body,
         NodeBody::Note { content, .. } if content.decode::<rumu_core::CardUnmount>().is_some()));
     assert_eq!(kernel.session_tree(&s.id).unwrap().0.project, None);
@@ -2656,6 +2656,33 @@ async fn delete_session_removes_the_tree_and_pushes_it() {
         kernel.delete_session(&SessionId::new()),
         Err(rumu_kernel::Error::SessionNotFound(_))
     ));
+}
+
+/// Deleting a session removes its `@scratch` directory; a session whose
+/// scratch was never created still deletes cleanly.
+#[tokio::test]
+async fn delete_session_removes_the_scratch_directory() {
+    let dir = tempfile::tempdir().unwrap();
+    let registry = Workspaces::default().with_scratch(dir.path().to_path_buf());
+    let (kernel, _llm) = kernel_with(vec![], vec![], registry.clone());
+    let (session, _) = kernel.create_session("assistant".into()).await.unwrap();
+
+    let scratch = registry.scratch(&session.id).root;
+    std::fs::create_dir_all(scratch.as_str()).unwrap();
+    std::fs::write(
+        std::path::Path::new(scratch.as_str()).join("note.txt"),
+        "hi",
+    )
+    .unwrap();
+
+    kernel.delete_session(&session.id).unwrap();
+    assert!(!std::path::Path::new(scratch.as_str()).exists());
+
+    // Never created: deleting succeeds (the removal ignores `NotFound`).
+    let (other, _) = kernel.create_session("assistant".into()).await.unwrap();
+    let other_scratch = registry.scratch(&other.id).root;
+    assert!(!std::path::Path::new(other_scratch.as_str()).exists());
+    kernel.delete_session(&other.id).unwrap();
 }
 
 /// Fail-fast: a malformed matcher fails kernel construction instead of

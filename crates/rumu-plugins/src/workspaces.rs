@@ -18,6 +18,8 @@ use crate::{Error, Result};
 
 pub const WORKSPACES_FILE: &str = "workspaces.yaml";
 pub const PROJECTS_FILE: &str = "projects.yaml";
+/// Sessions' scratch directories, one per session id.
+pub const SCRATCH_DIR: &str = "scratch";
 
 /// Load the registry. With no file at all, the current directory becomes
 /// the one workspace and the file is written (zero-config first start).
@@ -27,7 +29,7 @@ pub const PROJECTS_FILE: &str = "projects.yaml";
 pub fn load_workspaces(home: &Path) -> Result<Workspaces> {
     let list = load_list(home)?;
     let projects = load_projects(home)?;
-    Ok(Workspaces::with_projects(list, projects))
+    Ok(Workspaces::with_projects(list, projects).with_scratch(home.join(SCRATCH_DIR)))
 }
 
 fn load_list(home: &Path) -> Result<Vec<Workspace>> {
