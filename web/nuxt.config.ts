@@ -30,10 +30,12 @@ export default defineNuxtConfig({
       meta: [
         // resizes-content: a touch keyboard shrinks the page (Chrome on
         // Android), so the composer at its foot rises above the keyboard
-        // instead of under it.
+        // instead of under it. maximum-scale=1: iOS stops zooming into a
+        // field set below 16px on focus (pinch zoom still works there), so
+        // fields keep their type size on touch screens.
         {
           name: 'viewport',
-          content: 'width=device-width, initial-scale=1, interactive-widget=resizes-content',
+          content: 'width=device-width, initial-scale=1, maximum-scale=1, interactive-widget=resizes-content',
         },
         { name: 'color-scheme', content: 'light dark' },
         { name: 'apple-mobile-web-app-title', content: 'rumu' },

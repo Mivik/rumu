@@ -1677,16 +1677,6 @@
   }
 }
 
-/* Touch keyboards: iOS zooms the page into any field set below 16px.
- * Unlayered, so it outranks the type utilities on the fields. */
-@media (pointer: coarse) {
-  input,
-  textarea,
-  select {
-    font-size: max(16px, 1em);
-  }
-}
-
 /* Reduced motion: entrances and loops collapse to their end state. */
 @media (prefers-reduced-motion: reduce) {
   *,

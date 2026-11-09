@@ -565,9 +565,13 @@ async function refreshModels(): Promise<void> {
               {{ t('settings.detectFromAddress') }}
             </button>
           </div>
-          <div class="grid grid-cols-[8rem_minmax(0,1fr)_auto] items-center gap-x-3 gap-y-2">
+          <div
+            class="grid grid-cols-[minmax(0,1fr)_auto] items-center gap-x-3 gap-y-2 sm:grid-cols-[8rem_minmax(0,1fr)_auto]"
+          >
             <template v-for="protocol in shownProtocols" :key="protocol">
-              <span class="text-meta text-ink-3">{{ PROTOCOL_LABELS[protocol] }}</span>
+              <span class="col-span-2 -mb-1 text-meta text-ink-3 sm:col-span-1 sm:mb-0">{{
+                PROTOCOL_LABELS[protocol]
+              }}</span>
               <input
                 v-model="form.endpoints[protocol]"
                 type="url"
