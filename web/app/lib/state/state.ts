@@ -2,7 +2,7 @@
 // every mutation has an owner in one of the sibling modules.
 
 import { reactive } from 'vue'
-import type { SessionView } from '../router'
+import type { PageRoute, SessionView } from '../router'
 import type {
   Decision,
   Effect,
@@ -116,18 +116,13 @@ export const MAX_TRACE = 500
 export const MAX_DELTA_CHARS = 400_000
 
 const initial = {
-  /** The full-page card library dialog. */
+  /** The card library page (the open card is the page's item). */
   library: {
-    /** Whether the library dialog is open. */
-    isOpen: false,
     decks: [] as LibraryDeck[],
     cards: [] as LibraryCard[],
     query: '',
     /** Server search hits for `query` (null while the query is empty). */
     hits: null as LibraryCard[] | null,
-    /** The open card: {deck, path}; `isNew` starts a blank form at `path`
-     *  (a folder prefix, or `""`). */
-    open: null as { deck: string; path: string; isNew?: boolean } | null,
     /** A deck to scroll into view the next time the tree renders (set by
      *  "open in library" jumps from elsewhere). */
     focusDeck: null as string | null,
@@ -160,6 +155,9 @@ const initial = {
   booting: false,
   /** How the open session is shown (mirrored in the address). */
   view: 'chat' as SessionView,
+  /** The management page over the session, if any (mirrored in the
+   *  address); the session stays loaded beneath it. */
+  page: null as PageRoute | null,
   session: null as SessionInfo | null,
   nodes: {} as Record<NodeId, Node>,
   branches: {} as Record<BranchId, Branch>,

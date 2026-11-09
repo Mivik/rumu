@@ -6,18 +6,19 @@
 import { computed, nextTick, ref, watch } from 'vue'
 import { t } from '../../i18n'
 import { buildLibraryTree, type TreeNode } from '../../lib/libraryTree'
-import { openAssistantSettings } from '../../lib/layout'
+import { openPage } from '../../lib/router'
 import {
   addFolder,
-  closeLibrary,
   createDeck,
   deleteCard,
   deleteDeck,
   deleteFolder,
   loadCard,
   moveEntry,
+  moveOpenCard,
   newCard,
   openCard,
+  openedCard,
   renameDeck,
   saveCard,
   state,
@@ -79,7 +80,7 @@ const focused = ref(0)
 
 function isSelected(node: TreeNode): boolean {
   if (node.kind !== 'card') return false
-  const open = state.library.open
+  const open = openedCard.value
   return open !== null && !open.isNew && open.deck === node.card.deck && open.path === node.card.path
 }
 
@@ -199,7 +200,7 @@ function onKey(e: KeyboardEvent): void {
 // Opening a card (from the tree or the drawer) expands its ancestors; the
 // later watcher scrolls the now-visible row into place.
 watch(
-  () => state.library.open,
+  () => openedCard.value,
   async (open) => {
     if (!open) return
     state.library.expanded.add(`deck:${open.deck}`)
@@ -408,9 +409,9 @@ async function remove(node: TreeNode, close: () => void): Promise<void> {
     } else {
       const detail = await loadCard(node.card.deck, node.card.path)
       await deleteCard(node.card.deck, node.card.path, detail.view_rev)
-      const open = state.library.open
+      const open = openedCard.value
       if (open && !open.isNew && open.deck === node.card.deck && open.path === node.card.path) {
-        state.library.open = null
+        moveOpenCard(null)
       }
     }
     toast('info', t('library.deleted'))
@@ -435,8 +436,7 @@ function onMenuToggle(open: boolean, toggleMenu: () => void): void {
 }
 
 function openAssistant(id: string): void {
-  closeLibrary()
-  openAssistantSettings(id)
+  openPage('assistants', id)
 }
 
 // ---- drag to move ----
@@ -508,9 +508,9 @@ async function onDrop(e: DragEvent, node: TreeNode): Promise<void> {
         base: detail.view_rev,
         from: { deck: from.deck, path: from.path },
       })
-      const open = state.library.open
+      const open = openedCard.value
       if (open && !open.isNew && open.deck === from.deck && open.path === from.path) {
-        state.library.open = { deck: to.deck, path: dest }
+        moveOpenCard({ deck: to.deck, path: dest })
       }
     }
     state.library.expanded.add(node.key)

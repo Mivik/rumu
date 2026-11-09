@@ -2,7 +2,7 @@
 // A card's history: one row per commit, and the selected version's diff.
 import { computed, ref, watch } from 'vue'
 import { t } from '../../i18n'
-import { cardHistory, cardVersion, closeLibrary, openSession, state } from '../../lib/store'
+import { cardHistory, cardVersion, openSession, state } from '../../lib/store'
 import type { FilePatch, LibraryCommit, LibraryVersion } from '../../lib/types'
 import { relTime } from '../../lib/util'
 import FileDiff from '../chat/FileDiff.vue'
@@ -25,7 +25,6 @@ function authorLabel(author: string): string {
 }
 
 function toSession(id: string): void {
-  closeLibrary()
   void openSession(id)
 }
 

@@ -68,8 +68,6 @@ export type { OpenHistory, PromptAttachment } from './state/sessions'
 export {
   cardHistory,
   cardVersion,
-  closeCard,
-  closeLibrary,
   addFolder,
   createDeck,
   deleteCard,
@@ -77,16 +75,18 @@ export {
   deleteFolder,
   loadCard,
   moveEntry,
+  moveOpenCard,
   newCard,
   openCard,
   openLibrary,
   openLibraryAtDeck,
+  openedCard,
   refreshLibrary,
   renameDeck,
   saveCard,
   searchLibrary,
 } from './state/library'
-export type { SaveCardRequest } from './state/library'
+export type { OpenCard, SaveCardRequest } from './state/library'
 export {
   answerDecision,
   closeSession,

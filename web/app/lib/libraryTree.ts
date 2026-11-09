@@ -1,4 +1,4 @@
-// The library dialog's tree: decks → folders → cards, built client-side from
+// The library page's tree: decks → folders → cards, built client-side from
 // the flat card rows. Deck and folder children put folders first, then cards,
 // both by name.
 

@@ -1,12 +1,11 @@
 <script setup lang="ts">
-// A project's dialog: a new one (`projectSettingsFor` empty), or an existing
-// one's settings. Its name, its charter, its mounted workspaces (add a
-// registered one or a folder, reorder — the first is the default — remove)
-// and deleting it. A folder added here is registered only when the dialog
-// is submitted.
+// The projects page (`/projects/<id>`, `?new` for a new one): a project's
+// name, its charter, its mounted workspaces (add a registered one or a
+// folder, reorder — the first is the default — remove) and deleting it. A
+// folder added here is registered only when the form is submitted.
 import { computed, reactive, ref, watch } from 'vue'
-import { t } from '../i18n'
-import { closeProjectSettings, layout } from '../lib/layout'
+import { t } from '../../i18n'
+import { openPage, pageUp, replacePage } from '../../lib/router'
 import {
   chooseLandingProject,
   createProject,
@@ -17,12 +16,12 @@ import {
   saveWorkspace,
   state,
   updateProject,
-} from '../lib/store'
-import type { Workspace } from '../lib/types'
-import FolderPicker from './FolderPicker.vue'
-import Icon from './ui/Icon.vue'
-import Modal from './ui/Modal.vue'
-import Popover from './ui/Popover.vue'
+} from '../../lib/store'
+import type { Workspace } from '../../lib/types'
+import FolderPicker from '../FolderPicker.vue'
+import Icon from '../ui/Icon.vue'
+import Popover from '../ui/Popover.vue'
+import PageSheet from './PageSheet.vue'
 
 /** `folders`: the workspaces to register on submit, name → root. */
 const form = reactive<{ name: string; workspaces: string[]; folders: Record<string, string> }>({
@@ -35,9 +34,14 @@ const busy = ref(false)
 const error = ref('')
 const pendingDelete = ref(false)
 const picker = ref<InstanceType<typeof FolderPicker> | null>(null)
+/** The folder picker is open, to add a folder as a workspace. */
+const addingFolder = ref(false)
 
-const project = computed(() => state.projects.find((p) => p.id === layout.projectSettingsFor) ?? null)
-const creating = computed(() => !layout.projectSettingsFor)
+const creating = computed(() => !!state.page?.fresh)
+/** The project open on the page (none for a new one, or a stale id). */
+const project = computed(() =>
+  creating.value ? null : (state.projects.find((p) => p.id === state.page?.item) ?? null),
+)
 const dirty = computed(() => JSON.stringify(form) !== pristine.value)
 const nameInvalid = computed(() => !!form.name && !/^[a-z][a-z0-9-]*$/.test(form.name))
 const canSave = computed(
@@ -56,10 +60,12 @@ function location(name: string): string {
   return w ? where(w) : (form.folders[name] ?? '')
 }
 
-function choose(id: string): void {
+/** Load the form from the open project (a blank one when adding). */
+function reset(): void {
   error.value = ''
   pendingDelete.value = false
-  const p = state.projects.find((x) => x.id === id)
+  addingFolder.value = false
+  const p = project.value
   form.name = p?.name ?? ''
   form.workspaces = [...(p?.workspaces ?? [])]
   form.folders = {}
@@ -91,7 +97,7 @@ function addFolder(): void {
     form.workspaces.push(name)
   }
   if (creating.value && !form.name) form.name = folderProjectName(root)
-  layout.projectFolderOpen = false
+  addingFolder.value = false
 }
 
 function removeAt(index: number): void {
@@ -123,10 +129,11 @@ async function save(): Promise<void> {
     const p = project.value
     if (p) {
       await updateProject(p.id, changes)
-      choose(p.id)
+      reset()
     } else {
-      chooseLandingProject((await createProject(changes.name, changes.workspaces)).id)
-      closeProjectSettings()
+      const created = await createProject(changes.name, changes.workspaces)
+      chooseLandingProject(created.id)
+      replacePage(created.id)
     }
   } catch (err) {
     error.value = `${t(creating.value ? 'projects.createError' : 'projects.saveError')}: ${(err as Error).message}`
@@ -142,7 +149,7 @@ async function remove(): Promise<void> {
   error.value = ''
   try {
     await deleteProject(p.id)
-    closeProjectSettings()
+    replacePage(null)
   } catch (err) {
     error.value = `${t('projects.deleteError')}: ${(err as Error).message}`
   } finally {
@@ -150,44 +157,63 @@ async function remove(): Promise<void> {
   }
 }
 
-watch(
-  () => layout.projectSettingsOpen,
-  (open) => {
-    if (open) choose(layout.projectSettingsFor)
-    else {
-      pendingDelete.value = false
-      error.value = ''
-    }
-  },
-)
+// The form follows the open project, once the list names it.
+watch([creating, () => project.value?.id], reset, { immediate: true })
 </script>
 
 <template>
-  <Modal
-    :open="layout.projectSettingsOpen"
-    :label="creating ? t('projects.add') : t('projects.title')"
-    :z="55"
-    wrapper-class="p-3 sm:p-6"
-    panel-class="h-[min(84dvh,560px)] w-full max-w-[680px] rounded-sheet"
-    @close="closeProjectSettings"
+  <PageSheet
+    :title="t('projects.title')"
+    :count="state.projects.length"
+    icon="mount"
+    tone="text-tool"
+    :detail="creating || !!project"
+    :pick="t('projects.pick')"
+    @back="pageUp"
   >
-    <form class="flex min-h-0 flex-1 flex-col" @submit.prevent="save">
-      <header class="flex flex-none items-center gap-3 px-6 pt-5 pb-1">
-        <h2 class="min-w-0 truncate text-title font-bold">
-          {{ creating ? t('projects.add') : (project?.name ?? t('projects.title')) }}
-        </h2>
+    <template #list>
+      <div class="flex min-h-0 flex-1 flex-col gap-0.5 overflow-y-auto p-3">
+        <button
+          v-for="p in state.projects"
+          :key="p.id"
+          type="button"
+          class="flex flex-col rounded-control px-2.5 py-2 text-left transition-colors duration-150"
+          :class="
+            p.id === project?.id
+              ? 'bg-surface font-semibold text-ink shadow-soft'
+              : 'text-ink-2 hover:bg-surface/70 hover:text-ink'
+          "
+          @click="openPage('projects', p.id)"
+        >
+          <span class="truncate text-secondary">{{ p.name }}</span>
+          <span class="truncate font-card text-micro font-normal text-ink-3">{{
+            p.workspaces.join(' · ') || t('projects.noWorkspaces')
+          }}</span>
+        </button>
         <button
           type="button"
-          class="icon-btn ml-auto size-8 flex-none"
-          :title="t('common.close')"
-          :aria-label="t('common.close')"
-          @click="closeProjectSettings"
+          class="mt-1 flex items-center gap-2.5 rounded-control border border-dashed px-2.5 py-2 text-left text-secondary transition-colors duration-150"
+          :class="
+            creating
+              ? 'border-brand/50 bg-brand-soft/50 font-semibold text-ink'
+              : 'border-line text-ink-3 hover:border-ink-3 hover:text-ink'
+          "
+          @click="openPage('projects', null, true)"
         >
-          <Icon name="close" :size="14" />
+          <Icon name="plus" :size="14" />
+          {{ t('projects.add') }}
         </button>
+      </div>
+    </template>
+
+    <form class="flex min-h-0 flex-1 flex-col" @submit.prevent="save">
+      <header class="flex flex-none items-center gap-3 px-4 pt-5 pb-1 sm:px-6">
+        <h2 class="min-w-0 truncate text-title font-bold">
+          {{ creating ? t('projects.add') : project?.name }}
+        </h2>
       </header>
 
-      <div class="flex min-h-0 flex-1 flex-col gap-5 overflow-y-auto px-6 pt-3 pb-6">
+      <div class="flex min-h-0 flex-1 flex-col gap-5 overflow-y-auto px-4 pt-3 pb-6 sm:px-6">
         <div class="flex flex-col gap-1.5">
           <div class="flex items-center gap-2">
             <label for="project-name" class="field-label">{{ t('projects.name') }}</label>
@@ -263,8 +289,19 @@ watch(
             </p>
           </div>
 
-          <div class="flex items-center gap-2">
-            <button type="button" class="btn flex-none" @click="layout.projectFolderOpen = true">
+          <div v-if="addingFolder" class="flex flex-col gap-2">
+            <FolderPicker ref="picker" start="~" class="max-h-64" />
+            <div class="flex justify-end gap-2">
+              <button type="button" class="btn" @click="addingFolder = false">
+                {{ t('common.cancel') }}
+              </button>
+              <button type="button" class="btn btn-primary" :disabled="!picker?.path" @click="addFolder">
+                {{ t('projects.addFolderConfirm') }}
+              </button>
+            </div>
+          </div>
+          <div v-else class="flex items-center gap-2">
+            <button type="button" class="btn flex-none" @click="addingFolder = true">
               <Icon name="plus" :size="13" />
               {{ t('projects.addFolder') }}
             </button>
@@ -306,7 +343,7 @@ watch(
         </div>
       </div>
 
-      <footer class="flex flex-none flex-col gap-2 border-t border-line-soft px-6 py-3">
+      <footer class="flex flex-none flex-col gap-2 border-t border-line-soft px-4 py-3 sm:px-6">
         <p v-if="error" class="text-meta text-danger">{{ error }}</p>
         <div v-if="pendingDelete" class="flex items-center gap-3">
           <Icon name="trash" :size="14" class="flex-none text-danger" />
@@ -330,12 +367,7 @@ watch(
             <Icon name="trash" :size="14" />
             {{ t('projects.delete') }}
           </button>
-          <button
-            v-if="dirty && project"
-            type="button"
-            class="btn ml-auto"
-            @click="choose(layout.projectSettingsFor)"
-          >
+          <button v-if="dirty && project" type="button" class="btn ml-auto" @click="reset">
             {{ t('projects.discard') }}
           </button>
           <button
@@ -349,36 +381,5 @@ watch(
         </div>
       </footer>
     </form>
-  </Modal>
-
-  <Modal
-    :open="layout.projectFolderOpen"
-    :label="t('projects.addFolder')"
-    :z="57"
-    wrapper-class="p-3 sm:p-6"
-    panel-class="h-[min(72dvh,480px)] w-full max-w-[560px] rounded-sheet"
-    @close="layout.projectFolderOpen = false"
-  >
-    <header class="flex flex-none items-center gap-3 px-5 pt-4 pb-3">
-      <h3 class="min-w-0 truncate text-title font-bold">{{ t('projects.addFolder') }}</h3>
-      <button
-        type="button"
-        class="icon-btn ml-auto size-8 flex-none"
-        :title="t('common.close')"
-        :aria-label="t('common.close')"
-        @click="layout.projectFolderOpen = false"
-      >
-        <Icon name="close" :size="14" />
-      </button>
-    </header>
-    <FolderPicker ref="picker" start="~" class="mx-5 min-h-0 flex-1" />
-    <footer class="flex flex-none justify-end gap-2 px-5 py-4">
-      <button type="button" class="btn" @click="layout.projectFolderOpen = false">
-        {{ t('common.cancel') }}
-      </button>
-      <button type="button" class="btn btn-primary" :disabled="!picker?.path" @click="addFolder">
-        {{ t('projects.addFolderConfirm') }}
-      </button>
-    </footer>
-  </Modal>
+  </PageSheet>
 </template>

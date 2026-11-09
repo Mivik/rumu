@@ -85,7 +85,7 @@ const canAdd = computed(
 </script>
 
 <template>
-  <div class="flex min-h-0 flex-1 flex-col gap-6 overflow-y-auto px-6 pt-3 pb-6">
+  <div class="flex min-h-0 flex-1 flex-col gap-6 overflow-y-auto px-4 pt-3 pb-6 sm:px-6">
     <NoProviders v-if="settings && !modelOptions.length" />
 
     <template v-else>

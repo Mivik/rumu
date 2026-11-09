@@ -433,7 +433,7 @@ async function refreshModels(): Promise<void> {
 
 <template>
   <div class="flex min-h-0 flex-1 flex-col">
-    <div class="flex min-h-0 flex-1 flex-col gap-5 overflow-y-auto px-6 pt-3 pb-6">
+    <div class="flex min-h-0 flex-1 flex-col gap-5 overflow-y-auto px-4 pt-3 pb-6 sm:px-6">
       <!-- the list -->
       <div v-if="editing === null" class="flex flex-col gap-2">
         <button
@@ -761,7 +761,10 @@ async function refreshModels(): Promise<void> {
       </form>
     </div>
 
-    <footer v-if="formShown" class="flex flex-none items-center gap-2 border-t border-line-soft px-6 py-3">
+    <footer
+      v-if="formShown"
+      class="flex flex-none items-center gap-2 border-t border-line-soft px-4 py-3 sm:px-6"
+    >
       <template v-if="saved">
         <div v-if="pendingDelete" class="flex items-center gap-2">
           <button type="button" class="btn" :disabled="busy" @click="pendingDelete = false">

@@ -14,7 +14,8 @@
 import { computed, ref } from 'vue'
 import { t } from '../../i18n'
 import { connected, isBusy, queuedPrompts, state } from '../../lib/store'
-import { layout, openAssistantSettings, openProjectSettings, toggleSidebar } from '../../lib/layout'
+import { layout, toggleSidebar } from '../../lib/layout'
+import { openPage } from '../../lib/router'
 import CardDrawer from './CardDrawer.vue'
 import Composer from './Composer.vue'
 import ConversationView from './ConversationView.vue'
@@ -108,7 +109,7 @@ function composerRoot(): HTMLElement | null {
             type="button"
             class="scope-tag"
             :title="t('chat.newSession.assistant')"
-            @click="openAssistantSettings(scope.assistant)"
+            @click="openPage('assistants', scope.assistant)"
           >
             <RumuCat :size="13" :paper="false" class="flex-none" />
             <span class="truncate">{{ scope.assistantName }}</span>
@@ -118,7 +119,7 @@ function composerRoot(): HTMLElement | null {
             type="button"
             class="scope-tag"
             :title="t('chat.sidebar.projectSettings')"
-            @click="openProjectSettings(scope.project)"
+            @click="openPage('projects', scope.project)"
           >
             <Icon name="mount" :size="13" class="flex-none text-tool" />
             <span class="truncate">{{ scope.projectName }}</span>

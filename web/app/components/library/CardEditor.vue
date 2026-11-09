@@ -33,7 +33,7 @@ const props = defineProps<{
   deck: string
   path: string
   isNew?: boolean
-  /** Hosted by the library dialog (in-library links and mobile back). */
+  /** Hosted by the library page (no "open in library" for itself). */
   inLibrary: boolean
   /** A read-only view to show instead of the loaded card (the drawer's
    *  "as seen" snapshot). Its presence hides edit. */
@@ -289,11 +289,6 @@ function cancel(): void {
   applyDetail(detail.value)
 }
 
-/** The below-lg back arrow: leave the card, confirming unsaved edits. */
-function backToList(): void {
-  if (confirmLeave()) emit('close')
-}
-
 /** A link card names its target: open it in a new window over this one. */
 function openTarget(): void {
   const link = target.value
@@ -494,16 +489,6 @@ const draftDiff = computed(() =>
       class="mt-2 flex h-8 flex-none items-center gap-1"
       :class="mode === 'read' ? 'mx-auto w-full max-w-[680px] px-6 sm:px-8' : 'px-4 sm:px-8'"
     >
-      <button
-        v-if="inLibrary"
-        type="button"
-        class="icon-btn size-8 lg:hidden"
-        :title="t('library.back')"
-        :aria-label="t('library.back')"
-        @click="backToList"
-      >
-        <Icon name="chevron" :size="16" class="rotate-180" />
-      </button>
       <h2 v-if="mode === 'edit'" class="min-w-0 flex-1 truncate text-title font-bold">
         {{ detail ? title : t('library.newCard') }}
       </h2>

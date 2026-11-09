@@ -1,5 +1,6 @@
 {
-  "title": "Project",
+  "title": "Projects",
+  "pick": "Pick a project or create one.",
   "add": "New project",
   "create": "Create",
   "createError": "Couldn't create the project",

@@ -3,7 +3,7 @@
 // the project it works in. Both are single choice; "No project" is a choice.
 import { computed } from 'vue'
 import { t } from '../../i18n'
-import { openAssistantSettings } from '../../lib/layout'
+import { openPage } from '../../lib/router'
 import {
   chooseLandingAssistant,
   chooseLandingProject,
@@ -20,7 +20,7 @@ const project = computed(() => state.projects.find((p) => p.id === landingProjec
 
 function manage(close: () => void): void {
   close()
-  openAssistantSettings()
+  openPage('assistants', landingAssistant.value)
 }
 
 function pickAssistant(id: string, close: () => void): void {

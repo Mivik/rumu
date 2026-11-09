@@ -1,15 +1,25 @@
 <script setup lang="ts">
-import { onBeforeUnmount, onMounted, ref } from 'vue'
+import { onBeforeUnmount, onMounted, ref, type Component } from 'vue'
 import Sidebar from './components/Sidebar.vue'
-import AssistantSettings from './components/AssistantSettings.vue'
-import WorkspaceSettings from './components/WorkspaceSettings.vue'
-import ProjectSettings from './components/ProjectSettings.vue'
-import SettingsDialog from './components/SettingsDialog.vue'
 import ChatView from './components/chat/ChatView.vue'
-import LibraryView from './components/library/LibraryView.vue'
+import AssistantsPage from './components/pages/AssistantsPage.vue'
+import LibraryPage from './components/pages/LibraryPage.vue'
+import ProjectsPage from './components/pages/ProjectsPage.vue'
+import SettingsPage from './components/pages/SettingsPage.vue'
+import WorkspacesPage from './components/pages/WorkspacesPage.vue'
 import Lightbox from './components/Lightbox.vue'
 import Toasts from './components/Toasts.vue'
 import { closePanels, layout } from './lib/layout'
+import type { Page } from './lib/router'
+import { state } from './lib/store'
+
+const PAGES: Record<Page, Component> = {
+  library: LibraryPage,
+  workspaces: WorkspacesPage,
+  assistants: AssistantsPage,
+  projects: ProjectsPage,
+  settings: SettingsPage,
+}
 
 // Below lg the sidebar is a drawer; the header button in ChatView toggles it
 // and the scrim below sits over the chat. Keep the open state honest when the
@@ -45,8 +55,11 @@ onBeforeUnmount(() => {
        drawer below it) and the chat — the one the conversation is written on.
        Everything about the open session (branches, cards in play, diagnostics)
        lives in that sheet's header; below lg the sidebar overlays the chat,
-       leaving it alone on screen. The cards share one 16px gutter on every
-       side, so the desk reads as an even grid. -->
+       leaving it alone on screen. A management page (the library, the
+       workspaces, …) takes the chat's place while its route is open; the chat
+       stays mounted beneath it, so its draft and scroll survive. The cards
+       share one 16px gutter on every side, so the desk reads as an even
+       grid. -->
   <div class="desk grid h-full grid-cols-1 lg:grid-cols-[280px_minmax(0,1fr)] lg:gap-x-4 lg:pr-4">
     <Sidebar
       class="fixed inset-y-0 left-0 z-50 w-[min(86vw,300px)] border-r border-line-soft bg-canvas transition-transform duration-300 ease-soft lg:static lg:z-auto lg:my-4 lg:ml-4 lg:w-auto lg:translate-x-0 lg:rounded-sheet lg:border-0 lg:bg-surface lg:shadow-card lg:ring-1 lg:ring-line"
@@ -54,12 +67,8 @@ onBeforeUnmount(() => {
       :inert="!layout.sidebarOpen && !lgUp ? '' : undefined"
       :aria-hidden="!layout.sidebarOpen && !lgUp ? 'true' : undefined"
     />
-    <ChatView />
-    <LibraryView />
-    <AssistantSettings />
-    <ProjectSettings />
-    <WorkspaceSettings />
-    <SettingsDialog />
+    <ChatView v-show="!state.page" />
+    <component :is="PAGES[state.page.page]" v-if="state.page" />
     <Lightbox />
     <Toasts />
 

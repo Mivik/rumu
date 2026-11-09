@@ -30,7 +30,8 @@ import {
   state,
 } from '../lib/store'
 import type { Project, SessionInfo } from '../lib/types'
-import { layout, openProjectSettings, openSettings, openWorkspaceSettings } from '../lib/layout'
+import { layout } from '../lib/layout'
+import { openPage, type Page } from '../lib/router'
 import { prefs } from '../lib/state/prefs'
 import { requestComposerFocus } from '../lib/state/ui'
 import RumuMark from './brand/RumuMark.vue'
@@ -49,14 +50,23 @@ function library(): void {
   layout.sidebarOpen = false
 }
 
-function workspaces(): void {
-  openWorkspaceSettings(state.workspaces[0]?.name ?? '')
+/** Go to a page's list (the library loads its decks on the way). */
+function page(name: Page): void {
+  openPage(name)
   layout.sidebarOpen = false
 }
 
-function settings(): void {
-  openSettings()
-  layout.sidebarOpen = false
+/** The page open in the chat's place, which its entry here marks. */
+const onPage = computed(() => state.page?.page ?? null)
+
+/** An entry under the wordmark: a sheet of paper while its page is open. */
+function navTone(name: Page | null): string[] {
+  return [
+    'flex w-full flex-none items-center gap-2.5 rounded-control border py-1.5 pl-2.5 pr-1.5 text-left text-secondary transition-colors duration-200 lg:pr-3',
+    name && onPage.value === name
+      ? 'border-line bg-surface-2 font-bold text-ink shadow-soft'
+      : 'border-transparent text-ink-2 hover:bg-surface-2/60 hover:text-ink',
+  ]
 }
 
 function pickSession(id: string): void {
@@ -79,12 +89,12 @@ function openDraft(): void {
 }
 
 function projectSettings(project: Project): void {
-  openProjectSettings(project.id)
+  openPage('projects', project.id)
   layout.sidebarOpen = false
 }
 
 function newProject(): void {
-  openProjectSettings('')
+  openPage('projects', null, true)
   layout.sidebarOpen = false
 }
 
@@ -170,7 +180,7 @@ const groups = computed<Group[]>(() => {
   }
   // The landing composer is a new session not created yet: its row sits in
   // the group it would be born into, unless a boot is still resolving.
-  if (!state.sessionId && !state.booting) {
+  if (!state.sessionId && !state.booting && !state.page) {
     const draft = map.get(landingProject.value ?? '')
     if (draft) draft.draft = true
   }
@@ -324,10 +334,7 @@ const otherLocale = computed<Locale>(
       </span>
     </div>
 
-    <button
-      class="flex w-full flex-none items-center gap-2.5 rounded-control border border-transparent py-1.5 pl-2.5 pr-1.5 text-left text-secondary text-ink-2 transition-colors duration-200 hover:bg-surface-2/60 hover:text-ink lg:pr-3"
-      @click="home"
-    >
+    <button :class="navTone(null)" @click="home">
       <span class="flex size-5 flex-none items-center justify-center leading-0">
         <Icon name="plus" :size="16" />
       </span>
@@ -335,7 +342,9 @@ const otherLocale = computed<Locale>(
     </button>
 
     <button
-      class="mt-0.5 flex w-full flex-none items-center gap-2.5 rounded-control border border-transparent py-1.5 pl-2.5 pr-1.5 text-left text-secondary text-ink-2 transition-colors duration-200 hover:bg-surface-2/60 hover:text-ink lg:pr-3"
+      class="mt-0.5"
+      :class="navTone('library')"
+      :aria-current="onPage === 'library' ? 'page' : undefined"
       @click="library"
     >
       <span class="flex size-5 flex-none items-center justify-center leading-0">
@@ -346,8 +355,10 @@ const otherLocale = computed<Locale>(
     </button>
 
     <button
-      class="mt-0.5 flex w-full flex-none items-center gap-2.5 rounded-control border border-transparent py-1.5 pl-2.5 pr-1.5 text-left text-secondary text-ink-2 transition-colors duration-200 hover:bg-surface-2/60 hover:text-ink lg:pr-3"
-      @click="workspaces"
+      class="mt-0.5"
+      :class="navTone('workspaces')"
+      :aria-current="onPage === 'workspaces' ? 'page' : undefined"
+      @click="page('workspaces')"
     >
       <span class="flex size-5 flex-none items-center justify-center leading-0">
         <Icon name="mount" :size="16" class="text-tool" />
@@ -358,7 +369,8 @@ const otherLocale = computed<Locale>(
 
     <button
       type="button"
-      class="mt-0.5 flex w-full flex-none items-center gap-2.5 rounded-control border border-transparent py-1.5 pl-2.5 pr-1.5 text-left text-secondary text-ink-2 transition-colors duration-200 hover:bg-surface-2/60 hover:text-ink lg:pr-3"
+      class="mt-0.5"
+      :class="navTone(state.page?.page === 'projects' && state.page.fresh ? 'projects' : null)"
       @click="newProject"
     >
       <span class="flex size-5 flex-none items-center justify-center leading-0">
@@ -447,7 +459,7 @@ const otherLocale = computed<Locale>(
             draggable="true"
             class="group flex w-full min-w-0 items-center rounded-control border text-left text-secondary transition-[background-color,border-color,color,box-shadow] duration-200 has-[[aria-expanded=true]]:bg-surface-2/60 has-[:focus-visible]:ring-2 has-[:focus-visible]:ring-brand/25"
             :class="
-              row.s.id === state.sessionId
+              row.s.id === state.sessionId && !state.page
                 ? 'border-line bg-surface-2 font-bold text-ink shadow-soft'
                 : 'border-transparent text-ink-2 hover:bg-surface-2/60 hover:text-ink'
             "
@@ -456,7 +468,7 @@ const otherLocale = computed<Locale>(
           >
             <button
               class="flex min-w-0 flex-1 items-center gap-2 py-2 pr-1 pl-3 text-left outline-none"
-              :aria-current="row.s.id === state.sessionId ? 'page' : undefined"
+              :aria-current="row.s.id === state.sessionId && !state.page ? 'page' : undefined"
               @click="pickSession(row.s.id)"
             >
               <span class="min-w-0 flex-1 truncate">{{ row.s.title || t('common.untitled') }}</span>
@@ -556,9 +568,11 @@ const otherLocale = computed<Locale>(
       <button
         type="button"
         class="icon-btn -my-1 size-7 flex-none"
+        :class="{ 'bg-surface-2 text-ink': onPage === 'settings' }"
         :title="t('settings.title')"
         :aria-label="t('settings.title')"
-        @click="settings"
+        :aria-current="onPage === 'settings' ? 'page' : undefined"
+        @click="page('settings')"
       >
         <Icon name="settings" :size="15" />
       </button>

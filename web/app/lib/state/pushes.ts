@@ -3,7 +3,7 @@
 // modules rather than mutating anything itself (beyond its own slices).
 
 import { rumu } from '../api'
-import { routeSession, sessionIdFromLocation, viewFromLocation } from '../router'
+import { commitRoute, pageFromLocation, sessionIdFromLocation, viewFromLocation } from '../router'
 import type {
   BranchUpdatedPush,
   PendingDecision,
@@ -76,7 +76,7 @@ function onNodeAppended(p: NodeAppendedPush): void {
   if (cardChanged(node)) {
     void refreshCards()
     // The model may be writing cards while the user browses the library.
-    if (state.library.isOpen) void refreshLibrary()
+    if (state.page?.page === 'library') void refreshLibrary()
   }
   if (state.sessionId && node.session === state.sessionId) {
     state.nodes[node.id] = node
@@ -261,6 +261,7 @@ export function startApp(): void {
   // while the boot requests are in flight.
   state.booting = sessionIdFromLocation() !== null
   state.view = viewFromLocation()
+  state.page = pageFromLocation()
 
   rumu.onPush('node.appended', (p) => onNodeAppended(p as unknown as NodeAppendedPush))
   rumu.onPush('prompt.queued', (p) => onPromptQueued(p as unknown as PromptQueuedPush))
@@ -295,9 +296,11 @@ export function startApp(): void {
   // Updates that landed while the tab was hidden are seen once it shows.
   document.addEventListener('visibilitychange', markSeen)
 
-  // Browser back/forward: reopen the session (and view) the address names,
-  // or land.
+  // Browser back/forward: show the page the address names, or reopen its
+  // session (and view), or land. A page keeps the session beneath it.
   window.addEventListener('popstate', () => {
+    state.page = pageFromLocation()
+    if (state.page) return
     const id = sessionIdFromLocation()
     state.view = viewFromLocation()
     if (id === state.sessionId) return
@@ -310,12 +313,12 @@ export function startApp(): void {
     void refreshSettings()
     // A reconnect resyncs the open library; boot follows the session URL. A
     // URL naming an unknown session falls back to the landing page.
-    if (state.library.isOpen) void refreshLibrary()
+    if (state.page?.page === 'library') void refreshLibrary()
     const target = sessionIdFromLocation() ?? state.sessionId
     try {
       if (target && !(await openSession(target, { history: 'none' }))) {
         state.view = 'chat'
-        routeSession(null, 'chat', 'replace')
+        commitRoute('replace')
       }
     } finally {
       state.booting = false

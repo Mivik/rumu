@@ -5,9 +5,10 @@
 
 import { t } from '../i18n'
 import { cardById, mountedRef } from './cards'
+import { closePage } from './router'
 import {
   closeDrawer,
-  closeLibrary,
+  openCard,
   openCardWindow,
   openDrawer,
   openLibrary,
@@ -19,12 +20,13 @@ import { toast } from './state/ui'
 import type { LibraryRef } from './types'
 import { copyText } from './util'
 
-/** Open a card by deck and deck-local path. A card already on screen stays
- *  put: the link opens its target in a new window above it. With nothing
- *  showing, a mounted card opens in the drawer and an unmounted one in the
- *  library. */
+/** Open a card by deck and deck-local path. A card window stays put: the
+ *  link opens its target in a new window above it. The library page goes to
+ *  the card (Back returns). Elsewhere a mounted card opens in the drawer and
+ *  an unmounted one in the library. */
 function openDeckCard(ref: LibraryRef): void {
-  if (state.library.isOpen || state.drawers.length) return openCardWindow(ref.deck, ref.path)
+  if (state.drawers.length) return openCardWindow(ref.deck, ref.path)
+  if (state.page?.page === 'library') return openCard(ref.deck, ref.path)
   const mounted = state.cards.find((c) => c.deck === ref.deck && c.path === ref.path)
   if (mounted) return openDrawer(mounted.id)
   closeDrawer()
@@ -80,8 +82,7 @@ function openAddress(abs: string): boolean {
       const sid = segs[0]
       if (!sid || sid === 'by-assistant') return false
       closeDrawer()
-      closeLibrary()
-      // A failed open reports itself.
+      // A failed open reports itself; a page gives way once it loads.
       void openSession(sid)
       return true
     }
@@ -89,7 +90,7 @@ function openAddress(abs: string): boolean {
       const id = segs[0]
       if (!id || !state.tasks[id]) return false
       closeDrawer()
-      closeLibrary()
+      closePage()
       state.taskDetail = id
       return true
     }

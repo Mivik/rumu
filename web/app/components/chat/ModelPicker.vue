@@ -5,7 +5,7 @@
 // (EffortPicker).
 import { computed, ref } from 'vue'
 import { t } from '../../i18n'
-import { openSettings } from '../../lib/layout'
+import { openPage } from '../../lib/router'
 import { currentPick, editSettings, modelByRef, models, pick, resolvePick } from '../../lib/state/models'
 import type { ModelInfo } from '../../lib/generated/ModelInfo'
 import type { ModelUse } from '../../lib/generated/ModelUse'
@@ -78,7 +78,7 @@ async function togglePin(m: ModelInfo): Promise<void> {
 
 function configure(close: () => void): void {
   close()
-  openSettings()
+  openPage('settings')
 }
 </script>
 

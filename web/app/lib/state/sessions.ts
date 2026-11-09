@@ -3,7 +3,7 @@
 import { watch } from 'vue'
 import { rumu } from '../api'
 import { t } from '../../i18n'
-import { routeSession } from '../router'
+import { commitRoute } from '../router'
 import type { SessionView } from '../router'
 import type {
   Branch,
@@ -128,8 +128,8 @@ export function viewAssistant(assistant: string): void {
 }
 
 /** Open a session. `history` decides what happens to the address bar: a pick
- * pushes `/s/<id>`, boot and popstate leave it alone, a failed boot replaces
- * its stale URL with the landing page. */
+ * pushes `/s/<id>` (leaving any page for it), boot and popstate leave it
+ * alone, a failed boot replaces its stale URL with the landing page. */
 export type OpenHistory = 'push' | 'replace' | 'none'
 
 /** Latest open request; a slower earlier one is dropped, not applied. */
@@ -146,7 +146,10 @@ export async function openSession(id: SessionId, opts: { history?: OpenHistory }
     state.activeBranch = tree.session.active_branch
     chooseLandingProject(tree.session.project ?? null)
     const history = opts.history ?? 'push'
-    if (history !== 'none') routeSession(state.sessionId, state.view, history)
+    if (history !== 'none') {
+      state.page = null
+      commitRoute(history)
+    }
     await loadPath(tree.session.active_branch)
     markSeen()
     void refreshTasks(tree.session.id)
@@ -172,7 +175,8 @@ export function markSeen(): void {
  * where the user wants to be next, so it takes focus. */
 export function goHome(): void {
   closeSession()
-  routeSession(null, 'chat', 'push')
+  state.page = null
+  commitRoute('push')
   requestComposerFocus()
 }
 
@@ -180,7 +184,7 @@ export function goHome(): void {
 export function showView(view: SessionView): void {
   if (state.view === view) return
   state.view = view
-  routeSession(state.sessionId, view, 'push')
+  commitRoute('push')
 }
 
 /** Back to the landing page (browser back past the first session). */
@@ -282,7 +286,7 @@ export function forgetSession(id: SessionId): void {
   state.sessions = state.sessions.filter((s) => s.id !== id)
   if (state.sessionId !== id) return
   closeSession()
-  routeSession(null, 'chat', 'replace')
+  commitRoute('replace')
 }
 
 /** Delete a session and its stored history for good. */
