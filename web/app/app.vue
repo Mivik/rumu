@@ -13,7 +13,7 @@ import type { Page } from './lib/router'
 import { state } from './lib/store'
 
 const PAGES: Record<Page, Component> = {
-  library: LibraryPage,
+  decks: LibraryPage,
   workspaces: ProjectsPage,
   assistants: AssistantsPage,
   projects: ProjectsPage,

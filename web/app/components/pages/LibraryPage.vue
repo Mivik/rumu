@@ -1,6 +1,6 @@
 <script setup lang="ts">
 // The card library page: a folder tree over every deck, with the reader /
-// editor of the open card beside it (`/library/<deck>/<path>`).
+// editor of the open card beside it (`/decks/<deck>/<path>`).
 import { computed, onBeforeUnmount, ref, watch } from 'vue'
 import { t } from '../../i18n'
 import { pageUp } from '../../lib/router'

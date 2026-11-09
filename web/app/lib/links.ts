@@ -26,7 +26,7 @@ import { copyText } from './util'
  *  an unmounted one in the library. */
 function openDeckCard(ref: LibraryRef): void {
   if (state.drawers.length) return openCardWindow(ref.deck, ref.path)
-  if (state.page?.page === 'library') return openCard(ref.deck, ref.path)
+  if (state.page?.page === 'decks') return openCard(ref.deck, ref.path)
   const mounted = state.cards.find((c) => c.deck === ref.deck && c.path === ref.path)
   if (mounted) return openDrawer(mounted.id)
   closeDrawer()

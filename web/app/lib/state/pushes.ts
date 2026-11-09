@@ -76,7 +76,7 @@ function onNodeAppended(p: NodeAppendedPush): void {
   if (cardChanged(node)) {
     void refreshCards()
     // The model may be writing cards while the user browses the library.
-    if (state.page?.page === 'library') void refreshLibrary()
+    if (state.page?.page === 'decks') void refreshLibrary()
   }
   if (state.sessionId && node.session === state.sessionId) {
     state.nodes[node.id] = node
@@ -313,7 +313,7 @@ export function startApp(): void {
     void refreshSettings()
     // A reconnect resyncs the open library; boot follows the session URL. A
     // URL naming an unknown session falls back to the landing page.
-    if (state.page?.page === 'library') void refreshLibrary()
+    if (state.page?.page === 'decks') void refreshLibrary()
     const target = sessionIdFromLocation() ?? state.sessionId
     try {
       if (target && !(await openSession(target, { history: 'none' }))) {

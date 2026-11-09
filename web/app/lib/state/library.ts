@@ -1,7 +1,7 @@
 // The card library page: every deck, independent of the mounted cards a
 // session sees. Mutations refresh both this view and the chat's `state.cards`,
 // so chips and the drawer follow. The open card is the page's item
-// (`/library/<deck>/<path>`), so Back walks the cards that were read.
+// (`/decks/<deck>/<path>`), so Back walks the cards that were read.
 
 import { computed } from 'vue'
 import { t } from '../../i18n'
@@ -26,7 +26,7 @@ const cardItem = (deck: string, path: string): string => (path ? `${deck}/${path
 /** The card open on the library page, if any. Deck ids hold no `/`. */
 export const openedCard = computed<OpenCard | null>(() => {
   const p = state.page
-  if (p?.page !== 'library' || !p.item) return null
+  if (p?.page !== 'decks' || !p.item) return null
   const slash = p.item.indexOf('/')
   const deck = slash < 0 ? p.item : p.item.slice(0, slash)
   const path = slash < 0 ? '' : p.item.slice(slash + 1)
@@ -36,7 +36,7 @@ export const openedCard = computed<OpenCard | null>(() => {
 
 /** Navigate to the library, at a card when given, and load it. */
 export function openLibrary(deck: string | null = null, path: string | null = null): void {
-  openPage('library', deck && path ? cardItem(deck, path) : null)
+  openPage('decks', deck && path ? cardItem(deck, path) : null)
   state.library.query = ''
   state.library.hits = null
   void refreshLibrary()
@@ -50,20 +50,20 @@ export function openLibraryAtDeck(deck: string): void {
 
 /** Open one card in the editor. */
 export function openCard(deck: string, path: string): void {
-  openPage('library', cardItem(deck, path))
+  openPage('decks', cardItem(deck, path))
 }
 
 /** Open a blank card form in `deck`, prefilled with a folder prefix. */
 export function newCard(deck: string | null = null, pathPrefix = ''): void {
   const target = deck || state.library.decks[0]?.id
   if (!target) return
-  openPage('library', cardItem(target, pathPrefix), true)
+  openPage('decks', cardItem(target, pathPrefix), true)
 }
 
 /** The open card is now at another place, or gone (`null`): correct the
  *  address in place. */
 export function moveOpenCard(card: OpenCard | null): void {
-  if (state.page?.page !== 'library') return
+  if (state.page?.page !== 'decks') return
   replacePage(card ? cardItem(card.deck, card.path) : null, !!card?.isNew)
 }
 

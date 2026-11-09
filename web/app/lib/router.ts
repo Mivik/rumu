@@ -4,7 +4,7 @@
 // The History API directly rather than vue-router. An open session owns
 // `/s/<id>`, a view other than the conversation adds `?view=<name>`, and the
 // landing page is `/`. A page owns `/<page>`, the item open on it follows
-// (`/library/<deck>/<path>`, `/workspaces/<name>`, …), and `?new` is its
+// (`/decks/<deck>/<path>`, `/workspaces/<name>`, …), and `?new` is its
 // creation form. The rumu server already serves index.html for unknown paths
 // (SPA fallback), so a refresh boots into whatever the address names.
 //
@@ -20,7 +20,7 @@ const SESSION_PATH = /^\/s\/([^/]+)\/?$/
  *  trajectory of its nodes. */
 export type SessionView = 'chat' | 'trace'
 
-export const PAGES = ['library', 'workspaces', 'assistants', 'projects', 'settings'] as const
+export const PAGES = ['decks', 'workspaces', 'assistants', 'projects', 'settings'] as const
 export type Page = (typeof PAGES)[number]
 
 /** A page and the item open on it: a card (`<deck>/<path>`, a deck alone for

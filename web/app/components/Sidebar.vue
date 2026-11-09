@@ -338,8 +338,8 @@ const otherLocale = computed<Locale>(
 
     <button
       class="mt-0.5"
-      :class="navTone('library')"
-      :aria-current="onPage === 'library' ? 'page' : undefined"
+      :class="navTone('decks')"
+      :aria-current="onPage === 'decks' ? 'page' : undefined"
       @click="library"
     >
       <span class="flex size-5 flex-none items-center justify-center leading-0">
