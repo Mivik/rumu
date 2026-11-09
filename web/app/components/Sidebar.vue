@@ -34,6 +34,7 @@ import { layout } from '../lib/layout'
 import { openPage, sheetOf, type Page } from '../lib/router'
 import { prefs } from '../lib/state/prefs'
 import { requestComposerFocus } from '../lib/state/ui'
+import ProjectSeal from './brand/ProjectSeal.vue'
 import RumuMark from './brand/RumuMark.vue'
 import Icon from './ui/Icon.vue'
 import Popover from './ui/Popover.vue'
@@ -389,6 +390,7 @@ const otherLocale = computed<Locale>(
               class="flex-none transition-transform duration-150"
               :class="{ 'rotate-90': !collapsed(group) }"
             />
+            <ProjectSeal v-if="group.project" :project="group.project" :size="14" class="mr-0.5" />
             <span class="min-w-0 truncate text-ink-2">{{ group.name }}</span>
             <span v-if="group.sessions.length" class="text-micro text-ink-3 tabular-nums">{{
               group.sessions.length

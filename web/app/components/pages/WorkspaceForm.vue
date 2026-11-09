@@ -148,13 +148,7 @@ watch([isNew, () => current.value?.name], reset, { immediate: true })
 
 <template>
   <form class="flex min-h-0 min-w-0 flex-1 flex-col" @submit.prevent="save">
-    <header class="flex flex-none items-center gap-3 px-4 pt-5 pb-1 sm:px-6">
-      <h3 class="min-w-0 truncate text-title font-bold" :class="{ 'font-card': !isNew }">
-        {{ isNew ? t('workspaces.add') : editing }}
-      </h3>
-    </header>
-
-    <div class="flex min-h-0 flex-1 flex-col gap-5 overflow-y-auto px-4 pt-3 pb-6 sm:px-6">
+    <div class="flex min-h-0 flex-1 flex-col gap-5 overflow-y-auto px-4 pt-5 pb-6 sm:px-6">
       <div class="flex flex-col gap-1.5">
         <div class="flex items-center gap-2">
           <label for="workspace-root" class="field-label">{{ t('workspaces.root') }}</label>

@@ -1,6 +1,6 @@
 <script setup lang="ts">
 // A project on the projects page (`/projects/<id>`, `?new` for a new one): its
-// name, its charter, its mounted workspaces (add a registered one or a
+// seal and name, its charter, its mounted workspaces (add a registered one or a
 // folder, reorder — the first is the default — remove) and deleting it. A
 // folder added here is registered only when the form is submitted.
 import { computed, reactive, ref, watch } from 'vue'
@@ -17,14 +17,25 @@ import {
   state,
   updateProject,
 } from '../../lib/store'
+import { PROJECT_TONES, projectTone, toneColor } from '../../lib/projectIcon'
 import type { Workspace } from '../../lib/types'
 import FolderPicker from '../FolderPicker.vue'
+import ProjectSeal from '../brand/ProjectSeal.vue'
 import Icon from '../ui/Icon.vue'
 import Popover from '../ui/Popover.vue'
 
-/** `folders`: the workspaces to register on submit, name → root. */
-const form = reactive<{ name: string; workspaces: string[]; folders: Record<string, string> }>({
+/** `folders`: the workspaces to register on submit, name → root. `glyph`
+ *  and `tone` are the seal's, blank for the defaults. */
+const form = reactive<{
+  name: string
+  glyph: string
+  tone: string
+  workspaces: string[]
+  folders: Record<string, string>
+}>({
   name: '',
+  glyph: '',
+  tone: '',
   workspaces: [],
   folders: {},
 })
@@ -42,10 +53,15 @@ const project = computed(() =>
   creating.value ? null : (state.projects.find((p) => p.id === state.page?.item) ?? null),
 )
 const dirty = computed(() => JSON.stringify(form) !== pristine.value)
-const nameInvalid = computed(() => !!form.name && !/^[a-z][a-z0-9-]*$/.test(form.name))
-const canSave = computed(
-  () => !busy.value && (creating.value || dirty.value) && !!form.name.trim() && !nameInvalid.value,
-)
+const canSave = computed(() => !busy.value && (creating.value || dirty.value) && !!form.name.trim())
+
+/** The seal as the form has it; a new project's default tone is fixed when
+ *  the form opens, since its id (what the default comes from) is not known yet. */
+const seal = computed(() => ({
+  id: project.value?.id ?? '',
+  name: form.name || '?',
+  icon: { glyph: form.glyph.trim() || undefined, tone: form.tone || undefined },
+}))
 
 /** The registered workspaces not in the project yet. */
 const available = computed(() => state.workspaces.filter((w) => !form.workspaces.includes(w.name)))
@@ -66,6 +82,10 @@ function reset(): void {
   addingFolder.value = false
   const p = project.value
   form.name = p?.name ?? ''
+  form.glyph = p?.icon?.glyph ?? ''
+  form.tone = p
+    ? (p.icon?.tone ?? '')
+    : PROJECT_TONES[Math.floor(Math.random() * (PROJECT_TONES.length - 1))]!
   form.workspaces = [...(p?.workspaces ?? [])]
   form.folders = {}
   pristine.value = JSON.stringify(form)
@@ -124,13 +144,14 @@ async function save(): Promise<void> {
     for (const [name, root] of Object.entries(form.folders))
       await saveWorkspace({ name, root, read_only: false })
     form.folders = {}
-    const changes = { name: form.name.trim(), workspaces: form.workspaces }
+    const icon = { glyph: form.glyph.trim() || undefined, tone: form.tone || undefined }
+    const changes = { name: form.name.trim(), workspaces: form.workspaces, icon }
     const p = project.value
     if (p) {
       await updateProject(p.id, changes)
       reset()
     } else {
-      const created = await createProject(changes.name, changes.workspaces)
+      const created = await createProject(changes.name, changes.workspaces, icon)
       chooseLandingProject(created.id)
       replacePage(created.id)
     }
@@ -162,13 +183,7 @@ watch([creating, () => project.value?.id], reset, { immediate: true })
 
 <template>
   <form class="flex min-h-0 flex-1 flex-col" @submit.prevent="save">
-    <header class="flex flex-none items-center gap-3 px-4 pt-5 pb-1 sm:px-6">
-      <h2 class="min-w-0 truncate text-title font-bold">
-        {{ creating ? t('projects.add') : project?.name }}
-      </h2>
-    </header>
-
-    <div class="flex min-h-0 flex-1 flex-col gap-5 overflow-y-auto px-4 pt-3 pb-6 sm:px-6">
+    <div class="flex min-h-0 flex-1 flex-col gap-5 overflow-y-auto px-4 pt-5 pb-6 sm:px-6">
       <div class="flex flex-col gap-1.5">
         <div class="flex items-center gap-2">
           <label for="project-name" class="field-label">{{ t('projects.name') }}</label>
@@ -182,15 +197,77 @@ watch([creating, () => project.value?.id], reset, { immediate: true })
             {{ t('projects.charter') }}
           </button>
         </div>
-        <input
-          id="project-name"
-          v-model.trim="form.name"
-          type="text"
-          class="w-full"
-          autocomplete="off"
-          spellcheck="false"
-        />
-        <span v-if="nameInvalid" class="field-hint text-danger">{{ t('projects.nameHint') }}</span>
+        <div class="flex items-center gap-2.5">
+          <Popover :label="t('projects.icon')" placement="bottom-start" menu>
+            <template #trigger="{ open, toggle }">
+              <button
+                type="button"
+                class="seal-btn group relative flex-none rounded-[11px] outline-none focus-visible:ring-3 focus-visible:ring-brand/30"
+                :title="t('projects.icon')"
+                :aria-label="t('projects.icon')"
+                :aria-expanded="open"
+                @click="toggle"
+              >
+                <ProjectSeal :project="seal" :size="36" />
+                <span
+                  class="absolute -right-1 -bottom-1 flex size-4 items-center justify-center rounded-full bg-surface text-ink-3 shadow-soft transition-colors group-hover:text-ink"
+                >
+                  <Icon name="edit" :size="10" />
+                </span>
+              </button>
+            </template>
+            <div class="flex flex-col gap-2.5 p-1.5">
+              <div
+                class="flex items-center justify-between"
+                role="radiogroup"
+                :aria-label="t('projects.tone')"
+              >
+                <button
+                  v-for="tone in PROJECT_TONES"
+                  :key="tone"
+                  type="button"
+                  role="radio"
+                  class="swatch"
+                  :style="{ '--tone': toneColor(tone) }"
+                  :aria-checked="projectTone(seal) === tone"
+                  :title="t(`projects.tones.${tone}`)"
+                  :aria-label="t(`projects.tones.${tone}`)"
+                  @click="form.tone = tone"
+                />
+              </div>
+              <div class="flex items-center gap-2">
+                <input
+                  v-model="form.glyph"
+                  type="text"
+                  maxlength="4"
+                  class="w-12 flex-none text-center font-card"
+                  :placeholder="Array.from(form.name)[0]?.toUpperCase() ?? ''"
+                  :title="t('projects.glyph')"
+                  :aria-label="t('projects.glyph')"
+                  autocomplete="off"
+                  spellcheck="false"
+                />
+                <button
+                  v-if="form.glyph || (project && form.tone)"
+                  type="button"
+                  class="ml-auto rounded-control px-1.5 py-0.5 text-meta font-semibold text-ink-3 transition-colors hover:bg-surface-2 hover:text-ink"
+                  @click="((form.glyph = ''), project && (form.tone = ''))"
+                >
+                  {{ t('projects.resetIcon') }}
+                </button>
+              </div>
+            </div>
+          </Popover>
+          <input
+            id="project-name"
+            v-model.trim="form.name"
+            type="text"
+            class="w-full"
+            maxlength="80"
+            autocomplete="off"
+            spellcheck="false"
+          />
+        </div>
       </div>
 
       <div class="flex flex-col gap-1.5">
@@ -337,3 +414,33 @@ watch([creating, () => project.value?.id], reset, { immediate: true })
     </footer>
   </form>
 </template>
+
+<style scoped>
+.swatch {
+  width: 1.375rem;
+  height: 1.375rem;
+  border-radius: 999px;
+  background: var(--tone);
+  box-shadow:
+    0 0 0 2px var(--surface),
+    0 0 0 3px transparent;
+  transition:
+    box-shadow 0.15s,
+    scale 0.15s var(--ease-spring);
+}
+
+.swatch:hover {
+  scale: 1.1;
+}
+
+.swatch[aria-checked='true'] {
+  box-shadow:
+    0 0 0 2px var(--surface),
+    0 0 0 3.5px var(--tone);
+}
+
+.swatch:focus-visible {
+  outline: 2px solid var(--brand);
+  outline-offset: 3px;
+}
+</style>

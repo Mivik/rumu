@@ -1,6 +1,6 @@
 <script setup lang="ts">
 // The assistants page (`/assistants/<id>`, `?new` for a new one). Each
-// assistant is a deck (`decks/<name>/deck.yaml`) with a pinned
+// assistant is a deck (`decks/<id>/deck.yaml`) with a pinned
 // `instructions.md`; the form edits its name, default mounts, instructions
 // and who may ask it. Saves go through `assistant.upsert` /
 // `assistant.delete`; `assistant.set_default` picks the one sessions run as
@@ -63,15 +63,8 @@ const isDefault = computed(() => !!current.value?.default)
 /** The last assistant cannot go: sessions need one to run as. */
 const canDelete = computed(() => !isNew.value && state.assistants.length > 1)
 const dirty = computed(() => JSON.stringify(form) !== pristine.value)
-const nameInvalid = computed(() => isNew.value && !!form.name && !/^[a-z][a-z0-9-]*$/.test(form.name))
 const canSave = computed(
-  () =>
-    !saving.value &&
-    dirty.value &&
-    !!form.name.trim() &&
-    !nameInvalid.value &&
-    !badMounts.value.size &&
-    !badDecks.value.size,
+  () => !saving.value && dirty.value && !!form.name.trim() && !badMounts.value.size && !badDecks.value.size,
 )
 
 /** Decks a mount row may name; the assistant's own deck is the fixed `/cards/self`. */
@@ -360,8 +353,14 @@ onBeforeUnmount(() => window.removeEventListener('keydown', onKey, true))
         <div v-else class="flex flex-col gap-5">
           <label v-if="isNew" class="flex flex-col gap-1.5">
             <span class="field-label">{{ t('assistants.name') }}</span>
-            <input v-model="form.name" type="text" class="w-full" autocomplete="off" spellcheck="false" />
-            <span v-if="nameInvalid" class="field-hint text-danger">{{ t('assistants.nameHint') }}</span>
+            <input
+              v-model.trim="form.name"
+              type="text"
+              class="w-full"
+              maxlength="80"
+              autocomplete="off"
+              spellcheck="false"
+            />
           </label>
 
           <div class="flex flex-col gap-1.5">

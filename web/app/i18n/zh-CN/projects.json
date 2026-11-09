@@ -1,11 +1,10 @@
 {
   "title": "项目",
-  "pick": "选择一个项目，或新建一个。",
+  "newSession": "新会话",
   "add": "新建项目",
   "create": "创建",
   "createError": "创建项目失败",
   "name": "名字",
-  "nameHint": "小写字母开头，只含小写字母、数字和短横线",
   "charter": "章程",
   "workspaces": "工作区",
   "default": "默认",
@@ -22,5 +21,17 @@
   "deletePrompt": "删除 {name}？",
   "deleteConfirm": "删除",
   "saveError": "保存项目失败",
-  "deleteError": "删除项目失败"
+  "deleteError": "删除项目失败",
+  "icon": "图标",
+  "glyph": "符号",
+  "tone": "颜色",
+  "resetIcon": "恢复默认",
+  "tones": {
+    "brand": "珊瑚",
+    "tool": "石板",
+    "pine": "松绿",
+    "memory": "紫罗兰",
+    "agent": "青",
+    "ink": "石墨"
+  }
 }

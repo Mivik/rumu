@@ -62,6 +62,7 @@
   "deleteDeckConfirm": "删除卡组“{name}”和其中的 {n} 张卡片？",
   "deleteDeckNote": "它的版本历史也会一起删除。",
   "nameRule": "只能包含字母、数字、-、_ 和 .",
+  "deckNameRule": "名字最多 80 个字符",
   "nameTaken": "这个名字已被占用",
   "moveError": "移动失败"
 }

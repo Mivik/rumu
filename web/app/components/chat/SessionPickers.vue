@@ -12,6 +12,7 @@ import {
   state,
 } from '../../lib/store'
 import RumuCat from '../brand/RumuCat.vue'
+import ProjectSeal from '../brand/ProjectSeal.vue'
 import Icon from '../ui/Icon.vue'
 import Popover from '../ui/Popover.vue'
 
@@ -98,7 +99,8 @@ function pickProject(id: string | null, close: () => void): void {
         :aria-expanded="open"
         @click="toggle"
       >
-        <Icon name="mount" :size="14" class="text-tool" />
+        <ProjectSeal v-if="project" :project="project" :size="16" />
+        <Icon v-else name="mount" :size="14" class="text-ink-3" />
         <span class="truncate">{{ project?.name ?? t('chat.newSession.noProject') }}</span>
         <Icon name="down" :size="12" class="text-ink-3" />
       </button>
@@ -117,6 +119,11 @@ function pickProject(id: string | null, close: () => void): void {
           class="flex-none text-brand"
           :class="landingProject === null ? '' : 'invisible'"
         />
+        <span
+          class="flex size-[18px] flex-none items-center justify-center rounded-[5px] border border-dashed border-line"
+        >
+          <Icon name="close" :size="10" class="text-ink-3" />
+        </span>
         <span
           class="min-w-0 truncate text-secondary"
           :class="landingProject === null ? 'font-semibold text-ink' : 'text-ink-2'"
@@ -137,6 +144,7 @@ function pickProject(id: string | null, close: () => void): void {
           class="flex-none text-brand"
           :class="p.id === landingProject ? '' : 'invisible'"
         />
+        <ProjectSeal :project="p" :size="18" />
         <span
           class="min-w-0 truncate text-secondary"
           :class="p.id === landingProject ? 'font-semibold text-ink' : 'text-ink-2'"

@@ -4,7 +4,6 @@
   "manage": "Edit assistants",
   "new": "New assistant",
   "name": "Name",
-  "nameHint": "Lowercase letters, digits and dashes only",
   "mounts": "Default mounts",
   "instructions": "Instructions",
   "allowAsk": "Can ask it without approval",

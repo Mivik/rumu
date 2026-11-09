@@ -4,7 +4,6 @@
   "manage": "编辑助手",
   "new": "新建助手",
   "name": "名字",
-  "nameHint": "只能用小写字母、数字和短横线",
   "mounts": "默认挂载",
   "instructions": "指令",
   "allowAsk": "免确认询问它",

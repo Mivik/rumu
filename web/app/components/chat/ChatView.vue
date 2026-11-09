@@ -27,6 +27,7 @@ import SessionBar from './SessionBar.vue'
 import SessionPickers from './SessionPickers.vue'
 import RumuCat from '../brand/RumuCat.vue'
 import RumuMark from '../brand/RumuMark.vue'
+import ProjectSeal from '../brand/ProjectSeal.vue'
 import Icon from '../ui/Icon.vue'
 
 const composerEl = ref<HTMLElement | null>(null)
@@ -42,6 +43,7 @@ const scope = computed(() => {
     assistantName: assistant?.name ?? s.assistant.slice(0, 8),
     project: s.project ?? null,
     projectName: project?.name ?? s.project ?? null,
+    projectInfo: project ?? null,
   }
 })
 
@@ -121,7 +123,8 @@ function composerRoot(): HTMLElement | null {
             :title="t('chat.sidebar.projectSettings')"
             @click="openPage('projects', scope.project)"
           >
-            <Icon name="mount" :size="13" class="flex-none text-tool" />
+            <ProjectSeal v-if="scope.projectInfo" :project="scope.projectInfo" :size="14" />
+            <Icon v-else name="mount" :size="13" class="flex-none text-tool" />
             <span class="truncate">{{ scope.projectName }}</span>
           </button>
         </span>

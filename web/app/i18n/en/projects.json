@@ -1,11 +1,10 @@
 {
   "title": "Projects",
-  "pick": "Pick a project or create one.",
+  "newSession": "New session",
   "add": "New project",
   "create": "Create",
   "createError": "Couldn't create the project",
   "name": "Name",
-  "nameHint": "Lowercase letters, digits and dashes, starting with a letter",
   "charter": "Charter",
   "workspaces": "Workspaces",
   "default": "default",
@@ -22,5 +21,17 @@
   "deletePrompt": "Delete {name}?",
   "deleteConfirm": "Delete",
   "saveError": "Couldn't save the project",
-  "deleteError": "Couldn't delete the project"
+  "deleteError": "Couldn't delete the project",
+  "icon": "Icon",
+  "glyph": "Symbol",
+  "tone": "Color",
+  "resetIcon": "Reset",
+  "tones": {
+    "brand": "Coral",
+    "tool": "Slate",
+    "pine": "Pine",
+    "memory": "Violet",
+    "agent": "Teal",
+    "ink": "Graphite"
+  }
 }

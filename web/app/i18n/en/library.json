@@ -62,6 +62,7 @@
   "deleteDeckConfirm": "Delete the deck “{name}” and its {n} cards?",
   "deleteDeckNote": "Its version history goes with it.",
   "nameRule": "Only letters, digits, -, _ and .",
+  "deckNameRule": "At most 80 characters",
   "nameTaken": "That name is already taken",
   "moveError": "Couldn't move it"
 }

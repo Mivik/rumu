@@ -5,6 +5,7 @@
 // and folders move by dragging them onto a deck or folder.
 import { computed, nextTick, ref, watch } from 'vue'
 import { t } from '../../i18n'
+import { validDeckName } from '../../lib/deckName'
 import { buildLibraryTree, type TreeNode } from '../../lib/libraryTree'
 import { openPage } from '../../lib/router'
 import {
@@ -28,7 +29,6 @@ import type { LibraryCard } from '../../lib/types'
 import Icon from '../ui/Icon.vue'
 import Popover from '../ui/Popover.vue'
 
-const DECK_NAME = /^[a-z][a-z0-9-]*$/
 const ENTRY_NAME = /^[A-Za-z0-9_-][A-Za-z0-9._-]*$/
 
 const MENU_ITEM =
@@ -321,8 +321,9 @@ async function commitDraft(): Promise<void> {
   const name = draftName.value.trim()
   const isDeck = current.kind === 'deck' || (current.kind === 'rename' && current.node.kind === 'deck')
   if (!name || (current.kind === 'rename' && name === label(current.node))) return cancelDraft()
-  if (!(isDeck ? DECK_NAME : ENTRY_NAME).test(name)) {
-    draftError.value = t(isDeck ? 'assistants.nameHint' : 'library.nameRule')
+  const ok = isDeck ? validDeckName(name) : ENTRY_NAME.test(name)
+  if (!ok) {
+    draftError.value = t(isDeck ? 'library.deckNameRule' : 'library.nameRule')
     return
   }
   draftBusy.value = true
@@ -788,6 +789,7 @@ const isFolder = (node: TreeNode): node is FolderNode => node.kind === 'folder'
             v-model="draftName"
             type="text"
             class="w-full px-1.5 py-0.5 text-secondary"
+            maxlength="80"
             :placeholder="t('library.newDeckName')"
             :aria-label="t('library.newDeckRow')"
             :aria-invalid="!!draftError"

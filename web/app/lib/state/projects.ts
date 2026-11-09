@@ -6,7 +6,8 @@
 import { computed } from 'vue'
 import { t } from '../../i18n'
 import { rumu } from '../api'
-import type { Project, SessionId } from '../types'
+import { DECK_NAME_MAX } from '../deckName'
+import type { DeckIcon, Project, SessionId } from '../types'
 import { isUnseen } from './derived'
 import { prefs } from './prefs'
 import { state } from './state'
@@ -18,16 +19,21 @@ export async function refreshProjects(): Promise<Project[]> {
   return state.projects
 }
 
-export async function createProject(name: string, workspaces: string[] = []): Promise<Project> {
-  const res = await rumu.request<{ project: Project }>('project.create', { name, workspaces })
+export async function createProject(
+  name: string,
+  workspaces: string[] = [],
+  icon?: DeckIcon,
+): Promise<Project> {
+  const res = await rumu.request<{ project: Project }>('project.create', { name, workspaces, icon })
   await refreshProjects()
   return res.project
 }
 
-/** Rename a project and/or replace its ordered workspaces. */
+/** Rename a project, set its seal (an empty one clears it) and/or replace
+ *  its ordered workspaces. */
 export async function updateProject(
   id: string,
-  changes: { name?: string; workspaces?: string[] },
+  changes: { name?: string; icon?: DeckIcon; workspaces?: string[] },
 ): Promise<Project> {
   const res = await rumu.request<{ project: Project }>('project.update', { id, ...changes })
   await refreshProjects()
@@ -102,7 +108,6 @@ export function rememberSessionPicks(project: string | null, assistant: string):
 // ---- names from folders ----
 
 const WORKSPACE_NAME = /^[a-z][a-z0-9.-]+$/
-const PROJECT_NAME = /^[a-z][a-z0-9-]*$/
 
 function folderBase(path: string): string {
   return path.split(/[\\/]/).filter(Boolean).pop() ?? ''
@@ -124,11 +129,15 @@ export function folderWorkspaceName(path: string, taken: string[]): string {
   return unique(WORKSPACE_NAME.test(name) ? name : 'ws', (n) => taken.includes(n))
 }
 
-/** The project name a folder suggests: its workspace name without the dots a
- *  deck name forbids, not taken by a known project or assistant. */
+/** The project name a folder suggests: its base name, not taken by a known
+ *  project or assistant. */
 export function folderProjectName(path: string): string {
-  const name = folderWorkspaceName(path, []).replace(/\./g, '-')
+  const base = folderBase(path)
+    .replace(/[\u0000-\u001f\u007f]+/g, ' ')
+    .trim()
+  const name = Array.from(base).slice(0, DECK_NAME_MAX).join('') || 'project'
   const taken = (n: string) =>
-    state.projects.some((p) => p.name === n) || state.assistants.some((a) => a.name === n)
-  return unique(PROJECT_NAME.test(name) ? name : 'project', taken)
+    state.projects.some((p) => p.name.toLowerCase() === n.toLowerCase()) ||
+    state.assistants.some((a) => a.name.toLowerCase() === n.toLowerCase())
+  return unique(name, taken)
 }
