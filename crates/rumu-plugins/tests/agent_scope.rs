@@ -102,14 +102,12 @@ async fn scoped_child_cannot_read_an_out_of_scope_workspace() {
         vec![Arc::new(WorkspacePlugin::new(
             home.path(),
             rumu_cards::Decks::load(home.path()).unwrap(),
+            rumu_core::Workspaces::default(),
         ))],
         workspaces,
     )
     .unwrap();
-    let (session, _) = kernel
-        .create_session(vec!["proj".into(), "other".into()], "assistant".into())
-        .await
-        .unwrap();
+    let (session, _) = kernel.create_session("assistant".into()).await.unwrap();
     let branch = BranchId::from(session.active_branch.0.as_str());
     let mut rx = kernel.tap_pushes();
     kernel.prompt(&branch, "go").await.unwrap();

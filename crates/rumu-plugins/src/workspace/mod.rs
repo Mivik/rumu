@@ -26,6 +26,7 @@ mod cards;
 mod history;
 mod mount;
 mod patch;
+mod registry;
 mod session;
 mod task;
 mod time;
@@ -41,7 +42,7 @@ use std::path::{Path, PathBuf};
 use std::sync::Mutex;
 
 use async_trait::async_trait;
-use rumu_core::{Cx, Manifest, Plugin, ToolOutput, Workspace};
+use rumu_core::{Cx, Manifest, Plugin, ToolOutput, Workspace, Workspaces};
 use serde_json::Value;
 use tracing::warn;
 
@@ -52,6 +53,10 @@ pub struct WorkspacePlugin {
     home: PathBuf,
     /// The deck registry behind `@rumu:/cards`.
     decks: Decks,
+    /// The workspace registry and project lists behind `@rumu:/workspaces`
+    /// and `@rumu:/project/workspaces` (the kernel merges the same handle
+    /// into every path state).
+    workspaces: Workspaces,
     /// The blob store behind image reads (`<home>/blobs`), opened lazily on
     /// the first one — most plugin instances never read an image.
     blobs: std::sync::OnceLock<rumu_blob::Blobs>,
@@ -65,10 +70,11 @@ pub struct WorkspacePlugin {
 }
 
 impl WorkspacePlugin {
-    pub fn new(home: &Path, decks: Decks) -> Self {
+    pub fn new(home: &Path, decks: Decks, workspaces: Workspaces) -> Self {
         Self {
             home: home.to_path_buf(),
             decks,
+            workspaces,
             blobs: std::sync::OnceLock::new(),
             ssh_ctl_dir: ssh_ctl_dir(),
             ssh_uname: Mutex::new(HashMap::new()),

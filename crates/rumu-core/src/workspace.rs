@@ -1,3 +1,4 @@
+use std::collections::BTreeMap;
 use std::sync::{Arc, RwLock};
 
 use serde::{Deserialize, Serialize};
@@ -12,8 +13,8 @@ const PLATFORM_PATH_TYPE: PathType = PathType::Unix;
 /// A workspace: one project (a directory of files) the model can read/write
 /// files in and run commands in.
 ///
-/// Workspaces are registered by the user ([`Workspaces`]) and attached per
-/// branch, like card mounts. Files are addressed as `<name>:<path>`
+/// Workspaces are registered in [`Workspaces`] and mounted by projects.
+/// Files are addressed as `<name>:<path>`
 /// (see [`crate::addr`]); the implicit `@rumu` workspace holds rumu's own
 /// data and is never a preset (its `@` is not a valid preset-name character).
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, ts_rs::TS)]
@@ -111,43 +112,127 @@ impl Workspace {
     }
 }
 
+/// The mount point of a session's project deck: the deck mounted there is
+/// the session's project.
+pub const PROJECT_MOUNT: &str = "/cards/project";
+
+/// Each project's mounted workspaces: project deck id → workspace names, in
+/// order (the first is the project's default).
+pub type ProjectWorkspaces = BTreeMap<String, Vec<String>>;
+
 /// The workspace registry: every workspace the user added
-/// (`RUMU_HOME/workspaces.yaml`, written only by rumu). A session sees the
-/// ones attached to its branch (see [`crate::PathState`]). Cheap to clone;
-/// every handle sees the same list, so edits apply to running sessions.
+/// (`RUMU_HOME/workspaces.yaml`) and the workspaces each project mounts
+/// (`RUMU_HOME/projects.yaml`), both written only by rumu. Every registered
+/// workspace is addressable from every session; a session's project decides
+/// which are mounted (see [`crate::PathState`]). Cheap to clone; every
+/// handle sees the same lists, so edits apply to running sessions.
+#[derive(Clone, Default)]
+pub struct Workspaces {
+    inner: Arc<RwLock<Registry>>,
+    listeners: Arc<RwLock<Vec<Listener>>>,
+}
+
+type Listener = Box<dyn Fn() + Send + Sync>;
+
 #[derive(Debug, Clone, Default)]
-pub struct Workspaces(Arc<RwLock<Vec<Workspace>>>);
+struct Registry {
+    list: Vec<Workspace>,
+    projects: ProjectWorkspaces,
+}
+
+impl std::fmt::Debug for Workspaces {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        self.inner.read().unwrap().fmt(f)
+    }
+}
 
 impl Workspaces {
     pub fn new(list: Vec<Workspace>) -> Self {
-        Self(Arc::new(RwLock::new(list)))
+        Self::with_projects(list, ProjectWorkspaces::new())
+    }
+
+    pub fn with_projects(mut list: Vec<Workspace>, projects: ProjectWorkspaces) -> Self {
+        list.sort_by(|a, b| a.name.cmp(&b.name));
+        Self {
+            inner: Arc::new(RwLock::new(Registry { list, projects })),
+            listeners: Arc::default(),
+        }
     }
 
     /// The registered workspaces, in name order.
     pub fn list(&self) -> Vec<Workspace> {
-        self.0.read().unwrap().clone()
+        self.inner.read().unwrap().list.clone()
     }
 
     pub fn get(&self, name: &str) -> Option<Workspace> {
-        self.0
+        self.inner
             .read()
             .unwrap()
+            .list
             .iter()
             .find(|w| w.name == name)
             .cloned()
     }
 
-    /// Replace the list through `change`, under the write lock; nothing
-    /// changes when it fails (so a failed save leaves the old list).
+    /// Every project's mounted workspaces, as stored (names that left the
+    /// registry included).
+    pub fn projects(&self) -> ProjectWorkspaces {
+        self.inner.read().unwrap().projects.clone()
+    }
+
+    /// The registered workspaces `project` mounts, in its order.
+    pub fn project(&self, project: &str) -> Vec<String> {
+        let inner = self.inner.read().unwrap();
+        inner
+            .projects
+            .get(project)
+            .into_iter()
+            .flatten()
+            .filter(|n| inner.list.iter().any(|w| &w.name == *n))
+            .cloned()
+            .collect()
+    }
+
+    /// Call `f` after every change to either list.
+    pub fn on_change(&self, f: impl Fn() + Send + Sync + 'static) {
+        self.listeners.write().unwrap().push(Box::new(f));
+    }
+
+    /// Replace the workspace list through `change`, under the write lock;
+    /// nothing changes when it fails (so a failed save leaves the old list).
     pub fn update<E>(
         &self,
         change: impl FnOnce(&mut Vec<Workspace>) -> Result<(), E>,
     ) -> Result<(), E> {
-        let mut guard = self.0.write().unwrap();
-        let mut next = guard.clone();
-        change(&mut next)?;
-        next.sort_by(|a, b| a.name.cmp(&b.name));
-        *guard = next;
+        self.update_all(|reg| {
+            change(&mut reg.list)?;
+            reg.list.sort_by(|a, b| a.name.cmp(&b.name));
+            Ok(())
+        })
+    }
+
+    /// Replace both lists through `change`, as [`update`](Self::update).
+    pub fn update_both<E>(
+        &self,
+        change: impl FnOnce(&mut Vec<Workspace>, &mut ProjectWorkspaces) -> Result<(), E>,
+    ) -> Result<(), E> {
+        self.update_all(|reg| {
+            change(&mut reg.list, &mut reg.projects)?;
+            reg.list.sort_by(|a, b| a.name.cmp(&b.name));
+            Ok(())
+        })
+    }
+
+    fn update_all<E>(&self, change: impl FnOnce(&mut Registry) -> Result<(), E>) -> Result<(), E> {
+        {
+            let mut guard = self.inner.write().unwrap();
+            let mut next = guard.clone();
+            change(&mut next)?;
+            *guard = next;
+        }
+        for listener in self.listeners.read().unwrap().iter() {
+            listener();
+        }
         Ok(())
     }
 }

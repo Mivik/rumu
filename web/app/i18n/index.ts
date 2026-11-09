@@ -15,6 +15,7 @@ import enTools from './en/tools.json'
 import enUsage from './en/usage.json'
 import enSettings from './en/settings.json'
 import enWorkspaces from './en/workspaces.json'
+import enProjects from './en/projects.json'
 
 import zhCards from './zh-CN/cards.json'
 import zhLibrary from './zh-CN/library.json'
@@ -27,6 +28,7 @@ import zhTools from './zh-CN/tools.json'
 import zhUsage from './zh-CN/usage.json'
 import zhSettings from './zh-CN/settings.json'
 import zhWorkspaces from './zh-CN/workspaces.json'
+import zhProjects from './zh-CN/projects.json'
 
 const en = {
   common: enCommon,
@@ -38,6 +40,7 @@ const en = {
   panels: enPanels,
   usage: enUsage,
   workspaces: enWorkspaces,
+  projects: enProjects,
   settings: enSettings,
   errors: enErrors,
 }
@@ -52,6 +55,7 @@ const zhCN = {
   panels: zhPanels,
   usage: zhUsage,
   workspaces: zhWorkspaces,
+  projects: zhProjects,
   settings: zhSettings,
   errors: zhErrors,
 }

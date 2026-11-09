@@ -460,8 +460,6 @@ pub trait Runtime: History {
 pub struct Consult {
     /// The assistant deck the session runs as.
     pub assistant: String,
-    /// Its `deck.yaml` workspaces (the first is the default).
-    pub workspaces: Vec<String>,
     /// The asking assistant deck, recorded on the session's root.
     pub asked_by: String,
     /// The deck's default mounts (an `ask` session forces them to read).

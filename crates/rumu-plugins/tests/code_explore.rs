@@ -118,10 +118,7 @@ async fn setup_async(llm: Arc<AgentLlm>) -> (Arc<Kernel>, SessionId, BranchId) {
         Workspaces::default(),
     )
     .unwrap();
-    let (session, _) = kernel
-        .create_session(Vec::new(), "assistant".into())
-        .await
-        .unwrap();
+    let (session, _) = kernel.create_session("assistant".into()).await.unwrap();
     let branch = BranchId::from(session.active_branch.0.as_str());
     (kernel, session.id, branch)
 }

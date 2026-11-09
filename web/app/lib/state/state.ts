@@ -24,6 +24,7 @@ import type {
   LibraryDeck,
   LibraryCard,
   LlmDeltaPush,
+  Project,
   Workspace,
 } from '../types'
 
@@ -145,6 +146,8 @@ const initial = {
    *  holds, and who new sessions run as. */
   assistant: '',
   cards: [] as Card[],
+  /** The project decks (`project.list`, kept live by `workspaces.updated`). */
+  projects: [] as Project[],
   /** The workspace registry (`workspace.list`, kept live by `workspaces.updated`). */
   workspaces: [] as Workspace[],
   /** Questions tool calls are waiting on, oldest first. */

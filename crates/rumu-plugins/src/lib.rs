@@ -33,24 +33,29 @@ pub use error::{Error, Result};
 pub use memory::MemoryPlugin;
 pub use stdio::{StdioError, StdioPlugin};
 pub use workspace::{BackendError, WorkspacePlugin};
-pub use workspaces::{WORKSPACES_FILE, load_workspaces, remove_workspace, upsert_workspace};
+pub use workspaces::{
+    PROJECTS_FILE, Project, WORKSPACES_FILE, create_project, drop_project, load_workspaces,
+    project_of, projects, remove_workspace, seed_project, set_project_workspaces, upsert_workspace,
+};
 
 #[cfg(test)]
 pub(crate) mod testutil;
 
 /// Load every plugin: memory, workspace, ask, then the external stdio plugins
 /// registered in `<home>/config.yaml` (each spawned and `initialize`d). The
-/// caller supplies the parsed [`Config`], the deck registry and the kernel's
-/// built-in tools so the `code` plugin's API stub covers them.
+/// caller supplies the parsed [`Config`], the deck and workspace registries
+/// and the kernel's built-in tools so the `code` plugin's API stub covers
+/// them.
 pub async fn load_all(
     home: &Path,
     config: &Config,
     decks: rumu_cards::Decks,
+    workspaces: rumu_core::Workspaces,
     builtin_tools: &[rumu_core::ToolSpec],
 ) -> Result<Vec<Arc<dyn Plugin>>> {
     let mut plugins: Vec<Arc<dyn Plugin>> = vec![
         Arc::new(MemoryPlugin::new(decks.clone())),
-        Arc::new(WorkspacePlugin::new(home, decks.clone())),
+        Arc::new(WorkspacePlugin::new(home, decks.clone(), workspaces)),
         Arc::new(AskPlugin::new(decks)),
     ];
     for spec in config.external_specs(home)? {

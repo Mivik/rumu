@@ -94,16 +94,21 @@ pub(super) const LIST_LIMIT: usize = 100;
 const INSTRUCTIONS: &str = "Files live in workspaces — one project each, on this machine or a \
 remote one over ssh. Every file tool takes one `path`: a path in the default workspace (relative \
 to its root, or absolute on its machine), or `<workspace>:<path>` for another workspace, e.g. \
-`proj:src/main.rs`, `app:/var/log/app.log`. `workspace_use(name)` changes the default; \
-`workspace_use()` lists workspaces. `bash` runs in a workspace root, so relative paths mean the \
-same thing in bash and in the file tools. Read-only workspaces refuse writes and bash.\n\n\
+`proj:src/main.rs`, `app:/var/log/app.log`. Every registered workspace is addressable. \
+`workspace_use(name)` changes the default; `workspace_use()` lists workspaces, the project's \
+first. `bash` runs in a workspace root, so relative paths mean the same thing in bash and in the \
+file tools. Read-only workspaces refuse writes and bash.\n\n\
 The `@rumu` workspace holds rumu's own data and has no bash. `@rumu:/cards/<mount>/<path>` are \
 cards of the decks mounted on this branch (`/cards/self` is your own deck); `read` returns an \
 editable view (YAML frontmatter, then the body), and writes are refused if the card changed \
-since you last read it — re-read and merge. `card_mount` \
-mounts and unmounts decks. `@rumu:/history` is the decks' change timeline. \
+since you last read it — re-read and merge. `card_mount` mounts and unmounts decks; only project \
+decks mount at `/cards/project`, and mounting one there moves the session into that project \
+(`card_mount(create: <name>, at: \"project\")` creates one). `@rumu:/workspaces` lists the \
+workspace registry, `@rumu:/workspaces/<name>` reads and writes one entry, and \
+`@rumu:/project/workspaces` is the project's ordered workspace list (read it before writing). \
+`@rumu:/history` is the decks' change timeline. \
 `@rumu:/sessions/<session>/<node>` and `@rumu:/sessions/<session>/<from>..<to>` are past \
-conversation records (read-only): yours, and those of every assistant whose deck is mounted \
+conversation records (read-only): yours, and those of every deck mounted on the branch \
 (`@rumu:/sessions/by-assistant/<deck id>` lists one assistant's); \
 `search(query, scope: \"@rumu:/sessions\")` searches them. If the \
 user rewinds the conversation, card edits persist.";
@@ -180,7 +185,7 @@ struct SearchArgs {
 #[derive(Debug, Deserialize, JsonSchema)]
 #[serde(deny_unknown_fields)]
 struct WorkspaceUseArgs {
-    /// workspace name (an attached workspace or `@rumu`)
+    /// workspace name (any registered workspace or `@rumu`)
     name: Option<String>,
 }
 
@@ -191,6 +196,9 @@ pub(super) struct CardMountArgs {
     pub(super) deck: Option<String>,
     /// mount point under `/cards` (`/cards/user`); with no `deck`, unmounts it
     pub(super) at: Option<String>,
+    /// create a project deck with this name and mount it at `/cards/project`
+    /// (only with `at: "project"`, never with `deck`)
+    pub(super) create: Option<String>,
 }
 
 /// Parse `card_mount` arguments.
@@ -284,10 +292,14 @@ follow up with `read`."
             ToolSpec {
                 name: "card_mount".into(),
                 description: "Manage the branch's card mounts. Without arguments, list decks \
-(name, id, mount point, and whether mounting or writing it asks the user). With `deck` and \
-`at`, mount it at `/cards/<at>` (the user approves unless they already allowed it). With `at` \
-alone, unmount. Mount points must not overlap. Only mounted decks feed the catalog, recall, \
-list, search and notices."
+(name, id, mount point, whether it is an assistant or a project, and whether mounting or \
+writing it asks the user). With `deck` and `at`, mount it at `/cards/<at>` (the user approves \
+unless they already allowed it); only project decks mount at `/cards/project`, and mounting one \
+there moves the session into that project. With `at` alone, unmount (`at: \"project\"` leaves \
+the project). With `create` and `at: \"project\"`, create a project deck and move into it. Mount \
+points must not overlap. The registry is `@rumu:/workspaces`; the session project's list is \
+`@rumu:/project/workspaces`. Only mounted decks feed the catalog, recall, list, search and \
+notices."
                     .into(),
                 schema: tool_schema::<CardMountArgs>(),
                 background: false,
@@ -297,9 +309,9 @@ list, search and notices."
             ToolSpec {
                 name: "workspace_use".into(),
                 description: "Set the default workspace for subsequent tool calls \
-(branch state; forks inherit it) and return the workspace listing. Without \
-`name`, just list workspaces. `name` may be any attached workspace or `@rumu`; the user \
-attaches workspaces."
+(branch state; forks inherit it) and return the workspace listing (the project's mounted \
+workspaces first, then the others). Without `name`, just list workspaces. `name` may be any \
+registered workspace or `@rumu`."
                     .into(),
                 schema: tool_schema::<WorkspaceUseArgs>(),
                 background: false,
@@ -474,7 +486,7 @@ pub(super) fn slice_lines(
 }
 
 /// Count-limited exact string replacement for `edit`.
-fn replace_occurrences(
+pub(super) fn replace_occurrences(
     text: &str,
     old: &str,
     new: &str,
@@ -660,6 +672,11 @@ impl WorkspacePlugin {
                 }
             }
             Target::Rumu { abs } => {
+                if super::registry::is_config_path(&abs) {
+                    return self
+                        .config_write(state, &abs, &args.content, args.from.as_deref(), cx)
+                        .await;
+                }
                 let Some(path) = card_ref_of(&abs) else {
                     return Err(self.rumu_write_refused(&abs));
                 };
@@ -724,6 +741,18 @@ impl WorkspacePlugin {
                 }
             }
             Target::Rumu { abs } => {
+                if super::registry::is_config_path(&abs) {
+                    return self
+                        .config_edit(
+                            state,
+                            &abs,
+                            &args.old_string,
+                            &args.new_string,
+                            args.replace_all.unwrap_or(false),
+                            cx,
+                        )
+                        .await;
+                }
                 // Edit = string replace on the view, then the write path. The
                 // read-freshness check comes first: a stale read is the more
                 // fundamental problem than a non-matching string.
@@ -883,15 +912,22 @@ impl WorkspacePlugin {
         .with_effects(effects))
     }
 
-    /// One line per workspace: the default marker `*`, name, machine
-    /// label (`local` / `ssh:prod`), root, rw/ro (+ the remote OS/arch for
-    /// ssh once probed), then the `@rumu` line.
+    /// One line per workspace: the project's mounted ones first (marked),
+    /// then the others, then the `@rumu` line. The default is marked `*`.
     async fn listing(&self, state: &PathState) -> String {
-        let mut lines = Vec::new();
-        if state.workspaces.is_empty() {
-            lines.push("no workspaces attached (the user attaches them)".to_owned());
+        let mut ordered: Vec<&Workspace> = Vec::new();
+        for name in &state.mounted {
+            if let Some(ws) = state.workspaces.iter().find(|w| &w.name == name) {
+                ordered.push(ws);
+            }
         }
         for ws in &state.workspaces {
+            if !state.mounted.contains(&ws.name) {
+                ordered.push(ws);
+            }
+        }
+        let mut lines = Vec::new();
+        for ws in ordered {
             let star = if state.default_workspace.as_deref() == Some(ws.name.as_str()) {
                 "* "
             } else {
@@ -900,6 +936,9 @@ impl WorkspacePlugin {
             let rw = if ws.read_only { "ro" } else { "rw" };
             let mach = ws.label();
             let mut line = format!("{star}{} {mach} {} {rw}", ws.name, ws.root);
+            if state.mounted.iter().any(|n| n == &ws.name) {
+                line.push_str("  (mounted)");
+            }
             if let Some(host) = &ws.ssh {
                 let ctl_dir = usable_ctl_dir(&self.ssh_ctl_dir);
                 if let Some(uname) = probe_uname(host, ctl_dir.as_deref(), &self.ssh_uname).await {
@@ -915,7 +954,8 @@ impl WorkspacePlugin {
         };
         lines.push(format!(
             "{star}{RUMU_WORKSPACE} rumu's own data: {RUMU_WORKSPACE}:/cards (knowledge cards), \
-             {RUMU_WORKSPACE}:/sessions (past conversations); no bash"
+             {RUMU_WORKSPACE}:/workspaces (the registry), {RUMU_WORKSPACE}:/sessions (past \
+             conversations); no bash"
         ));
         lines.join("\n")
     }
@@ -948,6 +988,9 @@ impl WorkspacePlugin {
         limit: Option<u64>,
         cx: &Cx,
     ) -> ToolResult<ToolOutput> {
+        if super::registry::is_config_path(abs) {
+            return self.config_read(abs, offset, limit, cx).await;
+        }
         if abs.starts_with("/history") {
             return self.history_read(abs, offset, limit, cx).await;
         }
@@ -977,8 +1020,17 @@ impl WorkspacePlugin {
 
     /// `list` inside the `@rumu` workspace.
     async fn rumu_list(&self, abs: &Utf8UnixPath, cx: &Cx) -> ToolResult<ToolOutput> {
+        if super::registry::is_config_path(abs) {
+            return self.config_list(abs, cx).await;
+        }
         match abs.as_str() {
-            "/" => Ok("cards/\nhistory/\nsessions/\ntasks/".into()),
+            "/" => {
+                let mut roots = "cards/\nhistory/\nsessions/\ntasks/\nworkspaces/".to_owned();
+                if cx.state()?.project.is_some() {
+                    roots.push_str("\nproject/");
+                }
+                Ok(roots.into())
+            }
             "/cards" => self.card_list("", cx).await,
             _ if abs.starts_with("/cards") => {
                 let prefix = abs

@@ -166,7 +166,7 @@ pub(crate) fn create_deck(
                 id: String::new(),
                 name: name.to_owned(),
                 assistant: false,
-                workspaces: Vec::new(),
+                project: false,
                 mounts: Vec::new(),
                 allow_ask: Vec::new(),
             })

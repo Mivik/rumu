@@ -11,4 +11,9 @@ seen_at?: number | null,
 /**
  * The assistant the session runs as.
  */
-assistant: string, };
+assistant: string, 
+/**
+ * The project deck of the active branch (the deck mounted at
+ * [`crate::PROJECT_MOUNT`]); `None` outside any project.
+ */
+project?: string, };

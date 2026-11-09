@@ -14,7 +14,7 @@
 //!
 //! Loading a file folds the records into memory: `session` is the header
 //! (the initial [`SessionInfo`]), `meta` patches it (title /
-//! active_branch / updated_at — whatever the mutating call changed),
+//! active_branch / project / updated_at — whatever the mutating call changed),
 //! `branch` adds a branch and `branch_update` moves its head/status, and
 //! `node` appends a node. Optional fields are `#[serde(default)]` and
 //! skipped when unset, so the format can grow without migrations; records
@@ -58,6 +58,16 @@ pub struct Store {
     state: Mutex<StoreState>,
 }
 
+/// Reads a present field as its inner `Option`: an absent field (handled by
+/// `#[serde(default)]`) means "unchanged", an explicit `null` means "clear
+/// it". Needed to persist a nullable field through a sparse patch record.
+fn double_option<'de, D>(d: D) -> std::result::Result<Option<Option<String>>, D::Error>
+where
+    D: serde::Deserializer<'de>,
+{
+    Option::<String>::deserialize(d).map(Some)
+}
+
 /// One JSONL line. Internally tagged by `"t"` so lines stay flat and readable.
 #[derive(Debug, Serialize, Deserialize)]
 #[serde(tag = "t", rename_all = "snake_case")]
@@ -69,6 +79,14 @@ enum Record {
         title: Option<String>,
         #[serde(default, skip_serializing_if = "Option::is_none")]
         active_branch: Option<BranchId>,
+        /// The session's project: an absent field leaves it unchanged, an
+        /// explicit `null` clears it.
+        #[serde(
+            default,
+            skip_serializing_if = "Option::is_none",
+            deserialize_with = "double_option"
+        )]
+        project: Option<Option<String>>,
         #[serde(default, skip_serializing_if = "Option::is_none")]
         updated_at: Option<Timestamp>,
         #[serde(default, skip_serializing_if = "Option::is_none")]
@@ -217,6 +235,7 @@ impl Store {
         let rec = Record::Meta {
             title: Some(s.title.clone()),
             active_branch: Some(s.active_branch.clone()),
+            project: Some(s.project.clone()),
             updated_at: Some(s.updated_at),
             seen_at: None,
         };
@@ -250,6 +269,7 @@ impl Store {
         let rec = Record::Meta {
             title: None,
             active_branch: None,
+            project: None,
             updated_at,
             seen_at,
         };
@@ -576,6 +596,7 @@ impl SessionState {
             Record::Meta {
                 title,
                 active_branch,
+                project,
                 updated_at,
                 seen_at,
             } => {
@@ -584,6 +605,9 @@ impl SessionState {
                 }
                 if let Some(v) = active_branch {
                     self.info.active_branch = v;
+                }
+                if let Some(v) = project {
+                    self.info.project = v;
                 }
                 if let Some(v) = updated_at {
                     self.info.updated_at = v;
@@ -736,6 +760,7 @@ mod tests {
             updated_at: root.at,
             seen_at: None,
             assistant: "assistant".into(),
+            project: None,
         };
         store.insert_session(&session).unwrap();
         store.insert_branch(&branch).unwrap();
@@ -1165,7 +1190,10 @@ mod tests {
 
             let mut s = session.clone();
             s.title = "t1".into();
+            s.project = Some("proj-deck".into());
             store.update_session(&s).unwrap();
+            // A sparse clock patch must not clear the project.
+            store.touch_session(&session.id, 78).unwrap();
             (session.id, branch.id, child.id)
         };
 
@@ -1176,6 +1204,13 @@ mod tests {
 
         let s = store.get_session(&sid).unwrap().unwrap();
         assert_eq!(s.title, "t1");
+        assert_eq!(s.project.as_deref(), Some("proj-deck"));
+
+        // An update may also clear it (persisted as an explicit null).
+        let mut cleared = s.clone();
+        cleared.project = None;
+        store.update_session(&cleared).unwrap();
+        assert_eq!(store.get_session(&sid).unwrap().unwrap().project, None);
 
         // Id-only lookups work off the indexes built during the scan.
         assert!(store.get_node(&child_id).unwrap().is_some());

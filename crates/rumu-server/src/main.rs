@@ -45,11 +45,17 @@ async fn main() -> Result<()> {
     let store = Arc::new(Store::open(&home.join("sessions"))?);
     let blobs = Blobs::in_home(&home)?;
     let config = rumu_plugins::load_config(&home)?;
+    // A home without a registry starts with the current directory as its
+    // one workspace, in a project of its own.
+    let fresh = !home.join(rumu_plugins::WORKSPACES_FILE).exists();
     let workspaces = rumu_plugins::load_workspaces(&home)?;
     let names: Vec<String> = workspaces.list().into_iter().map(|w| w.name).collect();
     info!(workspaces = %names.join(", "), "workspaces loaded");
-    let decks = rumu_cards::Decks::load_seeded(&home, &names)?;
-    let plugins = load_plugins(&home, &config, decks.clone()).await?;
+    let decks = rumu_cards::Decks::load(&home)?;
+    if fresh {
+        rumu_plugins::seed_project(&home, &decks, &workspaces)?;
+    }
+    let plugins = load_plugins(&home, &config, decks.clone(), workspaces.clone()).await?;
     let genai = Arc::new(GenaiLlm::default().with_blobs(blobs.clone()));
     let settings = Arc::new(settings::Settings::load(&home, genai.clone())?);
     let llm = load_llm(genai)?;
@@ -133,8 +139,16 @@ async fn load_plugins(
     home: &Path,
     config: &rumu_plugins::Config,
     decks: rumu_cards::Decks,
+    workspaces: rumu_core::Workspaces,
 ) -> Result<Vec<Arc<dyn Plugin>>> {
-    let plugins = rumu_plugins::load_all(home, config, decks, &[rumu_kernel::agent_tool()]).await?;
+    let plugins = rumu_plugins::load_all(
+        home,
+        config,
+        decks,
+        workspaces,
+        &[rumu_kernel::agent_tool()],
+    )
+    .await?;
     let names: Vec<_> = plugins.iter().map(|p| p.manifest().name).collect();
     info!(plugins = %names.join(", "), "plugins loaded");
     Ok(plugins)

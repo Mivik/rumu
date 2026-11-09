@@ -6,24 +6,33 @@ import type { Workspace } from "./Workspace";
 /**
  * State derived purely from the root→head path (`state = f(path)`), merged
  * with the workspace registry by the kernel (see `rumu-kernel
- * state::merge_workspaces`): `workspaces` is then filled in and
- * `default_workspace` fully resolved.
+ * state::merge_workspaces`): `workspaces` and `mounted` are then filled in
+ * and `default_workspace` fully resolved.
  */
 export type PathState = { 
 /**
- * Names of the workspaces attached to the branch (the root's list, then
- * the last `workspace.set` marker).
- */
-attached: Array<string>, 
-/**
- * The attached workspaces that are registered, in attached order:
- * filled in by the kernel's merge (`rumu-kernel`
- * `state::merge_workspaces`). Empty straight out of `derive_state`.
+ * The workspaces the branch may address: every registered one, or those
+ * a `workspace.set` marker narrows it to. Filled in by the kernel's
+ * merge; empty straight out of `derive_state`.
  */
 workspaces: Array<Workspace>, 
 /**
+ * The project's mounted workspaces among `workspaces`, in the project's
+ * order (the first is its default). Filled in by the kernel's merge.
+ */
+mounted: Array<string>, 
+/**
+ * The last `workspace.set` marker's names (a sub-agent's
+ * `inherit.workspaces`); `None` addresses every registered workspace.
+ */
+restrict?: Array<string>, 
+/**
+ * The project deck: the one mounted at [`crate::PROJECT_MOUNT`].
+ */
+project?: string, 
+/**
  * Default workspace name: the last `workspace.use` marker here; after
- * the kernel's merge, resolved (marker → first attached → `@rumu`).
+ * the kernel's merge, resolved (marker → the project's first → `@rumu`).
  */
 default_workspace?: string | null, 
 /**

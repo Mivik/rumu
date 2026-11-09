@@ -17,7 +17,8 @@ use futures_util::{SinkExt, StreamExt};
 use rumu_blob::Blobs;
 use rumu_cards::{Author, Cards, Decks, library};
 use rumu_core::{
-    BranchId, CardMount, Content, NodeId, SessionId, SessionRoot, TaskId, Workspace, Workspaces,
+    BranchId, CardMount, Content, NodeId, PROJECT_MOUNT, SessionId, SessionRoot, TaskId, Workspace,
+    Workspaces,
 };
 use rumu_kernel::Kernel;
 use rumu_plugins::{Assistant, assistant_of};
@@ -381,22 +382,121 @@ async fn dispatch(state: &AppState, method: &str, p: &Value) -> Result<Value> {
 
         "session.create" => {
             // The assistant deck id (the default assistant when omitted),
-            // with its default mounts, and `workspaces` (the first is the
-            // default; the deck's when omitted).
+            // with its default mounts, in the `project` deck (none when
+            // omitted or null).
             let deck = assistant_param(state, p)?;
-            let mounts = state.decks.default_mounts(deck.id());
-            let workspaces: Option<Vec<String>> =
-                serde_json::from_value(p.get("workspaces").cloned().unwrap_or_default())
-                    .map_err(|e| ServerError::InvalidParams(format!("workspaces: {e}")))?;
+            let mut mounts = state.decks.default_mounts(deck.id());
+            if let Some(project) = project_param(state, p)? {
+                mounts.push(CardMount {
+                    deck: project.id().to_owned(),
+                    at: PROJECT_MOUNT.into(),
+                });
+            }
             let (session, branch) = kernel
                 .create_rooted_session(SessionRoot {
                     assistant: deck.id().to_owned(),
                     asked_by: None,
                     mounts,
-                    workspaces: workspaces.unwrap_or_else(|| deck.meta.workspaces.clone()),
                 })
                 .await?;
             Ok(json!({ "session": session, "branch": branch }))
+        }
+
+        // Move a session into the `project` deck, or out of its project
+        // (null): recorded on its active branch, the model told in a note.
+        "session.move" => {
+            let session: SessionId = str_param(p, "session")?.into();
+            let project = project_param(state, p)?;
+            let text = match &project {
+                Some(deck) => {
+                    let workspaces = state.workspaces.project(deck.id());
+                    let listed = if workspaces.is_empty() {
+                        "It mounts no workspace; `@rumu` is the default.".to_owned()
+                    } else {
+                        format!(
+                            "Its workspaces: {}; `{}` is the default.",
+                            workspaces
+                                .iter()
+                                .map(|n| format!("`{n}`"))
+                                .collect::<Vec<_>>()
+                                .join(", "),
+                            workspaces[0]
+                        )
+                    };
+                    format!(
+                        "The user moved this session into the project `{}` (deck id {}), mounted \
+                         at `@rumu:{PROJECT_MOUNT}`. {listed}",
+                        deck.meta.name,
+                        deck.id()
+                    )
+                }
+                None => format!(
+                    "The user moved this session out of its project; `@rumu:{PROJECT_MOUNT}` is \
+                     unmounted and `@rumu` is the default workspace."
+                ),
+            };
+            let mount = project.map(|deck| CardMount {
+                deck: deck.id().to_owned(),
+                at: PROJECT_MOUNT.into(),
+            });
+            kernel.move_project(&session, mount, text).await?;
+            Ok(json!({}))
+        }
+
+        // The project decks, each with the workspaces it mounts. Changes to
+        // the lists are pushed as `workspaces.updated`.
+        "project.list" => Ok(json!(rumu_plugins::projects(
+            &state.decks,
+            &state.workspaces
+        ))),
+
+        // A new project deck (blank charter) mounting `workspaces`.
+        "project.create" => {
+            #[derive(Deserialize)]
+            #[serde(deny_unknown_fields)]
+            struct Create {
+                name: String,
+                #[serde(default)]
+                workspaces: Vec<String>,
+            }
+            let req: Create = parse_params(p)?;
+            let deck = rumu_plugins::create_project(
+                &state.home,
+                &state.decks,
+                &state.workspaces,
+                &req.name,
+                req.workspaces,
+            )?;
+            Ok(json!({ "project": rumu_plugins::project_of(&deck, &state.workspaces) }))
+        }
+
+        // Rename a project, and/or replace the workspaces it mounts (in
+        // order; the first is its default).
+        "project.update" => {
+            #[derive(Deserialize)]
+            #[serde(deny_unknown_fields)]
+            struct Update {
+                id: String,
+                #[serde(default)]
+                name: Option<String>,
+                #[serde(default)]
+                workspaces: Option<Vec<String>>,
+            }
+            let req: Update = parse_params(p)?;
+            let mut deck = project_deck(state, &req.id)?;
+            if let Some(name) = req.name.filter(|n| *n != deck.meta.name) {
+                library::deck_rename(&state.decks, &deck, &name)?;
+                deck = project_deck(state, &req.id)?;
+            }
+            if let Some(names) = req.workspaces {
+                rumu_plugins::set_project_workspaces(
+                    &state.home,
+                    &state.workspaces,
+                    deck.id(),
+                    names,
+                )?;
+            }
+            Ok(json!({ "project": rumu_plugins::project_of(&deck, &state.workspaces) }))
         }
 
         "assistant.list" => {
@@ -441,21 +541,12 @@ async fn dispatch(state: &AppState, method: &str, p: &Value) -> Result<Value> {
                 #[serde(default)]
                 mounts: Vec<MountReq>,
                 #[serde(default)]
-                workspaces: Vec<String>,
-                #[serde(default)]
                 instructions: Option<String>,
                 #[serde(default)]
                 allow_ask: Vec<String>,
             }
             let req: Upsert = serde_json::from_value(p.clone())
                 .map_err(|e| ServerError::InvalidParams(e.to_string()))?;
-            for (i, name) in req.workspaces.iter().enumerate() {
-                if state.workspaces.get(name).is_none() || req.workspaces[..i].contains(name) {
-                    return Err(ServerError::InvalidParams(format!(
-                        "unknown or repeated workspace `{name}`"
-                    )));
-                }
-            }
             // No id creates a deck (refused if its directory exists); an id
             // updates exactly that deck.
             let existing = match req.id.as_deref().filter(|id| !id.is_empty()) {
@@ -483,7 +574,7 @@ async fn dispatch(state: &AppState, method: &str, p: &Value) -> Result<Value> {
                     .unwrap_or_default(),
                 name: req.name.clone(),
                 assistant: true,
-                workspaces: req.workspaces,
+                project: false,
                 mounts,
                 allow_ask: req.allow_ask,
             };
@@ -586,17 +677,13 @@ async fn dispatch(state: &AppState, method: &str, p: &Value) -> Result<Value> {
                 .map_err(|e| ServerError::InvalidParams(e.to_string()))?;
             let ws = Workspace::new(req.name, req.ssh, req.root, req.read_only);
             let ws = rumu_plugins::upsert_workspace(&state.home, &state.workspaces, ws)?;
-            kernel.workspaces_changed();
             Ok(json!({ "workspace": ws }))
         }
 
-        // Remove a workspace; assistants that attach it drop it. Sessions
-        // keep the name, so it comes back if a workspace of that name does.
+        // Remove a workspace, and from every project that mounts it.
         "workspace.delete" => {
             let name = str_param(p, "name")?;
             rumu_plugins::remove_workspace(&state.home, &state.workspaces, name)?;
-            state.decks.forget_workspace(name)?;
-            kernel.workspaces_changed();
             Ok(json!({}))
         }
 
@@ -628,23 +715,6 @@ async fn dispatch(state: &AppState, method: &str, p: &Value) -> Result<Value> {
                 .collect();
             dirs.sort_by_key(|n| n.to_lowercase());
             Ok(json!({ "path": path, "parent": path.parent(), "dirs": dirs }))
-        }
-
-        // The branch's default workspace (an attached one or `@rumu`).
-        "branch.use_workspace" => {
-            let branch: BranchId = str_param(p, "branch")?.into();
-            kernel.use_workspace(&branch, str_param(p, "name")?).await?;
-            Ok(json!({}))
-        }
-
-        // The branch's attached workspaces from here on, in order.
-        "branch.set_workspaces" => {
-            let branch: BranchId = str_param(p, "branch")?.into();
-            let names: Vec<String> =
-                serde_json::from_value(p.get("names").cloned().unwrap_or_default())
-                    .map_err(|e| ServerError::InvalidParams(format!("names: {e}")))?;
-            kernel.set_workspaces(&branch, names).await?;
-            Ok(json!({}))
         }
 
         // Questions a tool call put to the user (`decision.requested`).
@@ -717,8 +787,8 @@ async fn dispatch(state: &AppState, method: &str, p: &Value) -> Result<Value> {
                 return Err(ServerError::MissingParam("text".into()));
             }
             let content = Content::text(text).with_attachments(attachments);
-            // `workspaces` / `workspace` / `model` (optional): the composer's
-            // pick, recorded where it changes the branch.
+            // `model` (optional): the composer's pick, recorded where it
+            // changes the branch.
             kernel.apply_choice(&branch, parse_params(p)?).await?;
             kernel.prompt(&branch, content).await?;
             Ok(json!({}))
@@ -848,6 +918,7 @@ async fn dispatch(state: &AppState, method: &str, p: &Value) -> Result<Value> {
         "library.deck_delete" => {
             let deck = deck_param(state, str_param(p, "id")?)?;
             state.decks.delete(deck.id())?;
+            rumu_plugins::drop_project(&state.home, &state.workspaces, deck.id())?;
             Ok(json!({}))
         }
 
@@ -1004,6 +1075,27 @@ fn str_param<'a>(p: &'a Value, key: &str) -> Result<&'a str> {
     p.get(key)
         .and_then(Value::as_str)
         .ok_or_else(|| ServerError::MissingParam(key.to_owned()))
+}
+
+/// The project deck `id`; any other id is a bad request.
+fn project_deck(state: &AppState, id: &str) -> Result<rumu_cards::Deck> {
+    state
+        .decks
+        .get(id)
+        .filter(|d| d.project())
+        .ok_or_else(|| ServerError::InvalidParams(format!("no project deck `{id}`")))
+}
+
+/// The optional `project` param: a project deck id, or none when omitted or
+/// null.
+fn project_param(state: &AppState, p: &Value) -> Result<Option<rumu_cards::Deck>> {
+    match p.get("project") {
+        None | Some(Value::Null) => Ok(None),
+        Some(Value::String(id)) => project_deck(state, id).map(Some),
+        Some(_) => Err(ServerError::InvalidParams(
+            "`project` must be a deck id".into(),
+        )),
+    }
 }
 
 /// The deck a library request names; an unknown id is a bad request.

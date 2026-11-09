@@ -11,7 +11,7 @@ fn create_deck(home: &std::path::Path, name: &str, cards: &[(&str, &str)]) -> De
             id: String::new(),
             name: name.into(),
             assistant: false,
-            workspaces: Vec::new(),
+            project: false,
             mounts: Vec::new(),
             allow_ask: Vec::new(),
         })
@@ -204,7 +204,7 @@ fn deck_upsert_rename_and_delete_refresh_the_registry() {
             id: String::new(),
             name: "ledger".into(),
             assistant: true,
-            workspaces: vec!["proj".into()],
+            project: false,
             mounts: Vec::new(),
             allow_ask: Vec::new(),
         })
@@ -509,13 +509,8 @@ fn the_default_assistant_is_a_pointer_that_follows_the_roster() {
 #[test]
 fn a_fresh_home_gets_user_and_world_mounted_by_the_default_assistant() {
     let dir = tempfile::tempdir().unwrap();
-    let decks = Decks::load_seeded(dir.path(), &["proj".into()]).unwrap();
+    let decks = Decks::load(dir.path()).unwrap();
     let default = decks.get(&decks.default_assistant()).unwrap();
-    assert_eq!(
-        default.meta.workspaces,
-        ["proj"],
-        "it attaches the seed workspaces"
-    );
     let mounted: Vec<(String, String)> = default
         .meta
         .mounts
@@ -556,23 +551,37 @@ fn a_home_with_decks_but_no_assistant_gets_only_the_assistant() {
 }
 
 #[test]
-fn a_forgotten_workspace_leaves_every_deck_yaml() {
-    let (dir, decks, _main) = deck_home();
-    let mut ids = Vec::new();
-    for (name, workspaces) in [("a", vec!["proj", "blog"]), ("b", vec!["blog"])] {
-        let deck = decks
-            .upsert(DeckMeta {
-                workspaces: workspaces.into_iter().map(String::from).collect(),
-                assistant: true,
-                ..empty_meta(String::new(), name.into())
-            })
-            .unwrap();
-        ids.push(deck.meta.id);
-    }
-    decks.forget_workspace("blog").unwrap();
-    let decks = Decks::load(dir.path()).unwrap();
-    assert_eq!(decks.get(&ids[0]).unwrap().meta.workspaces, ["proj"]);
-    assert!(decks.get(&ids[1]).unwrap().meta.workspaces.is_empty());
+fn a_project_is_never_an_assistant_and_never_a_default_mount() {
+    let (_dir, decks, main) = deck_home();
+    let both = decks.upsert(DeckMeta {
+        assistant: true,
+        project: true,
+        ..empty_meta(String::new(), "both".into())
+    });
+    assert!(
+        both.unwrap_err()
+            .to_string()
+            .contains("both an assistant and a project")
+    );
+
+    let project = decks
+        .upsert(DeckMeta {
+            project: true,
+            ..empty_meta(String::new(), "app".into())
+        })
+        .unwrap();
+    assert!(project.project());
+    assert_eq!(decks.projects().len(), 1);
+
+    // `/cards/project` is the session's project, never a `deck.yaml` mount.
+    let mut meta = main.meta.clone();
+    meta.mounts = vec![DeckMount {
+        deck: project.meta.id.clone(),
+        at: "/cards/project".into(),
+        write: false,
+    }];
+    let err = decks.upsert(meta).unwrap_err().to_string();
+    assert!(err.contains("the session's project"), "{err}");
 }
 
 #[test]

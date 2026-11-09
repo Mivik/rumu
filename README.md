@@ -60,17 +60,22 @@ because the web build imports them.
 
 `RUMU_HOME` (default `~/.rumu`) holds `settings.yaml` (providers, profiles and roles),
 `config.yaml` (external plugins),
-`workspaces.yaml` (the workspace registry), `decks/` (cards, assistants and
-their history), `grants.json` (remembered mount / ask permissions) and
-`sessions/`. With no `workspaces.yaml`, the current directory is registered
-as the first workspace, so it runs out of the box.
+`workspaces.yaml` (the workspace registry), `projects.yaml` (the workspaces
+each project mounts), `decks/` (cards, assistants, projects and their
+history), `grants.json` (remembered approvals) and `sessions/`. With no
+`workspaces.yaml`, the current directory is registered as the first
+workspace, in a project of its own, so it runs out of the box.
 
-A **workspace** is a named directory, local or on an ssh host. rumu writes
-`workspaces.yaml`; add, edit and remove workspaces in the web UI. Like decks,
-workspaces are attached per branch: a session starts with its assistant's
-`workspaces` (the first is the default), and the composer adds, removes and
-switches them for the branch. The model switches the default among them with
-`workspace_use`. Each entry is a root string or a map:
+A **workspace** is a named directory, local or on an ssh host, addressed as
+`<name>:<path>` from every session. A **project** is what a session works
+on: a deck with `project: true` (its memory) plus an ordered list of
+workspaces it mounts, the first being the default; see
+[docs/projects.md](docs/projects.md). A session runs as one assistant in at
+most one project, and the sidebar groups sessions by project. rumu writes
+`workspaces.yaml` and `projects.yaml`, from the web UI or from the model's
+writes to `@rumu:/workspaces` and `@rumu:/project/workspaces`; the model
+switches the default with `workspace_use`. Each registry entry is a root
+string or a map:
 
 ```yaml
 proj: ~/code/proj
@@ -95,7 +100,6 @@ cards and its own past sessions. An **assistant** is a deck with
 id: 0193a2f1-7c4e-7b2a-9d01-5e8f3a6b2c10
 name: ledger
 assistant: true
-workspaces: [proj]
 mounts:
   - { deck: <finance-deck-id>, at: /cards/finance, write: true }
 ```
@@ -103,14 +107,14 @@ mounts:
 Decks are always referred to by id; the name is for display. Which
 assistant is the default is per user, in `RUMU_HOME/default-assistant`. A
 session starts with its own deck plus these default mounts; `card_mount`
-changes them for the branch. Decks are created by the user (the web UI or by
-hand), never by an assistant; assistants write cards in the decks they mount
-with `write`. Mount, ask and link approvals marked "always allow" are kept in
-`RUMU_HOME/grants.json`. History uses one git repository per deck through
+changes them for the branch. Decks are created by the user in the web UI; an
+assistant creates only project decks, with the user's approval. Assistants
+write cards in the decks they mount with `write`. Approvals marked "always
+allow" are kept in `RUMU_HOME/grants.json`. History uses one git repository per deck through
 gitoxide (`gix`); no git binary is needed at runtime.
 
-rumu's own data — knowledge cards and past conversations — lives in the
-reserved `@rumu:/…` workspace, always attached. The leading `@` is not a
+rumu's own data — knowledge cards, past conversations, the workspace
+registry — lives in the reserved `@rumu:/…` workspace, always addressable. The leading `@` is not a
 valid workspace name, so a project called `rumu` can be an ordinary workspace.
 
 ## Images

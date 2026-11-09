@@ -18,5 +18,6 @@
     "edit": "编辑"
   },
   "forkSession": "分叉会话失败",
+  "moveSession": "移动会话失败",
   "answer": "回答失败"
 }

@@ -50,6 +50,7 @@ async fn agent_transcript_address_is_readable() {
         Arc::new(WorkspacePlugin::new(
             home.path(),
             rumu_cards::Decks::load(home.path()).unwrap(),
+            rumu_core::Workspaces::default(),
         )),
     ];
     let kernel = Kernel::new(
@@ -70,10 +71,7 @@ async fn agent_transcript_address_is_readable() {
         Workspaces::default(),
     )
     .unwrap();
-    let (session, _) = kernel
-        .create_session(Vec::new(), "assistant".into())
-        .await
-        .unwrap();
+    let (session, _) = kernel.create_session("assistant".into()).await.unwrap();
     let branch = session.active_branch.clone();
     let mut rx = kernel.tap_pushes();
     kernel.prompt(&branch, "look around").await.unwrap();
@@ -106,7 +104,11 @@ async fn agent_transcript_address_is_readable() {
     // `read` opens it: the child's own nodes in root→head order — the
     // sub-agent prompt (its first own node), the skipped sibling, the
     // child's tool call + result, and the final reply.
-    let ws = WorkspacePlugin::new(home.path(), rumu_cards::Decks::load(home.path()).unwrap());
+    let ws = WorkspacePlugin::new(
+        home.path(),
+        rumu_cards::Decks::load(home.path()).unwrap(),
+        rumu_core::Workspaces::default(),
+    );
     let cx = rumu_core::Cx::new(
         session.id.clone(),
         branch.clone(),

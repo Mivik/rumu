@@ -7,7 +7,7 @@ export type LibraryDeck = { id: string,
 /**
  * The display name (`deck.yaml` `name`).
  */
-name: string, assistant: boolean, 
+name: string, assistant: boolean, project: boolean, 
 /**
  * The one-line summary from its charter (`about.md`).
  */

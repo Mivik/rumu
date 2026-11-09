@@ -106,17 +106,25 @@ export {
   refreshAssistants,
   refreshTasks,
   sendPrompt,
+  startSessionIn,
   stopTurn,
   viewAssistant,
 } from './state/sessions'
 
+export { deleteWorkspace, refreshWorkspaces, saveWorkspace } from './state/workspaces'
+
 export {
-  attachWorkspaces,
-  composerWorkspaces,
-  deleteWorkspace,
-  refreshWorkspaces,
-  saveWorkspace,
-  useWorkspace,
-} from './state/workspaces'
+  chooseLandingAssistant,
+  chooseLandingProject,
+  createProject,
+  deleteProject,
+  folderProjectName,
+  folderWorkspaceName,
+  landingAssistant,
+  landingProject,
+  moveSession,
+  refreshProjects,
+  updateProject,
+} from './state/projects'
 
 export { startApp } from './state/pushes'

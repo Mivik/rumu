@@ -1,18 +1,23 @@
-//! `RUMU_HOME/workspaces.yaml`: the workspace registry. rumu is its only
-//! writer (the web UI adds, edits and removes workspaces); each entry is the
-//! string shorthand (`proj: ~/code/proj`) or `{root, ssh?, read_only?}`.
-//! Sessions see the workspaces attached to their branch (see
-//! [`rumu_core::PathState`]); assistants attach theirs in `deck.yaml`.
+//! `RUMU_HOME/workspaces.yaml`: the workspace registry, and
+//! `RUMU_HOME/projects.yaml`: the workspaces each project mounts. rumu is
+//! the only writer of both (the web UI and the model's `@rumu:/workspaces`
+//! writes). A registry entry is the string shorthand (`proj: ~/code/proj`) or
+//! `{root, ssh?, read_only?}`; a project entry is `<deck id>: [<name>, …]`.
 
 use std::collections::BTreeMap;
 use std::path::Path;
 
-use rumu_core::{IoError, RUMU_WORKSPACE, Workspace, Workspaces, valid_workspace_name};
+use rumu_core::{
+    IoError, ProjectWorkspaces, RUMU_WORKSPACE, Workspace, Workspaces, valid_workspace_name,
+};
 use serde::{Deserialize, Deserializer, Serialize, de};
+
+use rumu_cards::{Deck, DeckMeta, Decks};
 
 use crate::{Error, Result};
 
 pub const WORKSPACES_FILE: &str = "workspaces.yaml";
+pub const PROJECTS_FILE: &str = "projects.yaml";
 
 /// Load the registry. With no file at all, the current directory becomes
 /// the one workspace and the file is written (zero-config first start).
@@ -20,6 +25,12 @@ pub const WORKSPACES_FILE: &str = "workspaces.yaml";
 /// are errors: a workspace that silently vanishes is worse than a startup
 /// failure.
 pub fn load_workspaces(home: &Path) -> Result<Workspaces> {
+    let list = load_list(home)?;
+    let projects = load_projects(home)?;
+    Ok(Workspaces::with_projects(list, projects))
+}
+
+fn load_list(home: &Path) -> Result<Vec<Workspace>> {
     let path = home.join(WORKSPACES_FILE);
     let text = match std::fs::read_to_string(&path) {
         Ok(text) => text,
@@ -30,7 +41,7 @@ pub fn load_workspaces(home: &Path) -> Result<Workspaces> {
             let root = cwd.to_string_lossy().into_owned();
             let list = vec![Workspace::new(cwd_workspace_name(&root), None, root, false)];
             save(home, &list)?;
-            return Ok(Workspaces::new(list));
+            return Ok(list);
         }
         Err(source) => return Err(IoError::at("reading", &path)(source).into()),
     };
@@ -39,12 +50,69 @@ pub fn load_workspaces(home: &Path) -> Result<Workspaces> {
             path,
             source: Box::new(source),
         })?;
-    let list = entries
+    entries
         .unwrap_or_default()
         .into_iter()
         .map(|(name, e)| check(name, e))
-        .collect::<Result<Vec<_>>>()?;
-    Ok(Workspaces::new(list))
+        .collect()
+}
+
+/// The project lists; a missing file is none. Names are kept as written: one
+/// that leaves the registry drops out when read (see [`Workspaces::project`]).
+fn load_projects(home: &Path) -> Result<ProjectWorkspaces> {
+    let path = home.join(PROJECTS_FILE);
+    let text = match std::fs::read_to_string(&path) {
+        Ok(text) => text,
+        Err(err) if err.kind() == std::io::ErrorKind::NotFound => return Ok(Default::default()),
+        Err(source) => return Err(IoError::at("reading", &path)(source).into()),
+    };
+    let projects: Option<ProjectWorkspaces> =
+        rumu_cards::yaml::from_str(&text).map_err(|source| Error::Yaml {
+            path,
+            source: Box::new(source),
+        })?;
+    Ok(projects.unwrap_or_default())
+}
+
+/// Make `names` (registered, each once) the workspaces `project` mounts, in
+/// order, and save. An empty list drops the project's entry.
+pub fn set_project_workspaces(
+    home: &Path,
+    registry: &Workspaces,
+    project: &str,
+    names: Vec<String>,
+) -> Result<()> {
+    registry.update_both(|list, projects| {
+        for (i, name) in names.iter().enumerate() {
+            let fail = |message: &str| Error::WorkspaceConfig {
+                name: name.clone(),
+                message: message.into(),
+            };
+            if !list.iter().any(|w| &w.name == name) {
+                return Err(fail("no such workspace"));
+            }
+            if names[..i].contains(name) {
+                return Err(fail("listed twice"));
+            }
+        }
+        if names.is_empty() {
+            projects.remove(project);
+        } else {
+            projects.insert(project.to_owned(), names);
+        }
+        save_projects(home, projects)
+    })
+}
+
+/// Forget the workspaces of `project` (its deck was deleted), and save.
+pub fn drop_project(home: &Path, registry: &Workspaces, project: &str) -> Result<()> {
+    if !registry.projects().contains_key(project) {
+        return Ok(());
+    }
+    registry.update_both(|_, projects| {
+        projects.remove(project);
+        save_projects(home, projects)
+    })
 }
 
 /// Add `ws`, or replace the workspace of the same name, and save.
@@ -63,9 +131,10 @@ pub fn upsert_workspace(home: &Path, registry: &Workspaces, ws: Workspace) -> Re
     Ok(ws)
 }
 
-/// Remove the workspace `name` and save.
+/// Remove the workspace `name`, and from every project that mounts it, and
+/// save.
 pub fn remove_workspace(home: &Path, registry: &Workspaces, name: &str) -> Result<()> {
-    registry.update(|list| {
+    registry.update_both(|list, projects| {
         let before = list.len();
         list.retain(|w| w.name != name);
         if list.len() == before {
@@ -74,8 +143,28 @@ pub fn remove_workspace(home: &Path, registry: &Workspaces, name: &str) -> Resul
                 message: "no such workspace".into(),
             });
         }
+        let mounted = projects
+            .values()
+            .any(|names| names.iter().any(|n| n == name));
+        if mounted {
+            for names in projects.values_mut() {
+                names.retain(|n| n != name);
+            }
+            projects.retain(|_, names| !names.is_empty());
+            save_projects(home, projects)?;
+        }
         save(home, list)
     })
+}
+
+/// Write `projects.yaml` whole, as [`save`] does.
+fn save_projects(home: &Path, projects: &ProjectWorkspaces) -> Result<()> {
+    let path = home.join(PROJECTS_FILE);
+    let text = serde_saphyr::to_string(projects).map_err(|e| Error::Config {
+        path: path.clone(),
+        message: format!("serializing: {e}"),
+    })?;
+    write_whole(home, PROJECTS_FILE, &text)
 }
 
 /// Write the file whole (through a temp file, so a crash never leaves half
@@ -97,9 +186,84 @@ fn save(home: &Path, list: &[Workspace]) -> Result<()> {
         path: path.clone(),
         message: format!("serializing: {e}"),
     })?;
-    let tmp = home.join(format!("{WORKSPACES_FILE}.tmp"));
+    write_whole(home, WORKSPACES_FILE, &text)
+}
+
+fn write_whole(home: &Path, file: &str, text: &str) -> Result<()> {
+    let path = home.join(file);
+    let tmp = home.join(format!("{file}.tmp"));
     std::fs::write(&tmp, text).map_err(IoError::at("writing", &tmp))?;
     std::fs::rename(&tmp, &path).map_err(IoError::at("renaming", &tmp))?;
+    Ok(())
+}
+
+/// One project deck as the web sidebar sees it.
+#[derive(Debug, Clone, Serialize, ts_rs::TS)]
+#[ts(export)]
+pub struct Project {
+    pub id: String,
+    pub name: String,
+    /// The one-line summary from its charter (`about.md`).
+    #[ts(optional)]
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub description: Option<String>,
+    /// The workspaces it mounts, in order (the first is its default).
+    pub workspaces: Vec<String>,
+}
+
+/// Every project deck, by name.
+pub fn projects(decks: &Decks, registry: &Workspaces) -> Vec<Project> {
+    let mut list: Vec<Project> = decks
+        .projects()
+        .iter()
+        .map(|d| project_of(d, registry))
+        .collect();
+    list.sort_by(|a, b| a.name.cmp(&b.name));
+    list
+}
+
+/// The wire form of one project deck.
+pub fn project_of(deck: &Deck, registry: &Workspaces) -> Project {
+    Project {
+        id: deck.id().to_owned(),
+        name: deck.meta.name.clone(),
+        description: deck.summary(),
+        workspaces: registry.project(deck.id()),
+    }
+}
+
+/// Create a project deck named `name` (blank charter) mounting `workspaces`.
+pub fn create_project(
+    home: &Path,
+    decks: &Decks,
+    registry: &Workspaces,
+    name: &str,
+    workspaces: Vec<String>,
+) -> Result<Deck> {
+    let deck = decks.upsert(DeckMeta {
+        id: String::new(),
+        name: name.to_owned(),
+        assistant: false,
+        project: true,
+        mounts: Vec::new(),
+        allow_ask: Vec::new(),
+    })?;
+    set_project_workspaces(home, registry, deck.id(), workspaces)?;
+    Ok(deck)
+}
+
+/// A fresh home's first project: the current directory's workspace (the only
+/// one registered), in a project deck of the same name. Skipped when a deck
+/// of that name already exists.
+pub fn seed_project(home: &Path, decks: &Decks, registry: &Workspaces) -> Result<()> {
+    let Ok([ws]) = <[Workspace; 1]>::try_from(registry.list()) else {
+        return Ok(());
+    };
+    let name: String = ws.name.replace('.', "-");
+    if !rumu_cards::deck::valid_deck_name(&name) || decks.list().iter().any(|d| d.name == name) {
+        return Ok(());
+    }
+    create_project(home, decks, registry, &name, vec![ws.name])?;
     Ok(())
 }
 
@@ -146,6 +310,39 @@ impl<'de> Deserialize<'de> for Entry {
             )),
         }
     }
+}
+
+/// Parse and validate one registry entry (`@rumu:/workspaces/<name>`): the
+/// string shorthand or the `{root, ssh?, read_only?}` map, with a local
+/// `root` required to be an existing directory (after `~` expansion).
+pub(crate) fn parse_entry(name: &str, text: &str) -> Result<Workspace> {
+    let entry: Entry =
+        rumu_cards::yaml::from_str(text).map_err(|source| Error::WorkspaceConfig {
+            name: name.to_owned(),
+            message: format!("does not parse: {source}"),
+        })?;
+    let ws = check(name.to_owned(), entry)?;
+    if ws.is_local() && !Path::new(ws.root.as_str()).is_dir() {
+        return Err(Error::WorkspaceConfig {
+            name: name.to_owned(),
+            message: format!("root `{}` is not an existing directory", ws.root),
+        });
+    }
+    Ok(ws)
+}
+
+/// One registry entry's canonical YAML text, as `@rumu:/workspaces/<name>`
+/// reads it.
+pub(crate) fn entry_yaml(ws: &Workspace) -> Result<String> {
+    let entry = Entry {
+        root: ws.root.as_str().to_owned(),
+        ssh: ws.ssh.clone(),
+        read_only: ws.read_only,
+    };
+    serde_saphyr::to_string(&entry).map_err(|e| Error::WorkspaceConfig {
+        name: ws.name.clone(),
+        message: format!("serializing: {e}"),
+    })
 }
 
 /// Validate one entry into a workspace. `~` in local roots expands to

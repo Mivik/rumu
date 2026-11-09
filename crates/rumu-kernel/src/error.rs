@@ -91,9 +91,9 @@ pub enum Error {
         source: PredicateError,
     },
 
-    /// A workspace the request names is not available (or is repeated).
-    #[error("unknown workspace `{name}` (available: {available})")]
-    UnknownWorkspace { name: String, available: String },
+    /// A session answering an `ask` keeps its mounts, so it has no project.
+    #[error("a session answering a question keeps its mounts")]
+    AskedSessionMounts,
 
     // ---- lifecycle / control flow ----
     /// The enclosing turn was aborted while an internal call was queued.

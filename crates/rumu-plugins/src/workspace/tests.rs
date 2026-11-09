@@ -63,10 +63,16 @@ fn flush_output(host: &std::sync::Arc<FakeRuntime>, call_id: &str, out: &ToolOut
     host.apply_output(call_id, out);
 }
 
-/// A workspace plugin over the temp home's decks.
+/// A workspace plugin over the temp home's decks, with an empty workspace
+/// registry (tests that need one use [`deck_plugin_with`]).
 fn deck_plugin(home: &Path) -> WorkspacePlugin {
+    deck_plugin_with(home, rumu_core::Workspaces::default())
+}
+
+/// A workspace plugin sharing `workspaces` with the test.
+fn deck_plugin_with(home: &Path, workspaces: rumu_core::Workspaces) -> WorkspacePlugin {
     let decks = rumu_cards::Decks::load(home).unwrap();
-    WorkspacePlugin::new(home, decks)
+    WorkspacePlugin::new(home, decks, workspaces)
 }
 
 /// One card read from a deck's `HEAD` tree.
@@ -962,7 +968,10 @@ async fn rumu_workspace_edges() {
 
     // `list @rumu:` shows the roots.
     let out = plugin.call_tool("list", json!({}), &cx).await.unwrap();
-    assert_eq!(out.content.text, "cards/\nhistory/\nsessions/\ntasks/");
+    assert_eq!(
+        out.content.text,
+        "cards/\nhistory/\nsessions/\ntasks/\nworkspaces/"
+    );
 
     // Unknown paths name the roots.
     for tool in ["read", "write", "edit", "list"] {
@@ -1573,6 +1582,7 @@ fn staged_session() -> (rumu_core::SessionInfo, Vec<Node>, Vec<rumu_core::Branch
         updated_at: 8000,
         seen_at: None,
         assistant: crate::testutil::TEST_ASSISTANT.into(),
+        project: None,
     };
     (info, nodes, vec![main, agent])
 }
@@ -1734,7 +1744,7 @@ async fn mounted_assistant_sessions_are_visible() {
     assert!(out.is_error, "{}", out.content.text);
     let out = call("list", json!({ "path": by_ledger })).await;
     assert!(
-        out.is_error && out.content.text.contains("not mounted"),
+        out.is_error && out.content.text.contains("no visible sessions"),
         "{}",
         out.content.text
     );
@@ -1983,6 +1993,7 @@ async fn session_nodes_show_image_placeholders() {
         updated_at: 0,
         seen_at: None,
         assistant: crate::testutil::TEST_ASSISTANT.into(),
+        project: None,
     };
     let host = session_host(info, nodes, vec![]);
     let cx = host.cx();
@@ -2103,6 +2114,7 @@ fn staged_tree(sid: &str, nodes: Vec<Node>, head: &str) -> std::sync::Arc<FakeRu
         updated_at: nodes.iter().map(|n| n.at).max().unwrap_or(0),
         seen_at: None,
         assistant: crate::testutil::TEST_ASSISTANT.into(),
+        project: None,
     };
     let branch = rumu_core::Branch {
         id: rumu_core::BranchId::from("B"),
@@ -2666,6 +2678,7 @@ fn search_sessions() -> std::sync::Arc<FakeRuntime> {
         updated_at: updated,
         seen_at: None,
         assistant: crate::testutil::TEST_ASSISTANT.into(),
+        project: None,
     };
     let branch = |sid: &str, head: &str| rumu_core::Branch {
         id: rumu_core::BranchId::from("B"),
@@ -2974,6 +2987,7 @@ async fn search_sessions_snippet_cjk_queries() {
         updated_at: 1,
         seen_at: None,
         assistant: crate::testutil::TEST_ASSISTANT.into(),
+        project: None,
     };
     let mk = |nid: &str, at: i64, body: NodeBody| Node {
         id: rumu_core::NodeId::from(nid),
@@ -3049,6 +3063,7 @@ async fn search_downweights_tool_results_and_breaks_ties_by_time() {
         updated_at: 1,
         seen_at: None,
         assistant: crate::testutil::TEST_ASSISTANT.into(),
+        project: None,
     };
     let mk = |nid: &str, at: i64, body: NodeBody| Node {
         id: rumu_core::NodeId::from(nid),
@@ -4052,4 +4067,881 @@ async fn history_lists_versions_by_path() {
     // old card's text.
     assert!(out.content.text.contains("two"), "{}", out.content.text);
     assert!(!out.content.text.contains("-one"), "{}", out.content.text);
+}
+
+// ---------- workspaces and the session's project ----------
+
+const PROJECT_ID: &str = "0193a2f1-0000-7000-8000-00000000c3c3";
+const PROJECT2_ID: &str = "0193a2f1-0000-7000-8000-00000000c4c4";
+
+/// A temp home with `main`, a project deck `proj`, and a registry of
+/// `app` (read-only), `ci` (ssh) and `proj` (local). The project mounts
+/// `app` then `proj`; the session is in it.
+fn project_setup() -> (
+    tempfile::TempDir,
+    WorkspacePlugin,
+    std::sync::Arc<FakeRuntime>,
+    rumu_core::Cx,
+    rumu_core::Workspaces,
+) {
+    let home = tempfile::tempdir().unwrap();
+    crate::testutil::main_deck(home.path());
+    crate::testutil::create_deck(
+        home.path(),
+        "proj",
+        Some(&format!("id: {PROJECT_ID}\nname: proj\nproject: true\n")),
+        &[],
+    );
+    let proj_dir = home.path().join("proj-ws");
+    let app_dir = home.path().join("app-ws");
+    std::fs::create_dir_all(&proj_dir).unwrap();
+    std::fs::create_dir_all(&app_dir).unwrap();
+    let registry = rumu_core::Workspaces::with_projects(
+        vec![
+            ws("proj", &proj_dir.to_string_lossy()),
+            Workspace::new(
+                "app".into(),
+                None,
+                app_dir.to_string_lossy().into_owned(),
+                true,
+            ),
+            Workspace::new(
+                "ci".into(),
+                Some("gw.example".into()),
+                "/srv/ci".into(),
+                false,
+            ),
+        ],
+        rumu_core::ProjectWorkspaces::from([(
+            PROJECT_ID.to_owned(),
+            vec!["app".into(), "proj".into()],
+        )]),
+    );
+    let plugin = deck_plugin_with(home.path(), registry.clone());
+    let host = FakeRuntime::arc();
+    *host.state.lock().unwrap() = PathState {
+        workspaces: registry.list(),
+        mounted: registry.project(PROJECT_ID),
+        project: Some(PROJECT_ID.into()),
+        default_workspace: Some("app".into()),
+        assistant: crate::testutil::TEST_ASSISTANT.into(),
+        mounts: vec![
+            rumu_core::CardMount {
+                deck: crate::testutil::TEST_ASSISTANT.into(),
+                at: "/cards/self".into(),
+            },
+            rumu_core::CardMount {
+                deck: PROJECT_ID.into(),
+                at: rumu_core::PROJECT_MOUNT.into(),
+            },
+        ],
+        ..Default::default()
+    };
+    let cx = host.cx();
+    (home, plugin, host, cx, registry)
+}
+
+#[tokio::test]
+async fn workspace_registry_reads_and_writes() {
+    let (home, plugin, host, cx, registry) = project_setup();
+
+    // The registry listing: every workspace, location, ro, mounted and default.
+    let out = plugin
+        .call_tool("list", json!({ "path": "@rumu:/workspaces" }), &cx)
+        .await
+        .unwrap();
+    assert!(!out.is_error, "{}", out.content.text);
+    let lines: Vec<&str> = out.content.text.lines().collect();
+    assert_eq!(lines.len(), 3, "{}", out.content.text);
+    assert!(lines[0].starts_with("* app local "), "{}", lines[0]);
+    assert!(lines[0].ends_with(" ro  (mounted)"), "{}", lines[0]);
+    assert!(
+        lines[1].starts_with("  ci ssh:gw.example /srv/ci rw"),
+        "{}",
+        lines[1]
+    );
+    assert!(lines[2].starts_with("  proj local "), "{}", lines[2]);
+    assert!(lines[2].ends_with(" rw  (mounted)"), "{}", lines[2]);
+    assert!(!out.content.text.contains("attached"));
+
+    // Reading an entry returns its YAML; unknown names are refused.
+    let out = plugin
+        .call_tool("read", json!({ "path": "@rumu:/workspaces/ci" }), &cx)
+        .await
+        .unwrap();
+    assert!(
+        out.content.text.contains("root: /srv/ci"),
+        "{}",
+        out.content.text
+    );
+    assert!(
+        out.content.text.contains("ssh: gw.example"),
+        "{}",
+        out.content.text
+    );
+    let out = plugin
+        .call_tool("read", json!({ "path": "@rumu:/workspaces/app" }), &cx)
+        .await
+        .unwrap();
+    assert!(
+        out.content.text.contains("read_only: true"),
+        "{}",
+        out.content.text
+    );
+    let out = plugin
+        .call_tool("read", json!({ "path": "@rumu:/workspaces/ghost" }), &cx)
+        .await
+        .unwrap();
+    assert!(
+        out.is_error && out.content.text.contains("no workspace `ghost`"),
+        "{}",
+        out.content.text
+    );
+
+    // Creating an entry needs no approval and saves it.
+    let new_dir = home.path().join("new-ws");
+    std::fs::create_dir(&new_dir).unwrap();
+    let created = format!("root: {}\n", new_dir.display());
+    let out = plugin
+        .call_tool(
+            "write",
+            json!({ "path": "@rumu:/workspaces/new", "content": created.clone() }),
+            &cx,
+        )
+        .await
+        .unwrap();
+    assert!(!out.is_error, "{}", out.content.text);
+    assert_eq!(
+        registry.get("new").unwrap().root.as_str(),
+        new_dir.to_string_lossy()
+    );
+    assert!(host.decisions.lock().unwrap().is_empty());
+
+    // A local root must be an existing directory.
+    let missing = format!("root: {}\n", home.path().join("ghost").display());
+    let out = plugin
+        .call_tool(
+            "write",
+            json!({ "path": "@rumu:/workspaces/new2", "content": missing }),
+            &cx,
+        )
+        .await
+        .unwrap();
+    assert!(
+        out.is_error && out.content.text.contains("not an existing directory"),
+        "{}",
+        out.content.text
+    );
+    assert!(registry.get("new2").is_none());
+
+    // Identical content is a no-op.
+    let out = plugin
+        .call_tool(
+            "write",
+            json!({ "path": "@rumu:/workspaces/new", "content": created }),
+            &cx,
+        )
+        .await
+        .unwrap();
+    assert!(!out.is_error, "{}", out.content.text);
+    assert!(
+        out.content.text.contains("unchanged"),
+        "{}",
+        out.content.text
+    );
+    assert!(host.decisions.lock().unwrap().is_empty());
+
+    // Changing an existing entry asks the user (`workspace`).
+    host.answers
+        .lock()
+        .unwrap()
+        .push_back(json!({ "allow": true, "scope": "once" }));
+    let changed = format!("root: {}\nread_only: true\n", new_dir.display());
+    let out = plugin
+        .call_tool(
+            "write",
+            json!({ "path": "@rumu:/workspaces/new", "content": changed }),
+            &cx,
+        )
+        .await
+        .unwrap();
+    assert!(!out.is_error, "{}", out.content.text);
+    assert!(registry.get("new").unwrap().read_only);
+    {
+        let decisions = host.decisions.lock().unwrap();
+        assert_eq!(decisions.len(), 1, "{decisions:?}");
+        let request = &decisions[0];
+        assert_eq!(request["kind"], "workspace_change");
+        assert_eq!(request["name"], "new");
+        assert_eq!(request["from_id"], crate::testutil::TEST_ASSISTANT);
+        assert!(
+            request["before"].as_str().unwrap().contains("root:"),
+            "{request}"
+        );
+        assert!(
+            request["after"]
+                .as_str()
+                .unwrap()
+                .contains("read_only: true"),
+            "{request}"
+        );
+    }
+
+    // A declined change leaves the entry alone.
+    host.answers
+        .lock()
+        .unwrap()
+        .push_back(json!({ "allow": false }));
+    let out = plugin
+        .call_tool(
+            "write",
+            json!({ "path": "@rumu:/workspaces/new", "content": format!("root: {}\n", new_dir.display()) }),
+            &cx,
+        )
+        .await
+        .unwrap();
+    assert!(
+        out.is_error && out.content.text.contains("declined"),
+        "{}",
+        out.content.text
+    );
+    assert!(registry.get("new").unwrap().read_only);
+
+    // Edit changes an existing entry through the same approval path.
+    host.answers
+        .lock()
+        .unwrap()
+        .push_back(json!({ "allow": true }));
+    let out = plugin
+        .call_tool(
+            "edit",
+            json!({
+                "path": "@rumu:/workspaces/new",
+                "old_string": "read_only: true",
+                "new_string": "read_only: false",
+            }),
+            &cx,
+        )
+        .await
+        .unwrap();
+    assert!(!out.is_error, "{}", out.content.text);
+    assert!(!registry.get("new").unwrap().read_only);
+    let out = plugin
+        .call_tool(
+            "edit",
+            json!({
+                "path": "@rumu:/workspaces/ghost",
+                "old_string": "a",
+                "new_string": "b",
+            }),
+            &cx,
+        )
+        .await
+        .unwrap();
+    assert!(out.is_error, "{}", out.content.text);
+}
+
+#[tokio::test]
+async fn project_workspaces_are_read_before_write() {
+    let (_home, plugin, host, cx, registry) = project_setup();
+
+    // The root lists the project directory when the session is in one.
+    let out = plugin
+        .call_tool("list", json!({ "path": "@rumu:/" }), &cx)
+        .await
+        .unwrap();
+    assert!(
+        out.content.text.contains("workspaces/"),
+        "{}",
+        out.content.text
+    );
+    assert!(
+        out.content.text.contains("project/"),
+        "{}",
+        out.content.text
+    );
+
+    // Reading returns the ordered list and records its content hash.
+    let out = plugin
+        .call_tool("read", json!({ "path": "@rumu:/project/workspaces" }), &cx)
+        .await
+        .unwrap();
+    assert_eq!(out.content.text, "- app\n- proj\n");
+    assert_eq!(
+        out.effects[0].data.as_ref().unwrap().tag,
+        "project.workspaces.read"
+    );
+    flush_output(&host, "call-1", &out);
+
+    // A write based on that read reorders the project's workspaces.
+    let out = plugin
+        .call_tool(
+            "write",
+            json!({
+                "path": "@rumu:/project/workspaces",
+                "content": "- proj\n- app\n",
+            }),
+            &cx,
+        )
+        .await
+        .unwrap();
+    assert!(!out.is_error, "{}", out.content.text);
+    assert_eq!(
+        registry.project(PROJECT_ID),
+        vec!["proj".to_owned(), "app".to_owned()]
+    );
+    // The write is the base of the next one, like a read.
+    assert_eq!(
+        out.effects[0].data.as_ref().unwrap().tag,
+        "project.workspaces.read"
+    );
+
+    // Without that marker (another session's change, say) the old read is
+    // stale: the refusal returns the current list.
+    let out = plugin
+        .call_tool(
+            "write",
+            json!({
+                "path": "@rumu:/project/workspaces",
+                "content": "- app\n- proj\n",
+            }),
+            &cx,
+        )
+        .await
+        .unwrap();
+    assert!(
+        out.is_error && out.content.text.contains("changed since you read it"),
+        "{}",
+        out.content.text
+    );
+    assert!(
+        out.content.text.contains("- proj\n- app"),
+        "{}",
+        out.content.text
+    );
+    assert_eq!(
+        registry.project(PROJECT_ID),
+        vec!["proj".to_owned(), "app".to_owned()]
+    );
+
+    // A fresh read makes a write valid again.
+    let fresh = host.cx();
+    let out = plugin
+        .call_tool(
+            "read",
+            json!({ "path": "@rumu:/project/workspaces" }),
+            &fresh,
+        )
+        .await
+        .unwrap();
+    flush_output(&host, "call-1", &out);
+    let fresh = host.cx();
+    let out = plugin
+        .call_tool(
+            "write",
+            json!({
+                "path": "@rumu:/project/workspaces",
+                "content": "- app\n- proj\n",
+            }),
+            &fresh,
+        )
+        .await
+        .unwrap();
+    assert!(!out.is_error, "{}", out.content.text);
+
+    // `edit` applies to the current text, with no read required.
+    let fresh = host.cx();
+    let out = plugin
+        .call_tool(
+            "edit",
+            json!({
+                "path": "@rumu:/project/workspaces",
+                "old_string": "- app\n- proj",
+                "new_string": "- proj\n- app",
+            }),
+            &fresh,
+        )
+        .await
+        .unwrap();
+    assert!(!out.is_error, "{}", out.content.text);
+    assert_eq!(
+        registry.project(PROJECT_ID),
+        vec!["proj".to_owned(), "app".to_owned()]
+    );
+
+    // Unknown names are refused, and no approval is involved.
+    let fresh = host.cx();
+    let out = plugin
+        .call_tool(
+            "write",
+            json!({
+                "path": "@rumu:/project/workspaces",
+                "content": "- ghost\n",
+            }),
+            &fresh,
+        )
+        .await
+        .unwrap();
+    assert!(out.is_error, "{}", out.content.text);
+    assert!(host.decisions.lock().unwrap().is_empty());
+}
+
+#[tokio::test]
+async fn project_config_needs_a_project() {
+    let home = card_home();
+    let (plugin, _host, cx) = card_plugin_for(home.path());
+    for tool in ["read", "list"] {
+        let out = plugin
+            .call_tool(tool, json!({ "path": "@rumu:/project/workspaces" }), &cx)
+            .await
+            .unwrap();
+        assert!(
+            out.is_error && out.content.text.contains("in no project"),
+            "{tool}: {}",
+            out.content.text
+        );
+    }
+    let out = plugin
+        .call_tool(
+            "write",
+            json!({ "path": "@rumu:/project/workspaces", "content": "[]" }),
+            &cx,
+        )
+        .await
+        .unwrap();
+    assert!(
+        out.is_error && out.content.text.contains("in no project"),
+        "{}",
+        out.content.text
+    );
+    let out = plugin
+        .call_tool("list", json!({ "path": "@rumu:/" }), &cx)
+        .await
+        .unwrap();
+    assert!(
+        !out.content.text.contains("project/"),
+        "{}",
+        out.content.text
+    );
+}
+
+#[tokio::test]
+async fn workspace_use_lists_the_projects_workspaces_first() {
+    let (_home, plugin, _host, cx, _registry) = project_setup();
+    let out = plugin
+        .call_tool("workspace_use", json!({}), &cx)
+        .await
+        .unwrap();
+    let lines: Vec<&str> = out.content.text.lines().collect();
+    assert!(lines[0].starts_with("* app local "), "{}", lines[0]);
+    assert!(lines[0].ends_with("(mounted)"), "{}", lines[0]);
+    assert!(lines[1].starts_with("  proj local "), "{}", lines[1]);
+    assert!(lines[1].ends_with("(mounted)"), "{}", lines[1]);
+    assert!(lines[2].starts_with("  ci ssh:gw.example"), "{}", lines[2]);
+    assert!(lines[3].starts_with("  @rumu"), "{}", lines[3]);
+    assert!(!out.content.text.contains("attached"));
+}
+
+#[tokio::test]
+async fn sessions_belong_to_their_project_or_assistant_deck() {
+    const OTHER: &str = "0193a2f1-0000-7000-8000-00000000b2b2";
+    let home = tempfile::tempdir().unwrap();
+    crate::testutil::main_deck(home.path());
+    crate::testutil::create_deck(
+        home.path(),
+        "proj",
+        Some(&format!("id: {PROJECT_ID}\nname: proj\nproject: true\n")),
+        &[],
+    );
+    crate::testutil::create_deck(
+        home.path(),
+        "other",
+        Some(&format!("id: {OTHER}\nname: other\nassistant: true\n")),
+        &[],
+    );
+    let plugin = deck_plugin(home.path());
+    let host = FakeRuntime::arc();
+    let session = |id: &str, assistant: &str, project: Option<&str>| rumu_core::SessionInfo {
+        id: rumu_core::SessionId::from(id),
+        title: id.into(),
+        active_branch: Default::default(),
+        created_at: 1,
+        updated_at: 2,
+        seen_at: None,
+        assistant: assistant.into(),
+        project: project.map(str::to_owned),
+    };
+    host.sessions.lock().unwrap().extend([
+        session(
+            "01SPROJECTSESSION000000000000",
+            crate::testutil::MAIN_DECK,
+            Some(PROJECT_ID),
+        ),
+        session("01SOTHERSESSION0000000000000", OTHER, None),
+    ]);
+    // The project is mounted; the other assistant's deck is not.
+    host.state
+        .lock()
+        .unwrap()
+        .mounts
+        .push(rumu_core::CardMount {
+            deck: PROJECT_ID.into(),
+            at: rumu_core::PROJECT_MOUNT.into(),
+        });
+    let cx = host.cx();
+    let out = plugin
+        .call_tool("list", json!({ "path": "@rumu:/sessions" }), &cx)
+        .await
+        .unwrap();
+    assert!(
+        out.content.text.contains("01SPROJECTSESSION000000000000"),
+        "{}",
+        out.content.text
+    );
+    assert!(
+        !out.content.text.contains("01SOTHERSESSION0000000000000"),
+        "{}",
+        out.content.text
+    );
+    let out = plugin
+        .call_tool(
+            "list",
+            json!({ "path": "@rumu:/sessions/by-assistant" }),
+            &cx,
+        )
+        .await
+        .unwrap();
+    assert_eq!(
+        out.content.text,
+        format!(
+            "@rumu:/sessions/by-assistant/{}  main (you)",
+            crate::testutil::MAIN_DECK
+        )
+    );
+
+    // Leaving the project hides its sessions; mounting the other assistant
+    // shows its own.
+    {
+        let mut state = host.state.lock().unwrap();
+        state.mounts.retain(|m| m.at != rumu_core::PROJECT_MOUNT);
+        state.mounts.push(rumu_core::CardMount {
+            deck: OTHER.into(),
+            at: "/cards/other".into(),
+        });
+    }
+    let out = plugin
+        .call_tool("list", json!({ "path": "@rumu:/sessions" }), &cx)
+        .await
+        .unwrap();
+    assert!(
+        !out.content.text.contains("01SPROJECTSESSION000000000000"),
+        "{}",
+        out.content.text
+    );
+    assert!(
+        out.content.text.contains("01SOTHERSESSION0000000000000"),
+        "{}",
+        out.content.text
+    );
+    let out = plugin
+        .call_tool(
+            "list",
+            json!({ "path": format!("@rumu:/sessions/by-assistant/{}", crate::testutil::MAIN_DECK) }),
+            &cx,
+        )
+        .await
+        .unwrap();
+    assert!(
+        out.is_error && out.content.text.contains("no visible sessions"),
+        "{}",
+        out.content.text
+    );
+}
+
+/// A home with `main` and two project decks, and a registry whose first
+/// project mounts `app`.
+fn mount_setup() -> (
+    tempfile::TempDir,
+    WorkspacePlugin,
+    std::sync::Arc<FakeRuntime>,
+    rumu_core::Cx,
+    rumu_core::Workspaces,
+) {
+    let home = tempfile::tempdir().unwrap();
+    crate::testutil::main_deck(home.path());
+    crate::testutil::create_deck(
+        home.path(),
+        "proj",
+        Some(&format!("id: {PROJECT_ID}\nname: proj\nproject: true\n")),
+        &[],
+    );
+    crate::testutil::create_deck(
+        home.path(),
+        "proj2",
+        Some(&format!("id: {PROJECT2_ID}\nname: proj2\nproject: true\n")),
+        &[],
+    );
+    let app_dir = home.path().join("app-ws");
+    std::fs::create_dir(&app_dir).unwrap();
+    let registry = rumu_core::Workspaces::with_projects(
+        vec![Workspace::new(
+            "app".into(),
+            None,
+            app_dir.to_string_lossy().into_owned(),
+            false,
+        )],
+        rumu_core::ProjectWorkspaces::from([(PROJECT_ID.to_owned(), vec!["app".into()])]),
+    );
+    let plugin = deck_plugin_with(home.path(), registry.clone());
+    let host = FakeRuntime::arc();
+    *host.state.lock().unwrap() = PathState {
+        workspaces: registry.list(),
+        default_workspace: Some(RUMU_WORKSPACE.into()),
+        assistant: crate::testutil::TEST_ASSISTANT.into(),
+        mounts: vec![rumu_core::CardMount {
+            deck: crate::testutil::TEST_ASSISTANT.into(),
+            at: "/cards/self".into(),
+        }],
+        ..Default::default()
+    };
+    let cx = host.cx();
+    (home, plugin, host, cx, registry)
+}
+
+#[tokio::test]
+async fn card_mount_moves_between_projects_and_creates_one() {
+    use rumu_cards::deck::{Action, Scope};
+
+    let (_home, plugin, host, cx, registry) = mount_setup();
+    let main = crate::testutil::TEST_ASSISTANT;
+
+    // The listing marks project decks like assistants.
+    let out = plugin
+        .call_tool("card_mount", json!({}), &cx)
+        .await
+        .unwrap();
+    let proj_line = out
+        .content
+        .text
+        .lines()
+        .find(|l| l.starts_with("proj ("))
+        .unwrap_or_else(|| panic!("{}", out.content.text));
+    assert!(proj_line.contains("  project"), "{proj_line}");
+    assert!(
+        out.content.text.lines().any(|l| l.contains("assistant")),
+        "{}",
+        out.content.text
+    );
+
+    // Only project decks mount at `/cards/project`.
+    let out = plugin
+        .call_tool(
+            "card_mount",
+            json!({ "deck": main, "at": "/cards/project" }),
+            &cx,
+        )
+        .await
+        .unwrap();
+    assert!(
+        out.is_error && out.content.text.contains("only project decks"),
+        "{}",
+        out.content.text
+    );
+
+    // A project mount carries the workspaces, default first, and a
+    // `WorkspaceUse` marker for its first one.
+    plugin
+        .decks()
+        .remember(Action::Mount, Scope::Always, "", main, PROJECT_ID);
+    let out = plugin
+        .call_tool(
+            "card_mount",
+            json!({ "deck": PROJECT_ID, "at": "project" }),
+            &cx,
+        )
+        .await
+        .unwrap();
+    assert!(!out.is_error, "{}", out.content.text);
+    assert!(
+        out.content
+            .text
+            .contains("Its workspaces (default first): `app`"),
+        "{}",
+        out.content.text
+    );
+    let mount: rumu_core::CardMount = out.effects[0].decode().unwrap();
+    assert_eq!(mount.deck, PROJECT_ID);
+    assert_eq!(mount.at, rumu_core::PROJECT_MOUNT);
+    let use_: WorkspaceUse = out.effects[1].decode().unwrap();
+    assert_eq!(use_.name, "app");
+    host.state
+        .lock()
+        .unwrap()
+        .mounts
+        .push(rumu_core::CardMount {
+            deck: PROJECT_ID.into(),
+            at: rumu_core::PROJECT_MOUNT.into(),
+        });
+
+    // Mounting another project there replaces it instead of refusing.
+    plugin
+        .decks()
+        .remember(Action::Mount, Scope::Always, "", main, PROJECT2_ID);
+    let out = plugin
+        .call_tool(
+            "card_mount",
+            json!({ "deck": PROJECT2_ID, "at": "project" }),
+            &cx,
+        )
+        .await
+        .unwrap();
+    assert!(!out.is_error, "{}", out.content.text);
+    let mount: rumu_core::CardMount = out.effects[0].decode().unwrap();
+    assert_eq!(mount.deck, PROJECT2_ID);
+    let use_: WorkspaceUse = out.effects[1].decode().unwrap();
+    assert_eq!(use_.name, RUMU_WORKSPACE, "it mounts no workspace");
+    host.state
+        .lock()
+        .unwrap()
+        .mounts
+        .push(rumu_core::CardMount {
+            deck: PROJECT2_ID.into(),
+            at: rumu_core::PROJECT_MOUNT.into(),
+        });
+
+    // Unmounting the project leaves it and resets the default to `@rumu`.
+    let out = plugin
+        .call_tool("card_mount", json!({ "at": "project" }), &cx)
+        .await
+        .unwrap();
+    assert!(!out.is_error, "{}", out.content.text);
+    assert!(
+        out.content.text.contains("leaves its project"),
+        "{}",
+        out.content.text
+    );
+    let unmount: rumu_core::CardUnmount = out.effects[0].decode().unwrap();
+    assert_eq!(unmount.at, rumu_core::PROJECT_MOUNT);
+    let use_: WorkspaceUse = out.effects[1].decode().unwrap();
+    assert_eq!(use_.name, RUMU_WORKSPACE);
+
+    // `create` is only valid with `at: "project"`, never with a deck.
+    for (args, needle) in [
+        (
+            json!({ "deck": main, "create": "fresh", "at": "project" }),
+            "cannot be combined",
+        ),
+        (json!({ "create": "fresh" }), "needs `at"),
+        (
+            json!({ "create": "fresh", "at": "/cards/user" }),
+            "needs `at",
+        ),
+        (
+            json!({ "create": "Bad_Name", "at": "project" }),
+            "invalid project name",
+        ),
+    ] {
+        let out = plugin.call_tool("card_mount", args, &cx).await.unwrap();
+        assert!(
+            out.is_error && out.content.text.contains(needle),
+            "{}",
+            out.content.text
+        );
+    }
+
+    // Creating a project asks (`create`, target `*`) and moves into it.
+    host.answers
+        .lock()
+        .unwrap()
+        .push_back(json!({ "allow": true }));
+    let out = plugin
+        .call_tool(
+            "card_mount",
+            json!({ "create": "fresh", "at": "project" }),
+            &cx,
+        )
+        .await
+        .unwrap();
+    assert!(!out.is_error, "{}", out.content.text);
+    assert!(
+        out.content.text.contains("mounts no workspace"),
+        "{}",
+        out.content.text
+    );
+    {
+        let decisions = host.decisions.lock().unwrap();
+        assert_eq!(decisions.len(), 1, "{decisions:?}");
+        assert_eq!(decisions[0]["kind"], "project_create");
+        assert_eq!(decisions[0]["name"], "fresh");
+        assert_eq!(decisions[0]["from_id"], main);
+    }
+    let fresh = plugin
+        .decks()
+        .list()
+        .into_iter()
+        .find(|d| d.meta.name == "fresh")
+        .expect("the project deck was created");
+    assert!(fresh.project());
+    assert!(registry.project(fresh.id()).is_empty());
+    let mount: rumu_core::CardMount = out.effects[0].decode().unwrap();
+    assert_eq!(mount.deck, fresh.id());
+    let use_: WorkspaceUse = out.effects[1].decode().unwrap();
+    assert_eq!(use_.name, RUMU_WORKSPACE);
+
+    // An `ask` session cannot move.
+    host.state.lock().unwrap().asked_by = Some(main.into());
+    let out = plugin
+        .call_tool(
+            "card_mount",
+            json!({ "deck": PROJECT_ID, "at": "project" }),
+            &cx,
+        )
+        .await
+        .unwrap();
+    assert!(
+        out.is_error && out.content.text.contains("answering a question"),
+        "{}",
+        out.content.text
+    );
+}
+
+#[tokio::test]
+async fn the_sessions_project_deck_is_writable_without_approval() {
+    let (home, plugin, host, cx, _registry) = project_setup();
+    let out = plugin
+        .call_tool(
+            "write",
+            json!({
+                "path": "@rumu:/cards/project/y",
+                "content": "---\ntitle: Y\n---\nnew\n",
+            }),
+            &cx,
+        )
+        .await
+        .unwrap();
+    assert!(!out.is_error, "{}", out.content.text);
+    assert!(
+        host.decisions.lock().unwrap().is_empty(),
+        "the project deck is the session's own"
+    );
+    assert!(
+        crate::testutil::card_text(home.path(), "proj", "y")
+            .unwrap()
+            .contains("new")
+    );
+
+    // The mount listing says nothing is approved automatically for mount,
+    // but writing it does not ask.
+    let out = plugin
+        .call_tool("card_mount", json!({}), &cx)
+        .await
+        .unwrap();
+    let proj_line = out
+        .content
+        .text
+        .lines()
+        .find(|l| l.starts_with("proj ("))
+        .unwrap_or_else(|| panic!("{}", out.content.text));
+    assert!(proj_line.contains("asks the user to mount"), "{proj_line}");
+    assert!(!proj_line.contains("write"), "{proj_line}");
 }

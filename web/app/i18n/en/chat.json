@@ -10,8 +10,15 @@
     "deleteWarning": "This can't be undone.",
     "lastActive": "Last active {at}",
     "actions": "Session actions",
-    "today": "Today",
-    "earlier": "Earlier"
+    "noProject": "No project",
+    "newSession": "New session",
+    "projectSettings": "Project settings"
+  },
+  "newSession": {
+    "assistant": "Assistant",
+    "project": "Project",
+    "noProject": "No project",
+    "pickAssistant": "Pick an assistant"
   },
   "welcome": "What are we working on?",
   "composer": {
@@ -78,6 +85,12 @@
     "hint": "{to} answers from its own memory; nothing is saved unless {from} writes it down.",
     "mountTitle": "{from} wants to mount {deck}",
     "mountHint": "{deck} would be mounted at {at}, and its cards readable from then on.",
+    "moveProjectTitle": "{from} wants to move this session into {project}",
+    "moveProjectHint": "{'@'}rumu:/cards/project",
+    "projectCreateTitle": "{from} wants to create the project {name}",
+    "workspaceChangeTitle": "{from} wants to change the workspace {name}",
+    "before": "Before",
+    "after": "After",
     "writeTitle": "{from} wants to write to {deck}",
     "writeHint": "The card {path}, as shown above.",
     "moveHint": "Moves {source} to {path}, as shown above.",

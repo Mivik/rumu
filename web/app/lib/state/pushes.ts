@@ -28,18 +28,11 @@ import type {
 } from '../types'
 import { MAX_TRACE, state } from './state'
 import { applyDelta } from './stream'
-import {
-  closeSession,
-  forgetSession,
-  markSeen,
-  openSession,
-  refreshAssistants,
-  refreshCards,
-  refreshLists,
-} from './sessions'
+import { closeSession, forgetSession, markSeen, openSession, refreshCards, refreshLists } from './sessions'
 import { onSettingsUpdated, refreshSettings } from './models'
 import type { SettingsInfo } from '../generated/SettingsInfo'
 import { refreshLibrary } from './library'
+import { refreshProjects } from './projects'
 import { loadPath } from './tree'
 import { toast } from './ui'
 
@@ -70,11 +63,10 @@ function stateChanged(node: Node): boolean {
   return tag === 'workspace.use' || tag === 'workspace.set' || tag === 'model.use'
 }
 
-/** `workspaces.updated`: the registry changed. A removed workspace also left
- *  the assistants, and drops out of the open branch. */
-function onWorkspacesUpdated(p: { workspaces: Workspace[] }): void {
+/** `workspaces.updated`: the registry or a project's workspace list changed. */
+function onWorkspacesUpdated(p: { workspaces: Workspace[]; projects: Record<string, string[]> }): void {
   state.workspaces = p.workspaces
-  void refreshAssistants()
+  void refreshProjects().catch(() => {})
   if (state.activeBranch) void loadPath(state.activeBranch)
 }
 
@@ -162,6 +154,8 @@ function onSessionUpdated(p: SessionUpdatedPush): void {
   const i = state.sessions.findIndex((x) => x.id === s.id)
   if (i >= 0) state.sessions[i] = s
   else state.sessions.push(s)
+  // The model can create a project; learn it when a session names one.
+  if (s.project && !state.projects.some((x) => x.id === s.project)) void refreshProjects().catch(() => {})
   if (state.sessionId === s.id) {
     state.session = s
     markSeen()
@@ -294,7 +288,9 @@ export function startApp(): void {
   rumu.onPush('turn.error', (p) => onTurnError(p as unknown as TurnErrorPush))
   rumu.onPush('warning', (p) => onWarning(p as unknown as WarningPush))
   rumu.onPush('settings.updated', (p) => onSettingsUpdated(p as unknown as { settings: SettingsInfo }))
-  rumu.onPush('workspaces.updated', (p) => onWorkspacesUpdated(p as unknown as { workspaces: Workspace[] }))
+  rumu.onPush('workspaces.updated', (p) =>
+    onWorkspacesUpdated(p as unknown as { workspaces: Workspace[]; projects: Record<string, string[]> }),
+  )
 
   // Updates that landed while the tab was hidden are seen once it shows.
   document.addEventListener('visibilitychange', markSeen)

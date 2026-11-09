@@ -21,6 +21,8 @@ use crate::{Error, Result};
 pub const CARDS_ROOT: &str = "/cards";
 /// Where a session's own deck is mounted.
 pub const SELF_MOUNT: &str = "/cards/self";
+/// The mount point of the session's project deck.
+pub use rumu_core::PROJECT_MOUNT;
 /// The prefix a link target is written with.
 pub const LINK_PREFIX: &str = "@rumu:/cards/";
 

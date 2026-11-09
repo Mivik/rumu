@@ -65,7 +65,7 @@ fn card_home() -> (tempfile::TempDir, std::path::PathBuf) {
             id: String::new(),
             name: "main".into(),
             assistant: false,
-            workspaces: Vec::new(),
+            project: false,
             mounts: Vec::new(),
             allow_ask: Vec::new(),
         })
@@ -110,7 +110,7 @@ async fn update_notices_only_follow_actual_reads() {
         .to_owned();
     let plugins: Vec<Arc<dyn Plugin>> = vec![
         Arc::new(MemoryPlugin::new(decks.clone())),
-        Arc::new(WorkspacePlugin::new(&home, decks)),
+        Arc::new(WorkspacePlugin::new(&home, decks, Workspaces::default())),
     ];
     let kernel = Kernel::new(
         Arc::new(Store::in_memory()),
@@ -126,10 +126,7 @@ async fn update_notices_only_follow_actual_reads() {
     )
     .unwrap();
 
-    let (a, _) = kernel
-        .create_session(Vec::new(), main.clone())
-        .await
-        .unwrap();
+    let (a, _) = kernel.create_session(main.clone()).await.unwrap();
     let ba = a.active_branch.clone();
     run_turn(&kernel, &ba, "read card x").await;
     let (nodes_a, _) = kernel.branch_path(&ba).unwrap();
@@ -152,10 +149,7 @@ async fn update_notices_only_follow_actual_reads() {
         .unwrap();
 
     // B (fresh session, same home) never read the card → no notice.
-    let (b, _) = kernel
-        .create_session(Vec::new(), main.clone())
-        .await
-        .unwrap();
+    let (b, _) = kernel.create_session(main.clone()).await.unwrap();
     let bb = b.active_branch.clone();
     run_turn(&kernel, &bb, "hello without reading anything").await;
     let (nodes_b, _) = kernel.branch_path(&bb).unwrap();
@@ -236,7 +230,8 @@ async fn script_edits_count_as_reads() {
         .id()
         .to_owned();
     let memory: Arc<dyn Plugin> = Arc::new(MemoryPlugin::new(decks.clone()));
-    let workspace: Arc<dyn Plugin> = Arc::new(WorkspacePlugin::new(&home, decks));
+    let workspace: Arc<dyn Plugin> =
+        Arc::new(WorkspacePlugin::new(&home, decks, Workspaces::default()));
     let code = Arc::new(rumu_plugins::CodePlugin::new(&workspace.manifest().tools));
     let edit = |old: &str, new: &str| json!({ "path": "@rumu:/cards/self/x", "old_string": old, "new_string": new });
     // read; a script with two edits in a row, then one that throws after an
@@ -270,7 +265,7 @@ async fn script_edits_count_as_reads() {
         Workspaces::default(),
     )
     .unwrap();
-    let (s, _) = kernel.create_session(Vec::new(), main).await.unwrap();
+    let (s, _) = kernel.create_session(main).await.unwrap();
     let b = s.active_branch.clone();
     run_turn(&kernel, &b, "edit card x").await;
     run_turn(&kernel, &b, "again").await;

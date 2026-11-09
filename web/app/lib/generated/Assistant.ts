@@ -6,10 +6,6 @@ import type { DeckMount } from "./DeckMount";
  */
 export type Assistant = { id: string, name: string, 
 /**
- * Its `deck.yaml` workspaces; the first is the default.
- */
-workspaces: Array<string>, 
-/**
  * The body of the pinned `instructions.md`, when present.
  */
 instructions?: string, 

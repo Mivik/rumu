@@ -1,18 +1,17 @@
 <script setup lang="ts">
-// Left column: the wordmark with the language key beside it, the assistant roster
-// (when assistants are configured), the new-session button, the card library
-// (every deck, opened as the Library page), that assistant's
-// sessions (grouped Today / Earlier) and, at the foot, the connection status.
-// Below lg it is the drawer; at lg it is the desk's second sheet of paper
-// (the card's edge lives on the <aside> in app.vue).
+// Left column: the wordmark with the language key beside it, the landing and
+// library entries, the workspace registry, and the sessions grouped by
+// project (a two-level tree). Each project group carries its sessions, newest
+// first; the last group holds the sessions without a project. A drag between
+// groups moves the session. At the foot, the connection status.
 //
-// Alignment: the column pads 8px; session rows add 12px more, so every
-// line of text starts 20px in from the card's edge on both sides.
+// Alignment: the column pads 8px; session rows add 12px more, so every line
+// of text starts 20px in from the card's edge on both sides.
 // The wordmark (RumuMark) breathes while a turn runs, goes hollow when the
 // connection drops, and doubles as the way home: clicking it returns to the
-// landing page, as does the new-session button — the first prompt typed there
-// starts the session. The open session is a bordered sheet of paper on this
-// one; the rest are plain lines with their last activity time.
+// landing page, as does the new-session button. The open session is a
+// bordered sheet of paper on this one; the rest are plain lines with their
+// last activity time.
 import { computed, ref } from 'vue'
 import { LOCALE_LABELS, SUPPORTED_LOCALES, locale, setLocale, t } from '../i18n'
 import type { Locale } from '../i18n'
@@ -22,15 +21,16 @@ import {
   goHome,
   isBusy,
   isUnseen,
+  moveSession,
   openLibrary,
   openSession,
   sortedSessions,
+  startSessionIn,
   state,
-  viewAssistant,
 } from '../lib/store'
-import type { SessionInfo } from '../lib/types'
-import { layout, openAssistantSettings, openSettings, openWorkspaceSettings } from '../lib/layout'
-import RumuCat from './brand/RumuCat.vue'
+import type { Project, SessionInfo } from '../lib/types'
+import { layout, openProjectSettings, openSettings, openWorkspaceSettings } from '../lib/layout'
+import { prefs } from '../lib/state/prefs'
 import RumuMark from './brand/RumuMark.vue'
 import Icon from './ui/Icon.vue'
 import Popover from './ui/Popover.vue'
@@ -62,27 +62,112 @@ function pickSession(id: string): void {
   layout.sidebarOpen = false
 }
 
-/** The roster: every assistant deck, plus any deck only old sessions still
- * name (gone from the roster, its sessions must stay reachable). */
-const roster = computed<{ id: string; name: string }[]>(() => {
-  const out = state.assistants.map((c) => ({ id: c.id, name: c.name }))
-  const known = new Set(out.map((c) => c.id))
-  for (const s of state.sessions) {
-    if (!known.has(s.assistant)) {
-      out.push({ id: s.assistant, name: s.assistant })
-      known.add(s.assistant)
+/** Start the next session in `project` (`null`: none). */
+function newIn(project: string | null): void {
+  startSessionIn(project)
+  layout.sidebarOpen = false
+}
+
+function projectSettings(project: Project): void {
+  openProjectSettings(project.id)
+  layout.sidebarOpen = false
+}
+
+function newProject(): void {
+  openProjectSettings('')
+  layout.sidebarOpen = false
+}
+
+function openGroupSettings(group: Group): void {
+  if (group.project) projectSettings(group.project)
+}
+
+interface SessionRow {
+  s: SessionInfo
+  last: string
+}
+
+/** One group of the tree: a project, or the sessions without one. */
+interface Group {
+  key: string
+  /** The project a dropped session moves into (`null`: no project). */
+  projectId: string | null
+  project: Project | null
+  name: string
+  sessions: SessionRow[]
+  activity: number
+}
+
+/** How a session row's menu names its last activity. */
+function lastActive(s: SessionInfo): string {
+  const midnight = new Date().setHours(0, 0, 0, 0)
+  const at = new Date(s.updated_at)
+  return s.updated_at >= midnight
+    ? at.toLocaleTimeString(locale.value, { hour: '2-digit', minute: '2-digit', hourCycle: 'h23' })
+    : at.toLocaleString(locale.value, {
+        month: 'short',
+        day: 'numeric',
+        hour: '2-digit',
+        minute: '2-digit',
+        hourCycle: 'h23',
+      })
+}
+
+/** The projects, those with recent activity first and the empty ones by
+ *  name, then the group without a project; sessions newest first. */
+const groups = computed<Group[]>(() => {
+  const map = new Map<string, Group>()
+  for (const p of state.projects)
+    map.set(p.id, {
+      key: p.id,
+      projectId: p.id,
+      project: p,
+      name: p.name,
+      sessions: [],
+      activity: -Infinity,
+    })
+  map.set('', {
+    key: '',
+    projectId: null,
+    project: null,
+    name: t('chat.sidebar.noProject'),
+    sessions: [],
+    activity: -Infinity,
+  })
+  for (const s of sortedSessions.value) {
+    const key = s.project ?? ''
+    let group = map.get(key)
+    // A project this client has not heard of yet (a model just made it).
+    if (!group) {
+      group = { key, projectId: key, project: null, name: key, sessions: [], activity: -Infinity }
+      map.set(key, group)
     }
+    group.sessions.push({ s, last: lastActive(s) })
+    group.activity = Math.max(group.activity, s.updated_at)
   }
-  if (!known.has(state.assistant)) out.push({ id: state.assistant, name: state.assistant })
-  return out
+  return [...map.values()].sort((a, b) => {
+    if (!a.projectId !== !b.projectId) return a.projectId ? -1 : 1
+    const busyA = a.sessions.length > 0
+    const busyB = b.sessions.length > 0
+    if (busyA !== busyB) return busyA ? -1 : 1
+    if (busyA && a.activity !== b.activity) return b.activity - a.activity
+    return a.name.localeCompare(b.name, locale.value)
+  })
 })
 
-/** Bring an assistant deck into view: its sessions list, and the next session
- * is its. An open session of another deck is left for the landing page. */
-function pickAssistant(id: string): void {
-  const leaving = state.sessionId && state.session?.assistant !== id
-  viewAssistant(id)
-  if (leaving) goHome()
+function collapsed(group: Group): boolean {
+  return !!prefs.collapsedProjects[group.key]
+}
+
+function toggleGroup(group: Group): void {
+  prefs.collapsedProjects[group.key] = !collapsed(group)
+}
+
+/** The default assistant's sessions carry no assistant label. */
+const defaultAssistant = computed(() => state.assistants.find((a) => a.default)?.id ?? '')
+
+function assistantName(id: string): string {
+  return state.assistants.find((a) => a.id === id)?.name ?? id.slice(0, 8)
 }
 
 /** Other sessions with a tool call waiting on the user's approval (the open
@@ -92,8 +177,8 @@ const waiting = computed(
 )
 
 /** The session whose action menu is asking for delete confirmation. The menu
- * opens on its action list every time, so a reopened menu never starts on the
- * destructive step. */
+ *  opens on its action list every time, so a reopened menu never starts on the
+ *  destructive step. */
 const pendingDelete = ref<string | null>(null)
 
 function toggleMenu(toggle: () => void): void {
@@ -122,6 +207,45 @@ function confirmRemove(id: string, close: () => void): void {
   close()
 }
 
+// ---- dragging a session onto another group ----
+
+const dragging = ref<string | null>(null)
+const dragOver = ref<string | null>(null)
+
+function startDrag(e: DragEvent, s: SessionInfo): void {
+  dragging.value = s.id
+  e.dataTransfer?.setData('text/plain', s.id)
+  if (e.dataTransfer) e.dataTransfer.effectAllowed = 'move'
+}
+
+function overGroup(e: DragEvent, group: Group): void {
+  if (!dragging.value) return
+  e.preventDefault()
+  dragOver.value = group.key
+}
+
+function leaveGroup(e: DragEvent, group: Group): void {
+  const to = e.relatedTarget as Node | null
+  if (to && (e.currentTarget as Node).contains(to)) return
+  if (dragOver.value === group.key) dragOver.value = null
+}
+
+function dropOn(e: DragEvent, group: Group): void {
+  e.preventDefault()
+  const id = dragging.value
+  dragging.value = null
+  dragOver.value = null
+  if (!id) return
+  const session = state.sessions.find((s) => s.id === id)
+  if (!session || (session.project ?? null) === group.projectId) return
+  void moveSession(id, group.projectId)
+}
+
+function endDrag(): void {
+  dragging.value = null
+  dragOver.value = null
+}
+
 const presence = computed(() => {
   if (!connected.value)
     return { live: false, offline: true, title: t('common.offlineReconnecting'), dot: 'bg-danger' }
@@ -134,38 +258,6 @@ const LOCALE_KEYS: Record<Locale, string> = { en: 'EN', 'zh-CN': '中' }
 const otherLocale = computed<Locale>(
   () => SUPPORTED_LOCALES.find((l) => l !== locale.value) ?? SUPPORTED_LOCALES[0],
 )
-
-/** Flat list with group headers mixed in, so one TransitionGroup animates both. */
-type Row =
-  | { kind: 'head'; key: string; label: string }
-  | { kind: 'session'; key: string; s: SessionInfo; last: string }
-
-const rows = computed<Row[]>(() => {
-  const midnight = new Date().setHours(0, 0, 0, 0)
-  const out: Row[] = []
-  let group = ''
-  for (const s of sortedSessions.value) {
-    if (s.assistant !== state.assistant) continue
-    const today = s.updated_at >= midnight
-    const g = today ? t('chat.sidebar.today') : t('chat.sidebar.earlier')
-    if (g !== group) {
-      out.push({ kind: 'head', key: `head:${g}`, label: g })
-      group = g
-    }
-    const at = new Date(s.updated_at)
-    const last = today
-      ? at.toLocaleTimeString(locale.value, { hour: '2-digit', minute: '2-digit', hourCycle: 'h23' })
-      : at.toLocaleString(locale.value, {
-          month: 'short',
-          day: 'numeric',
-          hour: '2-digit',
-          minute: '2-digit',
-          hourCycle: 'h23',
-        })
-    out.push({ kind: 'session', key: s.id, s, last })
-  }
-  return out
-})
 </script>
 
 <template>
@@ -200,37 +292,6 @@ const rows = computed<Row[]>(() => {
       </span>
     </div>
 
-    <div class="mb-2 flex flex-none flex-wrap items-center gap-1 px-1.5">
-      <div role="tablist" class="contents">
-        <button
-          v-for="assistant in roster"
-          :key="assistant.id"
-          type="button"
-          role="tab"
-          :aria-selected="assistant.id === state.assistant"
-          class="flex items-center gap-1.5 rounded-full border py-0.5 pr-2.5 pl-1.5 text-meta transition-colors duration-200"
-          :class="
-            assistant.id === state.assistant
-              ? 'border-line bg-surface-2 font-semibold text-ink shadow-soft'
-              : 'border-transparent text-ink-3 hover:bg-surface-2/60 hover:text-ink'
-          "
-          @click="pickAssistant(assistant.id)"
-        >
-          <RumuCat :size="18" :paper="false" />
-          {{ assistant.name }}
-        </button>
-      </div>
-      <button
-        type="button"
-        class="icon-btn size-6 flex-none"
-        :title="t('assistants.manage')"
-        :aria-label="t('assistants.manage')"
-        @click="openAssistantSettings()"
-      >
-        <Icon name="edit" :size="14" />
-      </button>
-    </div>
-
     <button
       class="flex w-full flex-none items-center gap-2.5 rounded-control border border-transparent py-1.5 pl-2.5 pr-1.5 text-left text-secondary text-ink-2 transition-colors duration-200 hover:bg-surface-2/60 hover:text-ink lg:pr-3"
       @click="home"
@@ -263,110 +324,183 @@ const rows = computed<Row[]>(() => {
       <span class="text-micro text-ink-3 tabular-nums">{{ state.workspaces.length }}</span>
     </button>
 
-    <TransitionGroup
-      tag="div"
-      class="scroll-fade -mx-2 mt-2 flex flex-1 flex-col gap-0.5 overflow-y-auto px-2 pt-2 pb-3"
-      move-class="transition-transform duration-300 ease-soft"
-      enter-active-class="transition duration-300 ease-soft"
-      enter-from-class="-translate-y-1 opacity-0"
+    <button
+      type="button"
+      class="mt-0.5 flex w-full flex-none items-center gap-2.5 rounded-control border border-transparent py-1.5 pl-2.5 pr-1.5 text-left text-secondary text-ink-2 transition-colors duration-200 hover:bg-surface-2/60 hover:text-ink lg:pr-3"
+      @click="newProject"
     >
-      <template v-for="r in rows" :key="r.key">
-        <div v-if="r.kind === 'head'" class="px-3 pt-3 pb-1 text-micro font-bold text-ink-3">
-          {{ r.label }}
-        </div>
+      <span class="flex size-5 flex-none items-center justify-center leading-0">
+        <Icon name="plus" :size="16" />
+      </span>
+      <span class="flex-1">{{ t('projects.add') }}</span>
+    </button>
+
+    <div class="scroll-fade -mx-2 mt-2 flex flex-1 flex-col gap-1 overflow-y-auto px-2 pt-2 pb-3">
+      <section
+        v-for="group in groups"
+        :key="group.key"
+        class="rounded-control transition-colors duration-150"
+        :class="{ 'bg-brand-soft/40 ring-1 ring-brand/25': dragOver === group.key }"
+        @dragover="overGroup($event, group)"
+        @dragleave="leaveGroup($event, group)"
+        @drop="dropOn($event, group)"
+      >
         <div
-          v-else
-          class="group flex w-full min-w-0 items-center rounded-control border text-left text-secondary transition-[background-color,border-color,color,box-shadow] duration-200 has-[[aria-expanded=true]]:bg-surface-2/60 has-[:focus-visible]:ring-2 has-[:focus-visible]:ring-brand/25"
-          :class="
-            r.s.id === state.sessionId
-              ? 'border-line bg-surface-2 font-bold text-ink shadow-soft'
-              : 'border-transparent text-ink-2 hover:bg-surface-2/60 hover:text-ink'
-          "
+          class="group/head flex items-center gap-1 rounded-control px-1.5 py-1.5 transition-colors duration-150 hover:bg-surface-2/60"
         >
           <button
-            class="flex min-w-0 flex-1 items-center gap-2 py-2 pr-1 pl-3 text-left outline-none"
-            :aria-current="r.s.id === state.sessionId ? 'page' : undefined"
-            @click="pickSession(r.s.id)"
+            type="button"
+            class="flex min-w-0 flex-1 items-center gap-1 text-left text-micro font-bold text-ink-3"
+            :aria-expanded="!collapsed(group)"
+            @click="toggleGroup(group)"
           >
-            <span class="min-w-0 flex-1 truncate">{{ r.s.title || t('common.untitled') }}</span>
-            <span
-              v-if="waiting.has(r.s.id)"
-              class="size-2 flex-none rounded-full bg-brand ring-3 ring-brand-soft"
-              :title="t('chat.ask.waiting')"
+            <Icon
+              name="chevron"
+              :size="12"
+              class="flex-none transition-transform duration-150"
+              :class="{ 'rotate-90': !collapsed(group) }"
             />
-            <span
-              v-else-if="r.s.id === state.sessionId && isBusy"
-              class="dot-live size-1.5 flex-none rounded-full bg-brand"
-              :title="t('common.working')"
-            />
-            <span
-              v-else-if="r.s.id !== state.sessionId && isUnseen(r.s)"
-              class="size-1.5 flex-none rounded-full bg-brand"
-              :title="t('chat.sidebar.unseen')"
-            />
+            <span class="min-w-0 truncate text-ink-2">{{ group.name }}</span>
+            <span v-if="group.sessions.length" class="text-micro text-ink-3 tabular-nums">{{
+              group.sessions.length
+            }}</span>
           </button>
-          <Popover
-            class="mr-1.5 flex-none"
-            :label="pendingDelete === r.s.id ? t('chat.sidebar.delete') : t('chat.sidebar.actions')"
-            placement="bottom-end"
-            menu
-            :role="pendingDelete === r.s.id ? 'dialog' : 'menu'"
+          <div
+            class="flex h-6 flex-none items-center opacity-0 transition-opacity duration-150 group-hover/head:opacity-100 focus-within:opacity-100"
           >
-            <template #trigger="{ open, toggle }">
-              <button
-                class="icon-btn relative size-6 flex-none opacity-60 transition-opacity duration-150 before:absolute before:-inset-1.5 hover:bg-line-soft/70 hover:text-ink group-hover:opacity-100 focus-visible:opacity-100 aria-expanded:opacity-100"
-                :aria-label="t('chat.sidebar.actions')"
-                :title="t('chat.sidebar.actions')"
-                aria-haspopup="menu"
-                :aria-expanded="open"
-                @click.stop="toggleMenu(toggle)"
+            <button
+              type="button"
+              class="icon-btn size-6"
+              :title="t('chat.sidebar.newSession')"
+              :aria-label="t('chat.sidebar.newSession')"
+              @click.stop="newIn(group.projectId)"
+            >
+              <Icon name="plus" :size="14" />
+            </button>
+            <button
+              v-if="group.project"
+              type="button"
+              class="icon-btn size-6"
+              :title="t('chat.sidebar.projectSettings')"
+              :aria-label="t('chat.sidebar.projectSettings')"
+              @click.stop="openGroupSettings(group)"
+            >
+              <Icon name="settings" :size="13" />
+            </button>
+          </div>
+        </div>
+
+        <TransitionGroup
+          v-if="!collapsed(group)"
+          tag="div"
+          class="flex flex-col gap-0.5 pb-1"
+          move-class="transition-transform duration-300 ease-soft"
+          enter-active-class="transition duration-300 ease-soft"
+          enter-from-class="-translate-y-1 opacity-0"
+        >
+          <div
+            v-for="row in group.sessions"
+            :key="row.s.id"
+            draggable="true"
+            class="group flex w-full min-w-0 items-center rounded-control border text-left text-secondary transition-[background-color,border-color,color,box-shadow] duration-200 has-[[aria-expanded=true]]:bg-surface-2/60 has-[:focus-visible]:ring-2 has-[:focus-visible]:ring-brand/25"
+            :class="
+              row.s.id === state.sessionId
+                ? 'border-line bg-surface-2 font-bold text-ink shadow-soft'
+                : 'border-transparent text-ink-2 hover:bg-surface-2/60 hover:text-ink'
+            "
+            @dragstart="startDrag($event, row.s)"
+            @dragend="endDrag"
+          >
+            <button
+              class="flex min-w-0 flex-1 items-center gap-2 py-2 pr-1 pl-3 text-left outline-none"
+              :aria-current="row.s.id === state.sessionId ? 'page' : undefined"
+              @click="pickSession(row.s.id)"
+            >
+              <span class="min-w-0 flex-1 truncate">{{ row.s.title || t('common.untitled') }}</span>
+              <span
+                v-if="row.s.assistant !== defaultAssistant"
+                class="max-w-[6.5rem] flex-none truncate text-micro font-normal text-ink-3"
+                >{{ assistantName(row.s.assistant) }}</span
               >
-                <Icon name="more" :size="14" />
-              </button>
-            </template>
-            <template #default="{ close }">
-              <!-- stage one: last activity + the action list -->
-              <template v-if="pendingDelete !== r.s.id">
-                <p class="px-2.5 pt-1.5 pb-1 text-micro text-ink-3">
-                  {{ t('chat.sidebar.lastActive', { at: r.last }) }}
-                </p>
-                <div class="mx-1 mb-1 h-px bg-line-soft/70" />
+              <span
+                v-if="waiting.has(row.s.id)"
+                class="size-2 flex-none rounded-full bg-brand ring-3 ring-brand-soft"
+                :title="t('chat.ask.waiting')"
+              />
+              <span
+                v-else-if="row.s.id === state.sessionId && isBusy"
+                class="dot-live size-1.5 flex-none rounded-full bg-brand"
+                :title="t('common.working')"
+              />
+              <span
+                v-else-if="row.s.id !== state.sessionId && isUnseen(row.s)"
+                class="size-1.5 flex-none rounded-full bg-brand"
+                :title="t('chat.sidebar.unseen')"
+              />
+            </button>
+            <Popover
+              class="mr-1.5 flex-none"
+              :label="pendingDelete === row.s.id ? t('chat.sidebar.delete') : t('chat.sidebar.actions')"
+              placement="bottom-end"
+              menu
+              :role="pendingDelete === row.s.id ? 'dialog' : 'menu'"
+            >
+              <template #trigger="{ open, toggle }">
                 <button
-                  type="button"
-                  role="menuitem"
-                  class="flex w-full items-center gap-2 rounded-control px-2.5 py-1.5 text-left text-secondary text-ink-2 transition-colors duration-150 hover:bg-danger-soft hover:text-danger focus-visible:bg-danger-soft focus-visible:text-danger"
-                  @click="askDelete(r.s.id)"
+                  class="icon-btn relative size-6 flex-none opacity-60 transition-opacity duration-150 before:absolute before:-inset-1.5 hover:bg-line-soft/70 hover:text-ink group-hover:opacity-100 focus-visible:opacity-100 aria-expanded:opacity-100"
+                  :aria-label="t('chat.sidebar.actions')"
+                  :title="t('chat.sidebar.actions')"
+                  aria-haspopup="menu"
+                  :aria-expanded="open"
+                  @click.stop="toggleMenu(toggle)"
                 >
-                  <Icon name="trash" :size="14" />
-                  {{ t('chat.sidebar.delete') }}
+                  <Icon name="more" :size="14" />
                 </button>
               </template>
-              <!-- stage two: confirmation, in place -->
-              <div v-else class="px-2.5 py-2">
-                <p class="text-secondary text-ink-2">{{ t('chat.sidebar.deletePrompt') }}</p>
-                <p class="mt-1 text-micro text-ink-3">{{ t('chat.sidebar.deleteWarning') }}</p>
-                <div class="mt-2 flex items-center justify-end gap-3">
+              <template #default="{ close }">
+                <!-- stage one: last activity + the action list -->
+                <template v-if="pendingDelete !== row.s.id">
+                  <p class="px-2.5 pt-1.5 pb-1 text-micro text-ink-3">
+                    {{ t('chat.sidebar.lastActive', { at: row.last }) }}
+                  </p>
+                  <div class="mx-1 mb-1 h-px bg-line-soft/70" />
                   <button
                     type="button"
-                    class="text-micro font-semibold text-ink-2 transition-colors hover:text-ink"
-                    @click="cancelDelete"
+                    role="menuitem"
+                    class="flex w-full items-center gap-2 rounded-control px-2.5 py-1.5 text-left text-secondary text-ink-2 transition-colors duration-150 hover:bg-danger-soft hover:text-danger focus-visible:bg-danger-soft focus-visible:text-danger"
+                    @click="askDelete(row.s.id)"
                   >
-                    {{ t('common.cancel') }}
+                    <Icon name="trash" :size="14" />
+                    {{ t('chat.sidebar.delete') }}
                   </button>
-                  <button
-                    type="button"
-                    class="text-micro font-semibold text-danger transition-colors hover:underline"
-                    @click="confirmRemove(r.s.id, close)"
-                  >
-                    {{ t('chat.sidebar.deleteConfirm') }}
-                  </button>
+                </template>
+                <!-- stage two: confirmation, in place -->
+                <div v-else class="px-2.5 py-2">
+                  <p class="text-secondary text-ink-2">{{ t('chat.sidebar.deletePrompt') }}</p>
+                  <p class="mt-1 text-micro text-ink-3">{{ t('chat.sidebar.deleteWarning') }}</p>
+                  <div class="mt-2 flex items-center justify-end gap-3">
+                    <button
+                      type="button"
+                      class="text-micro font-semibold text-ink-2 transition-colors hover:text-ink"
+                      @click="cancelDelete"
+                    >
+                      {{ t('common.cancel') }}
+                    </button>
+                    <button
+                      type="button"
+                      class="text-micro font-semibold text-danger transition-colors hover:underline"
+                      @click="confirmRemove(row.s.id, close)"
+                    >
+                      {{ t('chat.sidebar.deleteConfirm') }}
+                    </button>
+                  </div>
                 </div>
-              </div>
-            </template>
-          </Popover>
-        </div>
-      </template>
-    </TransitionGroup>
+              </template>
+            </Popover>
+          </div>
+        </TransitionGroup>
+      </section>
+    </div>
 
     <!-- the connection, at the foot -->
     <div class="flex flex-none items-center gap-2 border-t border-line-soft px-3 py-3 text-meta text-ink-3">

@@ -59,6 +59,7 @@ export type { ModelInfo } from './generated/ModelInfo'
 export type { ModelUse } from './generated/ModelUse'
 export type { SettingsInfo } from './generated/SettingsInfo'
 export type { Workspace } from './generated/Workspace'
+export type { Project } from './generated/Project'
 export type { WorkspaceUse as WorkspaceUseMarkerData } from './generated/WorkspaceUse'
 export type { PathState } from './generated/PathState'
 export type { Decision } from './generated/Decision'
@@ -174,7 +175,14 @@ export interface PendingDecision {
 
 /** What a tool call asks the user to approve. Names are for display; the
  * `_id` fields are the deck ids. */
-export type DecisionRequest = AskRequest | QuestionsRequest | MountRequest | WriteRequest | LinkRequest
+export type DecisionRequest =
+  | AskRequest
+  | QuestionsRequest
+  | MountRequest
+  | WriteRequest
+  | LinkRequest
+  | ProjectCreateRequest
+  | WorkspaceChangeRequest
 
 /** How long an approval lasts. */
 export type DecisionScope = 'once' | 'session' | 'always'
@@ -254,6 +262,24 @@ export interface LinkRequest {
   to_id: string
   target: string
   path: string
+}
+
+/** `card_mount(create, at: "project")`: `from` wants a project named `name`. */
+export interface ProjectCreateRequest {
+  kind: 'project_create'
+  from: string
+  from_id: string
+  name: string
+}
+
+/** A registered workspace entry would change: `before`/`after` are its YAML. */
+export interface WorkspaceChangeRequest {
+  kind: 'workspace_change'
+  from: string
+  from_id: string
+  name: string
+  before: string
+  after: string
 }
 
 /** `decision.resolved` push: answered, or the turn was aborted. */

@@ -13,6 +13,7 @@ import type {
   PendingDecision,
   Node,
   NodeId,
+  Project,
   SessionId,
   SessionInfo,
   SessionTreeResult,
@@ -26,7 +27,7 @@ import { isUnseen } from './derived'
 import { state } from './state'
 import { forkAt, loadPath, replaceTree, resyncTree } from './tree'
 import { toast } from './ui'
-import { composerWorkspaces } from './workspaces'
+import { chooseLandingProject, landingAssistant, landingProject, rememberSessionPicks } from './projects'
 
 /** `card.list`: what the open branch has mounted (`card_mount` included), else
  * the default mounts of the assistant in view. An assistant gone from the
@@ -44,13 +45,15 @@ export function defaultAssistant(): string {
 
 export async function refreshLists(): Promise<void> {
   try {
-    const [sessions, assistants, decisions, workspaces] = await Promise.all([
+    const [sessions, assistants, decisions, workspaces, projects] = await Promise.all([
       rumu.request<SessionInfo[]>('session.list'),
       rumu.request<Assistant[]>('assistant.list'),
       rumu.request<PendingDecision[]>('decision.list'),
       rumu.request<Workspace[]>('workspace.list'),
+      rumu.request<Project[]>('project.list'),
     ])
     state.workspaces = workspaces
+    state.projects = projects
     state.sessions = sessions
     state.assistants = assistants
     if (!assistants.some((a) => a.id === state.assistant)) {
@@ -141,6 +144,7 @@ export async function openSession(id: SessionId, opts: { history?: OpenHistory }
     viewAssistant(tree.session.assistant)
     replaceTree(tree)
     state.activeBranch = tree.session.active_branch
+    chooseLandingProject(tree.session.project ?? null)
     const history = opts.history ?? 'push'
     if (history !== 'none') routeSession(state.sessionId, state.view, history)
     await loadPath(tree.session.active_branch)
@@ -227,18 +231,17 @@ export function openTaskDetail(id: TaskId): void {
   state.taskDetail = state.taskDetail === id ? null : id
 }
 
-/** Start a session of the assistant in view on the composer's workspaces
- *  (the default first, as the session root takes it). */
+/** Start a session of the landing picks: who it runs as and the project it
+ *  works in (`null`: none). */
 export async function newSession(): Promise<boolean> {
   try {
-    const ws = composerWorkspaces.value
-    const workspaces = ws
-      ? [...ws.attached].sort((a, b) => Number(b === ws.default) - Number(a === ws.default))
-      : undefined
-    const res = await rumu.request<{ session: SessionInfo }>('session.create', {
-      assistant: state.assistant || undefined,
-      workspaces,
+    const assistant = landingAssistant.value || undefined
+    const project = landingProject.value
+    const res = await rumu.request<{ session: SessionInfo; branch: Branch }>('session.create', {
+      assistant,
+      project,
     })
+    rememberSessionPicks(project, assistant ?? '')
     // The server may have pushed session.updated for it already.
     const i = state.sessions.findIndex((s) => s.id === res.session.id)
     if (i >= 0) state.sessions[i] = res.session
@@ -248,6 +251,12 @@ export async function newSession(): Promise<boolean> {
     toast('error', t('errors.newSession'), (err as Error).message)
     return false
   }
+}
+
+/** From the landing page: start the next session in `project`. */
+export function startSessionIn(project: string | null): void {
+  chooseLandingProject(project)
+  goHome()
 }
 
 /**
@@ -292,24 +301,17 @@ export interface PromptAttachment {
 }
 
 /** What the composer shows, carried by a prompt or regeneration: the
- *  server records each part that differs from the branch it lands on. */
+ *  server records it when it differs from the branch it lands on. */
 export interface Choice {
-  workspaces?: string[]
-  workspace?: string
   model?: ModelUse
 }
 
 export function composerChoice(): Choice {
-  const ws = composerWorkspaces.value
-  return {
-    workspaces: ws?.workspaces.map((w) => w.name),
-    workspace: ws?.default ?? undefined,
-    model: currentPick() ?? undefined,
-  }
+  return { model: currentPick() ?? undefined }
 }
 
-/** The session's unsent model pick is on the branch now. */
-function settlePick(): void {
+/** The session's unsent picks are on the branch now. */
+function settlePicks(): void {
   if (state.sessionId) delete models.pending[state.sessionId]
 }
 
@@ -329,7 +331,7 @@ export async function sendPrompt(
   if (!text.trim() && !attachments.length) return false
   if (!state.sessionId) {
     if (!(await newSession())) return false
-    // The new session's root holds the workspaces already.
+    // The new session's root holds who and where already.
     choice = { model: choice.model }
   }
   const branch = state.activeBranch
@@ -339,7 +341,7 @@ export async function sendPrompt(
     const params: Record<string, unknown> = { branch, text, ...choice }
     if (attachments.length) params.attachments = attachments
     await rumu.request('prompt', params)
-    settlePick()
+    settlePicks()
     return true
   } catch (err) {
     state.busy[branch] = false
@@ -350,10 +352,10 @@ export async function sendPrompt(
 
 /**
  * Regenerate the reply to a prompt: the server forks at the user message,
- * records the composer's pick where it differs (telling the model of a
- * workspace change), replays the prompt (hooks and memory injection
- * included) and streams a new answer on that branch, replacing the branch it
- * leaves. The old reply stays reachable from the message's variant switcher.
+ * records the composer's model where it differs, replays the prompt (hooks
+ * and memory injection included) and streams a new answer on that branch,
+ * replacing the branch it leaves. The old reply stays reachable from the
+ * message's variant switcher.
  */
 export async function regenerateFrom(nodeId: NodeId): Promise<void> {
   try {
@@ -361,7 +363,7 @@ export async function regenerateFrom(nodeId: NodeId): Promise<void> {
       node: nodeId,
       ...composerChoice(),
     })
-    settlePick()
+    settlePicks()
     await resyncTree()
     state.activeBranch = res.branch.id
     if (state.session) state.session.active_branch = res.branch.id
@@ -385,7 +387,7 @@ export async function retryBranch(): Promise<boolean> {
   state.busy[branch] = true
   try {
     await rumu.request('branch.retry', { branch, ...composerChoice() })
-    settlePick()
+    settlePicks()
     return true
   } catch (err) {
     state.busy[branch] = false

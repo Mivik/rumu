@@ -26,7 +26,16 @@ watch(current, (d) => {
 })
 
 /** Title, quoted detail (if any) and hint for the shown request. */
-const view = computed(() => {
+interface RequestView {
+  title: string
+  detail: string | null
+  hint: string | null
+  /** A workspace entry change, shown side by side. */
+  before?: string
+  after?: string
+}
+
+const view = computed<RequestView | null>(() => {
   const r = shown.value?.request
   if (!r) return null
   switch (r.kind) {
@@ -39,6 +48,12 @@ const view = computed(() => {
         hint: t('chat.ask.hint', { from: r.from, to: r.to }),
       }
     case 'card_mount':
+      if (r.at === '/cards/project')
+        return {
+          title: t('chat.ask.moveProjectTitle', { from: r.from, project: r.deck }),
+          detail: null,
+          hint: t('chat.ask.moveProjectHint'),
+        }
       return {
         title: t('chat.ask.mountTitle', { from: r.from, deck: r.deck }),
         detail: null,
@@ -57,6 +72,20 @@ const view = computed(() => {
         title: t('chat.ask.linkTitle', { from: r.from, to: r.to }),
         detail: `${r.path} → ${r.target}`,
         hint: t('chat.ask.linkHint', { path: r.path, target: r.target }),
+      }
+    case 'project_create':
+      return {
+        title: t('chat.ask.projectCreateTitle', { from: r.from, name: r.name }),
+        detail: null,
+        hint: null,
+      }
+    case 'workspace_change':
+      return {
+        title: t('chat.ask.workspaceChangeTitle', { from: r.from, name: r.name }),
+        detail: null,
+        hint: null,
+        before: r.before,
+        after: r.after,
       }
   }
 })
@@ -120,8 +149,26 @@ onBeforeUnmount(() => window.removeEventListener('keydown', onKey, true))
           </div>
           <QuestionsForm v-if="shown.request.kind === 'questions'" :id="shown.id" :request="shown.request" />
           <template v-else>
+            <div v-if="view.before !== undefined" class="mt-2 grid gap-2 sm:grid-cols-2">
+              <div>
+                <p class="text-micro text-ink-3">{{ t('chat.ask.before') }}</p>
+                <blockquote
+                  class="mt-1 max-h-40 overflow-y-auto rounded-control bg-surface px-3 py-2 font-mono text-micro whitespace-pre-wrap text-ink-2 ring-1 ring-line-soft"
+                >
+                  {{ view.before }}
+                </blockquote>
+              </div>
+              <div>
+                <p class="text-micro text-ink-3">{{ t('chat.ask.after') }}</p>
+                <blockquote
+                  class="mt-1 max-h-40 overflow-y-auto rounded-control bg-surface px-3 py-2 font-mono text-micro whitespace-pre-wrap text-ink-2 ring-1 ring-line-soft"
+                >
+                  {{ view.after }}
+                </blockquote>
+              </div>
+            </div>
             <blockquote
-              v-if="view.detail"
+              v-else-if="view.detail"
               class="mt-2 max-h-40 overflow-y-auto rounded-control bg-surface px-3 py-2 text-secondary whitespace-pre-wrap text-ink-2 ring-1 ring-line-soft"
             >
               {{ view.detail }}

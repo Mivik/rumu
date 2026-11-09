@@ -203,7 +203,7 @@ mod tests {
                 id: String::new(),
                 name: "main".into(),
                 assistant: false,
-                workspaces: Vec::new(),
+                project: false,
                 mounts: Vec::new(),
                 allow_ask: Vec::new(),
             })

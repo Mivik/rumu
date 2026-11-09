@@ -15,8 +15,12 @@ export const layout = reactive({
   workspaceSettingsOpen: false,
   /** The workspace it opens on (`''`: a new one). */
   workspaceSettingsFor: '' as string,
-  /** A new workspace from the composer also joins the open branch. */
-  workspaceSettingsAttach: false,
+  /** The project settings dialog. */
+  projectSettingsOpen: false,
+  /** The project it opens on. */
+  projectSettingsFor: '' as string,
+  /** The project dialog's add-folder dialog, over it. */
+  projectFolderOpen: false,
   /** The settings dialog. */
   settingsOpen: false,
   settingsSection: 'profiles' as 'profiles' | 'providers',
@@ -46,16 +50,26 @@ export function closeAssistantSettings(): void {
   layout.assistantSettingsOpen = false
 }
 
-/** Open the workspace dialog on `name` (`''`: a new workspace, which joins
- *  the open branch when `attach`). */
-export function openWorkspaceSettings(name = '', attach = false): void {
+/** Open the workspace dialog on `name` (`''`: a new workspace). */
+export function openWorkspaceSettings(name = ''): void {
   layout.workspaceSettingsFor = name
-  layout.workspaceSettingsAttach = attach
   layout.workspaceSettingsOpen = true
 }
 
 export function closeWorkspaceSettings(): void {
   layout.workspaceSettingsOpen = false
+  closeSettings()
+}
+
+/** Open the project settings dialog on `id`. */
+export function openProjectSettings(id: string): void {
+  layout.projectSettingsFor = id
+  layout.projectSettingsOpen = true
+}
+
+export function closeProjectSettings(): void {
+  layout.projectSettingsOpen = false
+  layout.projectFolderOpen = false
   closeSettings()
 }
 
@@ -94,8 +108,13 @@ export function closePanels(): void {
     state.library.focusDeck = null
     return
   }
+  if (layout.projectFolderOpen) {
+    layout.projectFolderOpen = false
+    return
+  }
   layout.sidebarOpen = false
   layout.assistantSettingsOpen = false
   layout.workspaceSettingsOpen = false
+  layout.projectSettingsOpen = false
   closeSettings()
 }

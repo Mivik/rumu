@@ -1,20 +1,11 @@
 <script setup lang="ts">
 // The workspace registry dialog (`workspaces.yaml`): add, edit and delete
 // workspaces. Adding starts at the folder; the name follows it (made unique)
-// until typed by hand. A workspace added from the composer also joins the
-// composer's workspaces. Names are keys: an existing workspace keeps its name.
+// until typed by hand. Names are keys: an existing workspace keeps its name.
 import { computed, reactive, ref, watch } from 'vue'
 import { t } from '../i18n'
 import { closeWorkspaceSettings, layout } from '../lib/layout'
-import {
-  attachWorkspaces,
-  composerWorkspaces,
-  deleteWorkspace,
-  refreshAssistants,
-  refreshWorkspaces,
-  saveWorkspace,
-  state,
-} from '../lib/store'
+import { deleteWorkspace, refreshWorkspaces, saveWorkspace, state } from '../lib/store'
 import type { Workspace } from '../lib/types'
 import FolderPicker from './FolderPicker.vue'
 import Icon from './ui/Icon.vue'
@@ -52,10 +43,6 @@ const canSave = computed(
     !nameTaken.value &&
     !!form.root.trim() &&
     (!form.remote || !!form.ssh.trim()),
-)
-/** Assistants that lose the workspace when it is deleted. */
-const users = computed(() =>
-  state.assistants.filter((a) => a.workspaces.includes(editing.value)).map((a) => a.name),
 )
 
 function blank(): Form {
@@ -126,7 +113,6 @@ async function save(): Promise<void> {
   if (!canSave.value) return
   busy.value = true
   error.value = ''
-  const created = isNew.value
   try {
     const ws = await saveWorkspace({
       name: form.name,
@@ -134,11 +120,6 @@ async function save(): Promise<void> {
       ssh: form.remote ? form.ssh.trim() : undefined,
       read_only: form.read_only,
     })
-    if (created && layout.workspaceSettingsAttach && composerWorkspaces.value) {
-      await attachWorkspaces([...composerWorkspaces.value.workspaces.map((w) => w.name), ws.name])
-      closeWorkspaceSettings()
-      return
-    }
     choose(ws.name)
   } catch (err) {
     error.value = `${t('workspaces.saveError')}: ${(err as Error).message}`
@@ -152,7 +133,6 @@ async function remove(): Promise<void> {
   error.value = ''
   try {
     await deleteWorkspace(editing.value)
-    await refreshAssistants()
     choose(state.workspaces[0]?.name ?? '')
   } catch (err) {
     error.value = `${t('workspaces.deleteError')}: ${(err as Error).message}`
@@ -166,7 +146,7 @@ watch(
   async (open) => {
     if (!open) return
     choose(layout.workspaceSettingsFor)
-    await Promise.all([refreshWorkspaces(), refreshAssistants()])
+    await refreshWorkspaces()
     if (!dirty.value) choose(layout.workspaceSettingsFor)
   },
 )
@@ -331,9 +311,6 @@ watch(
             <div class="flex min-w-0 flex-1 flex-col">
               <p class="text-meta font-semibold text-ink">
                 {{ t('workspaces.deletePrompt', { name: editing }) }}
-              </p>
-              <p v-if="users.length" class="truncate text-micro text-ink-3">
-                {{ t('workspaces.deleteAssistants', { names: users.join(', ') }) }}
               </p>
             </div>
             <button type="button" class="btn" @click="pendingDelete = false">

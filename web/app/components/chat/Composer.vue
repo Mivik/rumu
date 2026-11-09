@@ -4,11 +4,10 @@
 // session (store.sendPrompt does that).
 //
 // A sheet of paper with the writing on top and a footer that says where the
-// prompt will go: the branch's default workspace (where its commands run —
-// it opens the list of all workspaces) and the model it runs on, on the
-// left; its reasoning effort and the send button on the right — solid coral once there is something
-// to send. While rumu works, sending steers the turn and a stop button
-// joins it.
+// prompt will go: on the landing page who it runs as and the project it works
+// in; always the model it runs on, on the left; its reasoning effort and the
+// send button on the right — solid coral once there is something to send.
+// While rumu works, sending steers the turn and a stop button joins it.
 //
 // A tool call waiting on the user's approval unfolds from the top of the
 // sheet (DecisionPanel), above the writing.
@@ -20,17 +19,16 @@
 // apps, the sent message leads with its images (`withLeadingAnchors`).
 import { computed, nextTick, onBeforeUnmount, onMounted, reactive, ref, watch } from 'vue'
 import { t } from '../../i18n'
-import { composerWorkspaces, isBusy, sendPrompt, state, stopTurn } from '../../lib/store'
+import { isBusy, sendPrompt, state, stopTurn } from '../../lib/store'
 import type { PromptAttachment } from '../../lib/store'
 import type { Attachment } from '../../lib/types'
 import { uploadBlob, withLeadingAnchors } from '../../lib/attachments'
 import { openLightbox, toast } from '../../lib/state/ui'
 import Icon from '../ui/Icon.vue'
-import Popover from '../ui/Popover.vue'
-import WorkspacesPanel from '../WorkspacesPanel.vue'
 import DecisionPanel from './DecisionPanel.vue'
 import EffortPicker from './EffortPicker.vue'
 import ModelPicker from './ModelPicker.vue'
+import SessionPickers from './SessionPickers.vue'
 
 /** One image being attached: the file, its local preview, and where its
  * upload stands. */
@@ -209,20 +207,6 @@ watch(
 const placeholder = computed(() => {
   return isBusy.value ? t('chat.composer.steerPlaceholder') : t('chat.composer.placeholder')
 })
-
-/** The chip: the default workspace (where it lives on hover), or the action
- *  to add one. `@rumu` is never shown. On the landing page it is the pick
- *  the new session starts with. */
-const workspace = computed(() => {
-  const ws = composerWorkspaces.value
-  if (!ws) return null
-  const own = ws.workspaces.find((w) => w.name === ws.default)
-  if (own)
-    return { name: own.name, title: own.ssh ? `${own.ssh}:${own.root}` : own.root, icon: 'mount', own: true }
-  return ws.workspaces.length
-    ? { name: t('workspaces.title'), title: '', icon: 'mount', own: false }
-    : { name: t('workspaces.add'), title: '', icon: 'plus', own: false }
-})
 </script>
 
 <template>
@@ -293,26 +277,7 @@ const workspace = computed(() => {
       @paste="onPaste"
     />
     <div class="flex min-w-0 items-center gap-1.5 pt-0.5 pr-2 pb-2 pl-3" @click.self="textareaEl?.focus()">
-      <Popover v-if="workspace" :label="t('workspaces.title')" placement="top-start">
-        <template #trigger="{ open, toggle }">
-          <button
-            type="button"
-            class="inline-flex min-w-0 items-center gap-1.5 rounded-full bg-surface-2 py-1 pr-2 pl-2.5 text-meta font-semibold text-ink-2 transition-colors hover:text-ink"
-            :class="{ 'text-ink': open }"
-            :title="workspace.title"
-            :aria-expanded="open"
-            @click="toggle"
-          >
-            <Icon :name="workspace.icon" :size="14" class="text-tool" />
-            <span class="truncate" :class="{ 'font-card': workspace.own }">{{ workspace.name }}</span>
-            <Icon name="down" :size="12" class="text-ink-3" />
-          </button>
-        </template>
-        <template #default="{ close }">
-          <div class="panel-head">{{ t('workspaces.title') }}</div>
-          <WorkspacesPanel @close="close" />
-        </template>
-      </Popover>
+      <SessionPickers v-if="!state.sessionId" />
       <ModelPicker />
       <span class="flex-1" @click.self="textareaEl?.focus()" />
       <input

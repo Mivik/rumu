@@ -138,7 +138,6 @@ impl Kernel {
                 assistant: consult.assistant,
                 asked_by: Some(consult.asked_by),
                 mounts: consult.mounts,
-                workspaces: consult.workspaces,
             })
             .await?;
         self.inner

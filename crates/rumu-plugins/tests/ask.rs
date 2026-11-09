@@ -169,7 +169,7 @@ async fn kernel(home: &std::path::Path) -> Arc<Kernel> {
 async fn kernel_on(home: &std::path::Path, llm: Arc<dyn Llm>) -> Arc<Kernel> {
     let config = load_config(home).unwrap();
     let decks = rumu_cards::Decks::load(home).unwrap();
-    let plugins = rumu_plugins::load_all(home, &config, decks, &[])
+    let plugins = rumu_plugins::load_all(home, &config, decks, Default::default(), &[])
         .await
         .unwrap();
     Kernel::new(
@@ -219,7 +219,7 @@ async fn scout_turn(
     answer: Value,
 ) -> (String, usize) {
     let scout = deck_id(home, "scout");
-    let (session, _) = kernel.create_session(Vec::new(), scout).await.unwrap();
+    let (session, _) = kernel.create_session(scout).await.unwrap();
     let branch = session.active_branch.clone();
     let mut rx = kernel.tap_pushes();
     kernel.prompt(&branch, "ask ledger").await.unwrap();
@@ -342,7 +342,7 @@ async fn aborting_the_turn_cancels_the_question() {
     let home = home();
     let kernel = kernel(home.path()).await;
     let scout = deck_id(home.path(), "scout");
-    let (session, _) = kernel.create_session(Vec::new(), scout).await.unwrap();
+    let (session, _) = kernel.create_session(scout).await.unwrap();
     let branch = session.active_branch.clone();
     let mut rx = kernel.tap_pushes();
     kernel.prompt(&branch, "ask ledger").await.unwrap();
@@ -390,7 +390,7 @@ async fn aborting_the_asker_winds_the_answering_turn_down() {
     let home = home();
     let kernel = kernel_on(home.path(), Arc::new(StuckLlm)).await;
     let scout = deck_id(home.path(), "scout");
-    let (session, _) = kernel.create_session(Vec::new(), scout).await.unwrap();
+    let (session, _) = kernel.create_session(scout).await.unwrap();
     let scout = session.active_branch.clone();
     let mut rx = kernel.tap_pushes();
     kernel.prompt(&scout, "ask ledger").await.unwrap();

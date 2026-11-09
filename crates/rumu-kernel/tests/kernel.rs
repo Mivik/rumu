@@ -12,10 +12,10 @@ use std::time::Duration;
 use async_trait::async_trait;
 use rumu_core::kind;
 use rumu_core::{
-    Attachment, BranchId, BranchStatus, Content, Cx, Decision, Event, HookOutput, HookSpec, Inbox,
-    Invoke, Manifest, Node, NodeBody, NodeId, PathState, Plugin, Post, Progress, SessionId, Tagged,
-    TaskDone, TaskKind, TaskStatus, ToolCall, ToolOutput, ToolSpec, Workspace, WorkspaceSet,
-    WorkspaceUse, Workspaces,
+    Attachment, BranchId, BranchStatus, CardMount, Content, Cx, Decision, Event, HookOutput,
+    HookSpec, Inbox, Invoke, Manifest, Node, NodeBody, NodeId, PROJECT_MOUNT, PathState, Plugin,
+    Post, Progress, RUMU_WORKSPACE, SessionId, SessionRoot, Tagged, TaskDone, TaskKind, TaskStatus,
+    ToolCall, ToolOutput, ToolSpec, Workspace, WorkspaceUse, Workspaces,
 };
 use rumu_kernel::{Delta, Kernel, Llm, LlmError, LlmResponse, OnDelta, ScriptedLlm};
 use rumu_store::Store;
@@ -618,18 +618,16 @@ fn kernel_with(
     (kernel, llm)
 }
 
-/// A kernel over `workspaces` and a session that attaches all of them.
+/// A kernel over `workspaces` and a session outside any project. Every
+/// registered workspace is addressable from it; one of them may still be the
+/// branch default through a `workspace.use` marker.
 async fn setup_with_workspaces(
     plugins: Vec<Arc<dyn Plugin>>,
     scripted: Vec<LlmResponse>,
     workspaces: Workspaces,
 ) -> (Arc<Kernel>, Arc<FakeLlm>, SessionId, BranchId) {
-    let names = workspaces.list().into_iter().map(|w| w.name).collect();
     let (kernel, llm) = kernel_with(plugins, scripted, workspaces);
-    let (session, _) = kernel
-        .create_session(names, "assistant".into())
-        .await
-        .unwrap();
+    let (session, _) = kernel.create_session("assistant".into()).await.unwrap();
     (
         kernel,
         llm,
@@ -652,6 +650,60 @@ fn project(name: &str, root: &str) -> Workspaces {
         root: root.into(),
         read_only: false,
     }])
+}
+
+/// A registry of `workspaces` (`name`, `root`) in which the project deck
+/// `deck` mounts `mounts`, in order.
+fn registry_with(workspaces: &[(&str, &str)], deck: &str, mounts: &[&str]) -> Workspaces {
+    let registry = Workspaces::new(
+        workspaces
+            .iter()
+            .map(|(name, root)| Workspace {
+                name: (*name).into(),
+                ssh: None,
+                root: (*root).into(),
+                read_only: false,
+            })
+            .collect(),
+    );
+    registry
+        .update_both(|_, projects| {
+            projects.insert(deck.into(), mounts.iter().map(|n| (*n).into()).collect());
+            Ok::<_, ()>(())
+        })
+        .unwrap();
+    registry
+}
+
+fn project_mount(deck: &str) -> CardMount {
+    CardMount {
+        deck: deck.into(),
+        at: PROJECT_MOUNT.into(),
+    }
+}
+
+/// A kernel over `registry` and a session that starts in project `deck`.
+async fn setup_in_project(
+    plugins: Vec<Arc<dyn Plugin>>,
+    scripted: Vec<LlmResponse>,
+    registry: Workspaces,
+    deck: &str,
+) -> (Arc<Kernel>, Arc<FakeLlm>, SessionId, BranchId) {
+    let (kernel, llm) = kernel_with(plugins, scripted, registry);
+    let (session, _) = kernel
+        .create_rooted_session(SessionRoot {
+            assistant: "assistant".into(),
+            asked_by: None,
+            mounts: vec![project_mount(deck)],
+        })
+        .await
+        .unwrap();
+    (
+        kernel,
+        llm,
+        session.id.clone(),
+        session.active_branch.clone(),
+    )
 }
 
 /// Drive pushes until `turn.done`/`turn.error` for `branch` (or any branch
@@ -1067,10 +1119,7 @@ async fn flaky_setup(
         Workspaces::default(),
     )
     .unwrap();
-    let (session, _) = kernel
-        .create_session(Vec::new(), "assistant".into())
-        .await
-        .unwrap();
+    let (session, _) = kernel.create_session("assistant".into()).await.unwrap();
     (kernel, llm, session.active_branch.clone())
 }
 
@@ -1180,10 +1229,7 @@ async fn failure_after_a_delta_is_not_retried() {
         Workspaces::default(),
     )
     .unwrap();
-    let (session, _) = kernel
-        .create_session(Vec::new(), "assistant".into())
-        .await
-        .unwrap();
+    let (session, _) = kernel.create_session("assistant".into()).await.unwrap();
     let branch = session.active_branch.clone();
     let mut rx = kernel.tap_pushes();
 
@@ -1297,7 +1343,6 @@ async fn retry_applies_the_current_choice() {
     };
     let choice = rumu_kernel::Choice {
         model: Some(cheap.clone()),
-        ..Default::default()
     };
     kernel.retry(&branch, choice).await.unwrap();
     let (done, _) = collect_turn(&mut rx, &branch.0).await;
@@ -1340,10 +1385,7 @@ async fn retry_refused_when_answered_or_busy() {
         Workspaces::default(),
     )
     .unwrap();
-    let (session, _) = kernel
-        .create_session(Vec::new(), "assistant".into())
-        .await
-        .unwrap();
+    let (session, _) = kernel.create_session("assistant".into()).await.unwrap();
     let branch = session.active_branch.clone();
     kernel.prompt(&branch, "go").await.unwrap();
     started_rx.recv().await.expect("first LLM call in flight");
@@ -1379,10 +1421,7 @@ async fn retry_works_behind_a_hook_note() {
         Workspaces::default(),
     )
     .unwrap();
-    let (session, _) = kernel
-        .create_session(Vec::new(), "assistant".into())
-        .await
-        .unwrap();
+    let (session, _) = kernel.create_session("assistant".into()).await.unwrap();
     let branch = session.active_branch.clone();
     let mut rx = kernel.tap_pushes();
 
@@ -1954,9 +1993,9 @@ async fn agent_unknown_workspace_errors_without_a_branch() {
     );
 }
 
-/// `inherit.workspaces` attaches that subset of the parent's workspaces to the
-/// child (a `workspace.set` marker), and a default the child still has is
-/// carried over as a `workspace.use` marker.
+/// `inherit.workspaces` narrows what the child may address in both context
+/// modes: the child gets a `workspace.set` marker with the named subset of
+/// the parent's workspaces (a `proj`-only list here).
 #[tokio::test]
 async fn agent_workspaces_narrow_the_child_state() {
     let cat = Workspaces::new(vec![
@@ -1987,16 +2026,95 @@ async fn agent_workspaces_narrow_the_child_state() {
                 "e1",
                 "agent",
                 json!({
-                    "task": "work",
+                    "task": "full",
+                    "inherit": { "workspaces": ["proj"] }
+                }),
+            )]),
+            LlmResponse::text("full child done"),
+            LlmResponse::text("parent one done"),
+            LlmResponse::calls(vec![ToolCall::new(
+                "e2",
+                "agent",
+                json!({
+                    "task": "clean",
                     "inherit": { "context": "none", "workspaces": ["proj"] }
                 }),
             )]),
-            LlmResponse::text("child done"),
-            LlmResponse::text("parent done"),
+            LlmResponse::text("clean child done"),
+            LlmResponse::text("parent two done"),
         ],
         cat,
     )
     .await;
+    run_turn_on(&kernel, &branch, "go").await;
+    run_turn_on(&kernel, &branch, "again").await;
+
+    let tree = kernel.session_tree(&session).unwrap();
+    for (task, set_at) in [("full", 3), ("clean", 1)] {
+        let child = tree
+            .2
+            .iter()
+            .find(|b| matches!(&b.kind, rumu_core::BranchKind::Agent { task: t, .. } if t == task))
+            .unwrap_or_else(|| panic!("agent child `{task}`"));
+        let (cnodes, cstate) = kernel.branch_path(&child.id).unwrap();
+        let kinds = body_kinds(&cnodes);
+        assert_eq!(kinds[set_at], "marker[workspace.set]", "{task}: {kinds:?}");
+        assert_eq!(
+            cstate
+                .workspaces
+                .iter()
+                .map(|w| w.name.as_str())
+                .collect::<Vec<_>>(),
+            ["proj"],
+            "{task}"
+        );
+        assert_eq!(cstate.restrict.as_deref(), Some(&["proj".to_owned()][..]));
+        // Outside any project the (now narrower) default is `@rumu`.
+        assert_eq!(
+            cstate.default_workspace.as_deref(),
+            Some(RUMU_WORKSPACE),
+            "{task}"
+        );
+    }
+}
+
+/// A `context: "none"` child forked at the root still lands in the parent's
+/// project: the project mount marker is seeded after the root, so the child
+/// sees the project's workspaces and default.
+#[tokio::test]
+async fn agent_context_none_inherits_the_project() {
+    let registry = registry_with(
+        &[("app", "/s/app"), ("proj", "/p/proj")],
+        "proj-deck",
+        &["proj", "app"],
+    );
+    let plugin = Arc::new(plugin_with(
+        "branch",
+        &["agent"],
+        vec![],
+        noop_hooks(),
+        noop_tools(),
+    ));
+    let (kernel, _llm, session, branch) = setup_with_workspaces(
+        vec![plugin],
+        vec![
+            LlmResponse::calls(vec![ToolCall::new(
+                "e1",
+                "agent",
+                json!({ "task": "clean", "inherit": { "context": "none" } }),
+            )]),
+            LlmResponse::text("child done"),
+            LlmResponse::text("parent done"),
+        ],
+        registry,
+    )
+    .await;
+    // Move into the project after the root, so the project is inherited as a
+    // marker rather than already being a root default.
+    kernel
+        .move_project(&session, Some(project_mount("proj-deck")), "entered".into())
+        .await
+        .unwrap();
     run_turn_on(&kernel, &branch, "go").await;
 
     let child = kernel
@@ -2007,19 +2125,12 @@ async fn agent_workspaces_narrow_the_child_state() {
         .find(|b| matches!(b.kind, rumu_core::BranchKind::Agent { .. }))
         .expect("agent child");
     let (cnodes, cstate) = kernel.branch_path(&child.id).unwrap();
-    let kinds = body_kinds(&cnodes);
     assert_eq!(
-        kinds[..3],
-        ["marker[root]", "marker[workspace.set]", "user"]
+        body_kinds(&cnodes)[..3],
+        ["marker[root]", "marker[card.mount]", "user"]
     );
-    assert_eq!(
-        cstate
-            .workspaces
-            .iter()
-            .map(|w| w.name.as_str())
-            .collect::<Vec<_>>(),
-        ["proj"]
-    );
+    assert_eq!(cstate.project.as_deref(), Some("proj-deck"));
+    assert_eq!(cstate.mounted, ["proj", "app"]);
     assert_eq!(cstate.default_workspace.as_deref(), Some("proj"));
 }
 
@@ -2112,10 +2223,7 @@ async fn agent_concurrency_limit_serialises_script_fanout() {
         Workspaces::default(),
     )
     .unwrap();
-    let (session, _) = kernel
-        .create_session(Vec::new(), "assistant".into())
-        .await
-        .unwrap();
+    let (session, _) = kernel.create_session("assistant".into()).await.unwrap();
     let branch = BranchId::from(session.active_branch.0.as_str());
     kernel.set_agent_concurrency(1);
 
@@ -2164,10 +2272,7 @@ async fn abort_while_waiting_for_an_agent_permit_creates_no_child() {
         Workspaces::default(),
     )
     .unwrap();
-    let (session, _) = kernel
-        .create_session(Vec::new(), "assistant".into())
-        .await
-        .unwrap();
+    let (session, _) = kernel.create_session("assistant".into()).await.unwrap();
     let branch = BranchId::from(session.active_branch.0.as_str());
     kernel.set_agent_concurrency(1);
     let mut rx = kernel.tap_pushes();
@@ -2279,109 +2384,259 @@ async fn abort_appends_error_results() {
 
 // ---------- workspaces ----------
 
+fn workspace_names(st: &PathState) -> Vec<&str> {
+    st.workspaces.iter().map(|w| w.name.as_str()).collect()
+}
+
+/// Every registered workspace is addressable from any session. A project's
+/// mounted list is the subset its deck names, in the deck's order (names
+/// that left the registry drop out), and its first is the default.
 #[tokio::test]
-async fn session_workspaces_are_branch_state() {
-    let registry = project("proj", "/p/rumu");
-    let (kernel, _llm) = kernel_with(vec![], vec![], registry.clone());
-    let names = |st: &rumu_core::PathState| -> Vec<String> {
-        st.workspaces.iter().map(|w| w.name.clone()).collect()
-    };
+async fn every_workspace_is_addressable_and_the_project_mounts_its_own() {
+    let registry = registry_with(
+        &[("app", "/s/app"), ("lib", "/l/lib"), ("proj", "/p/proj")],
+        "proj-deck",
+        &["proj", "ghost", "lib"],
+    );
+    let (kernel, _llm) = kernel_with(vec![], vec![], registry);
 
-    // The root attaches the session's list; the first is the default.
-    let (s1, b1) = kernel
-        .create_session(vec!["proj".into()], "assistant".into())
-        .await
-        .unwrap();
-    let (_, st) = kernel.branch_path(&s1.active_branch).unwrap();
-    assert_eq!(names(&st), ["proj"]);
+    // Outside a project: the whole registry is addressable, none is mounted,
+    // `@rumu` is the default.
+    let (s, _) = kernel.create_session("assistant".into()).await.unwrap();
+    let (_, st) = kernel.branch_path(&s.active_branch).unwrap();
+    assert_eq!(workspace_names(&st), ["app", "lib", "proj"]);
+    assert!(st.mounted.is_empty() && st.project.is_none());
+    assert_eq!(st.default_workspace.as_deref(), Some(RUMU_WORKSPACE));
+    assert_eq!(s.project, None);
+
+    // In a project: its registered mounts, in its order, first is default.
+    // `ghost` is mounted but unregistered, so it is not addressable.
+    let (kernel, _llm, _s, branch) = setup_in_project(
+        vec![],
+        vec![],
+        registry_with(
+            &[("app", "/s/app"), ("lib", "/l/lib"), ("proj", "/p/proj")],
+            "proj-deck",
+            &["proj", "ghost", "lib"],
+        ),
+        "proj-deck",
+    )
+    .await;
+    let (_, st) = kernel.branch_path(&branch).unwrap();
+    assert_eq!(workspace_names(&st), ["app", "lib", "proj"]);
+    assert_eq!(st.mounted, ["proj", "lib"]);
+    assert_eq!(st.project.as_deref(), Some("proj-deck"));
     assert_eq!(st.default_workspace.as_deref(), Some("proj"));
+}
 
-    // Nothing attached: only `@rumu`, which is the default.
-    let (s2, _) = kernel
-        .create_session(Vec::new(), "assistant".into())
+/// A registry edit reaches running sessions and is pushed to clients as
+/// `workspaces.updated`, carrying both lists.
+#[tokio::test]
+async fn registry_changes_are_pushed_with_projects() {
+    let registry = registry_with(&[("app", "/s/app")], "proj-deck", &["app"]);
+    let (kernel, _llm, _s, branch) =
+        setup_in_project(vec![], vec![], registry.clone(), "proj-deck").await;
+    let (_, st) = kernel.branch_path(&branch).unwrap();
+    assert_eq!(workspace_names(&st), ["app"]);
+    assert_eq!(st.mounted, ["app"]);
+
+    let mut rx = kernel.tap_pushes();
+    registry
+        .update_both(|list, projects| {
+            list.push(Workspace {
+                name: "lib".into(),
+                ssh: None,
+                root: "/l/lib".into(),
+                read_only: false,
+            });
+            projects.insert("proj-deck".into(), vec!["lib".into(), "app".into()]);
+            Ok::<_, ()>(())
+        })
+        .unwrap();
+
+    let push = loop {
+        let v = rx.recv().await.expect("a workspaces.updated push");
+        if v["method"] == "workspaces.updated" {
+            break v;
+        }
+    };
+    assert_eq!(push["params"]["workspaces"][0]["name"], "app");
+    assert_eq!(push["params"]["workspaces"][1]["name"], "lib");
+    assert_eq!(
+        push["params"]["projects"]["proj-deck"],
+        json!(["lib", "app"])
+    );
+
+    // The running branch sees the new registry and the reordered mounts.
+    let (_, st) = kernel.branch_path(&branch).unwrap();
+    assert_eq!(workspace_names(&st), ["app", "lib"]);
+    assert_eq!(st.mounted, ["lib", "app"]);
+    assert_eq!(st.default_workspace.as_deref(), Some("lib"));
+}
+
+/// `move_project` writes the project mount (or unmount) marker followed by a
+/// note carrying the project's first workspace as the default. Repeating the
+/// move is a no-op.
+#[tokio::test]
+async fn move_project_records_markers_default_and_note() {
+    let registry = registry_with(
+        &[("app", "/s/app"), ("proj", "/p/proj")],
+        "proj-deck",
+        &["proj", "app"],
+    );
+    let (kernel, _llm) = kernel_with(vec![], vec![], registry);
+    let (s, _) = kernel.create_session("assistant".into()).await.unwrap();
+    let branch = s.active_branch.clone();
+    let text = "The user moved this session into project `proj-deck`.";
+    let mut rx = kernel.tap_pushes();
+
+    kernel
+        .move_project(&s.id, Some(project_mount("proj-deck")), text.into())
         .await
         .unwrap();
-    let (_, st) = kernel.branch_path(&s2.active_branch).unwrap();
-    assert!(st.workspaces.is_empty());
-    assert_eq!(st.default_workspace.as_deref(), Some("@rumu"));
+    let (nodes, st) = kernel.branch_path(&branch).unwrap();
+    assert_eq!(st.project.as_deref(), Some("proj-deck"));
+    assert_eq!(st.mounted, ["proj", "app"]);
+    assert_eq!(st.default_workspace.as_deref(), Some("proj"));
+    let [marker, note] = &nodes[nodes.len() - 2..] else {
+        panic!("the move writes two nodes");
+    };
+    assert!(matches!(&marker.body,
+        NodeBody::Note { content, .. } if content.decode::<CardMount>().is_some_and(|m| m.deck == "proj-deck" && m.at == PROJECT_MOUNT)));
+    let NodeBody::Note { content, .. } = &note.body else {
+        panic!("the second node is a note");
+    };
+    assert_eq!(content.text, text);
+    assert_eq!(
+        content.decode::<WorkspaceUse>().map(|w| w.name),
+        Some("proj".into())
+    );
+    let info = kernel.session_tree(&s.id).unwrap().0;
+    assert_eq!(info.project.as_deref(), Some("proj-deck"));
+    // The active branch's new project is announced.
+    assert!(std::iter::from_fn(|| rx.try_recv().ok()).any(|v| {
+        v["method"] == "session.updated" && v["params"]["session"]["project"] == "proj-deck"
+    }));
 
-    // The user picks the default among the attached ones (or `@rumu`).
-    kernel.use_workspace(&b1.id, "@rumu").await.unwrap();
-    let (nodes, st) = kernel.branch_path(&b1.id).unwrap();
-    assert_eq!(st.default_workspace.as_deref(), Some("@rumu"));
-    assert!(nodes.iter().any(|n| matches!(&n.body,
-        NodeBody::Note { content, .. } if content.decode::<WorkspaceUse>().is_some_and(|w| w.name == "@rumu"))));
-    let err = kernel.use_workspace(&b1.id, "ghost").await.unwrap_err();
+    // Already in that project: nothing is written.
+    let len = kernel.branch_path(&branch).unwrap().0.len();
+    kernel
+        .move_project(&s.id, Some(project_mount("proj-deck")), "again".into())
+        .await
+        .unwrap();
+    assert_eq!(kernel.branch_path(&branch).unwrap().0.len(), len);
+
+    // Leaving writes an unmount marker and falls back to `@rumu`.
+    kernel
+        .move_project(&s.id, None, "The user left the project.".into())
+        .await
+        .unwrap();
+    let (nodes, st) = kernel.branch_path(&branch).unwrap();
+    assert!(st.project.is_none() && st.mounted.is_empty());
+    assert_eq!(st.default_workspace.as_deref(), Some(RUMU_WORKSPACE));
+    assert!(matches!(&nodes[nodes.len() - 2].body,
+        NodeBody::Note { content, .. } if content.decode::<rumu_core::CardUnmount>().is_some()));
+    assert_eq!(kernel.session_tree(&s.id).unwrap().0.project, None);
+
+    // Already outside: a no-op too.
+    let len = kernel.branch_path(&branch).unwrap().0.len();
+    kernel
+        .move_project(&s.id, None, "still outside".into())
+        .await
+        .unwrap();
+    assert_eq!(kernel.branch_path(&branch).unwrap().0.len(), len);
+}
+
+/// An `ask` session keeps its mounts, so it can never gain a project.
+#[tokio::test]
+async fn move_project_refuses_an_asked_session() {
+    let registry = registry_with(&[("proj", "/p/proj")], "proj-deck", &["proj"]);
+    let (kernel, _llm) = kernel_with(vec![], vec![], registry);
+    let (asked, _) = kernel
+        .create_rooted_session(SessionRoot {
+            assistant: "assistant".into(),
+            asked_by: Some("asker".into()),
+            mounts: Vec::new(),
+        })
+        .await
+        .unwrap();
+    let err = kernel
+        .move_project(&asked.id, Some(project_mount("proj-deck")), "no".into())
+        .await
+        .unwrap_err();
     assert!(
-        err.to_string().contains("unknown workspace `ghost`"),
+        matches!(err, rumu_kernel::Error::AskedSessionMounts),
         "{err:#}"
     );
+    let (_, st) = kernel.branch_path(&asked.active_branch).unwrap();
+    assert!(st.project.is_none());
+}
 
-    // Detaching and attaching replace the list; only registered names.
-    kernel.set_workspaces(&b1.id, Vec::new()).await.unwrap();
-    let (_, st) = kernel.branch_path(&b1.id).unwrap();
-    assert!(st.workspaces.is_empty() && st.attached.is_empty());
-    for bad in [vec!["ghost"], vec!["proj", "proj"]] {
-        let bad: Vec<String> = bad.into_iter().map(String::from).collect();
-        assert!(kernel.set_workspaces(&b1.id, bad).await.is_err());
-    }
+/// `SessionInfo.project` tracks the active branch: created, moved, switched,
+/// forked and copied by `fork_session`.
+#[tokio::test]
+async fn session_project_follows_the_active_branch() {
+    let registry = registry_with(
+        &[("app", "/s/app"), ("proj", "/p/proj")],
+        "proj-deck",
+        &["proj"],
+    );
+    let (kernel, _llm) = kernel_with(vec![], vec![], registry);
+    let (s, _) = kernel.create_session("assistant".into()).await.unwrap();
+    let main = s.active_branch.clone();
+    let root = kernel.branch_path(&main).unwrap().0[0].id.clone();
+
+    // A branch forked at the root stays outside the project.
+    let outside = kernel.fork(&root).await.unwrap();
+    assert_eq!(kernel.session_tree(&s.id).unwrap().0.project, None);
+
+    // Moving the main branch in is recorded on the session.
+    kernel.activate_branch(&main).unwrap();
     kernel
-        .set_workspaces(&b1.id, vec!["proj".into()])
+        .move_project(&s.id, Some(project_mount("proj-deck")), "in".into())
         .await
         .unwrap();
-    kernel.use_workspace(&b1.id, "proj").await.unwrap();
-
-    // Each change tells the model what the user did.
-    let (nodes, _) = kernel.branch_path(&b1.id).unwrap();
-    let notes: Vec<&str> = nodes
-        .iter()
-        .filter_map(|n| match &n.body {
-            NodeBody::Note { content, .. } if !content.text.is_empty() => {
-                Some(content.text.as_str())
-            }
-            _ => None,
-        })
-        .collect();
     assert_eq!(
-        notes,
-        [
-            "The user made `@rumu` the default workspace.",
-            "The user removed every workspace from this session; only `@rumu` remains.",
-            "The user changed this session's workspaces to: `proj` (local /p/rumu).",
-            "The user made `proj` the default workspace.",
-        ]
+        kernel.session_tree(&s.id).unwrap().0.project.as_deref(),
+        Some("proj-deck")
     );
 
-    // A workspace removed from the registry drops out of the branch, and
-    // comes back with a workspace of the same name.
-    let saved = registry.list();
-    registry
-        .update(|list| {
-            list.clear();
-            Ok::<_, ()>(())
-        })
-        .unwrap();
-    let (_, st) = kernel.branch_path(&b1.id).unwrap();
-    assert!(st.workspaces.is_empty());
-    assert_eq!(st.default_workspace.as_deref(), Some("@rumu"));
-    registry
-        .update(|list| {
-            *list = saved;
-            Ok::<_, ()>(())
-        })
-        .unwrap();
-    let (_, st) = kernel.branch_path(&b1.id).unwrap();
-    assert_eq!(st.default_workspace.as_deref(), Some("proj"));
+    // A branch forked from the moved head starts in that project.
+    let head = kernel
+        .branch_path(&main)
+        .unwrap()
+        .0
+        .last()
+        .unwrap()
+        .id
+        .clone();
+    let inside = kernel.fork(&head).await.unwrap();
+    assert_eq!(
+        kernel.session_tree(&s.id).unwrap().0.project.as_deref(),
+        Some("proj-deck")
+    );
+
+    // Switching branches switches the project with it.
+    kernel.activate_branch(&outside.id).unwrap();
+    assert_eq!(kernel.session_tree(&s.id).unwrap().0.project, None);
+    kernel.activate_branch(&inside.id).unwrap();
+    assert_eq!(
+        kernel.session_tree(&s.id).unwrap().0.project.as_deref(),
+        Some("proj-deck")
+    );
+
+    // `fork_session` copies the project from the path it copies.
+    let copy = kernel.fork_session(&head).unwrap();
+    assert_eq!(copy.project.as_deref(), Some("proj-deck"));
+    let copy_none = kernel.fork_session(&root).unwrap();
+    assert_eq!(copy_none.project, None);
 }
 
 #[tokio::test]
 async fn delete_session_removes_the_tree_and_pushes_it() {
     let (kernel, _llm, session, branch) = setup(vec![], vec![]).await;
     // Another session must be untouched.
-    let (keep, _) = kernel
-        .create_session(Vec::new(), "assistant".into())
-        .await
-        .unwrap();
+    let (keep, _) = kernel.create_session("assistant".into()).await.unwrap();
     let mut rx = kernel.tap_pushes();
 
     kernel.delete_session(&session).unwrap();
@@ -2440,13 +2695,14 @@ async fn workspace_field_guards_pathless_calls() {
         )],
         "proj is protected",
     ));
-    let (kernel, _llm, _s, branch) = setup_with_workspaces(
+    let (kernel, _llm, _s, branch) = setup_in_project(
         vec![plugin],
         vec![
             LlmResponse::calls(vec![ToolCall::new("c1", "bash", json!({"command": "ls"}))]),
             LlmResponse::text("ok"),
         ],
-        project("proj", "/p/rumu"),
+        registry_with(&[("proj", "/p/rumu")], "proj-deck", &["proj"]),
+        "proj-deck",
     )
     .await;
 
@@ -3282,10 +3538,7 @@ async fn fork_session_copies_the_path_into_a_new_session() {
         Workspaces::default(),
     )
     .unwrap();
-    let (session, _) = kernel
-        .create_session(Vec::new(), "assistant".into())
-        .await
-        .unwrap();
+    let (session, _) = kernel.create_session("assistant".into()).await.unwrap();
     let branch = BranchId::from(session.active_branch.0.as_str());
     let (_, nodes, _) = run_turn_on(&kernel, &branch, "hello").await;
     let result = nodes
@@ -3830,10 +4083,7 @@ async fn steering_prompt_starts_a_new_turn_if_the_turn_ended_first() {
         Workspaces::default(),
     )
     .unwrap();
-    let (session, _) = kernel
-        .create_session(Vec::new(), "assistant".into())
-        .await
-        .unwrap();
+    let (session, _) = kernel.create_session("assistant".into()).await.unwrap();
     let branch = session.active_branch.clone();
     kernel.set_wake_debounce(Duration::from_millis(5));
     let mut rx = kernel.tap_pushes();
@@ -4102,10 +4352,7 @@ async fn setup_split(
     let store = Store::in_memory();
     let llm = Arc::new(SplitLlm::new(parent, child));
     let kernel = Kernel::new(Arc::new(store), llm, plugins, Workspaces::default()).unwrap();
-    let (session, _) = kernel
-        .create_session(Vec::new(), "assistant".into())
-        .await
-        .unwrap();
+    let (session, _) = kernel.create_session("assistant".into()).await.unwrap();
     let branch = BranchId::from(session.active_branch.0.as_str());
     (kernel, session.id, branch)
 }
@@ -4597,10 +4844,7 @@ async fn kernel_start_closes_out_active_agent_branches() {
         Workspaces::default(),
     )
     .unwrap();
-    let (session, _) = kernel
-        .create_session(Vec::new(), "assistant".into())
-        .await
-        .unwrap();
+    let (session, _) = kernel.create_session("assistant".into()).await.unwrap();
     let main = store.get_branch(&session.active_branch).unwrap().unwrap();
     let child = rumu_core::Branch {
         id: BranchId::new(),
@@ -4758,10 +5002,7 @@ async fn live_turns_snapshot_the_stream_in_flight() {
         Workspaces::default(),
     )
     .unwrap();
-    let (session, _) = kernel
-        .create_session(vec![], "assistant".into())
-        .await
-        .unwrap();
+    let (session, _) = kernel.create_session("assistant".into()).await.unwrap();
     let branch = session.active_branch.clone();
     let mut rx = kernel.tap_pushes();
     kernel.prompt(&branch, "hi").await.unwrap();
@@ -4832,83 +5073,4 @@ async fn model_use_marker_is_written_only_when_the_pick_changes() {
     assert!(kernel.use_model(&b, other.clone()).await.unwrap());
     let (_, st) = kernel.branch_path(&b).unwrap();
     assert_eq!(st.model, Some(other));
-}
-
-/// Regenerating an older prompt runs on the composer's current pick: the
-/// workspaces and model chosen since are recorded on the new branch, and the
-/// model is told the workspaces changed. A pick the path already has writes
-/// nothing.
-#[tokio::test]
-async fn regenerate_applies_the_current_choice() {
-    use rumu_core::{ModelTarget, ModelUse};
-    let mut list = project("a", "/p/a").list();
-    list.extend(project("b", "/p/b").list());
-    let (kernel, llm, _s, branch) = setup_with_workspaces(
-        vec![],
-        vec![
-            LlmResponse::text("first"),
-            LlmResponse::text("second"),
-            LlmResponse::text("third"),
-        ],
-        Workspaces::new(list),
-    )
-    .await;
-    let (_, nodes, _) = run_turn(&kernel, &branch, "hello").await;
-    let prompt = nodes
-        .iter()
-        .find(|n| matches!(n.body, NodeBody::User { .. }))
-        .unwrap()
-        .id
-        .clone();
-    let notes = |b: &BranchId| -> usize {
-        let (nodes, _) = kernel.branch_path(b).unwrap();
-        nodes
-            .iter()
-            .filter(|n| matches!(&n.body, NodeBody::Note { content, .. }
-                if content.decode::<WorkspaceUse>().is_some() || content.decode::<WorkspaceSet>().is_some()))
-            .count()
-    };
-
-    // The pick the path already has: nothing recorded.
-    let same = rumu_kernel::Choice {
-        workspaces: Some(vec!["a".into(), "b".into()]),
-        workspace: Some("a".into()),
-        model: None,
-    };
-    let mut rx = kernel.tap_pushes();
-    let b1 = kernel.regenerate(&prompt, same).await.unwrap();
-    wait_turn(&mut rx, Some(b1.id.0.as_str())).await;
-    assert_eq!(notes(&b1.id), 0);
-
-    let cheap = ModelUse {
-        target: ModelTarget::Profile("cheap".into()),
-        effort: None,
-    };
-    let choice = rumu_kernel::Choice {
-        workspaces: Some(vec!["b".into()]),
-        workspace: Some("b".into()),
-        model: Some(cheap.clone()),
-    };
-    let mut rx = kernel.tap_pushes();
-    let b2 = kernel.regenerate(&prompt, choice).await.unwrap();
-    wait_turn(&mut rx, Some(b2.id.0.as_str())).await;
-    let (nodes, st) = kernel.branch_path(&b2.id).unwrap();
-    assert_eq!(st.attached, ["b"]);
-    assert_eq!(st.default_workspace.as_deref(), Some("b"));
-    assert_eq!(st.model, Some(cheap));
-    // `b` is first in the new list, so the default follows without a
-    // `workspace.use` of its own.
-    assert_eq!(notes(&b2.id), 1);
-    // The note sits between the prompt and the new reply, where the model
-    // reads it.
-    let at = |pred: &dyn Fn(&NodeBody) -> bool| nodes.iter().position(|n| pred(&n.body)).unwrap();
-    let user = at(&|b| matches!(b, NodeBody::User { .. }));
-    let note = at(
-        &|b| matches!(b, NodeBody::Note { content, .. } if content.decode::<WorkspaceSet>().is_some()),
-    );
-    let reply = at(&|b| matches!(b, NodeBody::Assistant { .. }));
-    assert!(user < note && note < reply, "{user} {note} {reply}");
-    let seen = llm.projections().pop().unwrap();
-    assert!(seen.iter().any(|n| matches!(&n.body,
-        NodeBody::Note { content, .. } if content.text.contains("`b`"))));
 }

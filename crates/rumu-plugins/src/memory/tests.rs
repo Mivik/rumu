@@ -659,3 +659,95 @@ async fn catalog_names_the_last_author() {
     let catalog: CatalogNote = out.effects[0].decode().unwrap();
     assert_eq!(catalog.entries[0].author, None);
 }
+
+#[tokio::test]
+async fn assistant_intro_names_the_project_and_its_workspaces() {
+    const PROJECT: &str = "0193a2f1-0000-7000-8000-00000000c3c3";
+    let home = tempfile::tempdir().unwrap();
+    crate::testutil::main_deck(home.path());
+    crate::testutil::create_deck(
+        home.path(),
+        "proj",
+        Some(&format!("id: {PROJECT}\nname: proj\nproject: true\n")),
+        &[],
+    );
+    let app_dir = home.path().join("app-ws");
+    let proj_dir = home.path().join("proj-ws");
+    std::fs::create_dir_all(&app_dir).unwrap();
+    std::fs::create_dir_all(&proj_dir).unwrap();
+    let plugin = memory_plugin(home.path());
+    let host = FakeRuntime::arc();
+    {
+        let mut state = host.state.lock().unwrap();
+        state.workspaces = vec![
+            rumu_core::Workspace::new(
+                "app".into(),
+                None,
+                app_dir.to_string_lossy().into_owned(),
+                true,
+            ),
+            rumu_core::Workspace::new(
+                "proj".into(),
+                None,
+                proj_dir.to_string_lossy().into_owned(),
+                false,
+            ),
+        ];
+        state.mounted = vec!["app".into(), "proj".into()];
+        state.project = Some(PROJECT.into());
+        state.mounts.push(rumu_core::CardMount {
+            deck: PROJECT.into(),
+            at: rumu_core::PROJECT_MOUNT.into(),
+        });
+    }
+    let out = plugin
+        .on_hook("assistant-intro", &event("llm.pre"), &host.cx())
+        .await
+        .unwrap();
+    let text = &out.effects[0].text;
+    assert!(
+        text.contains(&format!("Project: `proj` (deck id {PROJECT})")),
+        "{text}"
+    );
+    assert!(text.contains("@rumu:/cards/project"), "{text}");
+    let workspaces = text
+        .lines()
+        .find(|l| l.contains("Its workspaces"))
+        .unwrap_or_else(|| panic!("{text}"));
+    let list = &workspaces[workspaces.find("Its workspaces").unwrap()..];
+    assert!(
+        list.find("`app`").unwrap() < list.find("`proj`").unwrap(),
+        "default first: {workspaces}"
+    );
+    assert!(list.contains(", ro)"), "{workspaces}");
+    let project_mount = text
+        .lines()
+        .find(|l| l.contains("@rumu:/cards/project"))
+        .unwrap();
+    assert!(
+        !project_mount.contains("writes ask the user"),
+        "the session's project deck is its own: {project_mount}"
+    );
+    // Rules: project facts go to `/cards/project`, work under way is
+    // qualified by "outside any project".
+    assert!(text.contains("goes to `/cards/project`"), "{text}");
+    assert!(
+        text.contains("work under way outside any project"),
+        "{text}"
+    );
+
+    // No project: the line says so.
+    let out = plugin
+        .on_hook(
+            "assistant-intro",
+            &event("llm.pre"),
+            &FakeRuntime::arc().cx(),
+        )
+        .await
+        .unwrap();
+    assert!(
+        out.effects[0]
+            .text
+            .contains("This session is in no project.")
+    );
+}

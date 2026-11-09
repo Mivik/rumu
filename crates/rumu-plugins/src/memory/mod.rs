@@ -26,11 +26,13 @@ use rumu_cards::catalog::{self, CatalogNote};
 use rumu_cards::deck::Action;
 use rumu_cards::{Card, Cards, Decks, card, scope, usage};
 use rumu_core::{
-    Content, Cx, Decision, Event, HookOutput, HookSpec, Manifest, Plugin, RUMU_WORKSPACE,
-    Structured, Utf8TypedPath, Utf8TypedPathBuf,
+    Content, Cx, Decision, Event, HookOutput, HookSpec, Manifest, PROJECT_MOUNT, Plugin,
+    RUMU_WORKSPACE, Structured, Utf8TypedPath, Utf8TypedPathBuf,
 };
 use serde::{Deserialize, Serialize};
 use serde_json::{Value, json};
+
+use crate::approve::allowed;
 
 #[cfg(test)]
 mod tests;
@@ -185,6 +187,39 @@ impl MemoryPlugin {
             "You are the assistant `{}` (deck id {}). Cards live in the decks mounted under `{RUMU_WORKSPACE}:/cards`.",
             deck.meta.name, deck.meta.id
         );
+        match state.project.as_deref() {
+            Some(project) => {
+                let name = self.decks.get(project).map_or_else(
+                    || project.to_owned(),
+                    |d| format!("`{}` (deck id {})", d.meta.name, d.id()),
+                );
+                text.push_str(&format!(
+                    "\nProject: {name}, mounted at `{RUMU_WORKSPACE}:{PROJECT_MOUNT}`."
+                ));
+                let mounted: Vec<_> = state
+                    .mounted
+                    .iter()
+                    .filter_map(|n| state.workspaces.iter().find(|w| &w.name == n))
+                    .collect();
+                if mounted.is_empty() {
+                    text.push_str(" It mounts no workspace; `@rumu` is the default.");
+                } else {
+                    text.push_str(" Its workspaces (default first): ");
+                    text.push_str(
+                        &mounted
+                            .iter()
+                            .map(|w| {
+                                let rw = if w.read_only { "ro" } else { "rw" };
+                                format!("`{}` ({} {}, {rw})", w.name, w.label(), w.root)
+                            })
+                            .collect::<Vec<_>>()
+                            .join(", "),
+                    );
+                    text.push('.');
+                }
+            }
+            None => text.push_str("\nThis session is in no project."),
+        }
         let cards = Cards::new(&self.decks, &state.mounts);
         if cards.mounts().is_empty() {
             text.push_str(" No deck is mounted.");
@@ -193,10 +228,11 @@ impl MemoryPlugin {
             let session = cx.session.to_string();
             for mounted in cards.mounts() {
                 let asks = state.asked_by.is_none()
-                    && !self.decks.allowed(
-                        Action::Write,
+                    && !allowed(
+                        &self.decks,
+                        &state,
                         &session,
-                        &state.assistant,
+                        Action::Write,
                         mounted.deck.id(),
                     );
                 text.push_str(&format!(
@@ -210,10 +246,12 @@ impl MemoryPlugin {
         text.push_str(
             "\n\nPlacement rules:\n\
 1. Put a card in the mounted deck whose charter (its pinned `about` card) fits what the card is \
-about, whichever assistant learned it: a fact about the user goes to the user's deck.\n\
+about, whichever assistant learned it: a fact about the user goes to the user's deck, a fact \
+about the session's project goes to `/cards/project`.\n\
 2. Your own deck (`/cards/self`) is your own memory: your persona and instructions, what you \
-learned from your own work (approaches that worked, mistakes to avoid), and work under way. A card \
-no mounted deck fits also stays there until one does; then move it (`write` with `from`).\n\
+learned from your own work (approaches that worked, mistakes to avoid), and work under way outside \
+any project. A card no mounted deck fits also stays there until one does; then move it (`write` \
+with `from`).\n\
 3. Process stays in sessions (`@rumu:/sessions` is memory too); only conclusions become cards.\n\
 4. Link related cards instead of copying them. In a card's body, link a card of the same deck by \
 its path relative to the card (`[deploy](../ops/deploy)`), never by its mount path. For a card in \

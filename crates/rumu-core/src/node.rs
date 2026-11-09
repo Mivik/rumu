@@ -396,14 +396,14 @@ impl Structured for WorkspaceUse {
     const V: u32 = 1;
 }
 
-/// Payload of the `workspace.set` marker (v1): the workspaces attached to
-/// the branch from here on, replacing the list before it (the session root
-/// seeds the first one). The built-in `@rumu` workspace is always attached.
+/// Payload of the `workspace.set` marker (v1): a sub-agent's
+/// `inherit.workspaces`, narrowing the workspaces the branch may address from
+/// here on (every registered one otherwise). The built-in `@rumu` workspace
+/// is always addressable.
 ///
 /// This is an addressing restriction, not a sandbox: `bash` in a local
 /// workspace can still `cd` anywhere on the machine (see the workspace
-/// plugin's caveat), and absolute paths are allowed inside an attached
-/// workspace.
+/// plugin's caveat), and absolute paths are allowed inside a workspace.
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 pub struct WorkspaceSet {
     /// Workspace names, in order (`@rumu` implicit).
@@ -455,13 +455,10 @@ pub struct SessionRoot {
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub asked_by: Option<String>,
     /// The deck's `deck.yaml` mounts, seeded at session start (the session's
-    /// own deck is implicit at `/cards/self`).
+    /// own deck is implicit at `/cards/self`), and the project the session
+    /// starts in at [`crate::PROJECT_MOUNT`].
     #[serde(default, skip_serializing_if = "Vec::is_empty")]
     pub mounts: Vec<CardMount>,
-    /// The deck's `deck.yaml` workspaces, attached at session start; the
-    /// first is the default.
-    #[serde(default, skip_serializing_if = "Vec::is_empty")]
-    pub workspaces: Vec<String>,
 }
 
 impl Structured for SessionRoot {
@@ -599,25 +596,39 @@ pub struct SessionInfo {
     pub seen_at: Option<Timestamp>,
     /// The assistant the session runs as.
     pub assistant: String,
+    /// The project deck of the active branch (the deck mounted at
+    /// [`crate::PROJECT_MOUNT`]); `None` outside any project.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    #[ts(optional)]
+    pub project: Option<String>,
 }
 
 /// State derived purely from the root→head path (`state = f(path)`), merged
 /// with the workspace registry by the kernel (see `rumu-kernel
-/// state::merge_workspaces`): `workspaces` is then filled in and
-/// `default_workspace` fully resolved.
+/// state::merge_workspaces`): `workspaces` and `mounted` are then filled in
+/// and `default_workspace` fully resolved.
 #[derive(Debug, Clone, Default, Serialize, Deserialize, ts_rs::TS)]
 #[ts(export)]
 pub struct PathState {
-    /// Names of the workspaces attached to the branch (the root's list, then
-    /// the last `workspace.set` marker).
-    #[serde(default)]
-    pub attached: Vec<String>,
-    /// The attached workspaces that are registered, in attached order:
-    /// filled in by the kernel's merge (`rumu-kernel`
-    /// `state::merge_workspaces`). Empty straight out of `derive_state`.
+    /// The workspaces the branch may address: every registered one, or those
+    /// a `workspace.set` marker narrows it to. Filled in by the kernel's
+    /// merge; empty straight out of `derive_state`.
     pub workspaces: Vec<Workspace>,
+    /// The project's mounted workspaces among `workspaces`, in the project's
+    /// order (the first is its default). Filled in by the kernel's merge.
+    #[serde(default)]
+    pub mounted: Vec<String>,
+    /// The last `workspace.set` marker's names (a sub-agent's
+    /// `inherit.workspaces`); `None` addresses every registered workspace.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    #[ts(optional)]
+    pub restrict: Option<Vec<String>>,
+    /// The project deck: the one mounted at [`crate::PROJECT_MOUNT`].
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    #[ts(optional)]
+    pub project: Option<String>,
     /// Default workspace name: the last `workspace.use` marker here; after
-    /// the kernel's merge, resolved (marker → first attached → `@rumu`).
+    /// the kernel's merge, resolved (marker → the project's first → `@rumu`).
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub default_workspace: Option<String>,
     /// The assistant from the session's root.

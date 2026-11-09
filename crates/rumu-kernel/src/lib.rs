@@ -19,7 +19,7 @@ pub use fields::extract_fields;
 pub use llm::{Delta, Llm, LlmError, LlmResponse, OnDelta};
 pub use predicate::{Pred, PredicateError};
 pub use scripted::{Script, ScriptTurn, ScriptedLlm};
-pub use state::{derive_state, merge_workspaces};
+pub use state::{derive_state, merge_workspaces, project_change};
 
 use std::collections::{HashMap, HashSet};
 use std::sync::{Arc, Mutex};
@@ -31,8 +31,7 @@ use rumu_core::kind;
 use rumu_core::{
     Branch, BranchId, BranchKind, BranchStatus, Content, Effect, Event, HookSpec, Inbox, Node,
     NodeBody, NodeId, PathState, Plugin, Post, Runtime, SYSTEM_SOURCE, SessionId, SessionInfo,
-    SessionRoot, TaskId, ToolCall, ToolSpec, TurnError, WorkspaceSet, WorkspaceUse, Workspaces,
-    now, tool_schema,
+    SessionRoot, TaskId, ToolCall, ToolSpec, TurnError, WorkspaceUse, Workspaces, now, tool_schema,
 };
 use rumu_store::Store;
 use serde_json::{Value, json};
@@ -222,12 +221,6 @@ impl Default for Inner {
 /// [`Kernel::apply_choice`]. Absent parts leave the branch as it is.
 #[derive(Debug, Clone, Default, serde::Deserialize)]
 pub struct Choice {
-    /// The attached workspaces, in order.
-    #[serde(default)]
-    pub workspaces: Option<Vec<String>>,
-    /// The default workspace.
-    #[serde(default)]
-    pub workspace: Option<String>,
     #[serde(default)]
     pub model: Option<rumu_core::ModelUse>,
 }
@@ -378,6 +371,14 @@ impl Kernel {
             post_tx,
             tap: Mutex::new(None),
         });
+        // Every registry change (the web UI's or a model's) reaches the
+        // clients. Weak: the registry is owned by the kernel.
+        let weak = Arc::downgrade(&kernel);
+        kernel.workspaces.on_change(move || {
+            if let Some(kernel) = weak.upgrade() {
+                kernel.workspaces_changed();
+            }
+        });
         // Each plugin gets a channel bound to its manifest name. The worker
         // drains posts in arrival order and dispatches/delivers them async.
         for (i, p) in kernel.plugins.iter().enumerate() {
@@ -454,11 +455,15 @@ impl Kernel {
     }
 
     /// The workspace registry changed: push it, so clients re-read their
-    /// branch state (an attached workspace may have gone or changed).
-    pub fn workspaces_changed(&self) {
+    /// branch state (a mounted workspace may have gone or changed). Called
+    /// on every registry change.
+    fn workspaces_changed(&self) {
         self.push(
             "workspaces.updated",
-            json!({ "workspaces": self.workspaces.list() }),
+            json!({
+                "workspaces": self.workspaces.list(),
+                "projects": self.workspaces.projects(),
+            }),
         );
     }
 
@@ -557,7 +562,7 @@ impl Kernel {
     /// The merged path state: node-folded state plus the workspace registry
     /// (see [`merge_workspaces`]).
     pub(crate) fn state_of_nodes(&self, nodes: &[Node]) -> PathState {
-        merge_workspaces(derive_state(nodes), &self.workspaces.list())
+        merge_workspaces(derive_state(nodes), &self.workspaces)
     }
 
     pub(crate) fn session_of(&self, branch: &BranchId) -> Result<SessionId> {
@@ -638,25 +643,23 @@ impl Kernel {
 
     // ---- session lifecycle ----
 
-    /// Create a session running as `assistant`, with `workspaces` attached
-    /// (the first is the default). The assistant is recorded on the root
-    /// node, so every path of the session (and `session.start` hooks) sees it.
+    /// Create a session running as `assistant`, outside any project. The
+    /// assistant is recorded on the root node, so every path of the session
+    /// (and `session.start` hooks) sees it.
     pub async fn create_session(
         self: &Arc<Self>,
-        workspaces: Vec<String>,
         assistant: String,
     ) -> Result<(SessionInfo, Branch)> {
         self.create_rooted_session(SessionRoot {
             assistant,
             asked_by: None,
             mounts: Vec::new(),
-            workspaces,
         })
         .await
     }
 
     /// Create a session from a fully populated root marker (the deck id, the
-    /// asked-by reference, and the deck's default mounts and workspaces).
+    /// asked-by reference, and the default mounts, the project included).
     pub async fn create_rooted_session(
         self: &Arc<Self>,
         root_data: SessionRoot,
@@ -692,6 +695,11 @@ impl Kernel {
             updated_at: at,
             seen_at: Some(at),
             assistant,
+            project: root_data
+                .mounts
+                .iter()
+                .find(|m| m.at == rumu_core::PROJECT_MOUNT)
+                .map(|m| m.deck.clone()),
         };
         self.store.insert_session(&info)?;
         self.store.insert_branch(&branch)?;
@@ -751,19 +759,45 @@ impl Kernel {
         Ok(())
     }
 
-    /// The user picks the branch's default workspace among the attached ones
-    /// (or `@rumu`): a `workspace.use` marker, as the model's `workspace_use`
-    /// writes. Branch state, so forks inherit it; queued while a turn runs.
-    pub async fn use_workspace(self: &Arc<Self>, branch: &BranchId, name: &str) -> Result<()> {
-        let state = self.state_of_nodes(&self.pending_path_nodes(branch)?);
-        if name != rumu_core::RUMU_WORKSPACE && !state.workspaces.iter().any(|w| w.name == name) {
-            return Err(Error::UnknownWorkspace {
-                name: name.to_owned(),
-                available: state.attached.join(", "),
-            });
+    /// The user moves the session into a project (`mount`, a project deck
+    /// at `/cards/project`) or out of it (`None`): the marker a model's
+    /// `card_mount` writes, then the project's first workspace (or `@rumu`)
+    /// as the default, with `text` telling the model. Recorded on the active
+    /// branch; queued while a turn runs.
+    pub async fn move_project(
+        self: &Arc<Self>,
+        session: &SessionId,
+        mount: Option<rumu_core::CardMount>,
+        text: String,
+    ) -> Result<()> {
+        let info = self
+            .store
+            .get_session(session)?
+            .ok_or_else(|| Error::SessionNotFound(session.clone()))?;
+        let branch = info.active_branch;
+        let state = derive_state(&self.pending_path_nodes(&branch)?);
+        if state.asked_by.is_some() {
+            return Err(Error::AskedSessionMounts);
         }
-        let text = format!("The user made `{name}` the default workspace.");
-        self.deliver_note(branch, text, &WorkspaceUse { name: name.into() })
+        if state.project == mount.as_ref().map(|m| m.deck.clone()) {
+            return Ok(());
+        }
+        let default = mount
+            .as_ref()
+            .and_then(|m| self.workspaces.project(&m.deck).into_iter().next())
+            .unwrap_or_else(|| rumu_core::RUMU_WORKSPACE.to_owned());
+        let marker = match mount {
+            Some(mount) => Content::marker(&mount),
+            None => Content::marker(&rumu_core::CardUnmount {
+                at: rumu_core::PROJECT_MOUNT.into(),
+            }),
+        };
+        let body = NodeBody::Note {
+            source: SYSTEM_SOURCE.into(),
+            content: marker,
+        };
+        self.deliver(&branch, NodeId::new(), body, None).await?;
+        self.deliver_note(&branch, text, &WorkspaceUse { name: default })
             .await
     }
 
@@ -789,73 +823,14 @@ impl Kernel {
     }
 
     /// Bring the branch to what the composer shows when the user sends or
-    /// regenerates: each part of `choice` that differs from the branch's
-    /// state is recorded (workspace changes with a note, so the model is
-    /// told). A prompt replayed on an older point of the conversation thus
-    /// runs on the user's current pick, not the one it was first sent with.
+    /// regenerates: a model that differs from the branch's is recorded. A
+    /// prompt replayed on an older point of the conversation thus runs on
+    /// the user's current pick, not the one it was first sent with.
     pub async fn apply_choice(self: &Arc<Self>, branch: &BranchId, choice: Choice) -> Result<()> {
-        // Against the registered ones: a name gone from the registry is no
-        // difference the user could have picked.
-        let attached: Vec<String> = self
-            .state_of_nodes(&self.pending_path_nodes(branch)?)
-            .workspaces
-            .into_iter()
-            .map(|w| w.name)
-            .collect();
-        if let Some(names) = choice.workspaces.filter(|n| *n != attached) {
-            self.set_workspaces(branch, names).await?;
-        }
-        if let Some(name) = choice.workspace {
-            let state = self.state_of_nodes(&self.pending_path_nodes(branch)?);
-            if state.default_workspace.as_ref() != Some(&name) {
-                self.use_workspace(branch, &name).await?;
-            }
-        }
         if let Some(model) = choice.model {
             self.use_model(branch, model).await?;
         }
         Ok(())
-    }
-
-    /// The user attaches or detaches workspaces: `names` (registered, in
-    /// order) is the branch's list from here on (a `workspace.set` marker).
-    pub async fn set_workspaces(
-        self: &Arc<Self>,
-        branch: &BranchId,
-        names: Vec<String>,
-    ) -> Result<()> {
-        for (i, name) in names.iter().enumerate() {
-            if self.workspaces.get(name).is_none() || names[..i].contains(name) {
-                return Err(Error::UnknownWorkspace {
-                    name: name.clone(),
-                    available: self
-                        .workspaces
-                        .list()
-                        .iter()
-                        .map(|w| w.name.as_str())
-                        .collect::<Vec<_>>()
-                        .join(", "),
-                });
-            }
-        }
-        let listed: Vec<String> = names
-            .iter()
-            .filter_map(|n| self.workspaces.get(n))
-            .map(|w| {
-                let ro = if w.read_only { ", read-only" } else { "" };
-                format!("`{}` ({} {}{ro})", w.name, w.label(), w.root)
-            })
-            .collect();
-        let text = if listed.is_empty() {
-            "The user removed every workspace from this session; only `@rumu` remains.".to_owned()
-        } else {
-            format!(
-                "The user changed this session's workspaces to: {}.",
-                listed.join(", ")
-            )
-        };
-        self.deliver_note(branch, text, &WorkspaceSet { names })
-            .await
     }
 
     /// A user action recorded on the branch: the model reads `text`, the
@@ -891,6 +866,7 @@ impl Kernel {
             .get_session(&b.session)?
             .ok_or_else(|| Error::SessionNotFound(b.session.clone()))?;
         session.active_branch = b.id.clone();
+        session.project = derive_state(&self.path_nodes(&b.id)?).project;
         session.updated_at = now();
         self.store.update_session(&session)?;
         self.push("session.updated", json!({ "session": session }));
@@ -940,6 +916,19 @@ impl Kernel {
         self.store.update_branch(&b)?;
         self.store.touch_session(&b.session, at)?;
         self.push("node.appended", json!({ "branch": branch, "node": node }));
+
+        // The session is listed under its active branch's project.
+        if let Some(project) = project_change(&body) {
+            let mut session = self
+                .store
+                .get_session(&b.session)?
+                .ok_or_else(|| Error::SessionNotFound(b.session.clone()))?;
+            if session.active_branch == b.id && session.project != project {
+                session.project = project;
+                self.store.update_session(&session)?;
+                self.push("session.updated", json!({ "session": session }));
+            }
+        }
 
         if let NodeBody::User { content } = &body {
             // Session title = first user prompt, truncated to 60 chars.
@@ -1372,6 +1361,7 @@ impl Kernel {
         let b = Self::make_branch(&n.session, n.id.clone(), BranchKind::Main);
         self.store.insert_branch(&b)?;
         session.active_branch = b.id.clone();
+        session.project = derive_state(&self.path_nodes(&b.id)?).project;
         session.updated_at = now();
         self.store.update_session(&session)?;
         self.push("session.updated", json!({ "session": session }));
@@ -1442,6 +1432,7 @@ impl Kernel {
             updated_at: at,
             seen_at: Some(at),
             assistant: src.assistant.clone(),
+            project: derive_state(&path).project,
         };
         // The session row first: the store drops writes for unknown sessions.
         self.store.insert_session(&info)?;
@@ -1544,10 +1535,7 @@ mod tests {
             Workspaces::default(),
         )
         .unwrap();
-        let (_, branch) = kernel
-            .create_session(Vec::new(), "assistant".into())
-            .await
-            .unwrap();
+        let (_, branch) = kernel.create_session("assistant".into()).await.unwrap();
 
         kernel
             .append_body(
@@ -1680,10 +1668,7 @@ mod tests {
             Workspaces::default(),
         )
         .unwrap();
-        let (_, branch) = kernel
-            .create_session(Vec::new(), "assistant".into())
-            .await
-            .unwrap();
+        let (_, branch) = kernel.create_session("assistant".into()).await.unwrap();
 
         kernel
             .append_body(

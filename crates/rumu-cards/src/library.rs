@@ -23,6 +23,7 @@ pub struct LibraryDeck {
     /// The display name (`deck.yaml` `name`).
     pub name: String,
     pub assistant: bool,
+    pub project: bool,
     /// The one-line summary from its charter (`about.md`).
     pub description: Option<String>,
     /// The number of card files in the deck.
@@ -152,6 +153,7 @@ fn library_deck(deck: &Deck) -> Result<LibraryDeck> {
         id: deck.id().to_owned(),
         name: deck.meta.name.clone(),
         assistant: deck.meta.assistant,
+        project: deck.meta.project,
         description: deck.summary(),
         cards: deck.walk()?.len(),
     })
@@ -163,7 +165,7 @@ pub fn deck_create(decks: &Decks, name: &str) -> Result<LibraryDeck> {
         id: String::new(),
         name: name.to_owned(),
         assistant: false,
-        workspaces: Vec::new(),
+        project: false,
         mounts: Vec::new(),
         allow_ask: Vec::new(),
     })?;

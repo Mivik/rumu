@@ -54,11 +54,17 @@ const MIN_ABBR: usize = 8;
 /// A node address prefix shorter than this does not resolve.
 const MIN_PREFIX: usize = 4;
 
-/// Whether this path may see `assistant`'s sessions: its own, and those of
-/// every mounted deck. An assistant deck's conversations are part of its
-/// memory, so mounting the deck opens them.
-fn can_see(state: &PathState, assistant: &str) -> bool {
-    state.assistant == assistant || state.mounts.iter().any(|m| m.deck == assistant)
+/// The deck a session belongs to: its project deck when it has one, else its
+/// assistant deck.
+fn owner(info: &SessionInfo) -> &str {
+    info.project.as_deref().unwrap_or(&info.assistant)
+}
+
+/// Whether this path may see `info`'s session: its owning deck is mounted on
+/// the branch. A session's conversation is part of its project's memory, or
+/// of its assistant's when it has no project.
+fn can_see(state: &PathState, info: &SessionInfo) -> bool {
+    state.mounts.iter().any(|m| m.deck == owner(info))
 }
 
 /// The directory of per-assistant session listings.
@@ -98,18 +104,20 @@ fn session_path(abs: &Utf8UnixPath) -> Option<SessionPath<'_>> {
 }
 
 /// The sessions this path may see, optionally only `only`'s (an assistant
-/// deck id, which must be visible).
+/// deck id, which must have some).
 fn visible_sessions(cx: &Cx, only: Option<&str>) -> ToolResult<Vec<SessionInfo>> {
     let state = cx.state()?;
-    if let Some(id) = only
-        && !can_see(&state, id)
-    {
-        return Err(ToolError::model(format!(
-            "assistant `{id}` is not mounted; mount its deck (`card_mount`) to see its sessions"
-        )));
-    }
     let mut sessions = cx.history().sessions()?;
-    sessions.retain(|s| only.map_or(can_see(&state, &s.assistant), |id| s.assistant == id));
+    sessions.retain(|s| can_see(&state, s));
+    if let Some(id) = only {
+        sessions.retain(|s| s.assistant == id);
+        if sessions.is_empty() {
+            return Err(ToolError::model(format!(
+                "assistant `{id}` has no visible sessions; \
+                 `@rumu:/sessions/by-assistant` lists those that do"
+            )));
+        }
+    }
     Ok(sessions)
 }
 
@@ -137,7 +145,7 @@ impl WorkspacePlugin {
             Ok(t) => t,
             Err(e) => return Err(ToolError::model(format!("no session `{sid}`: {e}"))),
         };
-        if !can_see(&*cx.state()?, &info.assistant) {
+        if !can_see(cx.state()?.as_ref(), &info) {
             return Err(ToolError::model(format!("no session `{sid}`")));
         }
         let text = match what {

@@ -973,21 +973,46 @@ impl Kernel {
                 let root = path
                     .first()
                     .ok_or_else(|| Error::Internal(format!("branch {from} has no root node")))?;
-                // Forked at the root: the parent's current list, not the
-                // root's, is the starting point.
-                // Markers only where the root alone would differ.
-                let names = child_workspaces.unwrap_or(available);
+                // Forked at the root: the parent's current state, not the
+                // root's, is the starting point. Markers only where the root
+                // alone would differ: the restriction, the project, the
+                // default workspace.
                 let mut initial = Vec::new();
-                if names != crate::state::derive_state(std::slice::from_ref(root)).attached {
-                    initial.push(set_marker(names.clone()));
+                if let Some(names) = child_workspaces {
+                    initial.push(set_marker(names));
+                } else if parent_state.restrict.is_some() {
+                    initial.push(set_marker(available.clone()));
                 }
-                // Keep the parent's default workspace when the child still
-                // has it; otherwise the child's merge picks one.
-                let natural = names.first().map_or(RUMU_WORKSPACE, String::as_str);
-                let keep = parent_state
-                    .default_workspace
-                    .clone()
-                    .filter(|n| n != natural && (n == RUMU_WORKSPACE || names.contains(n)));
+                if parent_state.project
+                    != crate::state::derive_state(std::slice::from_ref(root)).project
+                {
+                    let marker = match &parent_state.project {
+                        Some(deck) => Content::marker(&rumu_core::CardMount {
+                            deck: deck.clone(),
+                            at: rumu_core::PROJECT_MOUNT.into(),
+                        }),
+                        None => Content::marker(&rumu_core::CardUnmount {
+                            at: rumu_core::PROJECT_MOUNT.into(),
+                        }),
+                    };
+                    initial.push(NodeBody::Note {
+                        source: SYSTEM_SOURCE.into(),
+                        content: marker,
+                    });
+                }
+                // Keep the parent's default workspace when the child can
+                // still address it; otherwise the child's merge picks one.
+                let seeded: Vec<rumu_core::Node> = std::iter::once(root.clone())
+                    .chain(initial.iter().map(|body| rumu_core::Node {
+                        body: body.clone(),
+                        ..root.clone()
+                    }))
+                    .collect();
+                let natural = self.state_of_nodes(&seeded);
+                let keep = parent_state.default_workspace.clone().filter(|n| {
+                    natural.default_workspace.as_ref() != Some(n)
+                        && (n == RUMU_WORKSPACE || natural.workspaces.iter().any(|w| &w.name == n))
+                });
                 if let Some(name) = keep {
                     initial.push(NodeBody::Note {
                         source: SYSTEM_SOURCE.into(),
