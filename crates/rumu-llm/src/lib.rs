@@ -346,7 +346,9 @@ impl Target {
                 };
                 // Replayed thinking the provider dropped
                 // (`input_transformations` on `message_start`), counted off
-                // the raw frames.
+                // the raw frames. Anthropic is the only protocol that
+                // reports this; the others reject replayed reasoning at most
+                // (caught by the retry in `complete`) or accept it silently.
                 opts.with_raw_frame_fn(move |_, frame| {
                     if frame.data.contains("input_transformations")
                         && let Some(v) = frame.json()
@@ -554,9 +556,10 @@ fn reasoning_body(effort: &str) -> Value {
     })
 }
 
-/// Thinking blocks a `message_start` frame reports as dropped. A model
-/// that cannot read another model's blocks (`model_binding_mismatch`) is a
-/// routing choice, not lost reasoning: those return when the model does.
+/// Thinking blocks a `message_start` frame reports as dropped. Anthropic is
+/// the only protocol that reports this; a model that cannot read another
+/// model's blocks (`model_binding_mismatch`) is a routing choice, not lost
+/// reasoning: those return when the model does.
 fn dropped_thinking(frame: &Value) -> usize {
     frame
         .pointer("/message/input_transformations")
@@ -570,35 +573,67 @@ fn dropped_thinking(frame: &Value) -> usize {
         .unwrap_or(0)
 }
 
-/// A 400 about replayed reasoning: Anthropic's `thinking` blocks (`Invalid
-/// signature in thinking block`, `Invalid data in redacted_thinking block`,
-/// `cannot be modified`), Gemini's `thought_signature`, OpenAI's
-/// `encrypted_content`.
+/// A 400 about replayed reasoning that dropping it would fix: Anthropic's
+/// `thinking` blocks (`Invalid signature in thinking block`, `Invalid data in
+/// redacted_thinking block`, `cannot be modified`), Gemini's
+/// `thought_signature` (providers write it both with an underscore and as
+/// `thought signature`), OpenAI's `encrypted_content`, and OpenAI-compatible
+/// endpoints rejecting the `reasoning_content` field.
 fn rejects_reasoning(e: &LlmError) -> bool {
-    match e {
-        LlmError::Request(m) | LlmError::Stream(m) => {
-            m.contains("400")
-                && ["thinking", "thought_signature", "encrypted_content"]
-                    .iter()
-                    .any(|k| m.contains(k))
+    let message = match e {
+        LlmError::Request(m) | LlmError::Stream(m) => m,
+        _ => return false,
+    };
+    if e.status() != Some(400) {
+        return false;
+    }
+    let lower = message.to_ascii_lowercase();
+    // The opposite complaint: the provider wants the reasoning and the
+    // request did not carry it (DeepSeek). Dropping it is not the fix.
+    if lower.contains("must be passed back")
+        || (lower.contains("missing") && lower.contains("reasoning"))
+    {
+        return false;
+    }
+    [
+        "thinking",
+        "thought_signature",
+        "thought signature",
+        "encrypted_content",
+        "encrypted content",
+        "reasoning_content",
+        "reasoning content",
+        // OpenAI Responses: a replayed reasoning item without the item it
+        // must be followed by.
+        "reasoning item",
+        "type 'reasoning'",
+        "type \\\"reasoning\\\"",
+    ]
+    .iter()
+    .any(|k| lower.contains(k))
+}
+
+/// Whether `block` is replayed to the model that made it: signed thinking and
+/// redacted blocks on every protocol, unsigned thinking only as OpenAI chat
+/// reasoning text. Mirrors how `project` emits them.
+fn replayable(to: Projection<'_>, block: &ReasoningBlock) -> bool {
+    match block {
+        ReasoningBlock::Thinking {
+            signature: Some(_), ..
         }
-        _ => false,
+        | ReasoningBlock::Redacted { .. } => true,
+        ReasoningBlock::Thinking {
+            text,
+            signature: None,
+        } => to.protocol == Protocol::Openai && !text.is_empty(),
     }
 }
 
 /// Whether projecting `nodes` replays any thinking block.
 fn replays_reasoning(to: Projection<'_>, nodes: &[Node]) -> bool {
-    nodes.iter().any(|n| {
-        to.replayed(&n.body).iter().any(|b| {
-            !matches!(
-                b,
-                ReasoningBlock::Thinking {
-                    signature: None,
-                    ..
-                }
-            )
-        })
-    })
+    nodes
+        .iter()
+        .any(|n| to.replayed(&n.body).iter().any(|b| replayable(to, b)))
 }
 
 /// Who a request is projected for.
@@ -1759,12 +1794,75 @@ mod tests {
              (TYPE_BYTES),  (request_id: x)\"}}"
                 .into()
         )));
+        // Gemini's other spelling: spaced and capitalized.
+        assert!(rejects_reasoning(&LlmError::Stream(
+            "Status: 400 Bad Request\nBody: {\"error\":{\"message\":\
+             \"Thought signature is not valid\"}}"
+                .into()
+        )));
+        assert!(rejects_reasoning(&LlmError::Stream(
+            "Status: 400 Bad Request\nBody: {\"error\":{\"message\":\"Function call is \
+             missing a thought_signature in functionCall parts.\"}}"
+                .into()
+        )));
+        // OpenAI Responses' encrypted reasoning.
+        assert!(rejects_reasoning(&LlmError::Stream(
+            "Status: 400 Bad Request\nBody: {\"message\":\"Invalid 'encrypted_content'\"}".into()
+        )));
+        // An endpoint that refuses the replayed field.
+        assert!(rejects_reasoning(&LlmError::Stream(
+            "Status: 400 Bad Request\nBody: {\"error\":{\"message\":\
+             \"reasoning_content: extra fields not permitted\"}}"
+                .into()
+        )));
+        // OpenAI Responses: an orphaned replayed reasoning item.
+        assert!(rejects_reasoning(&LlmError::Stream(
+            "Status: 400 Bad Request\nBody: {\"error\":{\"message\":\"Item 'rs_1' of type \
+             'reasoning' was provided without its required following item.\"}}"
+                .into()
+        )));
+        // The opposite: DeepSeek wants it and the request lacks it. Retrying
+        // without reasoning would make this worse, not better.
+        assert!(!rejects_reasoning(&LlmError::Stream(
+            "Status: 400 Bad Request\nBody: {\"error\":{\"message\":\"The reasoning_content \
+             in the thinking mode must be passed back to the API\"}}"
+                .into()
+        )));
+        assert!(!rejects_reasoning(&LlmError::Stream(
+            "Status: 400 Bad Request\nBody: {\"error\":{\"message\":\"Missing \
+             reasoning_content field in the assistant message at message index 2\"}}"
+                .into()
+        )));
         assert!(!rejects_reasoning(&LlmError::Stream(
             "Status: 400 Bad Request: max_tokens".into()
         )));
         assert!(!rejects_reasoning(&LlmError::Stream(
             "Status: 529 thinking overloaded".into()
         )));
+        // A reasoning keyword in a non-400 body is not a reasoning rejection.
+        assert!(!rejects_reasoning(&LlmError::Stream(
+            "Status: 500 Internal Server Error: thinking backend down".into()
+        )));
+    }
+
+    #[test]
+    fn unsigned_openai_chat_reasoning_is_replayed() {
+        // OpenAI-compatible reasoners (DeepSeek, Kimi) take plain reasoning
+        // text back with no signature; that is a replay, not display only.
+        let nodes = vec![assistant(
+            vec![ReasoningBlock::Thinking {
+                text: "thought".into(),
+                signature: None,
+            }],
+            false,
+            &[],
+        )];
+        let openai = Projection {
+            protocol: Protocol::Openai,
+            model: "m",
+        };
+        assert!(replays_reasoning(openai, &nodes));
+        assert!(!replays_reasoning(ANTHROPIC, &nodes));
     }
 
     fn config() -> ModelConfig {

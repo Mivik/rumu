@@ -60,6 +60,15 @@ const NETWORK_TRANSIENTS: &[&str] = &[
 ];
 
 impl LlmError {
+    /// The HTTP status embedded in a flattened `Request`/`Stream` message, if
+    /// any.
+    pub fn status(&self) -> Option<u16> {
+        match self {
+            Self::Request(m) | Self::Stream(m) => embedded_status(m),
+            _ => None,
+        }
+    }
+
     /// Whether a failed attempt might succeed if replayed: rate limiting, a
     /// server-side error, or a network-level fault. Request validation
     /// (other 4xx), missing configuration and client-build failures are the
