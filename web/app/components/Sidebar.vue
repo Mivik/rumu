@@ -398,7 +398,7 @@ const otherLocale = computed<Locale>(
             }}</span>
           </button>
           <div
-            class="flex h-6 flex-none items-center opacity-0 transition-opacity duration-150 group-hover/head:opacity-100 focus-within:opacity-100"
+            class="flex h-6 flex-none items-center transition-opacity duration-150 pointer-fine:opacity-0 pointer-fine:group-hover/head:opacity-100 pointer-fine:focus-within:opacity-100"
           >
             <button
               type="button"

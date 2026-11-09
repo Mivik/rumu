@@ -1,6 +1,7 @@
 <script setup lang="ts">
 // Landing hero (no session open): the wordmark writes itself in, then a short
-// prompt. The composer sits right below it, in the middle of the sheet.
+// prompt. The composer sits right below it, in the middle of the sheet — on a
+// phone, at the page's foot.
 import { t } from '../../i18n'
 import { connected } from '../../lib/store'
 import RumuMark from '../brand/RumuMark.vue'

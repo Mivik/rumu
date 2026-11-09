@@ -603,6 +603,31 @@
     color: var(--ink);
   }
 
+  /* the open session's assistant and project, beside the view tabs: quiet
+   * labels that open their settings */
+  .scope-tag {
+    display: inline-flex;
+    min-width: 0;
+    max-width: 12rem;
+    align-items: center;
+    gap: 5px;
+    height: 24px;
+    padding: 0 8px;
+    border-radius: 999px;
+    font-size: var(--text-meta);
+    font-weight: 600;
+    color: var(--ink-3);
+    white-space: nowrap;
+    transition:
+      background-color 0.15s,
+      color 0.15s;
+  }
+
+  .scope-tag:hover {
+    background: var(--surface-2);
+    color: var(--ink);
+  }
+
   /* popover sections: a heading in ink with its count beside it */
   .panel-head {
     display: flex;
@@ -1649,6 +1674,16 @@
 
   .desk {
     padding-right: 0;
+  }
+}
+
+/* Touch keyboards: iOS zooms the page into any field set below 16px.
+ * Unlayered, so it outranks the type utilities on the fields. */
+@media (pointer: coarse) {
+  input,
+  textarea,
+  select {
+    font-size: max(16px, 1em);
   }
 }
 

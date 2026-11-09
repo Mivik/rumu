@@ -5,7 +5,9 @@
 // held to the room on its side), teleported to
 // <body> so no scroller or `overflow: hidden` sheet can clip it; it stays
 // hidden until placed, so it never flashes at 0,0. A pointer down outside
-// both, or Escape, closes it. Once placed, an `[autofocus]` inside takes focus.
+// both, or Escape, closes it. Once placed, an `[autofocus]` inside takes focus
+// — but for touch, where focus raises a keyboard over the panel. The trigger's
+// box may shrink, so a chip in a tight row truncates instead of overflowing.
 import { onBeforeUnmount, ref, watch } from 'vue'
 import type { Ref } from 'vue'
 import { autoUpdate, flip, offset, shift, size, useFloating } from '@floating-ui/vue'
@@ -100,7 +102,8 @@ watch(open, (v) => {
 watch(
   isPositioned,
   (v) => {
-    if (v) panel.value?.querySelector<HTMLElement>('[autofocus]')?.focus()
+    if (v && !matchMedia('(pointer: coarse)').matches)
+      panel.value?.querySelector<HTMLElement>('[autofocus]')?.focus()
   },
   { flush: 'post' },
 )
@@ -109,7 +112,7 @@ onBeforeUnmount(close)
 </script>
 
 <template>
-  <div ref="anchor" class="inline-flex">
+  <div ref="anchor" class="inline-flex min-w-0">
     <slot name="trigger" :open="open" :toggle="toggle" />
   </div>
   <Teleport :to="to || 'body'">

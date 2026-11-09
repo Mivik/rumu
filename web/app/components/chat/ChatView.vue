@@ -1,14 +1,20 @@
 <script setup lang="ts">
 // Center column, the one paper sheet on the canvas: the shell around the
 // open session's view. The shell owns the header (title, diagnostics, view
-// tabs) and the composer card at the foot; the view between them is
-// the conversation (ConversationView) or the raw trajectory (TraceView). The
+// tabs, and beside them who the session runs as and the project it works in)
+// and the composer card at the foot; the view between them is the
+// conversation (ConversationView) or the raw trajectory (TraceView). The
 // content column is capped at --col-max (main.css), centered. On phones and
 // in portrait the sheet drops its card edges and becomes the page (main.css).
-import { ref } from 'vue'
+//
+// The landing page picks the new session's assistant and project in a row of
+// their own above the composer. On a phone the composer sits at the foot of
+// the page, where it stays once the session opens; wider, the hero and the
+// composer are centered together.
+import { computed, ref } from 'vue'
 import { t } from '../../i18n'
 import { connected, isBusy, queuedPrompts, state } from '../../lib/store'
-import { layout, toggleSidebar } from '../../lib/layout'
+import { layout, openAssistantSettings, openProjectSettings, toggleSidebar } from '../../lib/layout'
 import CardDrawer from './CardDrawer.vue'
 import Composer from './Composer.vue'
 import ConversationView from './ConversationView.vue'
@@ -17,10 +23,26 @@ import TraceView from './TraceView.vue'
 import ViewTabs from './ViewTabs.vue'
 import Welcome from './Welcome.vue'
 import SessionBar from './SessionBar.vue'
+import SessionPickers from './SessionPickers.vue'
+import RumuCat from '../brand/RumuCat.vue'
 import RumuMark from '../brand/RumuMark.vue'
 import Icon from '../ui/Icon.vue'
 
 const composerEl = ref<HTMLElement | null>(null)
+
+/** The open session's assistant and project, by name. */
+const scope = computed(() => {
+  const s = state.session
+  if (!s) return null
+  const assistant = state.assistants.find((a) => a.id === s.assistant)
+  const project = s.project ? state.projects.find((p) => p.id === s.project) : null
+  return {
+    assistant: s.assistant,
+    assistantName: assistant?.name ?? s.assistant.slice(0, 8),
+    project: s.project ?? null,
+    projectName: project?.name ?? s.project ?? null,
+  }
+})
 
 /** The view reads the composer through a getter: a template ref passed
  *  straight through a prop trips vue-tsc's HTMLElement unwrap, hence the
@@ -79,7 +101,30 @@ function composerRoot(): HTMLElement | null {
           <SessionBar v-if="state.sessionId" />
         </span>
       </div>
-      <ViewTabs v-if="state.sessionId" />
+      <div v-if="state.sessionId" class="flex gap-4">
+        <ViewTabs class="flex-none" />
+        <span v-if="scope" class="ml-auto flex min-w-0 items-center gap-1 pb-1.5">
+          <button
+            type="button"
+            class="scope-tag"
+            :title="t('chat.newSession.assistant')"
+            @click="openAssistantSettings(scope.assistant)"
+          >
+            <RumuCat :size="13" :paper="false" class="flex-none" />
+            <span class="truncate">{{ scope.assistantName }}</span>
+          </button>
+          <button
+            v-if="scope.project"
+            type="button"
+            class="scope-tag"
+            :title="t('chat.sidebar.projectSettings')"
+            @click="openProjectSettings(scope.project)"
+          >
+            <Icon name="mount" :size="13" class="flex-none text-tool" />
+            <span class="truncate">{{ scope.projectName }}</span>
+          </button>
+        </span>
+      </div>
     </header>
 
     <Transition
@@ -93,13 +138,14 @@ function composerRoot(): HTMLElement | null {
       <div
         v-if="!state.sessionId && !state.booting"
         key="landing"
-        class="flex min-h-0 flex-1 flex-col items-center justify-center overflow-y-auto px-4 pb-10"
+        class="flex min-h-0 flex-1 flex-col items-center overflow-y-auto px-3 pt-1 pb-3 sm:justify-center sm:px-4 sm:pb-10"
       >
-        <div class="w-full max-w-[var(--col-max)]">
-          <Welcome />
-          <div class="mt-8">
-            <Composer />
+        <div class="flex w-full max-w-[var(--col-max)] flex-1 flex-col sm:flex-none">
+          <Welcome class="my-auto sm:my-0" />
+          <div class="mt-8 mb-2 flex min-w-0 items-center gap-1.5 px-1.5">
+            <SessionPickers />
           </div>
+          <Composer />
         </div>
       </div>
 

@@ -28,6 +28,13 @@ export default defineNuxtConfig({
       title: 'rumu',
       htmlAttrs: { lang: 'en' },
       meta: [
+        // resizes-content: a touch keyboard shrinks the page (Chrome on
+        // Android), so the composer at its foot rises above the keyboard
+        // instead of under it.
+        {
+          name: 'viewport',
+          content: 'width=device-width, initial-scale=1, interactive-widget=resizes-content',
+        },
         { name: 'color-scheme', content: 'light dark' },
         { name: 'apple-mobile-web-app-title', content: 'rumu' },
       ],

@@ -3,10 +3,12 @@
 // of the landing state — in which case sending the first message creates the
 // session (store.sendPrompt does that).
 //
-// A sheet of paper with the writing on top and a footer that says where the
-// prompt will go: on the landing page who it runs as and the project it works
-// in; always the model it runs on, on the left; its reasoning effort and the
-// send button on the right — solid coral once there is something to send.
+// A sheet of paper with the writing on top and a footer that says how the
+// prompt runs: the model on the left; its reasoning effort and the send button
+// on the right — solid coral once there is something to send. Who a new
+// session runs as and where it works are picked above the sheet
+// (SessionPickers), so the footer is the same on the landing page and in a
+// session.
 // While rumu works, sending steers the turn and a stop button joins it.
 //
 // A tool call waiting on the user's approval unfolds from the top of the
@@ -28,7 +30,6 @@ import Icon from '../ui/Icon.vue'
 import DecisionPanel from './DecisionPanel.vue'
 import EffortPicker from './EffortPicker.vue'
 import ModelPicker from './ModelPicker.vue'
-import SessionPickers from './SessionPickers.vue'
 
 /** One image being attached: the file, its local preview, and where its
  * upload stands. */
@@ -280,7 +281,6 @@ const placeholder = computed(() => {
       @paste="onPaste"
     />
     <div class="flex min-w-0 items-center gap-1.5 pt-0.5 pr-2 pb-2 pl-3" @click.self="textareaEl?.focus()">
-      <SessionPickers v-if="!state.sessionId" />
       <ModelPicker />
       <span class="flex-1" @click.self="textareaEl?.focus()" />
       <input
