@@ -385,6 +385,53 @@ pub struct Invoke {
     pub blocked: Option<String>,
 }
 
+/// How an artifact renders, picked from its file extension.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize, ts_rs::TS)]
+#[serde(rename_all = "snake_case")]
+#[ts(export)]
+pub enum ArtifactKind {
+    /// A page, run in a sandboxed frame with no network.
+    Html,
+    Markdown,
+    Svg,
+    /// Any other text, highlighted by its extension.
+    Code,
+}
+
+impl ArtifactKind {
+    /// The kind of a file named `name`.
+    pub fn of(name: &str) -> Self {
+        let ext = name.rsplit_once('.').map(|(_, e)| e.to_ascii_lowercase());
+        match ext.as_deref() {
+            Some("html" | "htm") => Self::Html,
+            Some("md" | "markdown") => Self::Markdown,
+            Some("svg") => Self::Svg,
+            _ => Self::Code,
+        }
+    }
+}
+
+/// Payload of a `show` result (v1): a snapshot of a workspace file shown to
+/// the user. The bytes are a blob, so the branch keeps this version whatever
+/// later happens to the file; the snapshots of one `path` on a path are its
+/// versions.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, ts_rs::TS)]
+#[ts(export)]
+pub struct Artifact {
+    /// The file it was taken from, workspace-qualified.
+    pub path: String,
+    pub title: String,
+    pub kind: ArtifactKind,
+    /// Lowercase hex SHA-256 of the UTF-8 bytes in the blob store.
+    pub hash: String,
+    pub size: u64,
+}
+
+impl Structured for Artifact {
+    const TAG: &'static str = "artifact";
+    const V: u32 = 1;
+}
+
 /// Payload of the `workspace.use` marker (v1).
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, ts_rs::TS)]
 #[ts(export)]

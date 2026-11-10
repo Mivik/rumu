@@ -28,6 +28,7 @@ import type {
 } from '../types'
 import { MAX_TRACE, state } from './state'
 import { applyDelta } from './stream'
+import { artifactOf } from '../artifacts'
 import { closeSession, forgetSession, markSeen, openSession, refreshCards, refreshLists } from './sessions'
 import { onSettingsUpdated, refreshSettings } from './models'
 import type { SettingsInfo } from '../generated/SettingsInfo'
@@ -85,6 +86,17 @@ function onNodeAppended(p: NodeAppendedPush): void {
     if (b && branch === state.activeBranch && node.parent === b.head) {
       b.head = node.id
     }
+  }
+  // A file the model just showed opens beside the chat on a wide screen, or
+  // replaces the one already open.
+  if (
+    branch === state.activeBranch &&
+    node.body.type === 'tool_result' &&
+    !node.body.is_error &&
+    artifactOf(node.body.content) &&
+    (state.artifact || window.matchMedia('(min-width: 80rem)').matches)
+  ) {
+    state.artifact = node.id
   }
   // The finalized Assistant node replaces the streaming buffer.
   if (node.body.type === 'assistant') delete state.deltas[branch]

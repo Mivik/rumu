@@ -9,7 +9,9 @@ use axum::Router;
 use axum::body::Bytes;
 use axum::extract::ws::{Message, WebSocket, WebSocketUpgrade};
 use axum::extract::{DefaultBodyLimit, Path, Query, State};
-use axum::http::header::{CACHE_CONTROL, CONTENT_TYPE, HOST, ORIGIN};
+use axum::http::header::{
+    CACHE_CONTROL, CONTENT_SECURITY_POLICY, CONTENT_TYPE, HOST, ORIGIN, X_CONTENT_TYPE_OPTIONS,
+};
 use axum::http::{HeaderMap, StatusCode, Uri};
 use axum::response::{IntoResponse, Response};
 use axum::routing::{get, post};
@@ -229,7 +231,10 @@ async fn blob_upload(
 }
 
 /// `GET /blobs/{hash}`: the stored bytes. A blob never changes once written,
-/// so the response is immutable and caches forever.
+/// so the response is immutable and caches forever. An image is served as
+/// itself; any other blob (an artifact snapshot) only ever as sandboxed plain
+/// text, so model-written HTML never runs on rumu's origin — the web renders
+/// it in a sandboxed frame instead.
 async fn blob_get(
     State(state): State<AppState>,
     headers: HeaderMap,
@@ -238,25 +243,33 @@ async fn blob_get(
     if !origin_allowed(&headers) {
         return (StatusCode::FORBIDDEN, "cross-origin blob refused\n").into_response();
     }
-    // `describe` re-derives MIME and dimensions from the stored bytes; a hash
-    // from the wire is trusted for nothing but addressing the blob.
-    match state.blobs.describe(&hash, None) {
-        Ok(attachment) => match state.blobs.get(&hash) {
-            Ok(bytes) => (
-                [
-                    (CONTENT_TYPE, attachment.mime),
-                    (
-                        CACHE_CONTROL,
-                        "public, max-age=31536000, immutable".to_owned(),
-                    ),
-                ],
-                bytes,
-            )
-                .into_response(),
-            Err(e) => blob_error(&e),
-        },
-        Err(e) => blob_error(&e),
-    }
+    let bytes = match state.blobs.get(&hash) {
+        Ok(bytes) => bytes,
+        Err(e) => return blob_error(&e),
+    };
+    // `describe` re-derives the MIME from the stored bytes; a hash from the
+    // wire is trusted for nothing but addressing the blob.
+    let mime = if rumu_blob::is_image(&bytes) {
+        match state.blobs.describe(&hash, None) {
+            Ok(attachment) => attachment.mime,
+            Err(e) => return blob_error(&e),
+        }
+    } else {
+        "text/plain; charset=utf-8".to_owned()
+    };
+    (
+        [
+            (CONTENT_TYPE, mime),
+            (
+                CACHE_CONTROL,
+                "public, max-age=31536000, immutable".to_owned(),
+            ),
+            (X_CONTENT_TYPE_OPTIONS, "nosniff".to_owned()),
+            (CONTENT_SECURITY_POLICY, "sandbox".to_owned()),
+        ],
+        bytes,
+    )
+        .into_response()
 }
 
 /// The error response of a blob route: `{"error": message}` with the status

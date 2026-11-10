@@ -194,6 +194,8 @@ const initial = {
   drawers: [] as CardWindow[],
   /** The image shown full-size (opened by any thumbnail). */
   lightbox: null as LightboxImage | null,
+  /** The open artifact: the `show` result node it was recorded by. */
+  artifact: null as NodeId | null,
 }
 
 // Cast off Vue's `UnwrapNestedRefs`: the wire payloads embed a recursive JSON

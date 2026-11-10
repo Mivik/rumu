@@ -6,6 +6,7 @@
 // per-site nudging. Icon-only containers set `line-height: 0` to centre it on its own box.
 import {
   mdiAccountOutline,
+  mdiApplicationOutline,
   mdiArrowLeft,
   mdiArrowRight,
   mdiArrowTopRight,
@@ -16,12 +17,14 @@ import {
   mdiChevronRight,
   mdiClose,
   mdiCloseCircleOutline,
+  mdiCodeTags,
   mdiCogOutline,
   mdiCreationOutline,
   mdiCompassOutline,
   mdiConsole,
   mdiContentCopy,
   mdiDotsHorizontal,
+  mdiDownload,
   mdiFileOutline,
   mdiFolderOutline,
   mdiGauge,
@@ -89,6 +92,9 @@ const paths: Record<string, string> = {
   settings: mdiCogOutline,
   chat: mdiMessageTextOutline,
   trace: mdiTimelineTextOutline,
+  artifact: mdiApplicationOutline,
+  code: mdiCodeTags,
+  download: mdiDownload,
 }
 </script>
 

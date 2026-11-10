@@ -24,6 +24,7 @@ import { vEnter } from '../../lib/motion'
 import Icon from '../ui/Icon.vue'
 import RumuCat from '../brand/RumuCat.vue'
 import ActivityRun from './ActivityRun.vue'
+import ArtifactCard from './ArtifactCard.vue'
 import BranchSwitcher from './BranchSwitcher.vue'
 import ContextPills from './ContextPills.vue'
 import RunningTools from './RunningTools.vue'
@@ -165,6 +166,7 @@ const idle = computed(() => {
         :steps="item.steps"
         :live="live && !idle && i === group.items.length - 1"
       />
+      <ArtifactCard v-else-if="item.kind === 'artifact'" v-enter="'enter-fade'" :node="item.node" />
       <div
         v-else-if="item.kind === 'reset'"
         :data-path-node="item.node.id"

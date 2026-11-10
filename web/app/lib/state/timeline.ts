@@ -10,6 +10,7 @@ import { computed } from 'vue'
 import type { Node, ToolCall } from '../types'
 import { CATALOG_TAG, TURN_ERROR_TAG, reasoningText } from '../types'
 import { contentText } from '../util'
+import { artifactOf } from '../artifacts'
 import { callsOnPath, pathNodes } from './derived'
 import { state } from './state'
 
@@ -90,7 +91,14 @@ export interface GroupResetItem {
   kind: 'reset'
   node: Node
 }
-export type GroupItem = GroupTextItem | GroupActivityItem | GroupContextItem | GroupResetItem
+/** A file the model showed the user (a `show` result): its own card in the
+ *  turn, not a folded tool row. */
+export interface GroupArtifactItem {
+  kind: 'artifact'
+  node: Node
+}
+export type GroupItem =
+  GroupTextItem | GroupActivityItem | GroupContextItem | GroupResetItem | GroupArtifactItem
 
 /** Append a step to the group's trailing activity run (opening one if needed). */
 function pushActivity(g: TimelineGroup, step: ActivityStep): void {
@@ -206,6 +214,10 @@ export const timeline = computed<TimelineEntry[]>(() => {
       if (ctx.length) {
         moveNotes(g, ctx)
         ctx = []
+      }
+      if (!b.is_error && artifactOf(b.content)) {
+        g.items.push({ kind: 'artifact', node: n })
+        continue
       }
       const paired = calls.get(b.call_id) ?? null
       const row: ToolRowInfo = {

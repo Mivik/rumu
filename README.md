@@ -92,6 +92,12 @@ session. Its branches and sub-agents share it. It is always addressable, the
 default when the session has no project workspace, local only, and never
 synced or versioned: use it for throwaway files.
 
+To show the user a page, document or diagram, the model writes it to a file
+(usually in `@scratch`) and calls `show`. The result keeps a snapshot of the
+file in the blob store, so each branch keeps the versions it showed, however
+the file changes later. The web renders the snapshot beside the chat: HTML in a
+sandboxed frame with no network, plus Markdown, SVG and highlighted code.
+
 A **deck** is a set of cards about one subject, kept as a bare git repository
 at `RUMU_HOME/decks/<name>/`; see [docs/decks.md](docs/decks.md). Its identity
 and defaults live in `deck.yaml`. rumu is the only writer: every card write is

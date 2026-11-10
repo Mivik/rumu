@@ -45,7 +45,7 @@ use std::path::{Path, PathBuf};
 use std::sync::Mutex;
 
 use rumu_core::{
-    Branch, BranchId, BranchStatus, IoError, Node, NodeBody, NodeId, SessionId, SessionInfo,
+    Artifact, Branch, BranchId, BranchStatus, IoError, Node, NodeBody, NodeId, SessionId, SessionInfo,
     Timestamp,
 };
 use serde::{Deserialize, Serialize};
@@ -410,8 +410,9 @@ impl Store {
         })
     }
 
-    /// Every blob hash referenced by a node of any session — every `Content`
-    /// of every body variant, on every branch, referenced or not. This is the
+    /// Every blob hash referenced by a node of any session — the attachments
+    /// and `show` snapshot of every `Content` of every body variant, on every
+    /// branch, referenced or not. This is the
     /// live set the blob store's GC keeps. An unreadable session is an error
     /// (its references are unknowable, so GC must not run past it).
     pub fn referenced_blobs(&self) -> Result<HashSet<String>> {
@@ -428,6 +429,8 @@ impl Store {
                             | NodeBody::Note { content, .. } => content,
                         };
                         hashes.extend(content.attachments.iter().map(|a| a.hash.clone()));
+                        let artifact = content.data.as_ref().and_then(|d| d.decode::<Artifact>());
+                        hashes.extend(artifact.map(|a| a.hash));
                     }
                 }
                 Entry::Corrupt(msg) => return Err(unreadable(sid, msg)),
@@ -1044,7 +1047,14 @@ mod tests {
                     NodeBody::ToolResult {
                         call_id: "c1".into(),
                         content: rumu_core::Content::text("shot")
-                            .with_attachments([attachment("cc")]),
+                            .with_attachments([attachment("cc")])
+                            .with_data(&Artifact {
+                                path: "@scratch:a.html".into(),
+                                title: "a.html".into(),
+                                kind: rumu_core::ArtifactKind::Html,
+                                hash: "ff".into(),
+                                size: 1,
+                            }),
                         is_error: false,
                         invoke: None,
                     },
@@ -1066,7 +1076,7 @@ mod tests {
             let hashes = store.referenced_blobs().unwrap();
             assert_eq!(
                 hashes,
-                ["aa", "bb", "cc", "dd", "ee"]
+                ["aa", "bb", "cc", "dd", "ee", "ff"]
                     .into_iter()
                     .map(str::to_owned)
                     .collect::<HashSet<_>>()
@@ -1076,7 +1086,7 @@ mod tests {
 
         // The same set comes back from a reopened (re-scanned) store.
         let store = Store::open(&dir).unwrap();
-        assert_eq!(store.referenced_blobs().unwrap().len(), 5);
+        assert_eq!(store.referenced_blobs().unwrap().len(), 6);
         assert!(store.get_session(&sid).unwrap().is_some());
         std::fs::remove_dir_all(&dir).ok();
     }

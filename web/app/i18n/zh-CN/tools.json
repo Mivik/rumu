@@ -16,7 +16,8 @@
     "other": "调用 {count} 个工具",
     "catalog": "查阅了卡片目录",
     "thoughtFor": "思考了 {duration}",
-    "thinking": "思考中"
+    "thinking": "思考中",
+    "show": "展示了 {count} 个文件"
   },
   "verb": {
     "read": "读取",
@@ -32,7 +33,8 @@
     "search": "搜索",
     "workspaceUse": "切换到",
     "workspaceList": "列出",
-    "other": "调用"
+    "other": "调用",
+    "show": "展示了"
   },
   "count": {
     "entries": "{count} 个条目",

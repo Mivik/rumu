@@ -8,7 +8,7 @@ use std::time::Duration;
 use rumu_cards::usage::CardOp;
 use rumu_cards::{Cards, card};
 use rumu_core::{
-    Effect, INVOKE_OUTPUT_LIMIT, Manifest, PathState, Progress, RUMU_WORKSPACE, Structured,
+    Artifact, ArtifactKind, Effect, INVOKE_OUTPUT_LIMIT, Manifest, PathState, Progress, RUMU_WORKSPACE, Structured,
     ToolError, ToolOutput, ToolResult, ToolResultExt, ToolSpec, Utf8TypedPathBuf, Utf8UnixPath,
     Utf8UnixPathBuf, Workspace, WorkspaceUse, parse_args, resolve_state, tool_schema,
     truncate_middle,
@@ -90,6 +90,8 @@ impl From<BashOutcome> for ToolOutput {
 const BASH_TIMEOUT_DEFAULT: u64 = 60;
 const BASH_TIMEOUT_MAX: u64 = 600;
 pub(super) const LIST_LIMIT: usize = 100;
+/// The largest file `show` snapshots.
+const ARTIFACT_MAX_BYTES: usize = 5 * 1024 * 1024;
 
 const INSTRUCTIONS: &str = "Files live in workspaces — one project each, on this machine or a \
 remote one over ssh. Every file tool takes one `path`: a path in the default workspace (relative \
@@ -102,6 +104,10 @@ file tools. Read-only workspaces refuse writes and bash.\n\n\
 sub-agents and deleted with the session: the default when the session has no project workspace. \
 Use it for throwaway work (scripts, downloads, clones, generated files); what should outlive the \
 session belongs in a card or a project workspace.\n\n\
+To give the user a page, document, diagram or code to look at, write it to a file (usually in \
+`@scratch`) and `show` it: the user sees that version rendered beside the chat. After changing \
+the file, `show` it again for a new version. HTML runs sandboxed with no network: inline its \
+scripts, styles and images.\n\n\
 The `@rumu` workspace holds rumu's own data and has no bash. `@rumu:/cards/<mount>/<path>` are \
 cards of the decks mounted on this branch (`/cards/self` is your own deck); `read` returns an \
 editable view (YAML frontmatter, then the body), and writes are refused if the card changed \
@@ -173,6 +179,15 @@ struct BashArgs {
     workspace: Option<String>,
     /// seconds, default 60, max 600
     timeout: Option<u64>,
+}
+
+#[derive(Debug, Deserialize, JsonSchema)]
+#[serde(deny_unknown_fields)]
+struct ShowArgs {
+    /// file path (workspace-qualified, or relative to the default workspace's root)
+    path: String,
+    /// display title; default: the file name
+    title: Option<String>,
 }
 
 #[derive(Debug, Deserialize, JsonSchema)]
@@ -278,6 +293,18 @@ stdout+stderr (truncated to ~20k chars) and the exit code. Default timeout 60s (
                 background: true,
                 output_schema: Some(tool_schema::<BashResult>()),
                 parallel: false,
+            },
+            ToolSpec {
+                name: "show".into(),
+                description: "Show a text file to the user as an artifact: a snapshot rendered \
+beside the chat by its extension (`.html` runs sandboxed with no network; `.md`, `.svg`; \
+anything else as highlighted code). Same `path` addressing as `read`; not on `@rumu`. Showing \
+the same path again adds a version."
+                    .into(),
+                schema: tool_schema::<ShowArgs>(),
+                background: false,
+                output_schema: None,
+                parallel: true,
             },
             ToolSpec {
                 name: "search".into(),
@@ -561,6 +588,7 @@ pub(super) async fn call(
         "workspace_use" => p.tool_use(state, &args, cx).await.finish(),
         "card_mount" => p.tool_card_mount(state, &args, cx).await.finish(),
         "search" => p.tool_search(state, &args, cx).await.finish(),
+        "show" => p.tool_show(state, &args).await.finish(),
         _ => Ok(ToolOutput::err(format!(
             "workspace plugin has no tool `{name}`"
         ))),
@@ -631,6 +659,56 @@ impl WorkspacePlugin {
             attachment.width, attachment.height, attachment.size
         ))
         .with_attachments([attachment]))
+    }
+
+    /// `show`: snapshot a text file into the blob store and record it as an
+    /// [`Artifact`] on the result.
+    async fn tool_show(&self, state: &PathState, args: &Value) -> ToolResult<ToolOutput> {
+        let args: ShowArgs = parse_args("show", args)?;
+        let Target::Real { ws, abs } = target_of(state, &args.path)? else {
+            return Err(ToolError::model(
+                "`show` takes a workspace file; write the content to one (e.g. in `@scratch`) first",
+            ));
+        };
+        let at = display(&ws, &abs);
+        let bytes = self
+            .backend_for(&ws)
+            .read_bytes(&abs)
+            .await
+            .map_err(|e| backend_err("show", Some(at.clone()), e))?;
+        if bytes.len() > ARTIFACT_MAX_BYTES {
+            return Err(ToolError::model(format!(
+                "show {at}: {} bytes is over the {ARTIFACT_MAX_BYTES}-byte limit",
+                bytes.len()
+            )));
+        }
+        if std::str::from_utf8(&bytes).is_err() {
+            return Err(ToolError::model(format!(
+                "show {at}: not a UTF-8 text file (images: `read` them)"
+            )));
+        }
+        let hash = self
+            .blobs()
+            .and_then(|blobs| blobs.put(&bytes))
+            .map_err(|e| backend_err("show", Some(at.clone()), e))?;
+        let name = abs.file_name().unwrap_or(at.as_str()).to_owned();
+        let title = args
+            .title
+            .map(|t| t.trim().to_owned())
+            .filter(|t| !t.is_empty())
+            .unwrap_or_else(|| name.clone());
+        let artifact = Artifact {
+            kind: ArtifactKind::of(&name),
+            path: at,
+            title,
+            hash,
+            size: bytes.len() as u64,
+        };
+        Ok(ToolOutput::ok(format!(
+            "showed {} to the user ({} bytes)",
+            artifact.path, artifact.size
+        ))
+        .with_data(&artifact))
     }
 
     /// Shared write preflight for real workspaces: the read-only check.

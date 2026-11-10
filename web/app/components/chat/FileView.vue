@@ -14,6 +14,8 @@ const props = defineProps<{
   /** The called path (may carry a `<ws>:` prefix and a `#L` anchor) — picks the grammar. */
   path: string
   args: Record<string, unknown> | null
+  /** Fill the container and scroll there, instead of capping at 360px. */
+  fill?: boolean
 }>()
 
 const ANCHOR = /#L(\d+)(?:-L\d+)?$/
@@ -41,7 +43,7 @@ const html = computed(() =>
 </script>
 
 <template>
-  <div class="fview">
+  <div class="fview" :class="{ 'is-fill': fill }">
     <div v-if="lines.length" class="fview-body">
       <div class="fview-num">{{ numbers }}</div>
       <pre class="fview-code" v-html="html"></pre>
@@ -66,6 +68,15 @@ const html = computed(() =>
   display: flex;
   max-height: 360px;
   overflow: auto;
+}
+
+.is-fill {
+  border-top: 0;
+}
+.is-fill .fview-body {
+  max-height: none;
+  min-height: 100%;
+  padding-top: 10px;
 }
 
 .fview-num {

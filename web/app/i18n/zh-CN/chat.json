@@ -123,5 +123,17 @@
     "copy": "复制 JSON",
     "copied": "已复制 JSON",
     "more": "展开全部 {n} 个字符"
+  },
+  "artifact": {
+    "open": "打开 {title}",
+    "close": "关闭",
+    "version": "v{n}",
+    "versions": "版本",
+    "source": "源码",
+    "rendered": "渲染",
+    "copy": "复制",
+    "copied": "已复制 {title}",
+    "download": "下载",
+    "loadFailed": "无法加载这个版本"
   }
 }

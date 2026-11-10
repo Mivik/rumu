@@ -109,6 +109,7 @@ function callFull(name: string, call: Call): string {
     case 'write':
     case 'edit':
     case 'list':
+    case 'show':
       // `proj:` / `@rumu:` (empty rest) is that workspace's root.
       return str('path') || (name === 'list' ? 'root' : '')
     case 'bash': {
@@ -142,6 +143,7 @@ function callShort(name: string, call: Call): string {
     case 'read':
     case 'write':
     case 'edit':
+    case 'show':
       return str('path') ? baseName(str('path')) : ''
     case 'list': {
       const path = str('path').replace(/:$/, '')
@@ -373,11 +375,12 @@ const KIND_KEYS: Record<string, string> = {
   agent: 'agent',
   search: 'search',
   workspace_use: 'workspaceUse',
+  show: 'show',
 }
 
 /** A lone call's phrase names its target: "read store.ts". A command is
  * left to its row's `$` line ("ran 1 command"). */
-const TARGETED = new Set(['read', 'write', 'edit', 'list', 'search', 'workspace_use'])
+const TARGETED = new Set(['read', 'write', 'edit', 'list', 'search', 'workspace_use', 'show'])
 
 function kindKey(v: ToolRowView): string {
   if (v.toolCardId) return `${v.name}:card`

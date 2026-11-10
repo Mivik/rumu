@@ -123,5 +123,17 @@
     "copy": "Copy JSON",
     "copied": "Copied JSON",
     "more": "Show all {n} characters"
+  },
+  "artifact": {
+    "open": "Open {title}",
+    "close": "Close",
+    "version": "v{n}",
+    "versions": "Versions",
+    "source": "Source",
+    "rendered": "Rendered",
+    "copy": "Copy",
+    "copied": "Copied {title}",
+    "download": "Download",
+    "loadFailed": "Couldn't load this version"
   }
 }

@@ -551,6 +551,55 @@ async fn image_read_ingests_and_attaches() {
 }
 
 #[tokio::test]
+async fn show_snapshots_a_file_as_an_artifact() {
+    let dir = tempfile::tempdir().unwrap();
+    let (plugin, _host, cx, home) = setup(dir.path(), true);
+    std::fs::write(dir.path().join("page.html"), "<p>v1</p>").unwrap();
+
+    let out = plugin
+        .call_tool("show", json!({ "path": "page.html", "title": " Demo " }), &cx)
+        .await
+        .unwrap();
+    assert!(!out.is_error, "{}", out.content.text);
+    assert_eq!(out.content.text, "showed proj:page.html to the user (9 bytes)");
+    let a: rumu_core::Artifact = out.content.data.as_ref().unwrap().decode().unwrap();
+    assert_eq!(a.path, "proj:page.html");
+    assert_eq!(a.title, "Demo");
+    assert_eq!(a.kind, rumu_core::ArtifactKind::Html);
+    assert_eq!(a.size, 9);
+    // The snapshot outlives the file (read-only workspaces can show too).
+    std::fs::remove_file(dir.path().join("page.html")).unwrap();
+    let blob = std::fs::read(home.path().join("blobs").join(&a.hash)).unwrap();
+    assert_eq!(blob, b"<p>v1</p>");
+
+    // The title defaults to the file name; the extension picks the kind.
+    std::fs::write(dir.path().join("notes.MD"), "# hi").unwrap();
+    let out = plugin
+        .call_tool("show", json!({ "path": "notes.MD" }), &cx)
+        .await
+        .unwrap();
+    let a: rumu_core::Artifact = out.content.data.as_ref().unwrap().decode().unwrap();
+    assert_eq!((a.title.as_str(), a.kind), ("notes.MD", rumu_core::ArtifactKind::Markdown));
+
+    // Missing files, binary files and `@rumu` are refused.
+    for (path, needle) in [
+        ("gone.txt", "show proj:gone.txt: "),
+        ("bin.dat", "not a UTF-8 text file"),
+        ("@rumu:/cards/self/x", "takes a workspace file"),
+    ] {
+        if path == "bin.dat" {
+            std::fs::write(dir.path().join(path), [0xff, 0xfe, 0x00]).unwrap();
+        }
+        let out = plugin
+            .call_tool("show", json!({ "path": path }), &cx)
+            .await
+            .unwrap();
+        assert!(out.is_error && out.content.text.contains(needle), "{path}: {}", out.content.text);
+        assert!(out.content.data.is_none());
+    }
+}
+
+#[tokio::test]
 async fn read_only_and_bash_behaviour() {
     let dir = tempfile::tempdir().unwrap();
     let (plugin, _host, cx, _home) = setup(dir.path(), true);

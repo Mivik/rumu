@@ -16,7 +16,8 @@
     "other": "called {count} tool | called {count} tools",
     "catalog": "looked through the card catalog",
     "thoughtFor": "thought for {duration}",
-    "thinking": "thinking"
+    "thinking": "thinking",
+    "show": "showed {count} file | showed {count} files"
   },
   "verb": {
     "read": "read",
@@ -32,7 +33,8 @@
     "search": "searched",
     "workspaceUse": "switched to",
     "workspaceList": "listed",
-    "other": "called"
+    "other": "called",
+    "show": "showed"
   },
   "count": {
     "entries": "{count} entry | {count} entries",
