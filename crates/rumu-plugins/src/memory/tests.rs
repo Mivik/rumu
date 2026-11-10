@@ -1,5 +1,5 @@
-//! Tests for the memory plugin: the built-in hooks (catalog, scope cards,
-//! update notices) and revision-aware imports.
+//! Tests for the memory plugin: the built-in hooks (catalog, recall, update
+//! notices) and revision-aware imports.
 
 use super::*;
 use crate::testutil::{FakeRuntime, fixture_copy};
@@ -144,7 +144,6 @@ async fn manifest_lists_the_built_in_hooks() {
             ("assistant-intro", i32::MAX - 2),
             ("card-catalog", i32::MAX - 1),
             ("card-updates", i32::MAX),
-            ("related-cards", 0),
             ("recall", 0)
         ]
     );
@@ -420,155 +419,6 @@ async fn catalog_notes_are_per_deck_and_injected_once() {
         .await
         .unwrap();
     assert!(out.effects.is_empty(), "{:?}", out.effects);
-}
-
-// ---------- scope cards (related-cards) ----------
-
-/// A home with the given `(id, scope, body)` cards, the plugin, and a host
-/// whose path state has a workspace `proj` rooted at `<home>/proj`.
-async fn scope_setup(
-    cards: &[(&str, &str, &str)],
-) -> (tempfile::TempDir, MemoryPlugin, std::sync::Arc<FakeRuntime>) {
-    let dir = tempfile::tempdir().unwrap();
-    crate::testutil::main_deck(dir.path());
-    for (id, scope, body) in cards {
-        crate::testutil::put_card(
-            dir.path(),
-            "main",
-            id,
-            format!("---\ntitle: {id}\nscope: {scope}\n---\n{body}"),
-        );
-    }
-    let plugin = memory_plugin(dir.path());
-    let host = FakeRuntime::arc();
-    host.state.lock().unwrap().workspaces = vec![rumu_core::Workspace {
-        name: "proj".into(),
-        ssh: None,
-        root: under(dir.path(), "").trim_end_matches('/').into(),
-        read_only: false,
-    }];
-    (dir, plugin, host)
-}
-
-/// A successful `tool.post` event as the kernel's field extraction would
-/// produce it.
-fn tool_post(tool: &str, workspace: &str, paths: Vec<String>) -> Event {
-    let mut ev = event("tool.post");
-    ev.fields.tool = Some(tool.into());
-    if tool == "workspace_use" {
-        // `workspace_use` carries its target in args, not fields.
-        ev.payload = json!({ "args": { "name": workspace }, "is_error": false });
-    } else {
-        ev.payload = json!({ "args": {}, "is_error": false });
-        ev.fields.workspace = Some(workspace.into());
-    }
-    ev.fields.paths = paths;
-    ev
-}
-
-fn under(home: &std::path::Path, rel: &str) -> String {
-    home.join("proj").join(rel).to_string_lossy().into_owned()
-}
-
-async fn related(
-    plugin: &MemoryPlugin,
-    host: &std::sync::Arc<FakeRuntime>,
-    ev: &Event,
-) -> Vec<String> {
-    let out = plugin
-        .on_hook("related-cards", ev, &host.cx())
-        .await
-        .unwrap();
-    // The kernel's safe point: later calls see these notes on the path.
-    host.apply_output(
-        "call-1",
-        &rumu_core::ToolOutput::ok("ok").with_effects(out.effects.clone()),
-    );
-    out.effects
-        .iter()
-        .map(|e| {
-            let import: usage::CardImport = e.decode().expect("memory.import payload");
-            let _ = import;
-            let text = e.text.replacen("# self/", "# ", 1);
-            let path = text
-                .lines()
-                .find_map(|l| l.strip_prefix("# "))
-                .unwrap_or_default()
-                .to_owned();
-            format!("{path}: {text}")
-        })
-        .collect()
-}
-
-#[tokio::test]
-async fn related_cards_follow_workspace_and_path_touches() {
-    let (home, plugin, host) = scope_setup(&[
-        ("whole", "proj", "workspace notes\n"),
-        ("tree", "[proj:crates/rumu-kernel/**]", "tree notes\n"),
-        (
-            "file",
-            "[proj:crates/rumu-kernel/src/dispatch.rs]",
-            "file notes\n",
-        ),
-        ("ghost", "[ghost:crates/**]", "ghost notes\n"),
-    ])
-    .await;
-
-    // A workspace touch (bash) imports the whole-workspace card only.
-    let ev = tool_post("bash", "proj", vec![]);
-    assert_eq!(
-        related(&plugin, &host, &ev).await,
-        ["whole: # whole\nworkspace notes\n"]
-    );
-
-    // A file touch imports the rest, most specific first; `whole` is
-    // already on the path at this revision, `ghost` names no such workspace.
-    let ev = tool_post(
-        "read",
-        "proj",
-        vec![under(home.path(), "crates/rumu-kernel/src/dispatch.rs")],
-    );
-    assert_eq!(
-        related(&plugin, &host, &ev).await,
-        ["file: # file\nfile notes\n", "tree: # tree\ntree notes\n"]
-    );
-    // Touching it again is silent.
-    assert!(related(&plugin, &host, &ev).await.is_empty());
-}
-
-#[tokio::test]
-async fn related_cards_on_workspace_use() {
-    let (_home, plugin, host) = scope_setup(&[("whole", "[proj]", "notes\n")]).await;
-    let ev = tool_post("workspace_use", "proj", vec![]);
-    assert_eq!(
-        related(&plugin, &host, &ev).await,
-        ["whole: # whole\nnotes\n"]
-    );
-}
-
-#[tokio::test]
-async fn related_cards_reinject_when_the_revision_changed() {
-    let (home, plugin, host) = scope_setup(&[("kernel", "[proj:crates/**]", "new body\n")]).await;
-    host.nodes
-        .lock()
-        .unwrap()
-        .push(path_note("kernel", "00000000", "# kernel\nold body"));
-    let ev = tool_post("read", "proj", vec![under(home.path(), "crates/a.rs")]);
-    assert_eq!(
-        related(&plugin, &host, &ev).await,
-        [
-            "kernel: (Updated card — supersedes rev 00000000 read earlier on this branch.)\n\
-          # kernel\nnew body\n"
-        ]
-    );
-}
-
-#[tokio::test]
-async fn related_cards_ignore_failed_calls() {
-    let (home, plugin, host) = scope_setup(&[("kernel", "[proj:crates/**]", "notes\n")]).await;
-    let mut ev = tool_post("read", "proj", vec![under(home.path(), "crates/a.rs")]);
-    ev.payload["is_error"] = json!(true);
-    assert!(related(&plugin, &host, &ev).await.is_empty());
 }
 
 #[tokio::test]

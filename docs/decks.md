@@ -154,8 +154,8 @@ The first-call note states these rules.
 - Unmounting inserts a note saying that `/cards/<at>` is unmounted and that
   content loaded from it earlier is no longer readable, writable or updated.
   Unmounting only affects what happens after it.
-- Only mounted decks take part in the catalog, recall, `list`, `search`,
-  related cards and update notices.
+- Only mounted decks take part in the catalog, recall, `list`, `search` and
+  update notices.
 
 ## Catalog
 

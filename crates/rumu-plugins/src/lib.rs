@@ -1,7 +1,7 @@
 //! rumu-plugins: rumu's built-in plugins.
 //!
-//! - [`MemoryPlugin`] — card surfacing: the catalog, `scope:` related
-//!   cards, update notices (decks and cards themselves live in rumu-cards)
+//! - [`MemoryPlugin`] — card surfacing: the catalog, recall, update notices
+//!   (decks and cards themselves live in rumu-cards)
 //! - [`WorkspacePlugin`] — the `read`/`write`/`edit`/`list`/`bash` file tools
 //!   over workspaces (local dirs + ssh), the `@rumu` virtual workspace
 //!   (`@rumu:/cards`, `@rumu:/sessions`) and `workspace_use`

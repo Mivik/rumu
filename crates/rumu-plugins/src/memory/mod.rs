@@ -3,7 +3,7 @@
 //! Memory is the capability of keeping, finding and using **cards**: markdown
 //! files in the **decks** mounted on the branch (`@rumu:/cards/<mount>/<path>`).
 //! The decks, their identity and history live in the `rumu-cards` crate; this
-//! plugin surfaces their cards to the model through five built-in hooks:
+//! plugin surfaces their cards to the model through four built-in hooks:
 //!
 //! - `assistant-intro` on `llm.pre`: once per path, which assistant deck this
 //!   is, the mount table, the placement rules and the mounted decks' pinned
@@ -12,8 +12,6 @@
 //!   path);
 //! - `recall` on `prompt`: imports the cards whose text best matches the
 //!   prompt (BM25F over `keywords:`, path, description and body);
-//! - `related-cards` on `tool.post`: imports the cards whose `scope:` covers a
-//!   touched workspace or file;
 //! - `card-updates` on `llm.pre`: cards (keyed by deck id and path) whose current
 //!   revision differs from the path's last-used revision get a one-line
 //!   notice.
@@ -24,13 +22,13 @@ use crate::Result;
 use async_trait::async_trait;
 use rumu_cards::catalog::{self, CatalogNote};
 use rumu_cards::deck::Action;
-use rumu_cards::{Card, Cards, Decks, card, scope, usage};
+use rumu_cards::{Card, Cards, Decks, card, usage};
 use rumu_core::{
     Content, Cx, Decision, Event, HookOutput, HookSpec, Manifest, PROJECT_MOUNT, Plugin,
-    RUMU_WORKSPACE, Structured, Utf8TypedPath, Utf8TypedPathBuf,
+    RUMU_WORKSPACE, Structured,
 };
 use serde::{Deserialize, Serialize};
-use serde_json::{Value, json};
+use serde_json::json;
 
 use crate::approve::allowed;
 
@@ -43,8 +41,6 @@ const ASSISTANT_INTRO_HOOK: &str = "assistant-intro";
 const CARD_CATALOG_HOOK: &str = "card-catalog";
 /// Built-in hook id for update notices (fires on `llm.pre`, runs last).
 const CARD_UPDATES_HOOK: &str = "card-updates";
-/// Built-in hook id for scope cards (fires on successful tool calls).
-const RELATED_CARDS_HOOK: &str = "related-cards";
 /// Built-in hook id for prompt recall (fires on `prompt`).
 const RECALL_HOOK: &str = "recall";
 /// At most this many cards recall considers per prompt.
@@ -59,10 +55,9 @@ the user unless they already allowed it. Where a card belongs is in the placemen
 introduction.\n\n\
 Finding cards. A catalog note lists a deck's most-used cards by path and description; its folded \
 directories group the rest — `list` or `search` reach them. Some cards \
-arrive on their own, in full, as notes: those whose text matches the user's message, and those \
-whose `scope:` covers a workspace or file you use — don't re-read them. For any other card that \
-looks relevant, `read` it; `search` finds cards the catalog doesn't show. When a note says a card \
-changed, re-read it if it still matters.\n\n\
+arrive on their own, in full, as notes: those whose text matches the user's message — don't \
+re-read them. For any other card that looks relevant, `read` it; `search` finds cards the catalog \
+doesn't show. When a note says a card changed, re-read it if it still matters.\n\n\
 Saving cards. Save what will matter in later conversations: the user's preferences and \
 corrections, project facts and conventions, decisions with their reasons, procedures that worked. \
 Don't save the state of the current task or anything easily re-derived from the files. `search` \
@@ -73,10 +68,7 @@ Every card's frontmatter has a one-sentence `description` (shown in the catalog)
 `keywords:` — the terms that should bring it to mind, as a YAML list (`keywords: [deploy, \
 production]`); keywords, description and body are what message matching scores. Write a card's \
 description and body in the language of the conversation. Give `keywords` both the words the user \
-actually uses for the topic, in their language, and their English equivalents. Give \
-project-specific cards a `scope:` — a workspace name (`proj`) or a workspace-relative glob \
-(`proj:src/net/**`), one or a list — so they arrive when that workspace or those files are used. \
-A link card is only `link: @rumu:/cards/<path>` (anything else is dropped); reads follow it, writes are \
+actually uses for the topic, in their language, and their English equivalents. A link card is only `link: @rumu:/cards/<path>` (anything else is dropped); reads follow it, writes are \
 refused.";
 
 /// Payload of the `assistant.intro` note (v1): the once-per-path assistant introduction.
@@ -107,8 +99,8 @@ impl MemoryPlugin {
     }
 }
 
-/// The built-in hooks: the two `llm.pre` passes (catalog index, then update
-/// notices) and the scope-card import on successful tool calls.
+/// The built-in hooks: the `llm.pre` passes (introduction, catalog index,
+/// then update notices) and prompt recall.
 fn builtin_hooks() -> Vec<HookSpec> {
     vec![
         HookSpec {
@@ -125,14 +117,6 @@ fn builtin_hooks() -> Vec<HookSpec> {
             id: CARD_UPDATES_HOOK.into(),
             matcher: json!({ "event": "llm.pre" }),
             priority: i32::MAX,
-        },
-        HookSpec {
-            id: RELATED_CARDS_HOOK.into(),
-            matcher: json!({
-                "event": "tool.post",
-                "tool": ["read", "write", "edit", "list", "bash", "workspace_use", "card_mount"],
-            }),
-            priority: 0,
         },
         HookSpec {
             id: RECALL_HOOK.into(),
@@ -163,7 +147,6 @@ impl Plugin for MemoryPlugin {
             ASSISTANT_INTRO_HOOK => self.assistant_intro(cx).await,
             CARD_CATALOG_HOOK => self.catalog_notes(cx).await,
             CARD_UPDATES_HOOK => self.update_notices(cx).await,
-            RELATED_CARDS_HOOK => self.related_cards(event, cx).await,
             RECALL_HOOK => self.recall(event, cx).await,
             _ => Ok(HookOutput::default()),
         };
@@ -406,70 +389,6 @@ the catalog lists the cards.",
                     deck: deck_id.clone(),
                     path: path.clone(),
                     rev,
-                },
-            ));
-        }
-        Ok(out)
-    }
-
-    /// The `related-cards` hook: a successful call targeting a workspace
-    /// imports the cards whose `scope:` covers it (or the touched files),
-    /// most specific first.
-    async fn related_cards(&self, event: &Event, cx: &Cx) -> Result<HookOutput> {
-        if event.payload.get("is_error").and_then(Value::as_bool) == Some(true) {
-            return Ok(HookOutput::default());
-        }
-        let name = if event.fields.tool.as_deref() == Some("workspace_use") {
-            event.payload["args"]["name"].as_str().map(str::to_owned)
-        } else {
-            event.fields.workspace.clone()
-        };
-        let Some(name) = name.filter(|n| n != RUMU_WORKSPACE) else {
-            return Ok(HookOutput::default());
-        };
-        let state = cx.state()?;
-        let Some(ws) = state.workspaces.iter().find(|w| w.name == name) else {
-            return Ok(HookOutput::default());
-        };
-        let root = ws.root.to_path();
-        let rels: Vec<Utf8TypedPathBuf> = event
-            .fields
-            .paths
-            .iter()
-            .filter_map(|p| {
-                Utf8TypedPath::new(p, ws.path_type())
-                    .strip_prefix(root)
-                    .ok()
-                    .map(|rel| rel.with_unix_encoding())
-            })
-            .collect();
-        let paths: Vec<&str> = rels.iter().map(|p| p.as_str()).collect();
-
-        let cards = self.cards(cx)?;
-        let all = cards.rankable()?;
-        let related = scope::related(&all, &name, &paths);
-        if related.is_empty() {
-            return Ok(HookOutput::default());
-        }
-        let uses = usage::uses_on_path(&cx.path()?);
-        let identities = cards.identities()?;
-        let mut out = HookOutput::default();
-        for card in related {
-            let Some((deck, path)) = identities.get(&card.path) else {
-                continue;
-            };
-            let last = uses
-                .get(&(deck.clone(), path.clone()))
-                .and_then(|u| u.rev.as_deref());
-            let Some(body) = import_body(card, last) else {
-                continue;
-            };
-            out.effects.push(Content::note_with(
-                body,
-                &usage::CardImport {
-                    deck: deck.clone(),
-                    path: path.clone(),
-                    rev: card.revision.clone(),
                 },
             ));
         }

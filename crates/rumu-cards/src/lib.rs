@@ -14,13 +14,11 @@
 //! - [`library`] — the user's view of every deck (the web Library page);
 //! - [`usage`] — card use records derived from a branch path;
 //! - [`usage_index`] — per-deck card use scores (`usage.json`);
-//! - [`scope`] — which cards a card's frontmatter `scope:` relates to a
-//!   workspace / file touch;
 //! - [`recall`] — BM25F over `keywords:`, path, description and body;
 //! - [`search_text`] / [`list_text`] — the discovery outputs the workspace
 //!   plugin's `search` / `list` tools render.
 //!
-//! The `search` tool itself, and memory (the catalog, scope cards, update
+//! The `search` tool itself, and memory (the catalog, recall, update
 //! notices), live in rumu-plugins' memory and workspace plugins.
 
 use std::collections::BTreeMap;
@@ -37,7 +35,6 @@ mod error;
 pub mod git;
 pub mod library;
 pub mod recall;
-pub mod scope;
 pub mod usage;
 pub mod usage_index;
 pub mod yaml;
