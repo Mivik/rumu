@@ -146,7 +146,10 @@ function callShort(name: string, call: Call): string {
     case 'show':
       return str('path') ? baseName(str('path')) : ''
     case 'list': {
-      const path = str('path').replace(/:$/, '')
+      // `proj:` / `@scratch:` (a workspace's root) shows as written: the
+      // colon is the address, `@scratch/` would name a directory.
+      const path = str('path')
+      if (path.endsWith(':')) return path
       if (path && path !== '.' && path !== '/') return `${baseName(path)}/`
       return '/'
     }

@@ -341,14 +341,43 @@ async fn read_write_edit_list_roundtrip() {
     let dir = tempfile::tempdir().unwrap();
     let (plugin, _host, cx, _home) = setup(dir.path(), false);
 
+    // `write` never creates directories: a missing one is the model's error.
+    let write = json!({ "path": "a/b.txt", "content": "l1\nl2\nl3\n" });
+    let out = plugin.call_tool("write", write.clone(), &cx).await.unwrap();
+    assert!(out.is_error);
+    assert!(
+        out.content.text.contains("its directory does not exist"),
+        "{}",
+        out.content.text
+    );
+    assert!(!dir.path().join("a").exists());
+    // `@scratch/…` for `@scratch:…` gets pointed at the colon form.
     let out = plugin
         .call_tool(
             "write",
-            json!({ "path": "a/b.txt", "content": "l1\nl2\nl3\n" }),
+            json!({ "path": "@scratch/x.txt", "content": "" }),
             &cx,
         )
         .await
         .unwrap();
+    assert!(
+        out.content.text.contains("did you mean `@scratch:x.txt`?"),
+        "{}",
+        out.content.text
+    );
+    // …and so does a bare `@scratch` given to `list`.
+    let out = plugin
+        .call_tool("list", json!({ "path": "@scratch" }), &cx)
+        .await
+        .unwrap();
+    assert!(
+        out.is_error && out.content.text.contains("did you mean `@scratch:`?"),
+        "{}",
+        out.content.text
+    );
+
+    std::fs::create_dir(dir.path().join("a")).unwrap();
+    let out = plugin.call_tool("write", write, &cx).await.unwrap();
     assert!(!out.is_error, "{}", out.content.text);
     assert!(
         out.content.text.starts_with("wrote proj:a/b.txt (9 bytes)"),

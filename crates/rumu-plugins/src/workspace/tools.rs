@@ -8,10 +8,10 @@ use std::time::Duration;
 use rumu_cards::usage::CardOp;
 use rumu_cards::{Cards, card};
 use rumu_core::{
-    Artifact, ArtifactKind, Effect, INVOKE_OUTPUT_LIMIT, Manifest, PathState, Progress, RUMU_WORKSPACE, Structured,
-    ToolError, ToolOutput, ToolResult, ToolResultExt, ToolSpec, Utf8TypedPathBuf, Utf8UnixPath,
-    Utf8UnixPathBuf, Workspace, WorkspaceUse, parse_args, resolve_state, tool_schema,
-    truncate_middle,
+    Artifact, ArtifactKind, Effect, INVOKE_OUTPUT_LIMIT, Manifest, PathState, Progress,
+    RUMU_WORKSPACE, SCRATCH_WORKSPACE, Structured, ToolError, ToolOutput, ToolResult,
+    ToolResultExt, ToolSpec, Utf8TypedPathBuf, Utf8UnixPath, Utf8UnixPathBuf, Workspace,
+    WorkspaceUse, parse_args, resolve_state, tool_schema, truncate_middle,
 };
 use schemars::JsonSchema;
 use serde::Deserialize;
@@ -95,12 +95,18 @@ const ARTIFACT_MAX_BYTES: usize = 5 * 1024 * 1024;
 
 const INSTRUCTIONS: &str = "Files live in workspaces — one project each, on this machine or a \
 remote one over ssh. Every file tool takes one `path`: a path in the default workspace (relative \
-to its root, or absolute on its machine), or `<workspace>:<path>` for another workspace, e.g. \
-`proj:src/main.rs`, `app:/var/log/app.log`. Every registered workspace is addressable. \
+to its root, or absolute on its machine), or `<workspace>:<path>` for any workspace — the colon \
+is what names the workspace. With `proj` as the default:\n\
+- `src/main.rs` → `proj:src/main.rs`\n\
+- `app:/var/log/app.log` → `/var/log/app.log` on `app`\n\
+- `@scratch:page.html` → `page.html` in this session's scratch workspace\n\
+- `@scratch:` → the scratch workspace's root\n\
+- `@scratch/page.html` → `proj:@scratch/page.html`, NOT the scratch workspace\n\n\
+Every registered workspace is addressable. \
 `workspace_use(name)` changes the default; `workspace_use()` lists workspaces, the project's \
 first. `bash` runs in a workspace root, so relative paths mean the same thing in bash and in the \
 file tools. Read-only workspaces refuse writes and bash.\n\n\
-`@scratch` is this session's own scratch directory on this machine, shared by its branches and \
+`@scratch` is this session's own scratch workspace on this machine, shared by its branches and \
 sub-agents and deleted with the session: the default when the session has no project workspace. \
 Use it for throwaway work (scripts, downloads, clones, generated files); what should outlive the \
 session belongs in a card or a project workspace.\n\n\
@@ -248,7 +254,7 @@ apply to images); a trailing `#L<n>` / `#L<a>-L<b>` anchor sets them when omitte
             },
             ToolSpec {
                 name: "write".into(),
-                description: "Create or overwrite a file (parent directories are created; \
+                description: "Create or overwrite a file (its directory must already exist; \
 rejected on read-only workspaces). Same `path` addressing as `read`; for cards the \
 content is the editable view — frontmatter + body. With `from`, moves that card to `path` \
 (the destination must not exist). Writing to a deck other than your own asks the user unless \
@@ -748,6 +754,21 @@ impl WorkspacePlugin {
                     ))
                     .with_data(&patch)
                     .with_effects(effects)),
+                    // Directories are never created for the model: a missing
+                    // one usually means a mistyped path, not a new directory.
+                    Err(e) if is_not_found(&e) => {
+                        let fix = match colon_form(&args.path) {
+                            Some(fixed) => format!("did you mean `{fixed}`?"),
+                            None => "check the path (`<workspace>:<path>` for another \
+                                     workspace), or create the directory with bash first"
+                                .to_owned(),
+                        };
+                        Err(ToolError::model(format!(
+                            "write {}: its directory does not exist; {fix}",
+                            display(&ws, &abs)
+                        ))
+                        .with_effects(effects))
+                    }
                     Err(e) => {
                         Err(backend_err("write", Some(display(&ws, &abs)), e).with_effects(effects))
                     }
@@ -914,7 +935,14 @@ impl WorkspacePlugin {
                         Ok(ToolOutput::ok(body).with_effects(effects))
                     }
                     Err(e) => {
-                        Err(backend_err("list", Some(display(&ws, &abs)), e).with_effects(effects))
+                        let hint = args
+                            .path
+                            .as_deref()
+                            .and_then(colon_form)
+                            .map(|fixed| format!("; did you mean `{fixed}`?"))
+                            .unwrap_or_default();
+                        let at = Some(display(&ws, &abs));
+                        Err(backend_err("list", at, format!("{e}{hint}")).with_effects(effects))
                     }
                 }
             }
@@ -1044,6 +1072,17 @@ impl WorkspacePlugin {
 }
 
 /// The canonical display form of a real-workspace path.
+/// `@scratch/<rest>` or a bare `@scratch` written for `@scratch:<rest>`
+/// (likewise `@rumu`): the colon form, to point the model at its mistake.
+/// The path is not rewritten.
+fn colon_form(raw: &str) -> Option<String> {
+    [SCRATCH_WORKSPACE, RUMU_WORKSPACE].iter().find_map(|name| {
+        let rest = raw.strip_prefix(name)?;
+        let rest = rest.strip_prefix('/').or(rest.is_empty().then_some(rest))?;
+        Some(format!("{name}:{rest}"))
+    })
+}
+
 fn display(ws: &Workspace, abs: &Utf8TypedPathBuf) -> String {
     rumu_core::display(&ws.name, ws.root.to_path(), abs.to_path())
 }

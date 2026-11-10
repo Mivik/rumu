@@ -70,7 +70,8 @@ pub(crate) struct ExecOutput {
 pub(crate) trait Backend: Send + Sync {
     /// Read a file at an absolute path on the workspace's machine.
     async fn read_bytes(&self, abs: &Utf8TypedPathBuf) -> Result<Vec<u8>>;
-    /// Create/overwrite a file, creating parent directories.
+    /// Create/overwrite a file. Its parent directory must exist: a missing one
+    /// is [`is_not_found`], never created.
     async fn write_bytes(&self, abs: &Utf8TypedPathBuf, bytes: &[u8]) -> Result<()>;
     /// `(name, is_dir)` entries of a directory, sorted by name.
     async fn list_dir(&self, abs: &Utf8TypedPathBuf) -> Result<Vec<(String, bool)>>;
@@ -172,11 +173,6 @@ impl Backend for LocalBackend {
 
     async fn write_bytes(&self, abs: &Utf8TypedPathBuf, bytes: &[u8]) -> Result<()> {
         let full = Path::new(abs.as_str());
-        if let Some(parent) = full.parent() {
-            tokio::fs::create_dir_all(parent)
-                .await
-                .map_err(IoError::at("creating", parent))?;
-        }
         tokio::fs::write(full, bytes)
             .await
             .map_err(IoError::at("writing", full))?;
@@ -307,13 +303,14 @@ pub(crate) fn remote_read_cmd(abs: &Utf8UnixPath) -> String {
     format!("test -e {path} || exit {REMOTE_MISSING_EXIT}; cat {path}")
 }
 
-/// `mkdir -p <parent> && cat > <path>` (content arrives on stdin).
+/// `test -d <parent> || exit 44; cat > <path>` (content arrives on stdin).
 pub(crate) fn remote_write_cmd(abs: &Utf8UnixPath) -> String {
     let target = sh_quote(abs.as_str());
     match abs.parent() {
-        Some(parent) if !matches!(parent.as_str(), "" | "/") => {
-            format!("mkdir -p {} && cat > {}", sh_quote(parent.as_str()), target)
-        }
+        Some(parent) if !matches!(parent.as_str(), "" | "/") => format!(
+            "test -d {} || exit {REMOTE_MISSING_EXIT}; cat > {target}",
+            sh_quote(parent.as_str())
+        ),
         _ => format!("cat > {target}"),
     }
 }
@@ -326,7 +323,7 @@ pub(crate) fn remote_list_cmd(abs: &Utf8UnixPath) -> String {
     format!("test -e {path} || exit {REMOTE_MISSING_EXIT}; LC_ALL=C ls -1pA {path}")
 }
 
-/// Turn a failed remote read/list into an error; a missing path becomes
+/// Turn a failed remote read/write/list into an error; a missing path becomes
 /// [`BackendError::NotFound`] (see [`is_not_found`]).
 fn remote_failure(
     op: &'static str,
@@ -432,12 +429,7 @@ impl Backend for SshBackend {
             .await
             .map_err(|source| IoError::op("waiting for the ssh write", source))?;
         if !out.status.success() {
-            return Err(BackendError::Remote {
-                op: "write",
-                path: abs.to_string(),
-                code: out.status.code().unwrap_or(-1),
-                stderr: String::from_utf8_lossy(&out.stderr).trim().to_owned(),
-            });
+            return Err(remote_failure("write", abs, &out));
         }
         Ok(())
     }
@@ -563,10 +555,10 @@ mod tests {
             remote_read_cmd(Utf8UnixPath::new("/srv/app/a'b.txt")),
             "test -e '/srv/app/a'\\''b.txt' || exit 44; cat '/srv/app/a'\\''b.txt'"
         );
-        // Nested write creates the parent; a top-level write does not mkdir.
+        // A nested write checks the parent exists, never creates it.
         assert_eq!(
             remote_write_cmd(Utf8UnixPath::new("/srv/app/a/b.txt")),
-            "mkdir -p '/srv/app/a' && cat > '/srv/app/a/b.txt'"
+            "test -d '/srv/app/a' || exit 44; cat > '/srv/app/a/b.txt'"
         );
         assert_eq!(
             remote_write_cmd(Utf8UnixPath::new("/b.txt")),
