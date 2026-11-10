@@ -5,7 +5,8 @@
 // steps' reasoning and tool calls fold into one ActivityRun summary line, live
 // as "thinking" while the model reasons. While the turn runs, its frontier
 // always carries the live dot: the trailing activity run, the streaming
-// text's caret, the running calls, or else a "working…" line of its own.
+// text's caret, the running calls, or — while it waits on the model — a
+// "working…" line of its own.
 // One muted meta line at the bottom:
 // usage stays visible (hover for the full request/turn breakdown);
 // copy/regenerate/fork reveal on hover once the turn has finished.
@@ -122,13 +123,13 @@ watch(
 )
 onBeforeUnmount(() => retryTimer && clearInterval(retryTimer))
 
-/** The live turn is between visible steps: its tail is no activity run and no
- * streaming text, and no call is running — so the dot needs a line of its
- * own ("working…"): beside the mascot before anything shows, else at the end. */
+/** The live turn waits on the model: no call runs and the step has streamed
+ * nothing yet — so the dot needs a line of its own ("working…"): beside the
+ * mascot before anything shows, else at the end. */
 const idle = computed(() => {
   if (!props.live || retrying.value || pending.value.length) return false
-  const tail = props.group.items.at(-1)
-  return tail?.kind !== 'activity' && !(tail?.kind === 'text' && tail.streaming)
+  const d = activeDelta.value
+  return !d?.reasoning && !d?.text
 })
 </script>
 
@@ -162,7 +163,7 @@ const idle = computed(() => {
         v-else-if="item.kind === 'activity'"
         v-enter="'enter-fade'"
         :steps="item.steps"
-        :live="live && i === group.items.length - 1"
+        :live="live && !idle && i === group.items.length - 1"
       />
       <div
         v-else-if="item.kind === 'reset'"

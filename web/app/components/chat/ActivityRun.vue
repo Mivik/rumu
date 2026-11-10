@@ -7,9 +7,9 @@
 // every turn, so neither shows on the line; the opened body still renders
 // them. With tool calls the line doesn't count the thoughts; without any
 // (reasoning right before the answer) it names the thinking instead: "Thought
-// for 2s". The live run (the turn's tail while it runs) leads with the live
-// dot through every phase — thinking, calling, waiting on the next step — so
-// it never blinks out between them. While the model thinks, a run with
+// for 2s". The live run (the turn's tail while it thinks or calls) leads with
+// the live dot; waiting on the model, the group's "working…" line has it
+// instead. While the model thinks, a run with
 // no calls opens by itself so the reasoning streams in view, folding once the
 // answer starts unless toggled by hand. Exploration pills stay on the folded
 // line so the jump to the child branch is one click.
