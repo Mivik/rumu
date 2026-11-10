@@ -2,11 +2,11 @@
 // One "context" row: the Notes between messages. Recalled cards stay in view
 // as card stubs ("recalled [A] [B]", clickable, opening the CardDrawer); every
 // other notice (the default workspace, a loaded CLAUDE.md, a card that
-// changed, a finished task, a plain note) is a side note. They fold into a
-// divider across the column, "── 2 side notes › ──", since they happen
-// between the turns rather than in one; opened, each is a sentence of its own
-// (NoticeRow) in a list centred under it. Puts no node on the thread (only
-// messages do).
+// changed, a finished task, a plain note) is a side note, set on a divider
+// across the column since it happens between the turns rather than in one.
+// A few short ones sit on the divider as they are, "── ▣ loaded … ──"; more
+// fold into "── 3 side notes › ──", opening to a list of sentences
+// (NoticeRow) centred under it. Puts no node on the thread (only messages do).
 import { computed, ref } from 'vue'
 import { t } from '../../i18n'
 import type { Content, Node, TaskDone } from '../../lib/types'
@@ -110,6 +110,14 @@ function openCard(c: CardItem): void {
   if (c.cardId) openDrawer(c.cardId, c.node.id)
 }
 
+/** Up to this many side notes sit on the divider unfolded, one per line. */
+const INLINE = 2
+
+/** A note that reads on one line; a long or multi-line one stays folded. */
+const short = (n: Notice): boolean => n.kind !== 'note' || (n.text.length <= 80 && !n.text.includes('\n'))
+
+const inline = computed(() => notices.value.length <= INLINE && notices.value.every(short))
+
 const open = ref(false)
 </script>
 
@@ -148,7 +156,14 @@ const open = ref(false)
     </div>
 
     <!-- every other notice: a divider across the column, between the turns -->
-    <template v-if="notices.length">
+    <template v-if="inline">
+      <div v-for="n in notices" :key="n.key" v-enter="'enter-fade'" class="flex w-full items-center gap-3">
+        <span class="h-px min-w-6 flex-1 bg-line" />
+        <NoticeRow :notice="n" />
+        <span class="h-px min-w-6 flex-1 bg-line" />
+      </div>
+    </template>
+    <template v-else-if="notices.length">
       <div v-enter="'enter-fade'" class="flex w-full items-center gap-3">
         <span class="h-px flex-1 bg-line" />
         <button
