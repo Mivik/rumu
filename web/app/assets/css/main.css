@@ -143,15 +143,13 @@
   --text-secondary: 13.5px;
   --text-secondary--line-height: 1.55;
   --text-message: 15px;
-  --text-message--line-height: 1.6;
+  --text-message--line-height: 1.65;
   --text-title: 17px;
   --text-title--line-height: 1.35;
   --text-display: 22px;
   --text-display--line-height: 1.2;
   --text-hero: 44px;
   --text-hero--line-height: 1;
-
-  --leading-message: 1.6;
 
   /* one radius family: xs (inline marks) / control / card / sheet */
   --radius-xs: 4px;
@@ -1028,7 +1026,7 @@
   .md pre,
   .md blockquote,
   .md table {
-    margin: 0.5em 0;
+    margin: 0.85em 0;
   }
 
   .md h1,
@@ -1070,7 +1068,7 @@
   }
 
   .md li + li {
-    margin-top: 0.2em;
+    margin-top: 0.35em;
   }
 
   .md li::marker {
@@ -1106,7 +1104,7 @@
 
   .md .md-code {
     position: relative;
-    margin: 0.5em 0;
+    margin: 0.85em 0;
   }
 
   .md .md-code > pre {
