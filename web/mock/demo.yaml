@@ -35,9 +35,13 @@ turns:
               entries: entries.trim().split("\n").filter(Boolean).length,
               pwd: pwd.trim(),
             };
+      # Waits for the sub-agent (agents default to the background): the
+      # scripted replies are consumed in order, so the child must answer
+      # before the parent's next call.
       - call_id: c-agent
         name: agent
         args:
+          background: false
           task: Summarize the service notes in one line.
           inherit:
             context: none

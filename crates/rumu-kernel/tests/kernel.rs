@@ -142,9 +142,6 @@ impl Llm for TrackedLlm {
     ) -> std::result::Result<LlmResponse, rumu_kernel::LlmError> {
         let is_child = nodes.iter().any(|n| match &n.body {
             NodeBody::User { content } => content.text.contains("You are now a sub-agent"),
-            NodeBody::ToolResult { content, .. } => {
-                content.text.contains("You are now a sub-agent")
-            }
             _ => false,
         });
         if is_child {
@@ -1787,12 +1784,20 @@ async fn safe_point_queueing() {
 async fn agent_forks_a_child_and_survives_batch_order() {
     for calls in [
         vec![
-            ToolCall::new("e1", "agent", json!({"task": "find the config file"})),
+            ToolCall::new(
+                "e1",
+                "agent",
+                json!({"background": false, "task": "find the config file"}),
+            ),
             ToolCall::new("o1", "other", json!({})),
         ],
         vec![
             ToolCall::new("o1", "other", json!({})),
-            ToolCall::new("e1", "agent", json!({"task": "find the config file"})),
+            ToolCall::new(
+                "e1",
+                "agent",
+                json!({"background": false, "task": "find the config file"}),
+            ),
         ],
     ] {
         let plugin = Arc::new(plugin_with(
@@ -1847,15 +1852,28 @@ async fn agent_forks_a_child_and_survives_batch_order() {
         assert_eq!(kinds[2], "assistant+calls");
         assert_eq!(kinds[3], "tool_result");
         assert_eq!(kinds[4], "tool_result");
-        assert_eq!(kinds[5], "assistant");
+        assert_eq!(kinds[5], "user");
+        assert_eq!(kinds[6], "assistant");
+        // The parent's batch is answered by placeholders; the goal is a
+        // prompt of its own, not the `agent` call's result.
         let (child_e1, _) = result_text(&cnodes, "e1");
-        assert!(child_e1.contains("You are now a sub-agent"));
-        assert!(child_e1.contains("find the config file"));
-        assert!(child_e1.contains("a reply without tool calls ends the sub-agent"));
-        assert_eq!(
-            result_text(&cnodes, "o1"),
-            ("(skipped in sub-agent branch)".to_owned(), false)
+        assert!(!child_e1.contains("You are now a sub-agent"), "{child_e1}");
+        let (child_o1, _) = result_text(&cnodes, "o1");
+        assert!(child_o1.contains("left to the parent"), "{child_o1}");
+        let NodeBody::User { content } = &cnodes[5].body else {
+            unreachable!()
+        };
+        assert!(
+            content
+                .text
+                .contains("You are now a sub-agent. Goal: find the config file")
         );
+        assert!(
+            content
+                .text
+                .contains("a reply without tool calls ends the sub-agent")
+        );
+        assert!(content.text.contains("not yours to carry on"));
 
         // The transcript address points into this session: `<first>..<head>`
         // names the child's first own node and its final head.
@@ -1892,7 +1910,7 @@ async fn agent_context_none_starts_at_the_root() {
             LlmResponse::calls(vec![ToolCall::new(
                 "e1",
                 "agent",
-                json!({ "task": "independent work", "inherit": { "context": "none" } }),
+                json!({ "background": false, "task": "independent work", "inherit": { "context": "none" } }),
             )]),
             LlmResponse::text("clean summary"),
             LlmResponse::text("parent done"),
@@ -1971,7 +1989,7 @@ async fn agent_unknown_workspace_errors_without_a_branch() {
             LlmResponse::calls(vec![ToolCall::new(
                 "e1",
                 "agent",
-                json!({ "task": "x", "inherit": { "workspaces": ["ghost"] } }),
+                json!({ "background": false, "task": "x", "inherit": { "workspaces": ["ghost"] } }),
             )]),
             LlmResponse::text("done"),
         ],
@@ -2026,7 +2044,7 @@ async fn agent_workspaces_narrow_the_child_state() {
                 "e1",
                 "agent",
                 json!({
-                    "task": "full",
+                    "background": false, "task": "full",
                     "inherit": { "workspaces": ["proj"] }
                 }),
             )]),
@@ -2036,7 +2054,7 @@ async fn agent_workspaces_narrow_the_child_state() {
                 "e2",
                 "agent",
                 json!({
-                    "task": "clean",
+                    "background": false, "task": "clean",
                     "inherit": { "context": "none", "workspaces": ["proj"] }
                 }),
             )]),
@@ -2101,7 +2119,7 @@ async fn agent_context_none_inherits_the_project() {
             LlmResponse::calls(vec![ToolCall::new(
                 "e1",
                 "agent",
-                json!({ "task": "clean", "inherit": { "context": "none" } }),
+                json!({ "background": false, "task": "clean", "inherit": { "context": "none" } }),
             )]),
             LlmResponse::text("child done"),
             LlmResponse::text("parent done"),
@@ -2148,21 +2166,25 @@ async fn agent_depth_limit_refuses_the_fourth_level() {
     // Depth-first LLM order: each level calls the next, then replies on the
     // way back up.
     let script = vec![
-        LlmResponse::calls(vec![ToolCall::new("g1", "agent", json!({ "task": "two" }))]),
+        LlmResponse::calls(vec![ToolCall::new(
+            "g1",
+            "agent",
+            json!({ "background": false, "task": "two" }),
+        )]),
         LlmResponse::calls(vec![ToolCall::new(
             "g2",
             "agent",
-            json!({ "task": "three" }),
+            json!({ "background": false, "task": "three" }),
         )]),
         LlmResponse::calls(vec![ToolCall::new(
             "g3",
             "agent",
-            json!({ "task": "four" }),
+            json!({ "background": false, "task": "four" }),
         )]),
         LlmResponse::calls(vec![ToolCall::new(
             "g4",
             "agent",
-            json!({ "task": "five" }),
+            json!({ "background": false, "task": "five" }),
         )]),
         LlmResponse::text("level 3 done"),
         LlmResponse::text("level 2 done"),
@@ -3487,7 +3509,11 @@ async fn activate_refuses_agent_branches_and_switches_variants() {
     let (kernel, _llm, session, main) = setup(
         vec![plugin],
         vec![
-            LlmResponse::calls(vec![ToolCall::new("e1", "agent", json!({"task": "dig"}))]),
+            LlmResponse::calls(vec![ToolCall::new(
+                "e1",
+                "agent",
+                json!({"background": false, "task": "dig"}),
+            )]),
             LlmResponse::text("child summary"),
             LlmResponse::text("parent done"),
         ],
@@ -4193,7 +4219,11 @@ async fn wake_post_reactivates_a_finished_agent_branch() {
     let (kernel, _llm, session, branch) = setup(
         vec![plugin.clone()],
         vec![
-            LlmResponse::calls(vec![ToolCall::new("e1", "agent", json!({"task": "look"}))]),
+            LlmResponse::calls(vec![ToolCall::new(
+                "e1",
+                "agent",
+                json!({"background": false, "task": "look"}),
+            )]),
             LlmResponse::text("child summary"),
             LlmResponse::text("parent done"),
             LlmResponse::text("child woke"),
@@ -4258,7 +4288,7 @@ async fn agent_wake_turn_runs_to_a_final_reply() {
         LlmResponse::calls(vec![ToolCall::new(
             "e1",
             "agent",
-            json!({ "task": "look" }),
+            json!({ "background": false, "task": "look" }),
         )]),
         LlmResponse::text("child summary"),
         LlmResponse::text("parent done"),
@@ -4361,9 +4391,6 @@ impl Llm for SplitLlm {
     ) -> std::result::Result<LlmResponse, rumu_kernel::LlmError> {
         let is_child = nodes.iter().any(|n| match &n.body {
             NodeBody::User { content } => content.text.contains("You are now a sub-agent"),
-            NodeBody::ToolResult { content, .. } => {
-                content.text.contains("You are now a sub-agent")
-            }
             _ => false,
         });
         let llm = if is_child { &self.child } else { &self.parent };
@@ -4711,9 +4738,10 @@ async fn background_tool_cannot_invoke() {
     );
 }
 
-/// A background agent posts its summary to the parent when it finishes.
+/// An `agent` call runs in the background by default and posts its summary
+/// to the parent when it finishes.
 #[tokio::test]
-async fn background_agent_posts_summary_to_the_parent() {
+async fn agent_runs_in_background_by_default() {
     let plugin = Arc::new(plugin_with(
         "branch",
         &["agent"],
@@ -4727,7 +4755,7 @@ async fn background_agent_posts_summary_to_the_parent() {
             LlmResponse::calls(vec![ToolCall::new(
                 "e1",
                 "agent",
-                json!({ "task": "find it", "background": true }),
+                json!({ "task": "find it" }),
             )]),
             LlmResponse::text("parent done"),
             LlmResponse::text("parent woke"),
@@ -4795,7 +4823,7 @@ async fn sub_agent_waits_for_its_own_background_task() {
             LlmResponse::calls(vec![ToolCall::new(
                 "e1",
                 "agent",
-                json!({ "task": "wait for work" }),
+                json!({ "background": false, "task": "wait for work" }),
             )]),
             LlmResponse::text("parent done"),
         ],

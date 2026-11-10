@@ -58,7 +58,11 @@ async fn agent_transcript_address_is_readable() {
         Arc::new(ScriptedLlm::strict([
             // Parent: agent + other in one batch.
             LlmResponse::calls([
-                ToolCall::new("e1", "agent", json!({ "task": "find the config file" })),
+                ToolCall::new(
+                    "e1",
+                    "agent",
+                    json!({ "background": false, "task": "find the config file" }),
+                ),
                 ToolCall::new("o1", "other", json!({})),
             ]),
             // Child: one tool call, then a plain reply ends it.
@@ -102,8 +106,8 @@ async fn agent_transcript_address_is_readable() {
     assert!(addr.starts_with("@rumu:/sessions/"), "{addr}");
 
     // `read` opens it: the child's own nodes in root→head order — the
-    // sub-agent prompt (its first own node), the skipped sibling, the
-    // child's tool call + result, and the final reply.
+    // placeholders answering the parent's batch (its first own nodes), the
+    // sub-agent prompt, the child's tool call + result, and the final reply.
     let ws = WorkspacePlugin::new(
         home.path(),
         rumu_cards::Decks::load(home.path()).unwrap(),
@@ -128,7 +132,7 @@ async fn agent_transcript_address_is_readable() {
         .lines()
         .filter(|l| l.starts_with("<node "))
         .collect();
-    assert_eq!(elements.len(), 5, "{}", out.content.text);
+    assert_eq!(elements.len(), 6, "{}", out.content.text);
     assert!(
         out.content
             .text
@@ -137,7 +141,9 @@ async fn agent_transcript_address_is_readable() {
         out.content.text
     );
     assert!(
-        out.content.text.contains("(skipped in sub-agent branch)"),
+        out.content
+            .text
+            .contains("(left to the parent; not part of the sub-agent's work)"),
         "{}",
         out.content.text
     );

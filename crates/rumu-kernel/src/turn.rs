@@ -582,10 +582,12 @@ impl Kernel {
                     .get("args")
                     .cloned()
                     .unwrap_or_else(|| call.args.clone());
+                // A sub-agent runs in the background unless the model asks to
+                // wait on it; other tools wait unless asked otherwise.
                 let wants_background = args
                     .get("background")
                     .and_then(Value::as_bool)
-                    .unwrap_or(false);
+                    .unwrap_or(name == "agent" && matches!(caller, Caller::Model));
                 let background_tool = self.tools.iter().any(|t| t.name == name && t.background);
                 let strip_background = |args: &mut Value| {
                     if let Some(obj) = args.as_object_mut() {
@@ -954,11 +956,16 @@ impl Kernel {
                 if let Some(names) = child_workspaces {
                     initial.push(set_marker(names));
                 }
+                // The batch is answered by placeholders that say whose it is,
+                // and the goal comes as a prompt of its own: delivered as the
+                // `agent` call's result, it read as the parent's call coming
+                // back, and the child carried on with the parent's plan (and
+                // took its sibling calls' placeholders for failures).
                 for call in tool_calls {
                     let text = if call.call_id == call_id {
-                        sub_agent_text(task)
+                        "(handed to the sub-agent; its goal follows)"
                     } else {
-                        "(skipped in sub-agent branch)".to_owned()
+                        "(left to the parent; not part of the sub-agent's work)"
                     };
                     initial.push(NodeBody::ToolResult {
                         call_id: call.call_id.clone(),
@@ -967,6 +974,13 @@ impl Kernel {
                         invoke: None,
                     });
                 }
+                initial.push(NodeBody::User {
+                    content: Content::text(format!(
+                        "{}\nThe conversation above is your parent's, kept for context: its plan \
+                         and its other calls are not yours to carry on. Work only on the goal.",
+                        sub_agent_text(task)
+                    )),
+                });
                 (head.id.clone(), initial)
             }
             InheritContext::None => {
@@ -1203,7 +1217,7 @@ pub(crate) struct AgentArgs {
     task: String,
     /// how the sub-agent inherits from this branch
     inherit: Option<InheritArgs>,
-    /// run in the background; you get a task id now and a notification when it finishes
+    /// true (default): run in the background, returning a task id now and a notification when it finishes; false: wait here for its summary
     background: Option<bool>,
 }
 

@@ -50,7 +50,7 @@ fn content_text(content: &Content) -> String {
 
 fn child_task(nodes: &[Node]) -> Option<String> {
     for n in nodes {
-        if let NodeBody::ToolResult { content, .. } = &n.body {
+        if let NodeBody::User { content } = &n.body {
             let text = content_text(content);
             if let Some(rest) = text.split("You are now a sub-agent. Goal: ").nth(1) {
                 return Some(rest.lines().next().unwrap_or("").to_owned());

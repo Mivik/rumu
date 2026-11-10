@@ -70,7 +70,7 @@ impl Llm for AssistantsLlm {
                 1 => LlmResponse::calls([ToolCall::new(
                     "s1",
                     "agent",
-                    json!({ "task": "save a card", "inherit": { "context": "none" } }),
+                    json!({ "background": false, "task": "save a card", "inherit": { "context": "none" } }),
                 )]),
                 _ => {
                     let refusal = last_result(nodes).unwrap_or_default();

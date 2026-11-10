@@ -57,7 +57,7 @@ impl Llm for ScopedLlm {
             "a1",
             "agent",
             json!({
-                "task": "read the other workspace",
+                "background": false, "task": "read the other workspace",
                 "inherit": { "context": "none", "workspaces": ["proj"] }
             }),
         )]))

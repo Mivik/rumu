@@ -88,8 +88,9 @@ buffered output so far (pass `offset`/`limit` to page through it).";
 pub fn agent_tool() -> ToolSpec {
     ToolSpec {
         name: "agent".into(),
-        description: "Run a sub-agent on `task` and return its final summary (plus a transcript \
-address you can `read` for details). `inherit.context` defaults to \"full\" — it continues from \
+        description: "Run a sub-agent on `task`. It runs in the background by default: you get a \
+task id now and its final summary (plus a transcript address you can `read` for details) in a \
+note when it finishes; pass `background: false` to wait for the summary here instead. `inherit.context` defaults to \"full\" — it continues from \
 this exact point and sees everything you see; \"none\" starts a clean context containing only the \
 task. `inherit.workspaces` restricts which workspaces it may use (omit for all). Use for \
 open-ended work whose details don't need to stay here."
