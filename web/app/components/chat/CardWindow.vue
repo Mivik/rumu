@@ -118,10 +118,11 @@ const top = computed(() => {
   return open.at(-1)?.key === props.entry.key
 })
 
-/** Close the window, asking the pane first when it has unsaved work. The
- *  entry stays until the close transition has played. */
+/** Close the window, asking the pane first when it has unsaved work (a gone
+ *  card has no pane to ask). The entry stays until the close transition has
+ *  played. */
 function close(): void {
-  if (props.entry.closing || !pane.value?.confirmLeave()) return
+  if (props.entry.closing || (pane.value && !pane.value.confirmLeave())) return
   beginDrawerClose(props.entry.key)
   dialog.value?.close()
   window.setTimeout(() => closeDrawer(props.entry.key), 200)
