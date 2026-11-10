@@ -1,6 +1,6 @@
 <script setup lang="ts">
-// A project on the projects grid: a band of contour lines drawn from its id
-// (each project its own terrain, so two of a tint still tell apart) with its
+// A project on the projects grid: a band of soft color drawn from its id
+// (each project its own blend, so two of a tint still tell apart) with its
 // seal on the edge, then its name, its workspaces and a new session in it.
 // The card itself opens the project.
 import { computed } from 'vue'
@@ -14,9 +14,6 @@ import Icon from '../ui/Icon.vue'
 const props = defineProps<{ project: Project }>()
 defineEmits<{ open: [] }>()
 
-const W = 240
-const H = 80
-
 /** A small seeded PRNG (mulberry32) over the id's hash. */
 function random(seed: string): () => number {
   let h = hash(seed)
@@ -28,30 +25,20 @@ function random(seed: string): () => number {
   }
 }
 
-const rings = computed(() => {
+/** Three soft lights — the tone and its two hue neighbours — placed by the
+ * id; `--k` scales how much tone they carry (less in the dark). */
+const mesh = computed(() => {
   const rnd = random(props.project.id)
-  // a hill somewhere on the band, its rings widening out past the edges
-  const cx = W * (0.35 + rnd() * 0.55)
-  const cy = H * (0.2 + rnd() * 0.6)
-  const k1 = 2 + Math.floor(rnd() * 3)
-  const k2 = 3 + Math.floor(rnd() * 4)
-  const p1 = rnd() * Math.PI * 2
-  const p2 = rnd() * Math.PI * 2
-  const rings: string[] = []
-  let r = 4 + rnd() * 6
-  for (let i = 1; i <= 11; i++) {
-    // uneven steps: slopes steepen and flatten like real ground
-    r += 8 + rnd() * 10
-    const wobble = 0.05 + 0.1 * (i / 11)
-    let d = ''
-    for (let k = 0; k <= 72; k++) {
-      const a = (k / 72) * Math.PI * 2
-      const f = 1 + wobble * (0.7 * Math.sin(k1 * a + p1) + 0.3 * Math.sin(k2 * a + p2 + i * 0.3))
-      d += `${k ? 'L' : 'M'}${(cx + Math.cos(a) * r * f * 1.35).toFixed(1)} ${(cy + Math.sin(a) * r * f).toFixed(1)}`
-    }
-    rings.push(`${d}Z`)
-  }
-  return rings
+  const d = Math.round(25 + rnd() * 25)
+  const turn = Math.floor(rnd() * 3)
+  return [60, 45, 30]
+    .map((mix, k) => {
+      const dh = [-d, 0, d][(k + turn) % 3]
+      const color = `oklch(from var(--tone) l c calc(h + ${dh}))`
+      const at = `${Math.round(rnd() * 100)}% ${Math.round(rnd() * 100)}%`
+      return `radial-gradient(circle at ${at}, color-mix(in oklab, ${color} calc(var(--k) * ${mix}%), var(--surface)), transparent 65%)`
+    })
+    .join(', ')
 })
 
 /** Its workspaces, unless the one it mounts is just its own name again. */
@@ -76,9 +63,7 @@ const lastActive = computed(() => {
 <template>
   <div class="card" :style="{ '--tone': toneColor(projectTone(project)) }">
     <button type="button" class="open" :aria-label="project.name" @click="$emit('open')" />
-    <svg class="band" :viewBox="`0 0 ${W} ${H}`" preserveAspectRatio="xMidYMid slice" aria-hidden="true">
-      <path v-for="(d, i) in rings" :key="i" :d="d" :style="{ opacity: 0.6 - i * 0.04 }" />
-    </svg>
+    <div class="band" :style="{ '--mesh': mesh }" />
     <ProjectSeal :project="project" :size="40" class="seal" />
     <div class="pointer-events-none relative flex min-w-0 flex-1 flex-col gap-1.5 px-4 pt-2 pb-3">
       <span class="truncate text-message font-semibold text-ink">{{ project.name }}</span>
@@ -163,34 +148,10 @@ const lastActive = computed(() => {
 }
 
 .band {
-  pointer-events: none;
-  display: block;
-  width: 100%;
+  --k: 1;
   height: 4.75rem;
   background:
-    var(--grain),
-    linear-gradient(
-      120deg,
-      color-mix(in oklab, var(--tone) 22%, var(--surface)),
-      color-mix(in oklab, var(--tone) 58%, var(--surface))
-    );
-}
-
-.band path {
-  fill: none;
-  stroke: color-mix(in oklab, var(--tone) 55%, var(--ink));
-  stroke-width: 1;
-  vector-effect: non-scaling-stroke;
-  transition: translate 0.8s var(--ease-soft);
-}
-
-/* the terrain shifts a little under the pointer */
-.card:hover .band path:nth-child(odd) {
-  translate: -2px 1px;
-}
-
-.card:hover .band path:nth-child(even) {
-  translate: 2px -1px;
+    var(--grain), var(--mesh), color-mix(in oklab, var(--tone) calc(var(--k) * 22%), var(--surface));
 }
 
 .seal {
@@ -203,23 +164,7 @@ const lastActive = computed(() => {
 
 @media (prefers-color-scheme: dark) {
   .band {
-    background:
-      var(--grain),
-      linear-gradient(
-        120deg,
-        color-mix(in oklab, var(--tone) 8%, var(--surface)),
-        color-mix(in oklab, var(--tone) 24%, var(--surface))
-      );
-  }
-
-  .band path {
-    stroke: color-mix(in oklab, var(--tone) 80%, var(--surface));
-  }
-}
-
-@media (prefers-reduced-motion: reduce) {
-  .card:hover .band path {
-    translate: none;
+    --k: 0.65;
   }
 }
 </style>
