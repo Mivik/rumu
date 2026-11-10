@@ -100,6 +100,9 @@ impl Protocol {
 #[derive(Debug, Clone, Default, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(default, deny_unknown_fields)]
 pub struct ProviderSettings {
+    /// The name the web shows, when not the preset's (or the id).
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub name: Option<String>,
     /// A built-in provider, or a catalog one: its endpoints, and where its
     /// models are found in the catalog. A catalog one's endpoints are stored
     /// here whole.
@@ -281,6 +284,9 @@ pub enum ModelPick<'a> {
 pub struct ProviderInfo {
     pub id: String,
     pub name: String,
+    /// The name set on it; absent while it shows the preset's (or the id).
+    #[ts(optional)]
+    pub custom_name: Option<String>,
     #[ts(optional)]
     pub preset: Option<String>,
     /// The endpoints in use, the preset's included.

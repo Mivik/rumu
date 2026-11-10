@@ -5,7 +5,11 @@ import type { Protocol } from "./Protocol";
 /**
  * A provider as the web sees it.
  */
-export type ProviderInfo = { id: string, name: string, preset?: string, 
+export type ProviderInfo = { id: string, name: string, 
+/**
+ * The name set on it; absent while it shows the preset's (or the id).
+ */
+custom_name?: string, preset?: string, 
 /**
  * The endpoints in use, the preset's included.
  */

@@ -27,6 +27,8 @@ import ModelSettings from './ModelSettings.vue'
 
 interface Form {
   id: string
+  /** Shown in place of the preset's name (or the id); empty is automatic. */
+  name: string
   preset: string | null
   /** The endpoints in use, the preset's included. */
   endpoints: Partial<Record<Protocol, string>>
@@ -64,6 +66,10 @@ const shownPresets = computed(() => {
 const form = reactive<Form>(blank())
 const pristine = ref('')
 const saved = computed(() => providers.value.find((p) => p.id === editing.value) ?? null)
+/** What the name field falls back to when empty: the preset's name, else the id. */
+const defaultName = computed(
+  () => presets.value.find((p) => p.id === form.preset)?.name ?? form.id.trim(),
+)
 const isNew = computed(() => editing.value === '')
 const dirty = computed(() => JSON.stringify(form) !== pristine.value)
 const busy = ref(false)
@@ -77,7 +83,7 @@ onBeforeUnmount(() => (layout.settingsBusy = false))
 const formShown = computed(() => editing.value !== null && !picking.value)
 
 function blank(): Form {
-  return { id: '', preset: null, endpoints: {}, api_key: '', models: [], protocols: {} }
+  return { id: '', name: '', preset: null, endpoints: {}, api_key: '', models: [], protocols: {} }
 }
 
 function fill(p: ProviderInfo | null): void {
@@ -86,6 +92,7 @@ function fill(p: ProviderInfo | null): void {
     p
       ? {
           id: p.id,
+          name: p.custom_name ?? '',
           preset: p.preset ?? null,
           endpoints: { ...p.endpoints },
           api_key: '',
@@ -363,7 +370,7 @@ async function save(): Promise<void> {
   const endpoints: Record<string, string> = {}
   for (const p of usableProtocols.value) endpoints[p] = form.endpoints[p]!.trim()
   const protocols = Object.fromEntries(Object.entries(form.protocols).filter(([m]) => enabled.value.has(m)))
-  const params: Record<string, unknown> = { id, endpoints, models: form.models, protocols }
+  const params: Record<string, unknown> = { id, name: form.name.trim(), endpoints, models: form.models, protocols }
   if (form.preset) params.preset = form.preset
   if (form.api_key) params.api_key = form.api_key
   // Its list changes only with where it is reached and how.
@@ -539,6 +546,17 @@ async function refreshModels(): Promise<void> {
               />
             </label>
             <label class="flex flex-col gap-1.5">
+              <span class="field-label">{{ t('settings.providerName') }}</span>
+              <input
+                v-model="form.name"
+                type="text"
+                class="w-full"
+                :placeholder="defaultName"
+                autocomplete="off"
+                spellcheck="false"
+              />
+            </label>
+            <label class="flex flex-col gap-1.5" :class="{ 'sm:col-span-2': isNew }">
               <span class="field-label">{{ t('settings.apiKey') }}</span>
               <input
                 v-model="form.api_key"
@@ -791,12 +809,13 @@ async function refreshModels(): Promise<void> {
           <button
             v-else
             type="button"
-            class="icon-btn size-8"
+            class="inline-flex items-center gap-1.5 rounded-control border border-danger/30 bg-danger-soft px-2.5 py-1 text-meta font-semibold text-danger transition-colors hover:border-danger/50 hover:bg-danger-soft/70"
             :title="t('settings.deleteProvider', { name: saved.name })"
             :disabled="busy"
             @click="pendingDelete = true"
           >
-            <Icon name="trash" :size="14" />
+            <Icon name="trash" :size="13" />
+            {{ t('settings.delete') }}
           </button>
         </template>
         <span class="flex-1" />

@@ -82,6 +82,8 @@ struct File {
 pub struct ProviderEdit {
     id: String,
     #[serde(default)]
+    name: Option<String>,
+    #[serde(default)]
     preset: Option<String>,
     #[serde(default)]
     endpoints: BTreeMap<Protocol, String>,
@@ -242,6 +244,10 @@ impl Settings {
         let catalog = self.catalog();
         self.edit(|file| {
             let old = file.providers.remove(&id).unwrap_or_default();
+            let name = match &edit.name {
+                Some(n) => Some(n.trim()).filter(|n| !n.is_empty()).map(str::to_owned),
+                None => old.name,
+            };
             if let Some(p) = edit.preset.as_deref()
                 && presets::preset(p).is_none()
                 && catalog.provider(p).is_none()
@@ -258,6 +264,7 @@ impl Settings {
             file.providers.insert(
                 id,
                 ProviderSettings {
+                    name,
                     endpoints: overrides(edit.preset.as_deref(), edit.endpoints),
                     preset: edit.preset,
                     api_key,
@@ -511,11 +518,16 @@ fn provider_info(
     ProviderInfo {
         id: id.to_owned(),
         name: p
-            .preset
-            .as_deref()
-            .and_then(|x| preset_name(catalog, x))
-            .unwrap_or(id)
-            .to_owned(),
+            .name
+            .clone()
+            .or_else(|| {
+                p.preset
+                    .as_deref()
+                    .and_then(|x| preset_name(catalog, x))
+                    .map(str::to_owned)
+            })
+            .unwrap_or_else(|| id.to_owned()),
+        custom_name: p.name.clone(),
         preset: p.preset.clone(),
         endpoints: eps,
         has_api_key: !p.api_key.is_empty(),
@@ -661,6 +673,7 @@ mod tests {
     fn provider(id: &str, key: Option<&str>) -> ProviderEdit {
         ProviderEdit {
             id: id.into(),
+            name: None,
             preset: Some("anthropic".into()),
             endpoints: BTreeMap::new(),
             api_key: key.map(Into::into),
@@ -799,6 +812,7 @@ mod tests {
         let info = s
             .set_provider(ProviderEdit {
                 id: "zeta".into(),
+                name: None,
                 preset: Some("zeta".into()),
                 endpoints: info.presets[n + 1].endpoints.clone(),
                 api_key: None,
