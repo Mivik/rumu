@@ -132,6 +132,19 @@ const idle = computed(() => {
   const d = activeDelta.value
   return !d?.reasoning && !d?.text
 })
+
+/** The items to show: while it waits on the model, a trailing run of only
+ * recall and catalog has nothing to say on its line yet — it shows once the
+ * step's reasoning joins it. */
+const items = computed(() => {
+  const tail = props.group.items.at(-1)
+  const silent =
+    tail?.kind === 'activity' && tail.steps.every((s) => s.kind === 'catalog' || s.kind === 'recall')
+  return idle.value && silent ? props.group.items.slice(0, -1) : props.group.items
+})
+
+/** Nothing shows below the mascot yet: "working…" goes beside it. */
+const bare = computed(() => !items.value.length && !props.group.assistants.length)
 </script>
 
 <template>
@@ -153,18 +166,18 @@ const idle = computed(() => {
           })
         }}
       </span>
-      <span v-else-if="idle && !hasBody" v-enter="'enter-fade'" class="working-line">
+      <span v-else-if="idle && bare" v-enter="'enter-fade'" class="working-line">
         <span class="dot-live size-1.5 rounded-full bg-brand" />{{ t('chat.assistant.working') }}
       </span>
     </div>
 
-    <template v-for="(item, i) in group.items" :key="i">
+    <template v-for="(item, i) in items" :key="i">
       <ContextPills v-if="item.kind === 'context'" v-enter="'enter-fade'" :nodes="item.nodes" />
       <ActivityRun
         v-else-if="item.kind === 'activity'"
         v-enter="'enter-fade'"
         :steps="item.steps"
-        :live="live && !idle && i === group.items.length - 1"
+        :live="live && !idle && i === items.length - 1"
       />
       <ArtifactCard v-else-if="item.kind === 'artifact'" v-enter="'enter-fade'" :node="item.node" />
       <div
@@ -191,7 +204,7 @@ const idle = computed(() => {
 
     <!-- live output of the calls still running -->
     <RunningTools v-if="live" v-enter="'enter-fade'" :calls="pending" />
-    <span v-if="idle && hasBody" v-enter="'enter-fade'" class="working-line">
+    <span v-if="idle && !bare" v-enter="'enter-fade'" class="working-line">
       <span class="dot-live size-1.5 rounded-full bg-brand" />{{ t('chat.assistant.working') }}
     </span>
 
