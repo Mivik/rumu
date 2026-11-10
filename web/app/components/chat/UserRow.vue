@@ -1,9 +1,10 @@
 <script setup lang="ts">
 // A user message: right-aligned coral-tinted bubble (max ~70% of the column,
 // width fits content, no avatar); its coral ring on the thread is ConversationView's.
-// Time only on hover; edit/copy/regenerate/fork appear left of the bubble on
-// hover. Editing swaps the bubble for a textarea and resends the prompt on a
-// branch forked from just before it; regenerate asks the same question again
+// Edit/copy/regenerate/fork sit under the message's bottom-right: always shown
+// on touch, revealed on hover with a fine pointer. Editing swaps the bubble for
+// a textarea and resends the prompt on a branch forked from just before it;
+// regenerate asks the same question again
 // (same op as the assistant side's regenerate — the reply is replaced); fork
 // copies the conversation up to here into a new session.
 //
@@ -182,10 +183,10 @@ function onFork(): void {
       </div>
     </div>
 
-    <!-- actions sit at the message's bottom-right, revealed on hover -->
+    <!-- actions sit at the message's bottom-right: always on touch, revealed on hover with a fine pointer -->
     <div
       v-if="!editing"
-      class="mt-0.5 hidden h-5 items-center justify-end gap-0.5 opacity-0 transition duration-200 ease-soft group-hover/urow:opacity-100 group-focus-within/urow:opacity-100 sm:flex"
+      class="mt-0.5 flex h-5 items-center justify-end gap-0.5 opacity-100 transition duration-200 ease-soft pointer-fine:opacity-0 pointer-fine:group-hover/urow:opacity-100 pointer-fine:group-focus-within/urow:opacity-100"
     >
       <BranchSwitcher :parent-id="node.parent" />
       <button
