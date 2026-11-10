@@ -202,6 +202,10 @@ function measure(): void {
   metrics.value = { S, C, L, T, scale, off }
 }
 
+/** Only the composer is watched here: the scroller and the column are laid
+ *  out by ConversationView, which sizes the blank under the timeline in its
+ *  own resize pass and calls `measure` after it — measured on our own, the
+ *  page would be read before that blank settles. */
 const resize = typeof ResizeObserver !== 'undefined' ? new ResizeObserver(() => measure()) : null
 
 /** Scroll moves only the viewport stretch and "current" — layout is untouched. */
@@ -211,24 +215,18 @@ function onScrollSync(): void {
 
 watch(
   [scrollEl, innerEl, composerEl, layerEl],
-  ([sc, inner, comp], [oldSc, oldInner, oldComp]) => {
-    if (oldSc) {
-      oldSc.removeEventListener('scroll', onScrollSync)
-      resize?.unobserve(oldSc)
-    }
-    if (oldInner) resize?.unobserve(oldInner)
+  ([sc, , comp], [oldSc, , oldComp]) => {
+    oldSc?.removeEventListener('scroll', onScrollSync)
     if (oldComp) resize?.unobserve(oldComp)
-    if (sc) {
-      sc.addEventListener('scroll', onScrollSync, { passive: true })
-      resize?.observe(sc)
-    }
-    if (inner) resize?.observe(inner)
+    sc?.addEventListener('scroll', onScrollSync, { passive: true })
     if (comp) resize?.observe(comp)
     measure()
   },
   { immediate: true, flush: 'post' },
 )
 watch([timeline, isBusy], () => measure(), { flush: 'post' })
+
+defineExpose({ measure })
 
 // ---- drawing ----
 

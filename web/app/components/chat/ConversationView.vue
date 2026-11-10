@@ -48,7 +48,10 @@ const props = defineProps<{
 
 const scrollEl = ref<HTMLElement | null>(null)
 const innerEl = ref<HTMLElement | null>(null)
+const railEl = ref<InstanceType<typeof TimelineRail> | null>(null)
 const nearBottom = ref(true)
+/** Where the page ended (scrollHeight) at the last layoutTail. */
+let laidEnd = 0
 
 /** The rail reads the scroller / column through getters: a template ref
  *  passed straight through a prop (or read as one) trips vue-tsc's
@@ -69,7 +72,11 @@ let quietUntil = 0
 function onScroll(): void {
   const el = scrollEl.value
   if (!el) return
-  nearBottom.value = el.scrollHeight - el.scrollTop - el.clientHeight < 90
+  // At the end as it stands, or as last laid out: content that grows before
+  // layoutTail runs again (the scroll event of our own pin can fire after it)
+  // is not you scrolling away from the end.
+  const end = laidEnd ? Math.min(el.scrollHeight, laidEnd) : el.scrollHeight
+  nearBottom.value = end - el.scrollTop - el.clientHeight < 90
   if (performance.now() < quietUntil) return
   scrolling.value = true
   clearTimeout(scrollTimer)
@@ -235,18 +242,29 @@ function layoutTail(): void {
       floor += shift
       lent -= shift
     }
-    // Following the end, a shrink above it doesn't leave its blank behind.
-    if (nearBottom.value && !anchored) floor = Math.min(floor, Math.max(page ?? 0, height + LIVE_ROOM))
+    // Following the end, a shrink above it doesn't leave its blank behind;
+    // otherwise the blank only has to reach the bottom of the view.
+    if (!anchored) {
+      const cs = getComputedStyle(sc)
+      const view = sc.scrollTop + sc.clientHeight - parseFloat(cs.paddingTop) - parseFloat(cs.paddingBottom)
+      floor = Math.min(floor, Math.max(page ?? 0, height + LIVE_ROOM, nearBottom.value ? 0 : view))
+    }
   }
   viewHeight = sc.clientHeight
   const tail = floor - height
   spacer.style.height = `${tail}px`
+  laidEnd = sc.scrollHeight
   if (turnEnded && tail < shown && !prefersReduced()) {
     quietUntil = performance.now() + SETTLE_MS
-    spacer.animate([{ height: `${shown}px` }, { height: `${tail}px` }], {
-      duration: SETTLE_MS,
-      easing: 'cubic-bezier(0.22, 1, 0.36, 1)',
-    })
+    spacer
+      .animate([{ height: `${shown}px` }, { height: `${tail}px` }], {
+        duration: SETTLE_MS,
+        easing: 'cubic-bezier(0.22, 1, 0.36, 1)',
+      })
+      .finished.then(
+        () => railEl.value?.measure(),
+        () => {},
+      )
   }
   turnEnded = false
   if (anchored) {
@@ -255,6 +273,7 @@ function layoutTail(): void {
   } else if (nearBottom.value && performance.now() >= settlingUntil) {
     scrollToEnd()
   }
+  railEl.value?.measure()
 }
 
 // A finished turn gives back the blank it held, whether or not its last
@@ -288,6 +307,7 @@ function resetView(): void {
   anchorPending = null
   floor = 0
   lent = 0
+  laidEnd = 0
   sentId = null
   turnEnded = false
   seenPrompt = lastPromptId.value
@@ -402,6 +422,7 @@ function jumpTo(i: number): void {
   <!-- the thread rail down the right edge: a pinned minimap of the
        whole conversation (it stops above the composer where they meet) -->
   <TimelineRail
+    ref="railEl"
     :scroll-of="scrollRoot"
     :column-of="columnRoot"
     :composer-of="props.composerOf"
