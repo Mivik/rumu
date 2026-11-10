@@ -12,8 +12,13 @@ import ArtifactPanel from './components/chat/ArtifactPanel.vue'
 import { openArtifact } from './lib/artifacts'
 import Toasts from './components/Toasts.vue'
 import { closePanels, layout } from './lib/layout'
-import type { Page } from './lib/router'
+import { SIDE_SHEET, SWAP } from './lib/motion'
+import { sheetOf, type Page } from './lib/router'
 import { state } from './lib/store'
+
+/** The side sheet's place: an overlay below xl, the third column at xl. */
+const SIDE =
+  'fixed inset-2 z-45 shadow-pop sm:inset-3 xl:static xl:z-auto xl:col-start-3 xl:row-start-1 xl:my-4 xl:mr-4 xl:shadow-none'
 
 const PAGES: Record<Page, Component> = {
   decks: LibraryPage,
@@ -70,9 +75,19 @@ onBeforeUnmount(() => {
        stays mounted beneath it, so its draft and scroll survive. The cards
        share one 16px gutter on every side, so the desk reads as an even
        grid. -->
+  <!-- At xl the third column is always there, at 0fr while nothing is open in
+       it: the column eases open and shut (fr tracks interpolate) instead of
+       snapping the chat to half its width. A track's width already eases out
+       as its fr grows, hence ease-in-out. The third sheet keeps its own right
+       gutter, so the desk drops its padding there, and clips the sheet while
+       it slides past the edge (motion.ts, SIDE_SHEET). -->
   <div
-    class="desk grid h-full grid-cols-1 lg:grid-cols-[280px_minmax(0,1fr)] lg:gap-x-4 lg:pr-4"
-    :class="{ 'xl:grid-cols-[280px_minmax(0,1fr)_minmax(0,1fr)]': artifactOpen || agentOpen }"
+    class="desk grid h-full grid-cols-1 transition-[grid-template-columns] duration-350 ease-in-out lg:grid-cols-[280px_minmax(0,1fr)] lg:gap-x-4 lg:pr-4 xl:overflow-x-clip xl:pr-0"
+    :class="
+      artifactOpen || agentOpen
+        ? 'xl:grid-cols-[280px_minmax(0,1fr)_minmax(0,1fr)]'
+        : 'xl:grid-cols-[280px_minmax(0,1fr)_minmax(0,0fr)]'
+    "
   >
     <Sidebar
       class="fixed inset-y-0 left-0 z-50 w-[min(86vw,300px)] border-r border-line-soft bg-canvas transition-transform duration-300 ease-soft lg:static lg:z-auto lg:my-4 lg:ml-4 lg:w-auto lg:translate-x-0 lg:rounded-sheet lg:border-0 lg:bg-surface lg:shadow-card lg:ring-1 lg:ring-line"
@@ -80,18 +95,24 @@ onBeforeUnmount(() => {
       :inert="!layout.sidebarOpen && !lgUp ? '' : undefined"
       :aria-hidden="!layout.sidebarOpen && !lgUp ? 'true' : undefined"
     />
-    <ChatView v-show="!state.page" />
-    <component :is="PAGES[state.page.page]" v-if="state.page" />
-    <!-- an open artifact: the third sheet at xl, over the chat below it -->
-    <ArtifactPanel
-      v-if="artifactOpen"
-      class="fixed inset-2 z-45 shadow-pop sm:inset-3 xl:static xl:z-auto xl:my-4 xl:shadow-none"
-    />
-    <!-- a sub-agent's transcript: the same third sheet -->
-    <AgentPanel
-      v-if="agentOpen"
-      class="fixed inset-2 z-45 shadow-pop sm:inset-3 xl:static xl:z-auto xl:my-4 xl:shadow-none"
-    />
+    <!-- the chat and the pages share one cell, so a switch cross-fades -->
+    <Transition v-bind="SWAP">
+      <ChatView v-show="!state.page" class="col-start-1 row-start-1 lg:col-start-2" />
+    </Transition>
+    <Transition v-bind="SWAP">
+      <component
+        :is="PAGES[state.page.page]"
+        v-if="state.page"
+        :key="sheetOf(state.page.page)"
+        class="col-start-1 row-start-1 lg:col-start-2"
+      />
+    </Transition>
+    <!-- the third sheet at xl, over the chat below it: an open artifact, or
+         a sub-agent's transcript -->
+    <Transition v-bind="SIDE_SHEET">
+      <ArtifactPanel v-if="artifactOpen" key="artifact" :class="SIDE" />
+      <AgentPanel v-else-if="agentOpen" key="agent" :class="SIDE" />
+    </Transition>
     <Lightbox />
     <Toasts />
 

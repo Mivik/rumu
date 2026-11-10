@@ -104,7 +104,7 @@ watch(
     </header>
 
     <div ref="scrollEl" class="min-h-0 flex-1 overflow-y-auto px-5 py-4" @scroll="onScroll">
-      <div :key="branch.id" class="flex flex-col gap-5">
+      <div :key="branch.id" class="view-in flex flex-col gap-5">
         <div v-for="(entry, i) in timeline" :key="i" class="min-w-0">
           <UserRow v-if="entry.kind === 'user'" :node="entry.node" :context="entry.contextNodes" />
           <AssistantGroup v-else-if="entry.kind === 'group'" :group="entry" :live="busy && i === lastGroup" />

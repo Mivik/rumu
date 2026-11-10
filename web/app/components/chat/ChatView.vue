@@ -162,8 +162,14 @@ function composerRoot(): HTMLElement | null {
 
       <!-- the open session: its view + the composer at the foot of the sheet -->
       <div v-else key="chat" class="relative flex min-h-0 flex-1 flex-col">
-        <ConversationView v-if="state.view === 'chat'" :composer-of="composerRoot" />
-        <TraceView v-else />
+        <!-- a view switch: the new view settles in, the old one goes at once -->
+        <Transition
+          enter-active-class="transition-[opacity,translate] duration-300 ease-soft"
+          enter-from-class="translate-y-1.5 opacity-0"
+        >
+          <ConversationView v-if="state.view === 'chat'" :composer-of="composerRoot" />
+          <TraceView v-else />
+        </Transition>
 
         <div ref="composerEl" class="px-3 pt-1 pb-3 sm:px-6 sm:pb-5">
           <!-- running background tasks of this branch + opened task output -->

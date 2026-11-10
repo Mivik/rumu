@@ -71,3 +71,29 @@ export const vFollow: Directive<HTMLElement, boolean> = {
     if (binding.value && following.get(el)) el.scrollTop = el.scrollHeight
   },
 }
+
+// ---- swaps: one view taking another's place (Vue <Transition> classes) ----
+
+/** A sheet or pane replacing another: it rises in while the one it replaces
+ *  fades out. Either both share one grid cell (so they cross-fade in place),
+ *  or the transition runs `mode="out-in"`. */
+export const SWAP = {
+  enterActiveClass: 'transition-[opacity,translate] duration-300 ease-soft',
+  enterFromClass: 'translate-y-2 opacity-0',
+  leaveActiveClass: 'pointer-events-none transition-opacity duration-150 ease-soft',
+  leaveToClass: 'opacity-0',
+}
+
+/** The side sheet beside the chat (an artifact, a sub-agent). At xl its grid
+ *  column eases open and shut (app.vue); while it does, the sheet holds its
+ *  final width — half of what the sidebar (280px) and the two 16px gaps
+ *  leave, less its own 16px gutter — so its contents don't reflow: the
+ *  growing column slides it in from the right edge, where the desk clips it.
+ *  Below xl it is an overlay and rises like a dialog. */
+const SIDE_WIDTH = 'xl:min-w-[calc(50vw-172px)]'
+export const SIDE_SHEET = {
+  enterActiveClass: `transition-[opacity,translate] duration-300 ease-soft xl:duration-350 xl:ease-out ${SIDE_WIDTH}`,
+  enterFromClass: 'translate-y-3 opacity-0 xl:translate-y-0',
+  leaveActiveClass: `pointer-events-none transition-[opacity,translate] duration-200 ease-in xl:duration-350 ${SIDE_WIDTH}`,
+  leaveToClass: 'translate-y-2 opacity-0 xl:translate-y-0',
+}

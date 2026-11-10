@@ -3,7 +3,7 @@
 // Rendered as a flattened list so the ARIA tree keyboard model stays simple.
 // Every row has the same action menu; names are edited in place, and cards
 // and folders move by dragging them onto a deck or folder.
-import { computed, nextTick, ref, watch } from 'vue'
+import { computed, nextTick, onMounted, ref, watch, type Directive } from 'vue'
 import { t } from '../../i18n'
 import { validDeckName } from '../../lib/deckName'
 import { buildLibraryTree, type TreeNode } from '../../lib/libraryTree'
@@ -28,6 +28,14 @@ import { toast } from '../../lib/state/ui'
 import type { LibraryCard } from '../../lib/types'
 import Icon from '../ui/Icon.vue'
 import Popover from '../ui/Popover.vue'
+
+/** Rows that appear after the tree is up — a folder opened, a search's hits,
+ *  a card created — slide in; the tree's first render stays still. */
+let settled = false
+onMounted(() => void nextTick(() => (settled = true)))
+const vRowIn: Directive<HTMLElement> = {
+  mounted: (el) => settled && el.classList.add('enter-slide'),
+}
 
 const ENTRY_NAME = /^[A-Za-z0-9_-][A-Za-z0-9._-]*$/
 
@@ -567,6 +575,7 @@ const isFolder = (node: TreeNode): node is FolderNode => node.kind === 'folder'
               ? (node.deck.description ?? undefined)
               : undefined
         "
+        v-row-in
         :draggable="canDrag(node)"
         class="group flex min-h-8 cursor-pointer items-center gap-1.5 rounded-control border pr-1 font-card outline-none transition-colors duration-150 hover:bg-surface-2/60 focus-visible:ring-2 focus-visible:ring-brand/25"
         :class="[

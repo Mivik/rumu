@@ -1316,6 +1316,7 @@
  *   enter-pop    context pill                enter-recall recalled memory
  *   enter-stamp  "blocked" verdict           reveal       disclosed detail
  *   view-in      session switch              cascade      panel contents
+ *   stagger      a grid of items             SWAP / SIDE_SHEET  (lib/motion.ts)
  *   dot-live     the coral dot, working     line-in    a card's underline
  */
 
@@ -1390,6 +1391,13 @@
   }
   .cascade > * > :nth-child(n + 7) {
     animation-delay: 180ms;
+  }
+
+  /* a grid's items rising in one after another (--i: the item's index),
+   * capped so a long grid doesn't trail */
+  .stagger > * {
+    animation: rise 0.36s var(--ease-soft) both;
+    animation-delay: calc(min(var(--i, 0), 10) * 30ms + 40ms);
   }
 
   /* rendered markdown whose blocks settle in one after another (drawer) */

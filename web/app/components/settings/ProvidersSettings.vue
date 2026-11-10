@@ -7,6 +7,7 @@ import { computed, nextTick, onBeforeUnmount, onMounted, reactive, ref, watch, w
 import { t } from '../../i18n'
 import { rumu } from '../../lib/api'
 import { layout } from '../../lib/layout'
+import { SWAP } from '../../lib/motion'
 import {
   PROTOCOL_LABELS,
   PROTOCOLS,
@@ -114,11 +115,9 @@ function startAdd(): void {
   fill(null)
 }
 
-watch(picking, (v) => {
-  if (!v) return
-  presetQuery.value = ''
-  void nextTick(() => presetInput.value?.focus())
-})
+watch(picking, (v) => v && (presetQuery.value = ''))
+// The picker mounts once the page it replaces has faded out.
+watch(presetInput, (el) => el?.focus())
 
 // The page, as crumbs after Settings in the page header.
 watchEffect(() => {
@@ -434,228 +433,47 @@ async function refreshModels(): Promise<void> {
 <template>
   <div class="flex min-h-0 flex-1 flex-col">
     <div class="flex min-h-0 flex-1 flex-col gap-5 overflow-y-auto px-4 pt-5 pb-6 sm:px-6">
-      <!-- the list -->
-      <div v-if="editing === null" class="flex flex-col gap-2">
-        <button
-          v-for="p in providers"
-          :key="p.id"
-          type="button"
-          class="flex items-center gap-3 rounded-card border border-line-soft bg-surface px-3 py-2.5 text-left transition-colors hover:bg-surface-2"
-          @click="open(p)"
-        >
-          <span class="font-semibold text-ink">{{ p.name }}</span>
-          <span class="flex flex-wrap gap-1">
-            <span
-              v-for="protocol in protocolsOf(p.endpoints)"
-              :key="protocol"
-              class="rounded-xs border border-line px-1 text-micro text-ink-3"
-              >{{ PROTOCOL_LABELS[protocol] }}</span
-            >
-          </span>
-          <span class="ml-auto text-meta text-ink-3">{{
-            t('settings.modelCount', { n: p.models.length })
-          }}</span>
-          <Icon
-            v-if="!p.has_api_key"
-            name="blocked"
-            :size="13"
-            class="text-danger"
-            :title="t('settings.noKey')"
-          />
-          <Icon name="chevron" :size="12" class="text-ink-3" />
-        </button>
-        <div class="flex items-center gap-2 pt-1">
-          <button type="button" class="btn" @click="startAdd">
-            <Icon name="plus" :size="13" />
-            {{ t('settings.addProvider') }}
-          </button>
-        </div>
-      </div>
-
-      <!-- adding: pick a preset or a custom endpoint -->
-      <div v-else-if="picking" class="flex flex-col gap-2">
-        <div class="overflow-hidden rounded-control border border-line-soft">
-          <div class="relative border-b border-line-soft">
-            <Icon
-              name="search"
-              :size="13"
-              class="pointer-events-none absolute top-1/2 left-3 -translate-y-1/2 text-ink-3"
-            />
-            <input
-              ref="presetInput"
-              v-model="presetQuery"
-              type="search"
-              class="w-full rounded-none border-0 bg-transparent py-2 pl-8 text-secondary"
-              :placeholder="t('settings.searchProviders')"
-              autocomplete="off"
-              spellcheck="false"
-              @keydown.enter.prevent="shownPresets[0] && choosePreset(shownPresets[0])"
-            />
-          </div>
-          <div class="max-h-96 overflow-y-auto py-1">
-            <button
-              v-for="p in shownPresets"
-              :key="p.id"
-              type="button"
-              class="flex w-full items-center gap-2 px-3 py-1.5 text-left transition-colors hover:bg-surface-2"
-              @click="choosePreset(p)"
-            >
-              <span class="min-w-0 truncate text-secondary text-ink">{{ p.name }}</span>
-              <span class="flex flex-none gap-1">
-                <span
-                  v-for="protocol in protocolsOf(p.endpoints)"
-                  :key="protocol"
-                  class="rounded-xs border border-line px-1 text-micro text-ink-3"
-                  >{{ PROTOCOL_LABELS[protocol] }}</span
-                >
-              </span>
-            </button>
-            <p v-if="!shownPresets.length" class="px-3 py-3 text-center text-meta text-ink-3 italic">
-              {{ t('settings.noProvidersFound') }}
-            </p>
-          </div>
-        </div>
-        <button
-          type="button"
-          class="-mx-2.5 flex items-center gap-2 rounded-control px-2.5 py-1.5 text-left text-secondary text-ink-2 transition-colors hover:bg-surface-2"
-          @click="choosePreset(null)"
-        >
-          <Icon name="plus" :size="13" class="text-ink-3" />
-          {{ t('settings.customProvider') }}
-        </button>
-      </div>
-
-      <!-- the provider's form -->
-      <form v-else-if="formShown" class="flex flex-col gap-5" @submit.prevent="save">
-        <div class="grid gap-3" :class="{ 'sm:grid-cols-2': isNew }">
-          <label v-if="isNew" class="flex flex-col gap-1.5">
-            <span class="field-label">{{ t('settings.providerId') }}</span>
-            <input
-              v-model="form.id"
-              type="text"
-              class="w-full font-mono text-meta"
-              autocomplete="off"
-              spellcheck="false"
-            />
-          </label>
-          <label class="flex flex-col gap-1.5">
-            <span class="field-label">{{ t('settings.apiKey') }}</span>
-            <input
-              v-model="form.api_key"
-              type="password"
-              class="w-full font-mono text-meta"
-              :placeholder="saved?.has_api_key ? `•••••••• ${t('settings.apiKeySaved')}` : ''"
-              autocomplete="off"
-              spellcheck="false"
-            />
-          </label>
-        </div>
-
-        <!-- endpoints -->
-        <div class="flex flex-col gap-2">
-          <div class="flex items-center gap-2">
-            <span class="field-label">{{ t('settings.endpoints') }}</span>
-            <button
-              v-if="!form.preset"
-              type="button"
-              class="ml-auto inline-flex items-center gap-1.5 rounded-control border border-brand/40 bg-brand-soft px-2.5 py-1 text-meta font-semibold text-brand-strong transition-colors hover:border-brand/60 hover:bg-brand-soft/70"
-              @click="openDetect"
-            >
-              <Icon name="search" :size="12" />
-              {{ t('settings.detectFromAddress') }}
-            </button>
-          </div>
-          <div
-            class="grid grid-cols-[minmax(0,1fr)_auto] items-center gap-x-3 gap-y-2 sm:grid-cols-[8rem_minmax(0,1fr)_auto]"
+      <Transition v-bind="SWAP" mode="out-in">
+        <!-- the list -->
+        <div v-if="editing === null" class="flex flex-col gap-2">
+          <button
+            v-for="p in providers"
+            :key="p.id"
+            type="button"
+            class="flex items-center gap-3 rounded-card border border-line-soft bg-surface px-3 py-2.5 text-left transition-colors hover:bg-surface-2"
+            @click="open(p)"
           >
-            <template v-for="protocol in shownProtocols" :key="protocol">
-              <span class="col-span-2 -mb-1 text-meta text-ink-3 sm:col-span-1 sm:mb-0">{{
-                PROTOCOL_LABELS[protocol]
-              }}</span>
-              <input
-                v-model="form.endpoints[protocol]"
-                type="url"
-                class="w-full font-mono text-meta"
-                autocomplete="off"
-                spellcheck="false"
-              />
-              <button
-                type="button"
-                class="icon-btn size-7 justify-self-center"
-                :title="t('settings.removeEndpoint')"
-                :aria-label="t('settings.removeEndpoint')"
-                @click="removeEndpoint(protocol)"
+            <span class="font-semibold text-ink">{{ p.name }}</span>
+            <span class="flex flex-wrap gap-1">
+              <span
+                v-for="protocol in protocolsOf(p.endpoints)"
+                :key="protocol"
+                class="rounded-xs border border-line px-1 text-micro text-ink-3"
+                >{{ PROTOCOL_LABELS[protocol] }}</span
               >
-                <Icon name="close" :size="12" />
-              </button>
-            </template>
-          </div>
-          <div v-if="missingProtocols.length" class="flex flex-wrap gap-1.5">
-            <button
-              v-for="protocol in missingProtocols"
-              :key="protocol"
-              type="button"
-              class="inline-flex items-center gap-1 rounded-full border border-dashed border-line px-2.5 py-0.5 text-meta text-ink-3 transition-colors hover:border-ink-3 hover:text-ink"
-              @click="form.endpoints[protocol] = ''"
-            >
-              <Icon name="plus" :size="11" />
-              {{ PROTOCOL_LABELS[protocol] }}
+            </span>
+            <span class="ml-auto text-meta text-ink-3">{{
+              t('settings.modelCount', { n: p.models.length })
+            }}</span>
+            <Icon
+              v-if="!p.has_api_key"
+              name="blocked"
+              :size="13"
+              class="text-danger"
+              :title="t('settings.noKey')"
+            />
+            <Icon name="chevron" :size="12" class="text-ink-3" />
+          </button>
+          <div class="flex items-center gap-2 pt-1">
+            <button type="button" class="btn" @click="startAdd">
+              <Icon name="plus" :size="13" />
+              {{ t('settings.addProvider') }}
             </button>
           </div>
         </div>
 
-        <!-- models: listed once saved -->
-        <div v-if="saved" class="flex flex-col gap-2">
-          <div class="flex items-center gap-2">
-            <span class="field-label">{{ t('settings.models') }}</span>
-            <span class="text-meta text-ink-3">{{
-              t('settings.modelsSummary', { n: enabled.size, m: listed.length })
-            }}</span>
-            <button
-              v-if="!isDefaultRules"
-              type="button"
-              class="ml-auto rounded-control px-2 py-0.5 text-meta text-ink-3 transition-colors hover:bg-surface-2 hover:text-ink"
-              @click="resetRules"
-            >
-              {{ t('settings.resetRules') }}
-            </button>
-            <button
-              type="button"
-              class="icon-btn size-6"
-              :class="{ 'ml-auto': isDefaultRules }"
-              :disabled="busy"
-              :title="t('settings.refreshModels')"
-              :aria-label="t('settings.refreshModels')"
-              @click="refreshModels"
-            >
-              <Icon name="regenerate" :size="13" :class="{ 'animate-spin': listing }" />
-            </button>
-          </div>
-          <p v-if="saved.list_error" class="flex items-start gap-1.5 text-meta text-danger">
-            <Icon name="error" :size="13" class="mt-0.5 flex-none" />
-            <span class="min-w-0 truncate" :title="saved.list_error">{{ saved.list_error }}</span>
-          </p>
-
-          <div v-if="patterns.length" class="flex flex-wrap items-center gap-1.5">
-            <span class="text-meta text-ink-3">{{ t('settings.rules') }}</span>
-            <span
-              v-for="rule in patterns"
-              :key="rule"
-              class="inline-flex items-center gap-0.5 rounded-full bg-surface-2 py-0.5 pr-0.5 pl-2.5 font-mono text-meta text-ink-2"
-            >
-              {{ rule }}
-              <button
-                type="button"
-                class="icon-btn size-5"
-                :aria-label="t('settings.removeRule')"
-                :title="t('settings.removeRule')"
-                @click="removeRule(rule)"
-              >
-                <Icon name="close" :size="10" />
-              </button>
-            </span>
-          </div>
-
+        <!-- adding: pick a preset or a custom endpoint -->
+        <div v-else-if="picking" class="flex flex-col gap-2">
           <div class="overflow-hidden rounded-control border border-line-soft">
             <div class="relative border-b border-line-soft">
               <Icon
@@ -664,143 +482,336 @@ async function refreshModels(): Promise<void> {
                 class="pointer-events-none absolute top-1/2 left-3 -translate-y-1/2 text-ink-3"
               />
               <input
-                v-model="query"
+                ref="presetInput"
+                v-model="presetQuery"
                 type="search"
                 class="w-full rounded-none border-0 bg-transparent py-2 pl-8 text-secondary"
-                :placeholder="t('settings.searchOrAddModel')"
+                :placeholder="t('settings.searchProviders')"
                 autocomplete="off"
                 spellcheck="false"
-                @keydown.enter.prevent="addSearched"
+                @keydown.enter.prevent="shownPresets[0] && choosePreset(shownPresets[0])"
               />
             </div>
-            <div v-if="searchRules.length || customId" class="flex flex-col border-b border-line-soft py-1">
+            <div class="max-h-96 overflow-y-auto py-1">
               <button
-                v-for="r in searchRules"
-                :key="r.rule"
+                v-for="p in shownPresets"
+                :key="p.id"
                 type="button"
-                class="flex items-center gap-2 px-3 py-1.5 text-left text-secondary text-ink transition-colors hover:bg-surface-2"
-                @click="addRule(r.rule)"
+                class="flex w-full items-center gap-2 px-3 py-1.5 text-left transition-colors hover:bg-surface-2"
+                @click="choosePreset(p)"
               >
-                <Icon
-                  :name="r.kind.startsWith('exclude') ? 'close' : 'plus'"
-                  :size="13"
-                  :class="r.kind.startsWith('exclude') ? 'text-ink-3' : 'text-brand'"
-                />
-                <i18n-t :keypath="`settings.enable_${r.kind}`" scope="global" tag="span">
-                  <template #q>
-                    <span class="font-mono">{{ term }}</span>
-                  </template>
-                  <template #n>{{ r.n }}</template>
-                </i18n-t>
-                <span class="font-mono text-micro text-ink-3">{{ r.rule }}</span>
-              </button>
-              <button
-                v-if="customId"
-                type="button"
-                class="flex items-center gap-2 px-3 py-1.5 text-left text-secondary text-ink transition-colors hover:bg-surface-2"
-                @click="addRule(customId)"
-              >
-                <Icon name="plus" :size="13" class="text-ink-3" />
-                <i18n-t keypath="settings.addModelId" scope="global" tag="span">
-                  <template #id>
-                    <span class="font-mono">{{ customId }}</span>
-                  </template>
-                </i18n-t>
-              </button>
-            </div>
-            <div class="max-h-80 overflow-y-auto py-1">
-              <div
-                v-for="id in rows.ids"
-                :key="id"
-                class="flex items-center gap-2 py-0.5 pr-1.5 pl-3"
-                :class="enabled.has(id) ? '' : 'opacity-70 hover:opacity-100'"
-              >
-                <label class="flex min-w-0 flex-1 cursor-pointer items-center gap-2.5 py-0.5">
-                  <input type="checkbox" :checked="enabled.has(id)" @change="toggle(id)" />
-                  <span v-if="name(id)" class="max-w-1/2 flex-none truncate text-secondary text-ink">{{
-                    name(id)
-                  }}</span>
-                  <span class="min-w-0 truncate font-mono text-micro text-ink-3">{{ id }}</span>
+                <span class="min-w-0 truncate text-secondary text-ink">{{ p.name }}</span>
+                <span class="flex flex-none gap-1">
                   <span
-                    v-if="includePatterns.length > 1 && enabled.has(id) && !form.models.includes(id)"
-                    class="flex-none rounded-xs border border-line px-1 font-mono text-micro text-ink-3"
-                    :title="t('settings.enabledBy', { rule: patternFor(id) })"
-                    >{{ patternFor(id) }}</span
+                    v-for="protocol in protocolsOf(p.endpoints)"
+                    :key="protocol"
+                    class="rounded-xs border border-line px-1 text-micro text-ink-3"
+                    >{{ PROTOCOL_LABELS[protocol] }}</span
                   >
-                </label>
-                <span
-                  v-if="choosable && enabled.has(id)"
-                  class="flex-none text-micro"
-                  :class="form.protocols[id] ? 'text-ink-2' : 'text-ink-3'"
-                  >{{ PROTOCOL_LABELS[protocolOf(id)!] ?? '—' }}</span
-                >
-                <ModelSettings
-                  :provider="saved.id"
-                  :id="id"
-                  :info="savedModels.get(id)"
-                  :held="form.protocols[id] ?? null"
-                  :usable="usableProtocols"
-                  @protocol="setProtocol(id, $event)"
-                />
-              </div>
-              <p v-if="rows.more" class="px-3 py-1.5 text-meta text-ink-3 italic">
-                {{ t('settings.moreModels', { n: rows.more }) }}
-              </p>
-              <p
-                v-if="listing && !listed.length"
-                class="flex items-center justify-center gap-2 px-3 py-3 text-meta text-ink-3"
-              >
-                <span class="size-3.5 animate-spin rounded-full border-2 border-brand border-t-transparent" />
-                {{ t('settings.loadingModels') }}
-              </p>
-              <p
-                v-else-if="!rows.ids.length && !searchRules.length && !customId"
-                class="px-3 py-3 text-center text-meta text-ink-3 italic"
-              >
-                {{ t('settings.noModels') }}
+                </span>
+              </button>
+              <p v-if="!shownPresets.length" class="px-3 py-3 text-center text-meta text-ink-3 italic">
+                {{ t('settings.noProvidersFound') }}
               </p>
             </div>
           </div>
+          <button
+            type="button"
+            class="-mx-2.5 flex items-center gap-2 rounded-control px-2.5 py-1.5 text-left text-secondary text-ink-2 transition-colors hover:bg-surface-2"
+            @click="choosePreset(null)"
+          >
+            <Icon name="plus" :size="13" class="text-ink-3" />
+            {{ t('settings.customProvider') }}
+          </button>
         </div>
-      </form>
+
+        <!-- the provider's form -->
+        <form v-else-if="formShown" class="flex flex-col gap-5" @submit.prevent="save">
+          <div class="grid gap-3" :class="{ 'sm:grid-cols-2': isNew }">
+            <label v-if="isNew" class="flex flex-col gap-1.5">
+              <span class="field-label">{{ t('settings.providerId') }}</span>
+              <input
+                v-model="form.id"
+                type="text"
+                class="w-full font-mono text-meta"
+                autocomplete="off"
+                spellcheck="false"
+              />
+            </label>
+            <label class="flex flex-col gap-1.5">
+              <span class="field-label">{{ t('settings.apiKey') }}</span>
+              <input
+                v-model="form.api_key"
+                type="password"
+                class="w-full font-mono text-meta"
+                :placeholder="saved?.has_api_key ? `•••••••• ${t('settings.apiKeySaved')}` : ''"
+                autocomplete="off"
+                spellcheck="false"
+              />
+            </label>
+          </div>
+
+          <!-- endpoints -->
+          <div class="flex flex-col gap-2">
+            <div class="flex items-center gap-2">
+              <span class="field-label">{{ t('settings.endpoints') }}</span>
+              <button
+                v-if="!form.preset"
+                type="button"
+                class="ml-auto inline-flex items-center gap-1.5 rounded-control border border-brand/40 bg-brand-soft px-2.5 py-1 text-meta font-semibold text-brand-strong transition-colors hover:border-brand/60 hover:bg-brand-soft/70"
+                @click="openDetect"
+              >
+                <Icon name="search" :size="12" />
+                {{ t('settings.detectFromAddress') }}
+              </button>
+            </div>
+            <div
+              class="grid grid-cols-[minmax(0,1fr)_auto] items-center gap-x-3 gap-y-2 sm:grid-cols-[8rem_minmax(0,1fr)_auto]"
+            >
+              <template v-for="protocol in shownProtocols" :key="protocol">
+                <span class="col-span-2 -mb-1 text-meta text-ink-3 sm:col-span-1 sm:mb-0">{{
+                  PROTOCOL_LABELS[protocol]
+                }}</span>
+                <input
+                  v-model="form.endpoints[protocol]"
+                  type="url"
+                  class="w-full font-mono text-meta"
+                  autocomplete="off"
+                  spellcheck="false"
+                />
+                <button
+                  type="button"
+                  class="icon-btn size-7 justify-self-center"
+                  :title="t('settings.removeEndpoint')"
+                  :aria-label="t('settings.removeEndpoint')"
+                  @click="removeEndpoint(protocol)"
+                >
+                  <Icon name="close" :size="12" />
+                </button>
+              </template>
+            </div>
+            <div v-if="missingProtocols.length" class="flex flex-wrap gap-1.5">
+              <button
+                v-for="protocol in missingProtocols"
+                :key="protocol"
+                type="button"
+                class="inline-flex items-center gap-1 rounded-full border border-dashed border-line px-2.5 py-0.5 text-meta text-ink-3 transition-colors hover:border-ink-3 hover:text-ink"
+                @click="form.endpoints[protocol] = ''"
+              >
+                <Icon name="plus" :size="11" />
+                {{ PROTOCOL_LABELS[protocol] }}
+              </button>
+            </div>
+          </div>
+
+          <!-- models: listed once saved -->
+          <div v-if="saved" class="flex flex-col gap-2">
+            <div class="flex items-center gap-2">
+              <span class="field-label">{{ t('settings.models') }}</span>
+              <span class="text-meta text-ink-3">{{
+                t('settings.modelsSummary', { n: enabled.size, m: listed.length })
+              }}</span>
+              <button
+                v-if="!isDefaultRules"
+                type="button"
+                class="ml-auto rounded-control px-2 py-0.5 text-meta text-ink-3 transition-colors hover:bg-surface-2 hover:text-ink"
+                @click="resetRules"
+              >
+                {{ t('settings.resetRules') }}
+              </button>
+              <button
+                type="button"
+                class="icon-btn size-6"
+                :class="{ 'ml-auto': isDefaultRules }"
+                :disabled="busy"
+                :title="t('settings.refreshModels')"
+                :aria-label="t('settings.refreshModels')"
+                @click="refreshModels"
+              >
+                <Icon name="regenerate" :size="13" :class="{ 'animate-spin': listing }" />
+              </button>
+            </div>
+            <p v-if="saved.list_error" class="flex items-start gap-1.5 text-meta text-danger">
+              <Icon name="error" :size="13" class="mt-0.5 flex-none" />
+              <span class="min-w-0 truncate" :title="saved.list_error">{{ saved.list_error }}</span>
+            </p>
+
+            <div v-if="patterns.length" class="flex flex-wrap items-center gap-1.5">
+              <span class="text-meta text-ink-3">{{ t('settings.rules') }}</span>
+              <span
+                v-for="rule in patterns"
+                :key="rule"
+                class="inline-flex items-center gap-0.5 rounded-full bg-surface-2 py-0.5 pr-0.5 pl-2.5 font-mono text-meta text-ink-2"
+              >
+                {{ rule }}
+                <button
+                  type="button"
+                  class="icon-btn size-5"
+                  :aria-label="t('settings.removeRule')"
+                  :title="t('settings.removeRule')"
+                  @click="removeRule(rule)"
+                >
+                  <Icon name="close" :size="10" />
+                </button>
+              </span>
+            </div>
+
+            <div class="overflow-hidden rounded-control border border-line-soft">
+              <div class="relative border-b border-line-soft">
+                <Icon
+                  name="search"
+                  :size="13"
+                  class="pointer-events-none absolute top-1/2 left-3 -translate-y-1/2 text-ink-3"
+                />
+                <input
+                  v-model="query"
+                  type="search"
+                  class="w-full rounded-none border-0 bg-transparent py-2 pl-8 text-secondary"
+                  :placeholder="t('settings.searchOrAddModel')"
+                  autocomplete="off"
+                  spellcheck="false"
+                  @keydown.enter.prevent="addSearched"
+                />
+              </div>
+              <div v-if="searchRules.length || customId" class="flex flex-col border-b border-line-soft py-1">
+                <button
+                  v-for="r in searchRules"
+                  :key="r.rule"
+                  type="button"
+                  class="flex items-center gap-2 px-3 py-1.5 text-left text-secondary text-ink transition-colors hover:bg-surface-2"
+                  @click="addRule(r.rule)"
+                >
+                  <Icon
+                    :name="r.kind.startsWith('exclude') ? 'close' : 'plus'"
+                    :size="13"
+                    :class="r.kind.startsWith('exclude') ? 'text-ink-3' : 'text-brand'"
+                  />
+                  <i18n-t :keypath="`settings.enable_${r.kind}`" scope="global" tag="span">
+                    <template #q>
+                      <span class="font-mono">{{ term }}</span>
+                    </template>
+                    <template #n>{{ r.n }}</template>
+                  </i18n-t>
+                  <span class="font-mono text-micro text-ink-3">{{ r.rule }}</span>
+                </button>
+                <button
+                  v-if="customId"
+                  type="button"
+                  class="flex items-center gap-2 px-3 py-1.5 text-left text-secondary text-ink transition-colors hover:bg-surface-2"
+                  @click="addRule(customId)"
+                >
+                  <Icon name="plus" :size="13" class="text-ink-3" />
+                  <i18n-t keypath="settings.addModelId" scope="global" tag="span">
+                    <template #id>
+                      <span class="font-mono">{{ customId }}</span>
+                    </template>
+                  </i18n-t>
+                </button>
+              </div>
+              <div class="max-h-80 overflow-y-auto py-1">
+                <div
+                  v-for="id in rows.ids"
+                  :key="id"
+                  class="flex items-center gap-2 py-0.5 pr-1.5 pl-3"
+                  :class="enabled.has(id) ? '' : 'opacity-70 hover:opacity-100'"
+                >
+                  <label class="flex min-w-0 flex-1 cursor-pointer items-center gap-2.5 py-0.5">
+                    <input type="checkbox" :checked="enabled.has(id)" @change="toggle(id)" />
+                    <span v-if="name(id)" class="max-w-1/2 flex-none truncate text-secondary text-ink">{{
+                      name(id)
+                    }}</span>
+                    <span class="min-w-0 truncate font-mono text-micro text-ink-3">{{ id }}</span>
+                    <span
+                      v-if="includePatterns.length > 1 && enabled.has(id) && !form.models.includes(id)"
+                      class="flex-none rounded-xs border border-line px-1 font-mono text-micro text-ink-3"
+                      :title="t('settings.enabledBy', { rule: patternFor(id) })"
+                      >{{ patternFor(id) }}</span
+                    >
+                  </label>
+                  <span
+                    v-if="choosable && enabled.has(id)"
+                    class="flex-none text-micro"
+                    :class="form.protocols[id] ? 'text-ink-2' : 'text-ink-3'"
+                    >{{ PROTOCOL_LABELS[protocolOf(id)!] ?? '—' }}</span
+                  >
+                  <ModelSettings
+                    :provider="saved.id"
+                    :id="id"
+                    :info="savedModels.get(id)"
+                    :held="form.protocols[id] ?? null"
+                    :usable="usableProtocols"
+                    @protocol="setProtocol(id, $event)"
+                  />
+                </div>
+                <p v-if="rows.more" class="px-3 py-1.5 text-meta text-ink-3 italic">
+                  {{ t('settings.moreModels', { n: rows.more }) }}
+                </p>
+                <p
+                  v-if="listing && !listed.length"
+                  class="flex items-center justify-center gap-2 px-3 py-3 text-meta text-ink-3"
+                >
+                  <span
+                    class="size-3.5 animate-spin rounded-full border-2 border-brand border-t-transparent"
+                  />
+                  {{ t('settings.loadingModels') }}
+                </p>
+                <p
+                  v-else-if="!rows.ids.length && !searchRules.length && !customId"
+                  class="px-3 py-3 text-center text-meta text-ink-3 italic"
+                >
+                  {{ t('settings.noModels') }}
+                </p>
+              </div>
+            </div>
+          </div>
+        </form>
+      </Transition>
     </div>
 
-    <footer
-      v-if="formShown"
-      class="flex flex-none items-center gap-2 border-t border-line-soft px-4 py-3 sm:px-6"
+    <!-- arrives with the form, which waits for the page it replaces to fade -->
+    <Transition
+      enter-active-class="transition-opacity duration-300 delay-150 ease-soft"
+      enter-from-class="opacity-0"
+      leave-active-class="transition-opacity duration-150 ease-soft"
+      leave-to-class="opacity-0"
     >
-      <template v-if="saved">
-        <div v-if="pendingDelete" class="flex items-center gap-2">
-          <button type="button" class="btn" :disabled="busy" @click="pendingDelete = false">
-            {{ t('common.cancel') }}
+      <footer
+        v-if="formShown"
+        class="flex flex-none items-center gap-2 border-t border-line-soft px-4 py-3 sm:px-6"
+      >
+        <template v-if="saved">
+          <div v-if="pendingDelete" class="flex items-center gap-2">
+            <button type="button" class="btn" :disabled="busy" @click="pendingDelete = false">
+              {{ t('common.cancel') }}
+            </button>
+            <button type="button" class="btn btn-danger" :disabled="busy" @click="remove">
+              {{ t('settings.deleteProvider', { name: saved.name }) }}
+            </button>
+          </div>
+          <button
+            v-else
+            type="button"
+            class="icon-btn size-8"
+            :title="t('settings.deleteProvider', { name: saved.name })"
+            :disabled="busy"
+            @click="pendingDelete = true"
+          >
+            <Icon name="trash" :size="14" />
           </button>
-          <button type="button" class="btn btn-danger" :disabled="busy" @click="remove">
-            {{ t('settings.deleteProvider', { name: saved.name }) }}
-          </button>
-        </div>
-        <button
-          v-else
-          type="button"
-          class="icon-btn size-8"
-          :title="t('settings.deleteProvider', { name: saved.name })"
-          :disabled="busy"
-          @click="pendingDelete = true"
-        >
-          <Icon name="trash" :size="14" />
+        </template>
+        <span class="flex-1" />
+        <button v-if="dirty && saved" type="button" class="btn" :disabled="busy" @click="open(saved)">
+          {{ t('settings.discard') }}
         </button>
-      </template>
-      <span class="flex-1" />
-      <button v-if="dirty && saved" type="button" class="btn" :disabled="busy" @click="open(saved)">
-        {{ t('settings.discard') }}
-      </button>
-      <button type="button" class="btn btn-primary" :disabled="!canSave" @click="save">
-        <span
-          v-if="busy"
-          class="size-3.5 animate-spin rounded-full border-2 border-current border-t-transparent"
-        />
-        {{ isNew ? t('settings.add') : t('settings.save') }}
-      </button>
-    </footer>
+        <button type="button" class="btn btn-primary" :disabled="!canSave" @click="save">
+          <span
+            v-if="busy"
+            class="size-3.5 animate-spin rounded-full border-2 border-current border-t-transparent"
+          />
+          {{ isNew ? t('settings.add') : t('settings.save') }}
+        </button>
+      </footer>
+    </Transition>
 
     <Modal
       :open="detectOpen"

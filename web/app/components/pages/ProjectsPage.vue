@@ -5,6 +5,7 @@
 // header as the trail back; `?new` on either is its creation form.
 import { computed, watch } from 'vue'
 import { t } from '../../i18n'
+import { SWAP } from '../../lib/motion'
 import { openPage, pageUp } from '../../lib/router'
 import { connected, refreshWorkspaces, state } from '../../lib/store'
 import Icon from '../ui/Icon.vue'
@@ -43,60 +44,64 @@ watch(connected, (up) => up && void refreshWorkspaces(), { immediate: true })
       <span v-else class="truncate">{{ t('projects.title') }}</span>
     </template>
 
-    <div v-if="crumb" class="flex min-h-0 flex-1 flex-col">
-      <WorkspaceForm v-if="onWorkspaces" />
-      <ProjectForm v-else />
-    </div>
-
-    <div v-else class="min-h-0 flex-1 overflow-y-auto px-4 pt-5 pb-8 sm:px-6">
-      <div class="grid grid-cols-[repeat(auto-fill,minmax(14rem,1fr))] gap-4">
-        <ProjectCard
-          v-for="p in state.projects"
-          :key="p.id"
-          :project="p"
-          @open="openPage('projects', p.id)"
-        />
-        <button
-          type="button"
-          class="flex min-h-36 items-center justify-center gap-2 rounded-card border border-dashed border-line text-secondary text-ink-3 transition-colors duration-200 hover:border-ink-3 hover:bg-surface-2/40 hover:text-ink"
-          @click="openPage('projects', null, true)"
-        >
-          <Icon name="plus" :size="15" />
-          {{ t('projects.add') }}
-        </button>
+    <Transition v-bind="SWAP" mode="out-in">
+      <div v-if="crumb" :key="`${route.page}/${route.item}`" class="flex min-h-0 flex-1 flex-col">
+        <WorkspaceForm v-if="onWorkspaces" />
+        <ProjectForm v-else />
       </div>
 
-      <section class="mt-10" aria-labelledby="workspaces-heading">
-        <h2 id="workspaces-heading" class="flex items-center gap-1.5 pb-2 text-micro font-bold text-ink-3">
-          {{ t('workspaces.title') }}
-          <span class="tabular-nums font-normal">{{ state.workspaces.length }}</span>
-        </h2>
-        <div class="grid grid-cols-[repeat(auto-fill,minmax(17rem,1fr))] gap-1">
-          <button
-            v-for="w in state.workspaces"
-            :key="w.name"
-            type="button"
-            class="flex min-w-0 items-center gap-2.5 rounded-control px-2.5 py-2 text-left text-ink-2 transition-colors duration-150 hover:bg-surface-2/70 hover:text-ink"
-            @click="openPage('workspaces', w.name)"
-          >
-            <Icon name="mount" :size="15" class="flex-none text-ink-3" />
-            <span class="flex min-w-0 flex-col">
-              <span class="truncate font-card text-secondary">{{ w.name }}</span>
-              <span class="truncate font-card text-micro text-ink-3">{{
-                w.ssh ? `${w.ssh}:${w.root}` : w.root
-              }}</span>
-            </span>
-          </button>
+      <div v-else class="min-h-0 flex-1 overflow-y-auto px-4 pt-5 pb-8 sm:px-6">
+        <div class="stagger grid grid-cols-[repeat(auto-fill,minmax(14rem,1fr))] gap-4">
+          <ProjectCard
+            v-for="(p, i) in state.projects"
+            :key="p.id"
+            :project="p"
+            :style="{ '--i': i }"
+            @open="openPage('projects', p.id)"
+          />
           <button
             type="button"
-            class="flex items-center gap-2.5 rounded-control px-2.5 py-2 text-left text-secondary text-ink-3 transition-colors duration-150 hover:bg-surface-2/70 hover:text-ink"
-            @click="openPage('workspaces', null, true)"
+            :style="{ '--i': state.projects.length }"
+            class="flex min-h-36 items-center justify-center gap-2 rounded-card border border-dashed border-line text-secondary text-ink-3 transition-colors duration-200 hover:border-ink-3 hover:bg-surface-2/40 hover:text-ink"
+            @click="openPage('projects', null, true)"
           >
-            <Icon name="plus" :size="15" class="flex-none" />
-            {{ t('workspaces.add') }}
+            <Icon name="plus" :size="15" />
+            {{ t('projects.add') }}
           </button>
         </div>
-      </section>
-    </div>
+
+        <section class="mt-10" aria-labelledby="workspaces-heading">
+          <h2 id="workspaces-heading" class="flex items-center gap-1.5 pb-2 text-micro font-bold text-ink-3">
+            {{ t('workspaces.title') }}
+            <span class="tabular-nums font-normal">{{ state.workspaces.length }}</span>
+          </h2>
+          <div class="grid grid-cols-[repeat(auto-fill,minmax(17rem,1fr))] gap-1">
+            <button
+              v-for="w in state.workspaces"
+              :key="w.name"
+              type="button"
+              class="flex min-w-0 items-center gap-2.5 rounded-control px-2.5 py-2 text-left text-ink-2 transition-colors duration-150 hover:bg-surface-2/70 hover:text-ink"
+              @click="openPage('workspaces', w.name)"
+            >
+              <Icon name="mount" :size="15" class="flex-none text-ink-3" />
+              <span class="flex min-w-0 flex-col">
+                <span class="truncate font-card text-secondary">{{ w.name }}</span>
+                <span class="truncate font-card text-micro text-ink-3">{{
+                  w.ssh ? `${w.ssh}:${w.root}` : w.root
+                }}</span>
+              </span>
+            </button>
+            <button
+              type="button"
+              class="flex items-center gap-2.5 rounded-control px-2.5 py-2 text-left text-secondary text-ink-3 transition-colors duration-150 hover:bg-surface-2/70 hover:text-ink"
+              @click="openPage('workspaces', null, true)"
+            >
+              <Icon name="plus" :size="15" class="flex-none" />
+              {{ t('workspaces.add') }}
+            </button>
+          </div>
+        </section>
+      </div>
+    </Transition>
   </PageSheet>
 </template>

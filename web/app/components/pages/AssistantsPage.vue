@@ -276,6 +276,7 @@ onBeforeUnmount(() => window.removeEventListener('keydown', onKey, true))
     :count="assistants.length"
     :detail="isNew || !!current"
     :pick="t('assistants.pick')"
+    :item="editing"
     @back="pageUp"
   >
     <template #icon>
