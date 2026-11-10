@@ -21,31 +21,35 @@ export const currentBranch = computed<Branch | null>(() =>
   state.activeBranch ? (state.branches[state.activeBranch] ?? null) : null,
 )
 
-/** root → head for the active branch. */
-export const pathNodes = computed<Node[]>(() => {
-  const b = currentBranch.value
+/** root → head of `b`; with `stop`, only the nodes after that one. */
+export function pathOf(b: Branch | null | undefined, stop?: NodeId | null): Node[] {
   if (!b) return []
   const out: Node[] = []
   let cur: NodeId | null | undefined = b.head
   let guard = 0
-  while (cur && state.nodes[cur] && guard++ < 10_000) {
+  while (cur && cur !== stop && state.nodes[cur] && guard++ < 10_000) {
     const n: Node = state.nodes[cur]
     out.push(n)
     cur = n.parent
   }
   return out.reverse()
-})
+}
 
-/** call_id → ToolCall, from assistant nodes on the path (for pairing results). */
-export const callsOnPath = computed(() => {
+/** root → head for the active branch. */
+export const pathNodes = computed<Node[]>(() => pathOf(currentBranch.value))
+
+/** call_id → ToolCall, from the assistant nodes in `nodes` (for pairing results). */
+export function callsOf(nodes: Node[]): Map<string, { call: ToolCallLike; node: Node }> {
   const map = new Map<string, { call: ToolCallLike; node: Node }>()
-  for (const n of pathNodes.value) {
+  for (const n of nodes) {
     if (n.body.type === 'assistant') {
       for (const c of n.body.tool_calls) map.set(c.call_id, { call: c, node: n })
     }
   }
   return map
-})
+}
+
+export const callsOnPath = computed(() => callsOf(pathNodes.value))
 type ToolCallLike = { call_id: string; name: string; args: unknown }
 
 export const activeDelta = computed<DeltaBuffer | null>(() =>

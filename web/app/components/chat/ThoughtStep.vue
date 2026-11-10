@@ -8,12 +8,13 @@
 import { computed, ref } from 'vue'
 import { t } from '../../i18n'
 import { type Node, reasoningText } from '../../lib/types'
-import { activeDelta } from '../../lib/store'
+import { useBranchView } from '../../lib/store'
 import { fmtThought } from '../../lib/util'
 import { vFollow } from '../../lib/motion'
 import Icon from '../ui/Icon.vue'
 
 const props = withDefaults(defineProps<{ node: Node | null; flat?: boolean }>(), { flat: false })
+const activeDelta = useBranchView().delta
 
 const reasoning = computed(() => {
   if (!props.node) return activeDelta.value?.reasoning ?? ''

@@ -37,11 +37,14 @@ export function showModel(ref: string): void {
   openPage('settings', 'providers')
 }
 
-/** Escape closes the sidebar drawer, then the artifact. A card window is a
+/** Escape closes the sidebar drawer, then the side panel. A card window is a
  *  native <dialog>: its own cancel handler closes it (asking about unsaved
  *  edits first), so leave Escape to it. */
 export function closePanels(): void {
   if (state.drawers.length) return
   if (layout.sidebarOpen) layout.sidebarOpen = false
-  else state.artifact = null
+  else {
+    state.artifact = null
+    state.agentView = null
+  }
 }

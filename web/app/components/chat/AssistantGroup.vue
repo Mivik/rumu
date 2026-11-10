@@ -15,7 +15,7 @@ import { computed, onBeforeUnmount, ref, watch } from 'vue'
 import { t } from '../../i18n'
 import type { Node } from '../../lib/types'
 import type { TimelineGroup } from '../../lib/store'
-import { activeDelta, forkSession, pendingCalls, regenerateFrom, state } from '../../lib/store'
+import { forkSession, pendingCalls, regenerateFrom, state, useBranchView } from '../../lib/store'
 import type { CatState } from '../../lib/cat'
 import { renderMarkdown } from '../../lib/markdown'
 import { contentText, copyText } from '../../lib/util'
@@ -37,6 +37,9 @@ const props = withDefaults(defineProps<{ group: TimelineGroup; live?: boolean; p
 
 type AssistantBody = Extract<Node['body'], { type: 'assistant' }>
 
+const view = useBranchView()
+const activeDelta = view.delta
+
 function bodyOf(n: Node): AssistantBody {
   return n.body as AssistantBody
 }
@@ -55,7 +58,7 @@ const catState = computed<CatState>(() => {
 })
 
 /** Calls of the live turn still waiting on their result (RunningTools). */
-const pending = computed(() => (props.live ? pendingCalls(props.group) : []))
+const pending = computed(() => (props.live ? pendingCalls(props.group, view.nodes.value) : []))
 
 function textOf(n: Node): string {
   return contentText(bodyOf(n).content)
@@ -99,7 +102,7 @@ async function onCopy(): Promise<void> {
  * shown where the thinking indicator is: "retrying 2/5 · 3s", counting down
  * to the replay. Null unless this is the live group. */
 const retrying = computed(() =>
-  props.live && state.activeBranch ? (state.retrying[state.activeBranch] ?? null) : null,
+  props.live && view.branch.value ? (state.retrying[view.branch.value] ?? null) : null,
 )
 const retryLeft = ref(0)
 let retryTimer: ReturnType<typeof setInterval> | undefined
@@ -214,7 +217,7 @@ const bare = computed(() => !items.value.length && !props.group.assistants.lengt
       <UsageHud v-if="!live" :group="group" />
       <span class="flex-1" />
       <span
-        v-if="!live"
+        v-if="!live && !view.sub"
         class="flex items-center gap-0.5 opacity-100 transition duration-200 ease-soft sm:opacity-0 sm:group-hover/agroup:opacity-100 sm:group-focus-within/agroup:opacity-100"
       >
         <BranchSwitcher :parent-id="prompt?.id ?? null" />

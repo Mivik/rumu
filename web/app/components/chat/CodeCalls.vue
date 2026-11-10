@@ -7,7 +7,7 @@
 import { computed, ref } from 'vue'
 import { t } from '../../i18n'
 import type { Branch, Content, Decision, FilePatch, Tagged } from '../../lib/types'
-import { pathNodes, selectBranch, state } from '../../lib/store'
+import { openAgentView, state, useBranchView } from '../../lib/store'
 import { argSummary, shortId } from '../../lib/util'
 import { highlightLine, prettyJson } from '../../lib/markdown'
 import { patchOfData } from '../../lib/diff'
@@ -18,6 +18,7 @@ import FileDiff from './FileDiff.vue'
 import FileView from './FileView.vue'
 
 const props = defineProps<{ parentCall: string }>()
+const view = useBranchView()
 
 /** One invoke node under this `code` call, flattened for display. */
 interface CodeCallRow {
@@ -33,7 +34,7 @@ interface CodeCallRow {
 
 const calls = computed<CodeCallRow[]>(() => {
   const out: CodeCallRow[] = []
-  for (const n of pathNodes.value) {
+  for (const n of view.nodes.value) {
     const b = n.body
     if (b.type !== 'tool_result' || !b.invoke || b.invoke.parent !== props.parentCall) continue
     out.push({
@@ -60,7 +61,7 @@ const agentChildren = computed(() => {
   return map
 })
 function openAgent(b: Branch): void {
-  void selectBranch(b.id)
+  openAgentView(b.id)
 }
 const expanded = ref<Set<string>>(new Set())
 const showTrace = ref(false)

@@ -81,9 +81,10 @@ function onNodeAppended(p: NodeAppendedPush): void {
   }
   if (state.sessionId && node.session === state.sessionId) {
     state.nodes[node.id] = node
-    // If the node extends the active branch's head, the path grows live.
+    // A node extending a branch's head grows its path live (the active
+    // one, or a sub-agent open beside it).
     const b = state.branches[branch]
-    if (b && branch === state.activeBranch && node.parent === b.head) {
+    if (b && node.parent === b.head) {
       b.head = node.id
     }
   }
@@ -94,7 +95,7 @@ function onNodeAppended(p: NodeAppendedPush): void {
     node.body.type === 'tool_result' &&
     !node.body.is_error &&
     artifactOf(node.body.content) &&
-    (state.artifact || window.matchMedia('(min-width: 80rem)').matches)
+    (state.artifact || (!state.agentView && window.matchMedia('(min-width: 80rem)').matches))
   ) {
     state.artifact = node.id
   }

@@ -16,13 +16,14 @@ import type { CSSProperties, Ref } from 'vue'
 import { autoUpdate, flip, offset, shift, useFloating } from '@floating-ui/vue'
 import { showModel } from '../../lib/layout'
 import { modelByRef } from '../../lib/state/models'
-import { pathNodes } from '../../lib/store'
+import { useBranchView } from '../../lib/store'
 import type { TimelineGroup } from '../../lib/store'
 import type { Node as RumuNode } from '../../lib/types'
 import { fmtDuration, fmtTokens } from '../../lib/util'
 import Icon from '../ui/Icon.vue'
 
 const props = defineProps<{ group: TimelineGroup }>()
+const pathNodes = useBranchView().nodes
 
 type AsstBody = Extract<RumuNode['body'], { type: 'assistant' }>
 

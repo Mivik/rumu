@@ -196,6 +196,8 @@ const initial = {
   lightbox: null as LightboxImage | null,
   /** The open artifact: the `show` result node it was recorded by. */
   artifact: null as NodeId | null,
+  /** The sub-agent branch open beside the chat. */
+  agentView: null as BranchId | null,
 }
 
 // Cast off Vue's `UnwrapNestedRefs`: the wire payloads embed a recursive JSON

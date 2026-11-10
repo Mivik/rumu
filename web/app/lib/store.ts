@@ -18,6 +18,7 @@ export {
   branchTasks,
   cacheTotal,
   cacheTurns,
+  callsOf,
   callsOnPath,
   connected,
   hookTraceForSession,
@@ -25,6 +26,7 @@ export {
   isUnseen,
   owedReply,
   pathNodes,
+  pathOf,
   queuedPrompts,
   runningTasks,
   siblingAlternatives,
@@ -32,7 +34,9 @@ export {
 } from './state/derived'
 export type { OwedReply, SiblingAlternative } from './state/derived'
 
-export { pendingCalls, timeline } from './state/timeline'
+export { buildTimeline, pendingCalls, timeline } from './state/timeline'
+export { openAgentView, provideBranchView, useBranchView } from './state/branchView'
+export type { BranchView } from './state/branchView'
 export { trace } from './state/trace'
 export type { TraceKind, TraceRow } from './state/trace'
 export type {

@@ -13,7 +13,7 @@ import { computed, ref } from 'vue'
 import { t } from '../../i18n'
 import type { Branch } from '../../lib/types'
 import type { ToolRowInfo } from '../../lib/store'
-import { openTaskDetail, selectBranch, state } from '../../lib/store'
+import { openAgentView, openTaskDetail, state } from '../../lib/store'
 import { cardById } from '../../lib/cards'
 import type { ToolRowView, ToolStatus } from '../../lib/toolrows'
 import { argsOf, toolRowTitle, toolRowView } from '../../lib/toolrows'
@@ -108,7 +108,7 @@ function nameClass(v: ToolRowView): string {
 }
 
 function openAgent(b: Branch): void {
-  void selectBranch(b.id)
+  openAgentView(b.id)
 }
 
 function liveTaskOutput(id: string | null): string {

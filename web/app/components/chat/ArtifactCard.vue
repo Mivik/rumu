@@ -50,7 +50,7 @@ const ICONS = { html: 'artifact', markdown: 'note', svg: 'image', code: 'file' }
 <style scoped>
 .artifact-card {
   display: flex;
-  width: min(100%, 360px);
+  width: min(100%, 480px);
   align-items: center;
   gap: 10px;
   padding: 8px 12px 8px 8px;

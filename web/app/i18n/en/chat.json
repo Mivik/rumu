@@ -135,5 +135,11 @@
     "copied": "Copied {title}",
     "download": "Download",
     "loadFailed": "Couldn't load this version"
+  },
+  "agentView": {
+    "title": "Sub-agent",
+    "parent": "Parent sub-agent",
+    "close": "Close",
+    "empty": "Starting…"
   }
 }

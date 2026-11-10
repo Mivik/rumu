@@ -16,7 +16,7 @@ import { computed, nextTick, ref } from 'vue'
 import { t } from '../../i18n'
 import type { Node } from '../../lib/types'
 import type { PromptAttachment } from '../../lib/store'
-import { editPrompt, forkSession, isBusy, regenerateFrom } from '../../lib/store'
+import { editPrompt, forkSession, isBusy, regenerateFrom, useBranchView } from '../../lib/store'
 import { renderMarkdown } from '../../lib/markdown'
 import { renderedContent, typedText, withLeadingAnchors } from '../../lib/attachments'
 import { copyText } from '../../lib/util'
@@ -27,6 +27,7 @@ import ContextPills from './ContextPills.vue'
 import ImageThumb from './ImageThumb.vue'
 
 const props = withDefaults(defineProps<{ node: Node; context?: Node[] }>(), { context: () => [] })
+const view = useBranchView()
 
 const content = computed(() => (props.node.body as Extract<Node['body'], { type: 'user' }>).content)
 const images = computed(() => content.value.attachments ?? [])
@@ -185,7 +186,7 @@ function onFork(): void {
 
     <!-- actions sit at the message's bottom-right: always on touch, revealed on hover with a fine pointer -->
     <div
-      v-if="!editing"
+      v-if="!editing && !view.sub"
       class="mt-0.5 flex h-5 items-center justify-end gap-0.5 opacity-100 transition duration-200 ease-soft pointer-fine:opacity-0 pointer-fine:group-hover/urow:opacity-100 pointer-fine:group-focus-within/urow:opacity-100"
     >
       <BranchSwitcher :parent-id="node.parent" />

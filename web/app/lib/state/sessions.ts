@@ -206,6 +206,7 @@ export function closeSession(): void {
   state.tasks = {}
   state.taskOutput = {}
   state.taskDetail = null
+  state.agentView = null
 }
 
 /** Resync the session's runtime task table (`task.list`). */

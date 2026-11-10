@@ -11,27 +11,28 @@
 // the live dot; waiting on the model, the group's "working…" line has it
 // instead. While the model thinks, a run with
 // no calls opens by itself so the reasoning streams in view, folding once the
-// answer starts unless toggled by hand. Exploration pills stay on the folded
-// line so the jump to the child branch is one click.
+// answer starts unless toggled by hand. The sub-agents it started stand
+// below the line as cards (AgentCard), folded or not.
 // Opened, the steps show in order under a hairline: the catalog's cards,
 // each thought, each run of calls as a ToolList box. A bare thought — no
 // catalog, no calls — keeps its own disclosure (ThoughtStep).
 import { computed, ref } from 'vue'
 import { t, locale } from '../../i18n'
 import type { ActivityRecall, ActivityStep, ActivityThought, ActivityTools } from '../../lib/store'
-import { activeDelta, selectBranch } from '../../lib/store'
+import { useBranchView } from '../../lib/store'
 import type { PhrasePart, ToolRowView } from '../../lib/toolrows'
 import { toolPhrases, toolRowTitle, toolRowView } from '../../lib/toolrows'
-import { fmtThought, shortId } from '../../lib/util'
+import { fmtThought } from '../../lib/util'
 import { vEnter } from '../../lib/motion'
 import Icon from '../ui/Icon.vue'
-import Chip from '../ui/Chip.vue'
+import AgentCard from './AgentCard.vue'
 import CatalogList from './CatalogList.vue'
 import RecallList from './RecallList.vue'
 import ThoughtStep from './ThoughtStep.vue'
 import ToolList from './ToolList.vue'
 
 const props = withDefaults(defineProps<{ steps: ActivityStep[]; live?: boolean }>(), { live: false })
+const activeDelta = useBranchView().delta
 
 const thoughts = computed(() => props.steps.filter((s): s is ActivityThought => s.kind === 'thought'))
 const views = computed<ToolRowView[]>(() =>
@@ -60,12 +61,16 @@ function thoughtPhrase(): string {
 }
 
 /** The phrases joined by commas, the first one capitalized. Recall and the
- *  catalog are not phrases: they go with every turn, so they stay off the
- *  line and live in the opened body. */
+ *  catalog go with every turn, so they stay off a line that has anything else
+ *  to say; a run of only them names them, or the line would be empty. */
 const summary = computed<PhrasePart[][]>(() => {
   const phrases: PhrasePart[][] = []
   phrases.push(...toolPhrases(views.value))
   if (!views.value.length && thoughts.value.length) phrases.push([{ text: thoughtPhrase() }])
+  if (!phrases.length && recalledCount.value) {
+    phrases.push([{ text: t('cards.pills.recalled', { count: recalledCount.value }) }])
+  }
+  if (!phrases.length && hasCatalog.value) phrases.push([{ text: t('tools.phrase.catalog') }])
   return phrases
 })
 const summaryParts = computed<PhrasePart[]>(() => {
@@ -77,18 +82,10 @@ const summaryParts = computed<PhrasePart[]>(() => {
   }
   return parts
 })
-/** A line with no phrase (a run that only recalled or read the catalog) still
- *  needs an accessible name. */
-const summaryLabel = computed(() => {
-  if (summaryParts.value.length) return undefined
-  if (hasCatalog.value) return t('tools.phrase.catalog')
-  if (recalledCount.value) return t('cards.pills.recalled', { count: recalledCount.value })
-  return undefined
-})
-
 const errorCount = computed(() => views.value.filter((v) => v.status === 'error').length)
 const blockedCount = computed(() => views.value.filter((v) => v.status === 'blocked').length)
-const agents = computed(() => views.value.filter((v) => v.agentChild))
+/** The run's `agent` calls (a plugin's are its script's business). */
+const agents = computed(() => views.value.filter((v) => v.name === 'agent'))
 
 /** Each call's full facts, one per line, for the summary's tooltip. */
 const summaryTitle = computed(() => views.value.map(toolRowTitle).join('\n'))
@@ -123,12 +120,16 @@ function toggleOpen(): void {
         class="reason-toggle max-w-full min-w-0"
         :class="open ? 'text-ink-2' : 'text-ink-3 hover:text-ink-2'"
         :title="summaryTitle || undefined"
-        :aria-label="summaryLabel"
         :aria-expanded="open"
         @click="toggleOpen"
       >
         <span v-if="live" class="dot-live size-1.5 flex-none rounded-full bg-brand" />
-        <Icon v-else-if="!views.length" name="brain" :size="12" class="flex-none" />
+        <Icon
+          v-else-if="!views.length"
+          :name="thoughts.length ? 'brain' : 'memory'"
+          :size="12"
+          class="flex-none"
+        />
         <span class="min-w-0 truncate"
           ><span v-for="(p, i) in summaryParts" :key="i" :class="{ 'font-mono font-medium': p.mono }">{{
             p.text
@@ -145,20 +146,6 @@ function toggleOpen(): void {
         >
         <Icon name="chevron" :size="12" class="reason-chevron flex-none" :class="{ 'rotate-90': open }" />
       </button>
-      <template v-if="!open">
-        <Chip
-          v-for="v in agents"
-          :key="v.row.result.id"
-          icon="agent"
-          icon-after="external"
-          tone="agent"
-          clickable
-          :title="t('tools.row.subAgentTitle', { id: shortId(v.agentChild!.id) })"
-          @click="selectBranch(v.agentChild!.id)"
-        >
-          {{ t('tools.row.openSubAgent') }}
-        </Chip>
-      </template>
     </div>
 
     <div v-if="open" class="activity-body reveal">
@@ -183,6 +170,10 @@ function toggleOpen(): void {
         />
         <ToolList v-else v-enter="revealed.has(stepKey(s)) ? false : 'enter-fade'" :rows="s.rows" />
       </template>
+    </div>
+    <!-- the sub-agents it started stand outside the fold -->
+    <div v-if="agents.length" class="mt-2 flex w-full flex-col gap-1.5">
+      <AgentCard v-for="v in agents" :key="v.row.result.id" v-enter="'enter-fade'" :view="v" />
     </div>
   </div>
 </template>

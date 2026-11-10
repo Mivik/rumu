@@ -7,6 +7,7 @@ import LibraryPage from './components/pages/LibraryPage.vue'
 import ProjectsPage from './components/pages/ProjectsPage.vue'
 import SettingsPage from './components/pages/SettingsPage.vue'
 import Lightbox from './components/Lightbox.vue'
+import AgentPanel from './components/chat/AgentPanel.vue'
 import ArtifactPanel from './components/chat/ArtifactPanel.vue'
 import { openArtifact } from './lib/artifacts'
 import Toasts from './components/Toasts.vue'
@@ -40,6 +41,10 @@ function onKey(e: KeyboardEvent): void {
 
 /** An artifact is open beside the chat (the session is showing). */
 const artifactOpen = computed(() => !state.page && !!state.sessionId && !!openArtifact.value)
+/** A sub-agent's transcript is open beside the chat instead. */
+const agentOpen = computed(
+  () => !state.page && !artifactOpen.value && !!state.agentView && !!state.branches[state.agentView],
+)
 
 onMounted(() => {
   lg = window.matchMedia('(min-width: 64rem)')
@@ -55,8 +60,8 @@ onBeforeUnmount(() => {
 </script>
 
 <template>
-  <!-- Two sheets of paper on the canvas (three while an artifact is open at
-       xl): the sessions (a card at lg, the
+  <!-- Two sheets of paper on the canvas (three while an artifact or a
+       sub-agent is open at xl): the sessions (a card at lg, the
        drawer below it) and the chat — the one the conversation is written on.
        Everything about the open session (branches, cards in play, diagnostics)
        lives in that sheet's header; below lg the sidebar overlays the chat,
@@ -67,7 +72,7 @@ onBeforeUnmount(() => {
        grid. -->
   <div
     class="desk grid h-full grid-cols-1 lg:grid-cols-[280px_minmax(0,1fr)] lg:gap-x-4 lg:pr-4"
-    :class="{ 'xl:grid-cols-[280px_minmax(0,1fr)_minmax(0,1fr)]': artifactOpen }"
+    :class="{ 'xl:grid-cols-[280px_minmax(0,1fr)_minmax(0,1fr)]': artifactOpen || agentOpen }"
   >
     <Sidebar
       class="fixed inset-y-0 left-0 z-50 w-[min(86vw,300px)] border-r border-line-soft bg-canvas transition-transform duration-300 ease-soft lg:static lg:z-auto lg:my-4 lg:ml-4 lg:w-auto lg:translate-x-0 lg:rounded-sheet lg:border-0 lg:bg-surface lg:shadow-card lg:ring-1 lg:ring-line"
@@ -80,6 +85,11 @@ onBeforeUnmount(() => {
     <!-- an open artifact: the third sheet at xl, over the chat below it -->
     <ArtifactPanel
       v-if="artifactOpen"
+      class="fixed inset-2 z-45 shadow-pop sm:inset-3 xl:static xl:z-auto xl:my-4 xl:shadow-none"
+    />
+    <!-- a sub-agent's transcript: the same third sheet -->
+    <AgentPanel
+      v-if="agentOpen"
       class="fixed inset-2 z-45 shadow-pop sm:inset-3 xl:static xl:z-auto xl:my-4 xl:shadow-none"
     />
     <Lightbox />

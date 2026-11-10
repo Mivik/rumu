@@ -7,7 +7,7 @@
 // only answer text and context pills stand on their own.
 
 import { computed } from 'vue'
-import type { Node, ToolCall } from '../types'
+import type { BranchId, Node, ToolCall } from '../types'
 import { CATALOG_TAG, TURN_ERROR_TAG, reasoningText } from '../types'
 import { contentText } from '../util'
 import { artifactOf } from '../artifacts'
@@ -147,11 +147,17 @@ export interface TimelineContextEntry {
 }
 export type TimelineEntry = TimelineUserEntry | TimelineContextEntry | TimelineGroup
 
-export const timeline = computed<TimelineEntry[]>(() => {
+type CallsOnPath = typeof callsOnPath.value
+
+/** The timeline of the active branch. */
+export const timeline = computed(() => buildTimeline(pathNodes.value, callsOnPath.value, state.activeBranch))
+
+/** Group `nodes` (a branch's path, or the part of it to show) into timeline
+ *  entries, with `branch`'s live stream attached. */
+export function buildTimeline(nodes: Node[], calls: CallsOnPath, branch: BranchId | null): TimelineEntry[] {
   const out: TimelineEntry[] = []
-  const calls = callsOnPath.value
   const answered = new Set<string>()
-  for (const n of pathNodes.value) {
+  for (const n of nodes) {
     if (n.body.type === 'tool_result') answered.add(n.body.call_id)
   }
 
@@ -180,7 +186,7 @@ export const timeline = computed<TimelineEntry[]>(() => {
     return group
   }
 
-  for (const n of pathNodes.value) {
+  for (const n of nodes) {
     const b = n.body
     if (b.type === 'user') {
       flushCtx()
@@ -234,7 +240,6 @@ export const timeline = computed<TimelineEntry[]>(() => {
   // Attach the live stream to the group it belongs to (single header per turn).
   // The group exists from the moment the prompt is accepted, before the first
   // token: the mascot shows up immediately and waits.
-  const branch = state.activeBranch
   const delta = branch ? state.deltas[branch] : undefined
   let live: TimelineGroup | null = null
   if (branch && state.busy[branch]) {
@@ -261,12 +266,12 @@ export const timeline = computed<TimelineEntry[]>(() => {
   // No user prompt on the path yet (a brand-new session mid-request):
   // nothing to hang the group under, so leave the timeline alone.
   return out
-})
+}
 
-/** The group's tool calls still waiting on their result. */
-export function pendingCalls(g: TimelineGroup): ToolCall[] {
+/** The group's tool calls still waiting on their result in `nodes`. */
+export function pendingCalls(g: TimelineGroup, nodes: Node[]): ToolCall[] {
   const answered = new Set<string>()
-  for (const n of pathNodes.value) {
+  for (const n of nodes) {
     if (n.body.type === 'tool_result') answered.add(n.body.call_id)
   }
   return g.assistants.flatMap((a) =>

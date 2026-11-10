@@ -135,5 +135,11 @@
     "copied": "已复制 {title}",
     "download": "下载",
     "loadFailed": "无法加载这个版本"
+  },
+  "agentView": {
+    "title": "子代理",
+    "parent": "上级子代理",
+    "close": "关闭",
+    "empty": "启动中…"
   }
 }

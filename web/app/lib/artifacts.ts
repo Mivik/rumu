@@ -53,6 +53,7 @@ export const openArtifact = computed(() => versionOf(state.artifact))
 
 export function showArtifact(nodeId: string | null): void {
   state.artifact = nodeId
+  if (nodeId) state.agentView = null
 }
 
 /** Blob text by hash: a snapshot never changes, so one fetch serves all. */

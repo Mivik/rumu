@@ -5,7 +5,7 @@
 import { computed } from 'vue'
 import { t } from '../../i18n'
 import type { ToolCall } from '../../lib/types'
-import { state } from '../../lib/store'
+import { state, useBranchView } from '../../lib/store'
 import { argSummary } from '../../lib/util'
 import Icon from '../ui/Icon.vue'
 
@@ -16,8 +16,10 @@ interface RunningRow {
   progress: string
 }
 
+const view = useBranchView()
+
 const rows = computed<RunningRow[]>(() => {
-  const branch = state.activeBranch
+  const branch = view.branch.value
   if (!branch) return []
   return props.calls.map((call) => ({
     call,
