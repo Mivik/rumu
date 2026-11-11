@@ -1236,19 +1236,27 @@
     color: var(--ink-2);
   }
 
+  /* wide tables scroll inside the message instead of crushing columns */
   .md table {
+    display: block;
+    max-width: 100%;
+    overflow-x: auto;
     border-collapse: collapse;
   }
 
+  /* `anywhere` (inherited from .md) shrinks min-content to one glyph,
+   * which lets auto layout split words and stack headers vertically */
   .md th,
   .md td {
     padding: 4px 10px;
     border: 1px solid var(--line);
+    overflow-wrap: break-word;
   }
 
   .md th {
     background: var(--surface-2);
     font-weight: 600;
+    white-space: nowrap;
   }
 
   .md hr {
