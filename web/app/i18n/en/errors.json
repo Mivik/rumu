@@ -20,5 +20,6 @@
   },
   "forkSession": "Couldn't fork the session",
   "moveSession": "Couldn't move the session",
-  "answer": "Answering failed"
+  "answer": "Answering failed",
+  "compact": "Couldn't compact the context"
 }

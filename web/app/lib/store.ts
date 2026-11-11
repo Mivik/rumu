@@ -34,7 +34,7 @@ export {
 } from './state/derived'
 export type { OwedReply, SiblingAlternative } from './state/derived'
 
-export { buildTimeline, pendingCalls, timeline } from './state/timeline'
+export { buildTimeline, compactionOf, pendingCalls, timeline } from './state/timeline'
 export { openAgentView, provideBranchView, useBranchView } from './state/branchView'
 export type { BranchView } from './state/branchView'
 export { trace } from './state/trace'
@@ -49,6 +49,7 @@ export type {
   GroupContextItem,
   GroupItem,
   GroupTextItem,
+  TimelineCompactionEntry,
   TimelineContextEntry,
   TimelineEntry,
   TimelineGroup,
@@ -104,6 +105,7 @@ export {
   newSession,
   openSession,
   openTaskDetail,
+  compactBranch,
   defaultAssistant,
   regenerateFrom,
   retryBranch,

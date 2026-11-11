@@ -43,11 +43,11 @@ use genai::resolver::{AuthData, Endpoint};
 use genai::{Client, ModelIden, ServiceTarget};
 use rumu_blob::Blobs;
 use rumu_core::{
-    Attachment, CUSTOM_PROVIDER, Content, CustomModel, Effort, ModelConfig, ModelInfo, ModelPick,
-    Node, NodeBody, Protocol, ProviderSettings, ReasoningBlock, Role, Roles, Segment, Titles,
-    ToolCall, ToolSpec, Usage, image_label, split_model_ref,
+    Attachment, CUSTOM_PROVIDER, CompactSettings, Content, CustomModel, Effort, ModelConfig,
+    ModelInfo, ModelPick, Node, NodeBody, Protocol, ProviderSettings, ReasoningBlock, Role, Roles,
+    Segment, Titles, ToolCall, ToolSpec, Usage, image_label, split_model_ref,
 };
-use rumu_kernel::{Delta, Llm, LlmError, LlmResponse, OnDelta};
+use rumu_kernel::{Budget, Delta, Llm, LlmError, LlmResponse, OnDelta};
 use serde_json::{Value, json};
 use tracing::warn;
 
@@ -75,6 +75,7 @@ struct Resolved {
     custom: BTreeMap<String, CustomModel>,
     roles: Roles,
     titles: Titles,
+    compact: CompactSettings,
     catalog: Arc<Catalog>,
 }
 
@@ -96,6 +97,8 @@ struct Target {
     effort: Option<Effort>,
     /// The catalog's output limit; `None` leaves genai's default.
     max_tokens: Option<u64>,
+    /// The catalog's context window.
+    context: Option<u64>,
     /// Whether requests carry the session identity ([`ProviderSettings`]).
     sticky: bool,
 }
@@ -139,7 +142,7 @@ impl GenaiLlm {
                 )));
             }
         }
-        for role in [Role::Default, Role::Title] {
+        for role in [Role::Default, Role::Title, Role::Compact] {
             if let Some(r) = config.roles.get(role) {
                 let known = split_model_ref(r).is_some_and(|(p, m)| match p {
                     CUSTOM_PROVIDER => config.custom.contains_key(m),
@@ -155,6 +158,7 @@ impl GenaiLlm {
             custom: config.custom.clone(),
             roles: config.roles.clone(),
             titles: config.titles,
+            compact: config.compact,
             catalog,
         });
         Ok(())
@@ -330,6 +334,7 @@ impl Resolved {
             model_id: model_id.to_owned(),
             effort: effort.unwrap_or(Effort::High).nearest(&info.efforts),
             max_tokens: info.output,
+            context: info.context,
             sticky: provider.settings.sticky,
         })
     }
@@ -574,6 +579,17 @@ impl Llm for GenaiLlm {
         match r.titles {
             Titles::Model if r.roles.title.is_none() => Titles::First,
             t => t,
+        }
+    }
+
+    fn budget(&self, pick: ModelPick<'_>) -> Budget {
+        let r = self.resolved();
+        let target = r.resolve(pick).ok().flatten();
+        Budget {
+            context: target.as_ref().and_then(|t| t.context),
+            output: target.as_ref().and_then(|t| t.max_tokens),
+            settings: r.compact,
+            compact_role: r.roles.compact.is_some(),
         }
     }
 }

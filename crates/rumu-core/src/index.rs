@@ -3,8 +3,8 @@
 //! Every [`crate::NodeBody::Note`] with `content.data` is indexed, markers
 //! (empty text) included; plain notes without data are not. The index is built
 //! lazily once per [`crate::Cx`] from the same view as
-//! [`crate::Cx::path`] (root→head plus effects queued for the next safe
-//! point), so a plugin can query what earlier calls in its batch already
+//! [`crate::Cx::path`] (what the model sees, plus effects queued for the next
+//! safe point), so a plugin can query what earlier calls in its batch already
 //! recorded without the kernel deduplicating anything on its behalf.
 
 use serde::{Deserialize, Serialize};

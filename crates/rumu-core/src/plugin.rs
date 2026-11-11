@@ -422,9 +422,10 @@ pub trait Inbox: Send + Sync {
 #[doc(hidden)]
 #[async_trait]
 pub trait Runtime: History {
-    /// Nodes from root to the branch head, followed by appends still queued
-    /// for the next safe point (so a marker recorded earlier in a tool batch
-    /// is visible to the batch's later calls).
+    /// What the model sees of the branch ([`crate::view`] of the nodes from
+    /// root to head), followed by appends still queued for the next safe
+    /// point (so a marker recorded earlier in a tool batch is visible to the
+    /// batch's later calls). Nodes a compaction summarized are not in it.
     fn path(&self, branch: &BranchId) -> Result<Arc<[Node]>>;
     /// The path state derived from the same view as [`Runtime::path`].
     fn state(&self, branch: &BranchId) -> Result<Arc<PathState>>;
@@ -563,12 +564,14 @@ impl Cx {
         self.depth
     }
 
-    /// The root→head path plus queued appends (see [`Runtime::path`]).
+    /// The model's view of the path plus queued appends (see
+    /// [`Runtime::path`]).
     pub fn path(&self) -> Result<Arc<[Node]>> {
         self.runtime.path(&self.branch)
     }
 
-    /// The state derived from [`Cx::path`].
+    /// The state derived from the whole root→head path (plus queued
+    /// appends), compacted nodes included.
     pub fn state(&self) -> Result<Arc<PathState>> {
         self.runtime.state(&self.branch)
     }

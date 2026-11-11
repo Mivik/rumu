@@ -20,7 +20,11 @@
 //! roles:                        # model refs, custom or not
 //!   default: rumu/main
 //!   title: rumu/cheap
+//!   compact: rumu/cheap         # compaction summaries (unset: the path's model)
 //! titles: model                 # session titles: first, last or model
+//! compact:                      # automatic compaction
+//!   auto: true                  # false: only manual and on overflow
+//!   at: 0.7                     # lowers the threshold: a window fraction or tokens
 //! ```
 //!
 //! The ids each provider lists are fetched from its endpoints and cached at
@@ -366,7 +370,7 @@ impl Settings {
                     "custom model `{name}` uses provider `{id}`"
                 )));
             }
-            if let Some(r) = [&file.roles.default, &file.roles.title]
+            if let Some(r) = [&file.roles.default, &file.roles.title, &file.roles.compact]
                 .into_iter()
                 .flatten()
                 .find(|r| of(r))
@@ -396,7 +400,11 @@ impl Settings {
                 }
                 file.custom.remove(old);
                 let (old, new) = (custom_ref(old), custom_ref(&name));
-                for slot in [&mut file.roles.default, &mut file.roles.title] {
+                for slot in [
+                    &mut file.roles.default,
+                    &mut file.roles.title,
+                    &mut file.roles.compact,
+                ] {
                     if slot.as_deref() == Some(&old) {
                         *slot = Some(new.clone());
                     }
@@ -417,7 +425,11 @@ impl Settings {
         self.edit(|file| {
             file.custom.remove(name);
             let gone = custom_ref(name);
-            for slot in [&mut file.roles.default, &mut file.roles.title] {
+            for slot in [
+                &mut file.roles.default,
+                &mut file.roles.title,
+                &mut file.roles.compact,
+            ] {
                 if slot.as_deref() == Some(&gone) {
                     *slot = None;
                 }
@@ -822,13 +834,14 @@ mod tests {
         assert!(
             s.set_roles(Roles {
                 default: Some("rumu/nope".into()),
-                title: None
+                ..Roles::default()
             })
             .is_err()
         );
         s.set_roles(Roles {
             default: Some("rumu/main".into()),
             title: Some("rumu/main".into()),
+            compact: Some("rumu/main".into()),
         })
         .unwrap();
 
@@ -844,13 +857,14 @@ mod tests {
         assert_eq!(file.providers["a"].api_key, "k");
         assert_eq!(file.custom["primary"].model, "a/n");
         assert_eq!(file.roles.title.as_deref(), Some("rumu/primary"));
+        assert_eq!(file.roles.compact.as_deref(), Some("rumu/primary"));
 
         s.remove_custom("primary").unwrap();
         assert_eq!(s.info().roles, Roles::default());
         // A provider a role names directly stays too.
         s.set_roles(Roles {
             default: Some("a/m".into()),
-            title: None,
+            ..Roles::default()
         })
         .unwrap();
         assert!(s.remove_provider("a").is_err());

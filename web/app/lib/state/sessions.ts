@@ -413,6 +413,22 @@ export async function retryBranch(): Promise<boolean> {
   }
 }
 
+/** `branch.compact`: summarize the active branch's older context now, the
+ *  summary focusing on `focus` when given. */
+export async function compactBranch(focus: string): Promise<boolean> {
+  const branch = state.activeBranch
+  if (!branch) return false
+  state.busy[branch] = true
+  try {
+    await rumu.request('branch.compact', focus ? { branch, focus } : { branch })
+    return true
+  } catch (err) {
+    state.busy[branch] = false
+    toast('error', t('errors.compact'), (err as Error).message)
+    return false
+  }
+}
+
 export async function stopTurn(): Promise<void> {
   const branch = state.activeBranch
   if (!branch) return

@@ -219,6 +219,8 @@ pub enum Role {
     Default,
     /// Session titles. Unset keeps the truncated first prompt.
     Title,
+    /// Compaction summaries. Unset summarizes on the path's own model.
+    Compact,
 }
 
 #[derive(Debug, Clone, Default, PartialEq, Eq, Serialize, Deserialize, ts_rs::TS)]
@@ -231,6 +233,9 @@ pub struct Roles {
     #[serde(skip_serializing_if = "Option::is_none")]
     #[ts(optional)]
     pub title: Option<String>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    #[ts(optional)]
+    pub compact: Option<String>,
 }
 
 impl Roles {
@@ -238,6 +243,7 @@ impl Roles {
         match role {
             Role::Default => self.default.as_deref(),
             Role::Title => self.title.as_deref(),
+            Role::Compact => self.compact.as_deref(),
         }
     }
 }
@@ -267,7 +273,34 @@ pub struct ModelConfig {
     pub roles: Roles,
     #[serde(skip_serializing_if = "is_default")]
     pub titles: Titles,
+    #[serde(skip_serializing_if = "is_default")]
+    pub compact: CompactSettings,
 }
+
+/// When paths compact on their own.
+#[derive(Debug, Clone, Copy, PartialEq, Serialize, Deserialize, ts_rs::TS)]
+#[serde(default, deny_unknown_fields)]
+#[ts(export)]
+pub struct CompactSettings {
+    /// Compact when the view outgrows the threshold. Manual and overflow
+    /// compaction happen either way.
+    pub auto: bool,
+    /// Lowers the threshold: a fraction of the window (≤ 1) or a token count.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    #[ts(optional)]
+    pub at: Option<f64>,
+}
+
+impl Default for CompactSettings {
+    fn default() -> Self {
+        Self {
+            auto: true,
+            at: None,
+        }
+    }
+}
+
+impl Eq for CompactSettings {}
 
 fn is_default<T: Default + PartialEq>(v: &T) -> bool {
     *v == T::default()

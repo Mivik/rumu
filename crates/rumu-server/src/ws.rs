@@ -870,6 +870,13 @@ async fn dispatch(state: &AppState, method: &str, p: &Value) -> Result<Value> {
             Ok(json!({}))
         }
 
+        "branch.compact" => {
+            let branch: BranchId = str_param(p, "branch")?.into();
+            let focus = p.get("focus").and_then(Value::as_str).map(str::to_owned);
+            kernel.compact(&branch, focus).await?;
+            Ok(json!({}))
+        }
+
         "branch.activate" => {
             let branch: BranchId = str_param(p, "branch")?.into();
             kernel.activate_branch(&branch)?;

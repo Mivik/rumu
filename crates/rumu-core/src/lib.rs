@@ -5,6 +5,7 @@
 //! these.
 
 mod addr;
+mod compaction;
 mod error;
 mod event;
 mod ids;
@@ -17,6 +18,7 @@ mod task;
 mod workspace;
 
 pub use addr::*;
+pub use compaction::*;
 pub use error::*;
 pub use event::*;
 pub use ids::*;

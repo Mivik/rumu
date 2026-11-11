@@ -104,6 +104,10 @@ async function onCopy(): Promise<void> {
 const retrying = computed(() =>
   props.live && view.branch.value ? (state.retrying[view.branch.value] ?? null) : null,
 )
+/** This live group's branch is compacting its context (`compact.started`). */
+const compacting = computed(() =>
+  props.live && view.branch.value ? Boolean(state.compacting[view.branch.value]) : false,
+)
 const retryLeft = ref(0)
 let retryTimer: ReturnType<typeof setInterval> | undefined
 watch(
@@ -131,7 +135,7 @@ onBeforeUnmount(() => retryTimer && clearInterval(retryTimer))
  * nothing yet — so the dot needs a line of its own ("working…"): beside the
  * mascot before anything shows, else at the end. */
 const idle = computed(() => {
-  if (!props.live || retrying.value || pending.value.length) return false
+  if (!props.live || retrying.value || compacting.value || pending.value.length) return false
   const d = activeDelta.value
   return !d?.reasoning && !d?.text
 })
@@ -168,6 +172,9 @@ const bare = computed(() => !items.value.length && !props.group.assistants.lengt
             seconds: retryLeft,
           })
         }}
+      </span>
+      <span v-else-if="compacting" v-enter="'enter-fade'" class="working-line">
+        <span class="dot-live size-1.5 rounded-full bg-brand" />{{ t('chat.assistant.compacting') }}
       </span>
       <span v-else-if="idle && bare" v-enter="'enter-fade'" class="working-line">
         <span class="dot-live size-1.5 rounded-full bg-brand" />{{ t('chat.assistant.working') }}

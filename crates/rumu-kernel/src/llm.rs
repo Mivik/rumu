@@ -3,7 +3,9 @@
 use std::sync::Arc;
 
 use async_trait::async_trait;
-use rumu_core::{ModelPick, Node, ReasoningBlock, Titles, ToolCall, ToolSpec, Usage};
+use rumu_core::{
+    CompactSettings, ModelPick, Node, ReasoningBlock, Titles, ToolCall, ToolSpec, Usage,
+};
 
 /// A model-call failure.
 #[derive(Debug, thiserror::Error)]
@@ -55,6 +57,20 @@ const NETWORK_TRANSIENTS: &[&str] = &[
     "timeout",
 ];
 
+/// How providers word a request that does not fit the window.
+const OVERFLOW_PHRASES: &[&str] = &[
+    "prompt is too long",
+    "context_length_exceeded",
+    "context length",
+    "context window",
+    "maximum context",
+    "input is too long",
+    "too many input tokens",
+    "input token count",
+    "exceeds the maximum number of tokens",
+    "request too large",
+];
+
 impl LlmError {
     /// The HTTP status embedded in a flattened `Request`/`Stream` message, if
     /// any.
@@ -62,6 +78,22 @@ impl LlmError {
         match self {
             Self::Request(m) | Self::Stream(m) => embedded_status(m),
             _ => None,
+        }
+    }
+
+    /// Whether the provider refused the request as longer than the model's
+    /// window: a 413, or one of the phrases providers word it with.
+    pub fn is_overflow(&self) -> bool {
+        let (Self::Request(m) | Self::Stream(m)) = self else {
+            return false;
+        };
+        match embedded_status(m) {
+            Some(413) => true,
+            Some(429) => false,
+            _ => {
+                let lower = m.to_ascii_lowercase();
+                OVERFLOW_PHRASES.iter().any(|f| lower.contains(f))
+            }
         }
     }
 
@@ -178,6 +210,24 @@ pub trait Llm: Send + Sync {
     fn titles(&self) -> Titles {
         Titles::First
     }
+
+    /// What compaction needs to know about running on `pick`.
+    fn budget(&self, pick: ModelPick<'_>) -> Budget {
+        let _ = pick;
+        Budget::default()
+    }
+}
+
+/// The window a model call runs in, and how paths compact in it.
+#[derive(Debug, Clone, Copy, Default)]
+pub struct Budget {
+    /// Input window, tokens; `None` when nothing knows it.
+    pub context: Option<u64>,
+    /// The most tokens one reply may take.
+    pub output: Option<u64>,
+    pub settings: CompactSettings,
+    /// A model is bound to the `compact` role.
+    pub compact_role: bool,
 }
 
 #[cfg(test)]
@@ -217,6 +267,27 @@ mod tests {
         assert!(t(
             "Reqwest error: HTTP status server error (502) for url (https://x)"
         ));
+    }
+
+    #[test]
+    fn overflow_errors() {
+        let o = |m: &str| LlmError::Request(m.to_owned()).is_overflow();
+        assert!(o(
+            "HTTP error.\nStatus: 400 Bad Request\nBody:\n{\"error\":{\"type\":\
+             \"invalid_request_error\",\"message\":\"prompt is too long: 210000 tokens > 200000 maximum\"}}"
+        ));
+        assert!(o(
+            "HTTP error.\nStatus: 400 Bad Request\nBody:\n{\"error\":{\"code\":\
+             \"context_length_exceeded\"}}"
+        ));
+        assert!(o("HTTP error.\nStatus: 413 Payload Too Large\nBody:\n"));
+        assert!(!o(
+            "HTTP error.\nStatus: 429 Too Many Requests\nBody:\ncontext window tokens per minute"
+        ));
+        assert!(!o(
+            "HTTP error.\nStatus: 400 Bad Request\nBody:\nbad tool schema"
+        ));
+        assert!(!LlmError::MissingEnd.is_overflow());
     }
 
     #[test]

@@ -77,5 +77,7 @@
   "no": "No",
   "notInCatalog": "Not on models.dev",
   "enable_exclude_prefix": "Exclude the {n} starting with {q}",
-  "enable_exclude_contains": "Exclude the {n} containing {q}"
+  "enable_exclude_contains": "Exclude the {n} containing {q}",
+  "roleCompact": "Compaction",
+  "sameModel": "The session's model"
 }

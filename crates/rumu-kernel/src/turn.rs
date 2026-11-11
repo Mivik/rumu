@@ -7,10 +7,10 @@ use std::time::{Duration, Instant};
 use crate::{Error, Result};
 use rumu_core::kind;
 use rumu_core::{
-    Branch, BranchId, BranchKind, BranchStatus, CODE_DENIED_TOOLS, Call, Content, Cx,
-    FILE_PATCH_TAG, Inherit, InheritContext, InnerCall, Invoke, ModelPick, NodeBody, NodeId,
-    Plugin, RUMU_WORKSPACE, Role, SYSTEM_SOURCE, SessionId, ToolCall, ToolError, ToolOutput,
-    ToolResultExt, TurnError, WorkspaceSet, WorkspaceUse, parse_args, truncate_output,
+    Branch, BranchId, BranchKind, BranchStatus, CODE_DENIED_TOOLS, Call, CompactReason, Content,
+    Cx, FILE_PATCH_TAG, Inherit, InheritContext, InnerCall, Invoke, NodeBody, NodeId, Plugin,
+    RUMU_WORKSPACE, SYSTEM_SOURCE, SessionId, ToolCall, ToolError, ToolOutput, ToolResultExt,
+    TurnError, WorkspaceSet, WorkspaceUse, parse_args, truncate_output,
 };
 use schemars::JsonSchema;
 use serde::Deserialize;
@@ -73,6 +73,8 @@ pub(crate) enum TurnKind {
     Prompt(Content),
     Regenerate(Content),
     Retry,
+    /// A manual compaction, with what the summary should focus on.
+    Compact(Option<String>),
 }
 
 impl Kernel {
@@ -212,6 +214,17 @@ impl Kernel {
         Ok(())
     }
 
+    /// `branch.compact` WS method: compact an idle branch now, the summary
+    /// focusing on `focus` when given. Progress arrives via pushes.
+    pub async fn compact(self: &Arc<Self>, branch: &BranchId, focus: Option<String>) -> Result<()> {
+        self.store
+            .get_branch(branch)?
+            .ok_or_else(|| Error::BranchNotFound(branch.clone()))?;
+        let token = self.begin_loop(branch)?;
+        self.spawn_turn(branch.clone(), token, TurnKind::Compact(focus));
+        Ok(())
+    }
+
     /// `abort` WS method: cancel the running loop for a branch. Already-queued
     /// items are still written but no longer start a turn; posts arriving
     /// after the abort wake normally.
@@ -277,6 +290,17 @@ impl Kernel {
                     json!({ "branch": branch, "reason": "retry" }),
                 );
             }
+            TurnKind::Compact(focus) => {
+                self.push(
+                    "turn.started",
+                    json!({ "branch": branch, "reason": "compact" }),
+                );
+                self.flush_queue(&branch).await?;
+                self.compact_now(&branch, CompactReason::Manual, focus.as_deref(), &token)
+                    .await?;
+                self.push("turn.done", json!({ "branch": branch }));
+                return Ok(());
+            }
         }
         self.run_loop(branch.clone(), &token).await?;
         self.push("turn.done", json!({ "branch": branch }));
@@ -336,6 +360,8 @@ impl Kernel {
         // A reply without tool calls is the only way a loop "finishes"; abort
         // leaves it without a final reply.
         let mut replied = false;
+        // This reply's request overflowed once already.
+        let mut overflowed = false;
 
         loop {
             if token.is_cancelled() {
@@ -344,9 +370,12 @@ impl Kernel {
             let session = self.session_of(&branch)?;
 
             // Flush first so llm.pre hooks see notes queued earlier on the path
-            // (e.g. prompt-hook imports); then llm.pre (hooks may inject), then
-            // flush again so those notes are on the path before projection.
+            // (e.g. prompt-hook imports); compact when the view has outgrown
+            // the window, so llm.pre sees (and re-injects into) the new view;
+            // then llm.pre (hooks may inject), then flush again so those notes
+            // are on the path before projection.
             self.flush_queue(&branch).await?;
+            self.auto_compact(&branch, token).await?;
             let mut ev =
                 self.make_event(kind::LLM_PRE, session.clone(), branch.clone(), json!({}))?;
             self.dispatch(&mut ev, false).await?;
@@ -359,12 +388,10 @@ impl Kernel {
             // failed attempt is retried only while nothing has streamed to
             // the UI yet: once text or reasoning reached the client,
             // replaying would duplicate it, so the turn fails instead.
-            let nodes = self.path_nodes(&branch)?;
-            let model = crate::state::derive_state(&nodes).model;
-            let pick = match &model {
-                Some(u) => ModelPick::Use(u),
-                None => ModelPick::Role(Role::Default),
-            };
+            let path = self.path_nodes(&branch)?;
+            let model = crate::state::derive_state(&path).model;
+            let pick = crate::compact::pick(&model);
+            let nodes = rumu_core::view(&path);
             let streamed = Arc::new(AtomicBool::new(false));
             let on_delta = {
                 let k = self.clone();
@@ -409,7 +436,12 @@ impl Kernel {
                     _ = token.cancelled() => break None,
                     r = self.llm.complete(pick, &self.system, &self.tools, &nodes, on_delta.clone()) => {
                         match r {
-                            Ok(resp) => break Some(resp),
+                            Ok(resp) => break Some(Ok(resp)),
+                            // Too long for the window: compact and project
+                            // again, once per reply.
+                            Err(e) if e.is_overflow()
+                                && !overflowed
+                                && !streamed.load(Ordering::Relaxed) => break Some(Err(e)),
                             Err(e) => {
                                 if retries >= MAX_LLM_RETRIES
                                     || streamed.load(Ordering::Relaxed)
@@ -440,9 +472,21 @@ impl Kernel {
                     }
                 }
             };
-            let Some(resp) = resp else {
-                break;
+            let resp = match resp {
+                None => break,
+                Some(Ok(resp)) => resp,
+                Some(Err(e)) => {
+                    overflowed = true;
+                    if self
+                        .compact_now(&branch, CompactReason::Overflow, None, token)
+                        .await?
+                    {
+                        continue;
+                    }
+                    return Err(e.into());
+                }
             };
+            overflowed = false;
             // The Assistant node below replaces the streamed text.
             self.inner.lock().unwrap().streaming.remove(&branch);
             let llm_ms = llm_started.elapsed().as_millis() as u64;

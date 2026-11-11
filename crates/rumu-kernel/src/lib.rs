@@ -1,6 +1,7 @@
 //! rumu-kernel: the agent loop, hook dispatch, predicate engine, projection
 //! inputs and UI tree ops for rumu.
 
+mod compact;
 mod decide;
 mod dispatch;
 mod error;
@@ -16,7 +17,7 @@ mod turn;
 
 pub use error::{Error, Result};
 pub use fields::extract_fields;
-pub use llm::{Delta, Llm, LlmError, LlmResponse, OnDelta};
+pub use llm::{Budget, Delta, Llm, LlmError, LlmResponse, OnDelta};
 pub use predicate::{Pred, PredicateError};
 pub use scripted::{Script, ScriptTurn, ScriptedLlm};
 pub use state::{derive_state, merge_workspaces, project_change};

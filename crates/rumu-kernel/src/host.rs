@@ -36,7 +36,7 @@ impl Runtime for KernelRuntime {
     /// Includes appends queued for the next safe point (see
     /// `Kernel::pending_path_nodes`).
     fn path(&self, branch: &BranchId) -> Result<Arc<[Node]>> {
-        Ok(self.0.pending_path_nodes(branch)?.into())
+        Ok(rumu_core::view(&self.0.pending_path_nodes(branch)?).into())
     }
 
     fn state(&self, branch: &BranchId) -> Result<Arc<PathState>> {

@@ -11,6 +11,7 @@ import type { Node } from '../../lib/types'
 import Icon from '../ui/Icon.vue'
 import AssistantGroup from './AssistantGroup.vue'
 import ContextPills from './ContextPills.vue'
+import CompactionRow from './CompactionRow.vue'
 import UserRow from './UserRow.vue'
 
 const branch = computed(() => (state.agentView ? (state.branches[state.agentView] ?? null) : null))
@@ -109,6 +110,7 @@ watch(
           <UserRow v-if="entry.kind === 'user'" :node="entry.node" :context="entry.contextNodes" />
           <AssistantGroup v-else-if="entry.kind === 'group'" :group="entry" :live="busy && i === lastGroup" />
           <ContextPills v-else-if="entry.kind === 'context'" :nodes="entry.nodes" />
+          <CompactionRow v-else-if="entry.kind === 'compaction'" :node="entry.node" />
         </div>
         <p v-if="!timeline.length" class="text-meta text-ink-3">{{ t('chat.agentView.empty') }}</p>
       </div>

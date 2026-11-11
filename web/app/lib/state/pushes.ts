@@ -36,6 +36,7 @@ import { refreshLibrary } from './library'
 import { refreshProjects } from './projects'
 import { loadPath } from './tree'
 import { toast } from './ui'
+import { t } from '../../i18n'
 
 let traceSeq = 1
 let queuedSeq = 1
@@ -197,12 +198,14 @@ function onTurnDone(p: TurnPush): void {
   state.busy[p.branch] = false
   delete state.deltas[p.branch]
   delete state.retrying[p.branch]
+  delete state.compacting[p.branch]
 }
 
 function onTurnError(p: TurnErrorPush): void {
   state.busy[p.branch] = false
   delete state.deltas[p.branch]
   delete state.retrying[p.branch]
+  delete state.compacting[p.branch]
   // A hook refused the prompt before the turn started: nothing was recorded
   // and no reply is owed — a toast, never a failure row.
   if (p.blocked) {
@@ -300,6 +303,18 @@ export function startApp(): void {
   rumu.onPush('turn.done', (p) => onTurnDone(p as unknown as TurnPush))
   rumu.onPush('turn.retrying', (p) => onTurnRetrying(p as unknown as TurnRetryingPush))
   rumu.onPush('turn.error', (p) => onTurnError(p as unknown as TurnErrorPush))
+  rumu.onPush('compact.started', (p) => {
+    state.compacting[(p as unknown as TurnPush).branch] = true
+  })
+  rumu.onPush('compact.done', (p) => {
+    delete state.compacting[(p as unknown as TurnPush).branch]
+  })
+  // The turn carries on uncompacted; only the failure is news.
+  rumu.onPush('compact.failed', (p) => {
+    const { branch, message } = p as unknown as TurnErrorPush
+    delete state.compacting[branch]
+    toast('error', t('errors.compact'), message)
+  })
   rumu.onPush('warning', (p) => onWarning(p as unknown as WarningPush))
   rumu.onPush('settings.updated', (p) => onSettingsUpdated(p as unknown as { settings: SettingsInfo }))
   rumu.onPush('workspaces.updated', (p) =>

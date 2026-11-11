@@ -21,7 +21,7 @@
 // apps, the sent message leads with its images (`withLeadingAnchors`).
 import { computed, nextTick, onBeforeUnmount, onMounted, reactive, ref, watch } from 'vue'
 import { t } from '../../i18n'
-import { isBusy, sendPrompt, state, stopTurn } from '../../lib/store'
+import { compactBranch, isBusy, sendPrompt, state, stopTurn } from '../../lib/store'
 import type { PromptAttachment } from '../../lib/store'
 import type { Attachment } from '../../lib/types'
 import { uploadBlob, withLeadingAnchors } from '../../lib/attachments'
@@ -167,6 +167,13 @@ async function submit(): Promise<void> {
     .filter((i) => i.status === 'done')
     .map((i) => ({ hash: i.attachment!.hash, name: i.file.name || undefined }))
   const text = draft.value.trim()
+  // `/compact [focus]` compacts the open session's branch instead.
+  const compact = /^\/compact(?:\s+([\s\S]*))?$/.exec(text)
+  if (compact && !items.length && state.sessionId) {
+    draft.value = ''
+    if (!(await compactBranch(compact[1]?.trim() ?? ''))) draft.value = text
+    return
+  }
   draft.value = ''
   attachments.value = []
   // Put everything back if creating/sending failed so nothing is lost.

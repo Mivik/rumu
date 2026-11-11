@@ -34,9 +34,13 @@ holds models of your own (`rumu/main`, `rumu/cheap`, …), each routed to
 another provider's model at a reasoning effort. Sessions and roles name the
 custom model, so pointing it at a newer model moves all of them. **Roles**
 bind models, custom or not, to jobs: `default` for sessions that pick
-nothing, `title` for generated session titles. A session is titled by its
-first prompt, its latest one, or a summary the `title` model writes of the
-first. The composer picks a model (and effort) per branch; the
+nothing, `title` for generated session titles, `compact` for compaction
+summaries (the session's own model when unset). A branch whose context
+outgrows its model's window is compacted: the older part is replaced by a
+summary, with the newest messages kept verbatim, and `/compact [focus]` does
+it by hand; see [docs/compaction.md](docs/compaction.md). A session is
+titled by its first prompt, its latest one, or a summary the `title` model
+writes of the first. The composer picks a model (and effort) per branch; the
 pick is recorded on the branch (a `model.use` marker) when the next prompt is
 sent. Settings are saved to `RUMU_HOME/settings.yaml` (owner-only, since it
 holds the keys) and apply from the next model call, without a restart.

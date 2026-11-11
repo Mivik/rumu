@@ -38,6 +38,7 @@ import type { Node } from '../../lib/types'
 import UserRow from './UserRow.vue'
 import AssistantGroup from './AssistantGroup.vue'
 import ContextPills from './ContextPills.vue'
+import CompactionRow from './CompactionRow.vue'
 import ErrorRow from './ErrorRow.vue'
 import TimelineRail from './TimelineRail.vue'
 
@@ -340,6 +341,7 @@ watch(() => state.activeBranch, resetView, { flush: 'pre' })
 function dataId(e: TimelineEntry): string {
   if (e.kind === 'user') return e.node.id
   if (e.kind === 'context') return e.nodes[0]?.id ?? ''
+  if (e.kind === 'compaction') return e.node.id
   return e.safeNode?.id ?? e.assistants.at(-1)?.id ?? ''
 }
 
@@ -408,6 +410,7 @@ function jumpTo(i: number): void {
               :live="isBusy && i === lastGroup"
             />
             <ContextPills v-else-if="entry.kind === 'context'" :nodes="entry.nodes" />
+            <CompactionRow v-else-if="entry.kind === 'compaction'" :node="entry.node" />
           </div>
         </template>
         <!-- the reply this branch still owes: its last exchange failed

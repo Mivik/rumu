@@ -77,5 +77,7 @@
   "no": "不支持",
   "notInCatalog": "models.dev 未收录",
   "enable_exclude_prefix": "排除以 {q} 开头的 {n} 个",
-  "enable_exclude_contains": "排除包含 {q} 的 {n} 个"
+  "enable_exclude_contains": "排除包含 {q} 的 {n} 个",
+  "roleCompact": "上下文压缩",
+  "sameModel": "会话所用模型"
 }

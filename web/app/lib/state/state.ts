@@ -173,6 +173,9 @@ const initial = {
   /** Pending automatic retry of the model call, keyed by branch; cleared by
    * the next turn event or the branch's first delta. */
   retrying: {} as Record<BranchId, RetryState>,
+  /** Branches whose context is being compacted (`compact.started` until
+   * `compact.done`/`compact.failed` or the turn's end). */
+  compacting: {} as Record<BranchId, true>,
 
   /** Live foreground tool output, keyed by `${branch}:${call_id}`. */
   toolProgress: {} as Record<

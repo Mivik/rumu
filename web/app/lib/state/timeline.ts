@@ -8,6 +8,7 @@
 
 import { computed } from 'vue'
 import type { BranchId, Node, ToolCall } from '../types'
+import type { Compaction } from '../generated/Compaction'
 import { CATALOG_TAG, TURN_ERROR_TAG, reasoningText } from '../types'
 import { contentText } from '../util'
 import { artifactOf } from '../artifacts'
@@ -145,7 +146,19 @@ export interface TimelineContextEntry {
   kind: 'context'
   nodes: Node[]
 }
-export type TimelineEntry = TimelineUserEntry | TimelineContextEntry | TimelineGroup
+/** A compaction, where it happened: from here on the model sees its summary
+ *  in place of the older messages. */
+export interface TimelineCompactionEntry {
+  kind: 'compaction'
+  node: Node
+}
+export type TimelineEntry = TimelineUserEntry | TimelineContextEntry | TimelineGroup | TimelineCompactionEntry
+
+/** The compaction payload of a note, if it is one. */
+export function compactionOf(n: Node): Compaction | null {
+  if (n.body.type !== 'note' || n.body.content.data?.tag !== 'compaction') return null
+  return n.body.content.data.data as Compaction
+}
 
 type CallsOnPath = typeof callsOnPath.value
 
@@ -188,6 +201,14 @@ export function buildTimeline(nodes: Node[], calls: CallsOnPath, branch: BranchI
 
   for (const n of nodes) {
     const b = n.body
+    // A compaction is a line of its own, where it happened.
+    if (compactionOf(n)) {
+      flushCtx()
+      group = null
+      userEntry = null
+      out.push({ kind: 'compaction', node: n })
+      continue
+    }
     if (b.type === 'user') {
       flushCtx()
       group = null

@@ -65,7 +65,8 @@
     "fork": "Fork into new session",
     "noSafePoint": "Tool calls unfinished",
     "copied": "Copied reply",
-    "reasoningReset": "Earlier reasoning dropped"
+    "reasoningReset": "Earlier reasoning dropped",
+    "compacting": "compacting context…"
   },
   "error": {
     "interrupted": "The reply was interrupted",
@@ -142,5 +143,10 @@
     "parent": "Parent sub-agent",
     "close": "Close",
     "empty": "Starting…"
+  },
+  "compaction": {
+    "line": "Context compacted · {before} → {after} tok",
+    "show": "Show summary",
+    "hide": "Hide summary"
   }
 }

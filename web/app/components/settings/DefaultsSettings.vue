@@ -1,7 +1,7 @@
 <script setup lang="ts">
-// The default model, and where session titles come from: the first or the
-// latest prompt, or a model's summary (its model then picked below). Every
-// change saves at once.
+// The default model, where session titles come from (the first or the latest
+// prompt, or a model's summary, its model then picked below), and the model
+// that writes compaction summaries. Every change saves at once.
 import { computed } from 'vue'
 import { t } from '../../i18n'
 import { editSettings, models } from '../../lib/state/models'
@@ -65,6 +65,15 @@ function setTitles(titles: Titles): void {
           @update:model-value="setRole('title', $event)"
         />
       </div>
+      <label class="flex flex-col gap-1.5">
+        <span class="field-label">{{ t('settings.roleCompact') }}</span>
+        <ModelField
+          :model-value="settings?.roles.compact ?? ''"
+          :placeholder="t('settings.sameModel')"
+          clearable
+          @update:model-value="setRole('compact', $event)"
+        />
+      </label>
     </section>
   </div>
 </template>

@@ -3,4 +3,4 @@
 /**
  * What a background job or a fresh path runs on, by model ref.
  */
-export type Role = "default" | "title";
+export type Role = "default" | "title" | "compact";
