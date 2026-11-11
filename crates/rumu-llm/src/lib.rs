@@ -13,13 +13,20 @@
 //! models of the [`ModelConfig`].
 //!
 //! On Anthropic, reasoning is always requested explicitly (adaptive thinking
-//! at the resolved effort), with replayed thinking blocks that no longer
-//! verify dropped by the provider (`block_binding: drop_block`) instead of
-//! failing the request. Reasoning is only ever replayed to the model that
-//! produced it. Other protocols do not report dropped input reasoning; a
-//! request they reject because of it is retried once without any. Whichever
-//! way reasoning is left out, the reply records it as a reset, so it is never
-//! replayed again and the UI can say so.
+//! at the resolved effort). Replayed thinking blocks whose prefix no longer
+//! verifies are left to the provider's default: older accounts pass them
+//! through (`thinking_mismatch_allowed`), so the model keeps its earlier
+//! reasoning, and accounts that enforce the check reject the request, which
+//! is retried once without any. We deliberately do not set
+//! `block_binding: drop_block`: that would turn every prefix mismatch into
+//! lost reasoning (and an `input_transformations` reset) even when the
+//! provider would have accepted the block. History that rumu itself rewrites
+//! (compaction) drops the affected thinking blocks in its projection instead.
+//! Reasoning is only ever replayed to the model that produced it. Other
+//! protocols do not report dropped input reasoning; a request they reject
+//! because of it is retried once without any. Whichever way reasoning is left
+//! out, the reply records it as a reset, so it is never replayed again and
+//! the UI can say so.
 
 pub mod catalog;
 mod list;
@@ -55,7 +62,9 @@ pub use catalog::Catalog;
 pub use list::list_models;
 pub use probe::{Probe, probe};
 
-/// The beta that enables `thinking.block_binding`.
+/// The beta that reports `input_transformations` on `message_start`: blocks
+/// the provider dropped, and blocks whose prefix did not verify but that it
+/// passed through anyway (`thinking_mismatch_allowed`, which is not a reset).
 const THINKING_BINDING_BETA: &str = "thinking-binding-controls-2026-08-01";
 
 /// The genai adapter. Its providers, custom models and roles come from the
@@ -378,9 +387,11 @@ impl Target {
                 };
                 // Replayed thinking the provider dropped
                 // (`input_transformations` on `message_start`), counted off
-                // the raw frames. Anthropic is the only protocol that
-                // reports this; the others reject replayed reasoning at most
-                // (caught by the retry in `complete`) or accept it silently.
+                // the raw frames. Mismatches the provider passed through
+                // (`thinking_mismatch_allowed`) are not drops and are not
+                // counted. Anthropic is the only protocol that reports this;
+                // the others reject replayed reasoning at most (caught by the
+                // retry in `complete`) or accept it silently.
                 opts.with_raw_frame_fn(move |_, frame| {
                     if frame.data.contains("input_transformations")
                         && let Some(v) = frame.json()
@@ -607,15 +618,15 @@ fn genai_effort(effort: Effort) -> ReasoningEffort {
 }
 
 /// The reasoning part of every request, merged over genai's payload (which
-/// replaces top-level keys whole): adaptive thinking with summarized text,
-/// the effort, and replayed blocks that fail the prefix check dropped rather
-/// than rejected.
+/// replaces top-level keys whole): adaptive thinking with summarized text and
+/// the effort. No `block_binding`: a replayed block whose prefix no longer
+/// verifies must stay a provider decision (pass through on older accounts,
+/// 400 on accounts that enforce the check), never a request-side drop.
 fn reasoning_body(effort: &str) -> Value {
     json!({
         "thinking": {
             "type": "adaptive",
             "display": "summarized",
-            "block_binding": { "prefix_mismatch_behavior": "drop_block" },
         },
         "output_config": { "effort": effort },
     })
@@ -630,16 +641,26 @@ fn device_id() -> &'static str {
 }
 
 /// Anthropic's `metadata.user_id` for a sticky provider: the JSON shape
-/// Claude Code sends, which gateways pooling accounts parse to keep one
-/// conversation on one upstream account.
+/// Claude Code sends (and the account-pooling gateway documents) ...
+/// `device_id`, `account_uuid` and `session_id`; the gateway parses its
+/// `session_id` to keep one conversation on one upstream account. The
+/// device id is per run (see [`device_id`]), so it names nothing beyond this
+/// run's conversations.
 fn user_id(session: &str) -> String {
-    json!({ "device_id": device_id(), "session_id": session }).to_string()
+    json!({
+        "device_id": device_id(),
+        "account_uuid": "",
+        "session_id": session,
+    })
+    .to_string()
 }
 
 /// Thinking blocks a `message_start` frame reports as dropped. Anthropic is
 /// the only protocol that reports this; a model that cannot read another
 /// model's blocks (`model_binding_mismatch`) is a routing choice, not lost
-/// reasoning: those return when the model does.
+/// reasoning: those return when the model does. A prefix mismatch the
+/// provider merely flags (`thinking_mismatch_allowed`) is not a drop: the
+/// block still reached the model.
 fn dropped_thinking(frame: &Value) -> usize {
     frame
         .pointer("/message/input_transformations")
@@ -1860,9 +1881,23 @@ mod tests {
         let frame = json!({"type": "message_start", "message": {"input_transformations": [
             {"type": "thinking_dropped", "path": "messages.1.content.0", "reason": "prefix_binding_mismatch"},
             {"type": "thinking_dropped", "path": "messages.3.content.0", "reason": "model_binding_mismatch"},
+            {"type": "thinking_mismatch_allowed", "path": "messages.5.content.0", "reason": "prefix_binding_mismatch"},
         ]}});
         assert_eq!(dropped_thinking(&frame), 1);
         assert_eq!(dropped_thinking(&json!({"type": "message_start"})), 0);
+    }
+
+    #[test]
+    fn replayed_thinking_is_not_dropped_by_the_request() {
+        let body = reasoning_body("high");
+        assert_eq!(body["thinking"]["type"], "adaptive");
+        assert_eq!(body["thinking"]["display"], "summarized");
+        // A prefix mismatch stays the provider's decision: older accounts
+        // pass the block through, enforcing ones reject it (retried without
+        // any). Asking for `drop_block` would lose reasoning the provider
+        // would otherwise have accepted.
+        assert!(body["thinking"].get("block_binding").is_none());
+        assert_eq!(body["output_config"]["effort"], "high");
     }
 
     #[test]
@@ -2200,6 +2235,9 @@ mod tests {
     fn sticky_user_id_names_the_session() {
         let id: Value = serde_json::from_str(&user_id("s1")).unwrap();
         assert!(id["device_id"].as_str().is_some_and(|d| !d.is_empty()));
+        // The account-pooling gateway (and Claude Code) send this field; a
+        // missing one can keep the request out of the gateway's cache keys.
+        assert_eq!(id["account_uuid"], "");
         assert_eq!(id["session_id"], "s1");
     }
 }

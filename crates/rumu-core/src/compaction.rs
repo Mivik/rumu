@@ -54,41 +54,61 @@ pub fn compaction_of(node: &Node) -> Option<Compaction> {
     }
 }
 
+/// The latest compaction note's position and the first position of its
+/// verbatim tail (the note itself when there is no tail).
+fn compaction_cut(nodes: &[Node]) -> Option<(usize, usize)> {
+    let (c, compaction) = nodes
+        .iter()
+        .enumerate()
+        .rev()
+        .find_map(|(i, n)| compaction_of(n).map(|x| (i, x)))?;
+    let keep = compaction
+        .keep_from
+        .and_then(|k| nodes[..c].iter().position(|n| n.id == k))
+        .unwrap_or(c);
+    Some((c, keep))
+}
+
 /// Positions of `nodes` (root → head) the model sees, in projection order:
 /// everything without a compaction; otherwise the last compaction note,
 /// then its tail (`keep_from` up to the note, other compactions skipped),
 /// then everything after it.
 pub fn view_order(nodes: &[Node]) -> Vec<usize> {
-    let Some((c, compaction)) = nodes
-        .iter()
-        .enumerate()
-        .rev()
-        .find_map(|(i, n)| compaction_of(n).map(|x| (i, x)))
-    else {
+    let Some((c, keep)) = compaction_cut(nodes) else {
         return (0..nodes.len()).collect();
     };
-    let keep = compaction
-        .keep_from
-        .and_then(|k| nodes[..c].iter().position(|n| n.id == k))
-        .unwrap_or(c);
     std::iter::once(c)
         .chain((keep..c).filter(|&i| compaction_of(&nodes[i]).is_none()))
         .chain(c + 1..nodes.len())
         .collect()
 }
 
-/// The nodes of [`view_order`].
+/// The nodes of [`view_order`]. The compaction note stands before the kept
+/// tail, so the thinking blocks of that tail were produced under a prefix the
+/// model no longer sees: their signatures no longer verify against it (the
+/// provider drops or rejects them). Clear them here, where history is
+/// rewritten, per the replay rule; the path keeps them for display.
 pub fn view(nodes: &[Node]) -> Vec<Node> {
+    let cut = compaction_cut(nodes);
     view_order(nodes)
         .into_iter()
-        .map(|i| nodes[i].clone())
+        .map(|i| {
+            let mut node = nodes[i].clone();
+            if let Some((c, keep)) = cut
+                && (keep..c).contains(&i)
+                && let NodeBody::Assistant { reasoning, .. } = &mut node.body
+            {
+                reasoning.clear();
+            }
+            node
+        })
         .collect()
 }
 
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::{Content, SessionId};
+    use crate::{Content, ReasoningBlock, SessionId};
 
     fn node(id: &str, body: NodeBody) -> Node {
         Node {
@@ -129,6 +149,24 @@ mod tests {
         )
     }
 
+    fn reply(id: &str) -> Node {
+        node(
+            id,
+            NodeBody::Assistant {
+                content: Content::text("ok"),
+                reasoning: vec![ReasoningBlock::Thinking {
+                    text: "thinking".into(),
+                    signature: Some("sig".into()),
+                }],
+                reason_ms: None,
+                reasoning_reset: false,
+                tool_calls: vec![],
+                model: "m".into(),
+                usage: Default::default(),
+            },
+        )
+    }
+
     fn ids(nodes: &[Node]) -> Vec<&str> {
         nodes.iter().map(|n| n.id.0.as_str()).collect()
     }
@@ -164,5 +202,36 @@ mod tests {
             user("d"),
         ];
         assert_eq!(ids(&view(&path)), ["y", "b", "c", "d"]);
+    }
+
+    #[test]
+    fn the_kept_tail_loses_its_reasoning() {
+        let path = [
+            user("a"),
+            reply("r1"),
+            user("b"),
+            reply("r2"),
+            compaction("x", Some("b")),
+            reply("r3"),
+        ];
+        let seen = view(&path);
+        assert_eq!(ids(&seen), ["x", "b", "r2", "r3"]);
+        for n in &seen {
+            let NodeBody::Assistant { reasoning, .. } = &n.body else {
+                continue;
+            };
+            match n.id.0.as_str() {
+                // The summary now leads this one: its prefix was rewritten.
+                "r2" => assert!(reasoning.is_empty(), "kept-tail reasoning cleared"),
+                // Produced after the compaction, under the current prefix.
+                "r3" => assert!(!reasoning.is_empty(), "new reasoning kept"),
+                other => panic!("unexpected assistant {other}"),
+            }
+        }
+        // The path keeps the transcript for display.
+        let NodeBody::Assistant { reasoning, .. } = &path[3].body else {
+            panic!("r2 is an assistant");
+        };
+        assert!(!reasoning.is_empty(), "path keeps the reply's reasoning");
     }
 }
