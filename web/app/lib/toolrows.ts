@@ -26,6 +26,8 @@ export interface ToolRowView {
   resultText: string
   /** The full one-line call summary, for the tooltip. */
   callFull: string
+  /** A `bash` call's own description of what it does (empty when none). */
+  description: string
   output: string
   /** Image attachments of the result (e.g. `read` on an image file). */
   attachments: Attachment[]
@@ -333,6 +335,7 @@ export function toolRowView(row: ToolRowInfo): ToolRowView {
     callText: parsed.callShort,
     resultText: parsed.result,
     callFull: parsed.callFull,
+    description: name === 'bash' ? strArg(args, 'description') : '',
     output: blocked ?? output,
     attachments,
     patch,
@@ -381,8 +384,8 @@ const KIND_KEYS: Record<string, string> = {
   show: 'show',
 }
 
-/** A lone call's phrase names its target: "read store.ts". A command is
- * left to its row's `$` line ("ran 1 command"). */
+/** A lone call's phrase names its target: "read store.ts". A command says
+ * its description, or is left to its row's `$` line ("ran 1 command"). */
 const TARGETED = new Set(['read', 'write', 'edit', 'list', 'search', 'workspace_use', 'show'])
 
 function kindKey(v: ToolRowView): string {
@@ -406,6 +409,7 @@ export function toolPhrases(views: ToolRowView[]): PhrasePart[][] {
   if (views.length === 1) {
     const v = views[0]!
     const key = kindKey(v)
+    if (v.description) return [[{ text: v.description }]]
     if (key === 'other') {
       return [[{ text: `${t('tools.verb.other')} ` }, { text: v.name, mono: true }]]
     }

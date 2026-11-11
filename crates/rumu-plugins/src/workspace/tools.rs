@@ -181,6 +181,10 @@ struct ListArgs {
 struct BashArgs {
     /// shell snippet
     command: String,
+    /// what the command does, 5-10 words in active voice ("List files in
+    /// src", "Run the parser tests"); shown to the user in place of the command
+    #[allow(dead_code)] // read from the raw args by the UI and the task label
+    description: Option<String>,
     /// workspace name; default: the branch default
     workspace: Option<String>,
     /// seconds, default 60, max 600
@@ -293,7 +297,8 @@ workspace, lists cards."
                 description: "Run a command with `bash -c` in a workspace's root \
 directory (`workspace` argument; default = the default workspace). Returns combined \
 stdout+stderr (truncated to ~20k chars) and the exit code. Default timeout 60s (max \
-600s). Disabled on read-only workspaces and on the `@rumu` workspace."
+600s). Disabled on read-only workspaces and on the `@rumu` workspace. Give every call a \
+`description`: the user sees it instead of the command."
                     .into(),
                 schema: tool_schema::<BashArgs>(),
                 background: true,

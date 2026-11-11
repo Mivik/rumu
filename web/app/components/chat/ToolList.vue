@@ -55,9 +55,9 @@ function callArg(v: ToolRowView, key: string): string {
   return typeof raw === 'string' ? raw.trim() : ''
 }
 
-/** A bash row is its own prompt line: `$ command`, clipped to one line
- * while closed, the whole command (highlighted) once open — its body then
- * says the exit code, so the row's result hides. */
+/** A bash row is its own prompt line: its description (or the command,
+ * clipped to one line) while closed, the whole command (highlighted) once
+ * open — its body then says the exit code, so the row's result hides. */
 function isShellOpen(v: ToolRowView): boolean {
   return v.name === 'bash' && isOpen(v)
 }
@@ -146,6 +146,7 @@ function liveTaskOutput(id: string | null): string {
           class="shell max-h-40 min-w-0 flex-1 overflow-y-auto font-mono text-meta break-words whitespace-pre-wrap text-ink"
           v-html="highlightLine(callArg(v, 'command'), 'bash')"
         ></span>
+        <span v-else-if="v.description" class="min-w-0 truncate text-meta text-ink-2">{{ v.description }}</span>
         <span v-else-if="v.callText" class="min-w-0 truncate font-mono text-meta text-ink-2">{{
           v.callText
         }}</span>

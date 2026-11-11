@@ -1185,9 +1185,11 @@ pub(crate) enum AgentRun {
 /// A short, single-line summary of a background tool's arguments.
 fn args_summary(name: &str, args: &Value) -> String {
     let text = match name {
-        "bash" => args
-            .get("command")
-            .and_then(Value::as_str)
+        // a bash call's description names it better than its command
+        "bash" => ["description", "command"]
+            .iter()
+            .filter_map(|key| args.get(*key).and_then(Value::as_str))
+            .find(|text| !text.trim().is_empty())
             .unwrap_or_default(),
         "agent" => args.get("task").and_then(Value::as_str).unwrap_or_default(),
         _ => "",
