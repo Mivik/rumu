@@ -125,6 +125,14 @@ pub struct ProviderSettings {
     /// Models held to one protocol instead of their native one.
     #[serde(skip_serializing_if = "BTreeMap::is_empty")]
     pub protocols: BTreeMap<String, Protocol>,
+    /// Send a session identity with every request — a per-run random device
+    /// id and the session id — so a gateway pooling accounts keeps one
+    /// conversation on one upstream account, where its cache lives
+    /// (`metadata.user_id` on Anthropic, `prompt_cache_key` on OpenAI). Off
+    /// by default: the ids are random and carry nothing, but nothing needs
+    /// them either.
+    #[serde(default, skip_serializing_if = "is_default")]
+    pub sticky: bool,
 }
 
 /// Whether `id` matches `rule`, where `*` matches any run of characters.
@@ -310,6 +318,9 @@ pub struct ProviderInfo {
     /// The endpoints in use, the preset's included.
     pub endpoints: BTreeMap<Protocol, String>,
     pub has_api_key: bool,
+    /// Whether requests carry a session identity
+    /// ([`ProviderSettings::sticky`]).
+    pub sticky: bool,
     /// The enabling rules ([`ProviderSettings::models`]).
     pub rules: Vec<String>,
     pub protocols: BTreeMap<String, Protocol>,

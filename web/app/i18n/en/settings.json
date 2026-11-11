@@ -30,6 +30,8 @@
   "providerId": "ID",
   "providerName": "Name",
   "endpoints": "Endpoints",
+  "sticky": "Sticky sessions",
+  "stickyHint": "For a gateway pooling accounts: one conversation stays on one upstream account, where its cache lives",
   "protocol": "Protocol",
   "protocolAuto": "Auto",
   "apiKey": "API key",

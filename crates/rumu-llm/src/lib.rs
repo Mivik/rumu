@@ -28,7 +28,7 @@ mod probe;
 
 use std::collections::BTreeMap;
 use std::sync::atomic::{AtomicUsize, Ordering};
-use std::sync::{Arc, RwLock};
+use std::sync::{Arc, OnceLock, RwLock};
 
 use async_trait::async_trait;
 use base64::Engine as _;
@@ -96,6 +96,8 @@ struct Target {
     effort: Option<Effort>,
     /// The catalog's output limit; `None` leaves genai's default.
     max_tokens: Option<u64>,
+    /// Whether requests carry the session identity ([`ProviderSettings`]).
+    sticky: bool,
 }
 
 impl GenaiLlm {
@@ -328,17 +330,24 @@ impl Resolved {
             model_id: model_id.to_owned(),
             effort: effort.unwrap_or(Effort::High).nearest(&info.efforts),
             max_tokens: info.output,
+            sticky: provider.settings.sticky,
         })
     }
 }
 
 impl Target {
-    fn options(&self, dropped: Arc<AtomicUsize>) -> ChatOptions {
+    fn options(&self, dropped: Arc<AtomicUsize>, session: &str) -> ChatOptions {
         let opts = ChatOptions::default()
             .with_capture_usage(true)
             .with_capture_tool_calls(true)
             .with_capture_reasoning_content(true)
             .with_stream_read_timeout(std::time::Duration::from_secs(120));
+        // Only the OpenAI adapters send it; Anthropic's identity goes in
+        // `metadata` below.
+        let opts = match self.sticky {
+            true => opts.with_prompt_cache_key(session),
+            false => opts,
+        };
         match (self.protocol, self.effort) {
             (Protocol::Anthropic, effort) => {
                 // Anthropic requires `max_tokens`; genai otherwise guesses it
@@ -352,10 +361,14 @@ impl Target {
                 // model-name suffix (`…-high`). `Zero` adds nothing of its own
                 // but a `thinking: disabled`, which `extra_body` replaces.
                 let opts = opts.with_reasoning_effort(ReasoningEffort::Zero);
-                let opts = match effort.filter(|e| *e != Effort::None) {
-                    Some(e) => opts
-                        .with_extra_body(reasoning_body(e.as_str()))
-                        .with_extra_headers([("anthropic-beta", THINKING_BINDING_BETA)]),
+                let effort = effort.filter(|e| *e != Effort::None);
+                let mut extra = effort.map_or_else(|| json!({}), |e| reasoning_body(e.as_str()));
+                if self.sticky {
+                    extra["metadata"] = json!({ "user_id": user_id(session) });
+                }
+                let opts = opts.with_extra_body(extra);
+                let opts = match effort {
+                    Some(_) => opts.with_extra_headers([("anthropic-beta", THINKING_BINDING_BETA)]),
                     None => opts,
                 };
                 // Replayed thinking the provider dropped
@@ -382,6 +395,7 @@ impl Target {
         &self,
         mut req: genai::chat::ChatRequest,
         on_delta: Option<OnDelta>,
+        session: &str,
     ) -> Result<LlmResponse, (LlmError, bool)> {
         // Static-prefix breakpoint: cache_control on the last tool (tools +
         // system prefix). genai's request-level `cache_control` defers to any
@@ -392,7 +406,7 @@ impl Target {
         }
 
         let dropped = Arc::new(AtomicUsize::new(0));
-        let opts = self.options(dropped.clone());
+        let opts = self.options(dropped.clone(), session);
         let target = ModelIden::new(adapter_kind(self.protocol), self.model_id.as_str());
         let res = self
             .client
@@ -507,6 +521,12 @@ impl Llm for GenaiLlm {
             .resolved()
             .resolve(pick)?
             .ok_or(LlmError::MissingModel)?;
+        // What a sticky provider's gateway routes a conversation by; the
+        // root node carries the session's id.
+        let session = nodes
+            .first()
+            .map(|n| n.session.to_string())
+            .unwrap_or_default();
         let to = Projection {
             protocol: target.protocol,
             model: &target.model_ref,
@@ -518,6 +538,7 @@ impl Llm for GenaiLlm {
             .stream(
                 project_from(to, system, tools, nodes, from, blobs),
                 on_delta.clone(),
+                &session,
             )
             .await
         {
@@ -537,7 +558,10 @@ impl Llm for GenaiLlm {
             Err((e, false)) if rejects_reasoning(&e) && replays_reasoning(to, &nodes[from..]) => {
                 warn!(error = %e, "provider rejected replayed reasoning; retrying without it");
                 let req = project_from(to, system, tools, nodes, nodes.len(), blobs);
-                let mut resp = target.stream(req, on_delta).await.map_err(|(e, _)| e)?;
+                let mut resp = target
+                    .stream(req, on_delta, &session)
+                    .await
+                    .map_err(|(e, _)| e)?;
                 resp.reasoning_reset = true;
                 Ok(resp)
             }
@@ -579,6 +603,21 @@ fn reasoning_body(effort: &str) -> Value {
         },
         "output_config": { "effort": effort },
     })
+}
+
+/// The per-run half of the sticky identity: a fresh random id every start,
+/// so the pair of it and a session id names nothing beyond this run's
+/// conversations.
+fn device_id() -> &'static str {
+    static DEVICE: OnceLock<String> = OnceLock::new();
+    DEVICE.get_or_init(|| uuid::Uuid::new_v4().to_string())
+}
+
+/// Anthropic's `metadata.user_id` for a sticky provider: the JSON shape
+/// Claude Code sends, which gateways pooling accounts parse to keep one
+/// conversation on one upstream account.
+fn user_id(session: &str) -> String {
+    json!({ "device_id": device_id(), "session_id": session }).to_string()
 }
 
 /// Thinking blocks a `message_start` frame reports as dropped. Anthropic is
@@ -2139,5 +2178,12 @@ mod tests {
             Some(&["mine".to_owned()][..])
         );
         assert!(req.messages[1].content.thought_signatures().is_empty());
+    }
+
+    #[test]
+    fn sticky_user_id_names_the_session() {
+        let id: Value = serde_json::from_str(&user_id("s1")).unwrap();
+        assert!(id["device_id"].as_str().is_some_and(|d| !d.is_empty()));
+        assert_eq!(id["session_id"], "s1");
     }
 }

@@ -15,6 +15,11 @@ custom_name?: string, preset?: string,
  */
 endpoints: { [key in Protocol]?: string }, has_api_key: boolean, 
 /**
+ * Whether requests carry a session identity
+ * ([`ProviderSettings::sticky`]).
+ */
+sticky: boolean, 
+/**
  * The enabling rules ([`ProviderSettings::models`]).
  */
 rules: Array<string>, protocols: { [key in string]: Protocol }, 

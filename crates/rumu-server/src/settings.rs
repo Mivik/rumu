@@ -94,6 +94,8 @@ pub struct ProviderEdit {
     models: Vec<String>,
     #[serde(default)]
     protocols: BTreeMap<String, Protocol>,
+    #[serde(default)]
+    sticky: Option<bool>,
 }
 
 impl ProviderEdit {
@@ -285,6 +287,7 @@ impl Settings {
                     models,
                     pinned: old.pinned,
                     protocols: edit.protocols,
+                    sticky: edit.sticky.unwrap_or(old.sticky),
                 },
             );
             Ok(())
@@ -572,6 +575,7 @@ fn provider_info(
         preset: p.preset.clone(),
         endpoints: eps,
         has_api_key: !p.api_key.is_empty(),
+        sticky: p.sticky,
         rules: p.models.clone(),
         protocols: p.protocols.clone(),
         models,
@@ -743,6 +747,7 @@ mod tests {
             api_key: key.map(Into::into),
             models: vec![" m ".into(), "m".into(), "n".into()],
             protocols: BTreeMap::new(),
+            sticky: None,
         }
     }
 
@@ -907,6 +912,7 @@ mod tests {
                 api_key: None,
                 models: vec!["*".into()],
                 protocols: BTreeMap::new(),
+                sticky: None,
             })
             .unwrap();
         assert_eq!(info.providers[0].name, "Zeta");

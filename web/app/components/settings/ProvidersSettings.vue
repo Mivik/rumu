@@ -40,6 +40,8 @@ interface Form {
   models: string[]
   /** Models held to a protocol; absent is automatic. */
   protocols: Record<string, Protocol>
+  /** Whether requests carry a session identity for gateways to route by. */
+  sticky: boolean
 }
 
 /** A new provider's rules: every listed model, until narrowed. */
@@ -86,7 +88,7 @@ const customShown = computed(() => editing.value === CUSTOM_PROVIDER)
 const formShown = computed(() => editing.value !== null && !picking.value && !customShown.value)
 
 function blank(): Form {
-  return { id: '', name: '', preset: null, endpoints: {}, api_key: '', models: [], protocols: {} }
+  return { id: '', name: '', preset: null, endpoints: {}, api_key: '', models: [], protocols: {}, sticky: false }
 }
 
 function fill(p: ProviderInfo | null): void {
@@ -101,6 +103,7 @@ function fill(p: ProviderInfo | null): void {
           api_key: '',
           models: [...p.rules],
           protocols: { ...p.protocols },
+          sticky: p.sticky,
         }
       : blank(),
   )
@@ -387,6 +390,7 @@ async function save(): Promise<void> {
     endpoints,
     models: form.models,
     protocols,
+    sticky: form.sticky,
   }
   if (form.preset) params.preset = form.preset
   if (form.api_key) params.api_key = form.api_key
@@ -651,6 +655,13 @@ async function refreshModels(): Promise<void> {
                 {{ PROTOCOL_LABELS[protocol] }}
               </button>
             </div>
+            <label
+              class="flex w-fit cursor-pointer items-center gap-2 text-secondary text-ink"
+              :title="t('settings.stickyHint')"
+            >
+              <input v-model="form.sticky" type="checkbox" />
+              {{ t('settings.sticky') }}
+            </label>
           </div>
 
           <!-- models: listed once saved -->
