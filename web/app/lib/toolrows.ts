@@ -26,7 +26,7 @@ export interface ToolRowView {
   resultText: string
   /** The full one-line call summary, for the tooltip. */
   callFull: string
-  /** A `bash` call's own description of what it does (empty when none). */
+  /** A `bash` call's one-line intent (empty when none). */
   description: string
   output: string
   /** Image attachments of the result (e.g. `read` on an image file). */
@@ -385,7 +385,7 @@ const KIND_KEYS: Record<string, string> = {
 }
 
 /** A lone call's phrase names its target: "read store.ts". A command says
- * its description, or is left to its row's `$` line ("ran 1 command"). */
+ * its intent, or is left to its row's `$` line ("ran 1 command"). */
 const TARGETED = new Set(['read', 'write', 'edit', 'list', 'search', 'workspace_use', 'show'])
 
 function kindKey(v: ToolRowView): string {

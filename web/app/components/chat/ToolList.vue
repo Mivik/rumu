@@ -55,11 +55,17 @@ function callArg(v: ToolRowView, key: string): string {
   return typeof raw === 'string' ? raw.trim() : ''
 }
 
-/** A bash row is its own prompt line: its description (or the command,
- * clipped to one line) while closed, the whole command (highlighted) once
- * open — its body then says the exit code, so the row's result hides. */
+/** A bash row is its own prompt line: its intent (or the command, clipped
+ * to one line) while closed, the whole command (highlighted) once open —
+ * its body then says the exit code, so the row's result hides. */
 function isShellOpen(v: ToolRowView): boolean {
   return v.name === 'bash' && isOpen(v)
+}
+
+/** A bash row's label: `$` when a command follows it, the tool name when
+ * the row shows the call's intent instead. */
+function nameLabel(v: ToolRowView): string {
+  return v.name === 'bash' && (isShellOpen(v) || !v.description) ? '$' : v.name
 }
 
 /** The dedicated body an expanded row gets: a successful write/edit its
@@ -139,7 +145,7 @@ function liveTaskOutput(id: string | null): string {
           :class="iconClass(v)"
         />
         <span class="max-w-[40%] flex-none truncate font-mono text-meta font-medium" :class="nameClass(v)">{{
-          v.name === 'bash' ? '$' : v.name
+          nameLabel(v)
         }}</span>
         <span
           v-if="isShellOpen(v)"
