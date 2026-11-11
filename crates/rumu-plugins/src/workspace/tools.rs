@@ -93,41 +93,38 @@ pub(super) const LIST_LIMIT: usize = 100;
 /// The largest file `show` snapshots.
 const ARTIFACT_MAX_BYTES: usize = 5 * 1024 * 1024;
 
-const INSTRUCTIONS: &str = "Files live in workspaces — one project each, on this machine or a \
-remote one over ssh. Every file tool takes one `path`: a path in the default workspace (relative \
-to its root, or absolute on its machine), or `<workspace>:<path>` for any workspace — the colon \
-is what names the workspace. With `proj` as the default:\n\
-- `src/main.rs` → `proj:src/main.rs`\n\
-- `app:/var/log/app.log` → `/var/log/app.log` on `app`\n\
-- `@scratch:page.html` → `page.html` in this session's scratch workspace\n\
-- `@scratch:` → the scratch workspace's root\n\
-- `@scratch/page.html` → `proj:@scratch/page.html`, NOT the scratch workspace\n\n\
-Every registered workspace is addressable. \
-`workspace_use(name)` changes the default; `workspace_use()` lists workspaces, the project's \
-first. `bash` runs in a workspace root, so relative paths mean the same thing in bash and in the \
-file tools. Read-only workspaces refuse writes and bash.\n\n\
-`@scratch` is this session's own scratch workspace on this machine, shared by its branches and \
-sub-agents and deleted with the session: the default when the session has no project workspace. \
-Use it for throwaway work (scripts, downloads, clones, generated files); what should outlive the \
-session belongs in a card or a project workspace.\n\n\
+const INSTRUCTIONS: &str = "Files live in workspaces. A workspace is a name for a root \
+directory on this machine or an ssh host; the name is not a folder and never appears inside a \
+path. A tool `path` is either a plain path in the default workspace (relative to its root, or \
+absolute on its machine), or `<workspace>:<path>` for any workspace — the colon separates the \
+name from the path:\n\
+- `src/main.rs`, `/etc/hosts` → the default workspace\n\
+- `app:/var/log/app.log` → workspace `app`\n\
+- `@scratch:page.html`, `@scratch:` (its root) → the scratch workspace\n\
+- `@scratch/page.html` → a folder named `@scratch` in the default workspace, NOT the scratch \
+workspace\n\
+Name files the same way when you mention them to the user. \
+`bash` runs in the default workspace's root (or `workspace`'s), so relative paths match the file \
+tools. `workspace_use(name)` changes the default; `workspace_use()` lists workspaces. Read-only \
+workspaces refuse writes and bash.\n\n\
+`@scratch` is this session's throwaway workspace on this machine, shared with its branches and \
+sub-agents and deleted with the session. Use it for scripts, downloads, clones and generated \
+files; what should outlive the session belongs in a card or a project workspace.\n\n\
 To give the user a page, document, diagram or code to look at, write it to a file (usually in \
-`@scratch`) and `show` it: the user sees that version rendered beside the chat. After changing \
-the file, `show` it again for a new version. HTML runs sandboxed with no network: inline its \
-scripts, styles and images.\n\n\
-The `@rumu` workspace holds rumu's own data and has no bash. `@rumu:/cards/<mount>/<path>` are \
-cards of the decks mounted on this branch (`/cards/self` is your own deck); `read` returns an \
-editable view (YAML frontmatter, then the body), and writes are refused if the card changed \
-since you last read it — re-read and merge. `card_mount` mounts and unmounts decks; only project \
-decks mount at `/cards/project`, and mounting one there moves the session into that project \
-(`card_mount(create: <name>, at: \"project\")` creates one). `@rumu:/workspaces` lists the \
-workspace registry, `@rumu:/workspaces/<name>` reads and writes one entry, and \
-`@rumu:/project/workspaces` is the project's ordered workspace list (read it before writing). \
-`@rumu:/history` is the decks' change timeline. \
-`@rumu:/sessions/<session>/<node>` and `@rumu:/sessions/<session>/<from>..<to>` are past \
-conversation records (read-only): yours, and those of every deck mounted on the branch \
-(`@rumu:/sessions/by-assistant/<deck id>` lists one assistant's); \
-`search(query, scope: \"@rumu:/sessions\")` searches them. If the \
-user rewinds the conversation, card edits persist.";
+`@scratch`) and `show` it; `show` it again after a change for a new version. HTML runs sandboxed \
+with no network: inline its scripts, styles and images.\n\n\
+`@rumu` holds rumu's own data (no bash):\n\
+- `@rumu:/cards/<mount>/<path>`: cards of the decks mounted on this branch (`/cards/self` is \
+yours). `read` gives an editable view (YAML frontmatter, then the body); a write is refused if \
+the card changed since your read — re-read and merge. Card edits survive a rewind.\n\
+- `@rumu:/workspaces[/<name>]`: the workspace registry; `@rumu:/project/workspaces`: the \
+project's ordered list (read it before writing).\n\
+- `@rumu:/history`: the decks' change timeline.\n\
+- `@rumu:/sessions/<session>/<node>` and `.../<from>..<to>`: past conversations, read-only \
+(yours and the mounted decks'; `@rumu:/sessions/by-assistant/<deck id>` lists one assistant's). \
+`search(query, scope: \"@rumu:/sessions\")` searches them.\n\
+`card_mount` mounts and unmounts decks; mounting a project deck at `/cards/project` moves the \
+session into that project (`card_mount(create: <name>, at: \"project\")` creates one).";
 
 // ---------------------------------------------------------------------------
 // Tool arguments (the single source of truth for parsing and schemas)
@@ -136,7 +133,7 @@ user rewinds the conversation, card edits persist.";
 #[derive(Debug, Deserialize, JsonSchema)]
 #[serde(deny_unknown_fields)]
 struct ReadArgs {
-    /// file path (workspace-qualified, or relative to the default workspace's root)
+    /// `<workspace>:<path>`, or a path in the default workspace
     path: String,
     /// 1-based start line
     offset: Option<u64>,
@@ -147,7 +144,7 @@ struct ReadArgs {
 #[derive(Debug, Deserialize, JsonSchema)]
 #[serde(deny_unknown_fields)]
 struct WriteArgs {
-    /// file path (workspace-qualified, or relative to the default workspace's root)
+    /// `<workspace>:<path>`, or a path in the default workspace
     path: String,
     /// full file content (for cards: the editable view — frontmatter + body)
     content: String,
@@ -159,7 +156,7 @@ struct WriteArgs {
 #[derive(Debug, Deserialize, JsonSchema)]
 #[serde(deny_unknown_fields)]
 struct EditArgs {
-    /// file path (workspace-qualified, or relative to the default workspace's root)
+    /// `<workspace>:<path>`, or a path in the default workspace
     path: String,
     /// exact text to replace
     old_string: String,
@@ -172,7 +169,7 @@ struct EditArgs {
 #[derive(Debug, Deserialize, JsonSchema)]
 #[serde(deny_unknown_fields)]
 struct ListArgs {
-    /// directory (workspace-qualified, or relative to the default workspace's root)
+    /// directory: `<workspace>:<path>`, or a path in the default workspace
     path: Option<String>,
 }
 
@@ -194,7 +191,7 @@ struct BashArgs {
 #[derive(Debug, Deserialize, JsonSchema)]
 #[serde(deny_unknown_fields)]
 struct ShowArgs {
-    /// file path (workspace-qualified, or relative to the default workspace's root)
+    /// `<workspace>:<path>`, or a path in the default workspace
     path: String,
     /// display title; default: the file name
     title: Option<String>,
@@ -245,11 +242,9 @@ pub(super) fn manifest() -> Manifest {
                 name: "read".into(),
                 description: "Read a file's raw text content (no line numbers), or view an \
 image (PNG, JPEG, GIF, WebP) as an image attachment beside a one-line header naming the file, \
-its dimensions and stored size. `path` is a \
-workspace path (relative to the workspace root, absolute on its machine, or \
-`<workspace>:<path>`; `@rumu:/cards/<mount>/<path>` for a card, `@rumu:/history` for deck \
-history). `offset` is a 1-based start line and `limit` a line count (text only — they do not \
-apply to images); a trailing `#L<n>` / `#L<a>-L<b>` anchor sets them when omitted."
+its dimensions and stored size. `path`: a plain path (default workspace) or \
+`<workspace>:<path>`. `offset` is a 1-based start line and `limit` a line count (text only — \
+they do not apply to images); a trailing `#L<n>` / `#L<a>-L<b>` anchor sets them when omitted."
                     .into(),
                 schema: tool_schema::<ReadArgs>(),
                 background: false,

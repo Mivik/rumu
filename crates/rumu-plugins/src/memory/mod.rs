@@ -185,9 +185,9 @@ impl MemoryPlugin {
                     .filter_map(|n| state.workspaces.iter().find(|w| &w.name == n))
                     .collect();
                 if mounted.is_empty() {
-                    text.push_str(" It mounts no workspace; `@scratch` is the default.");
+                    text.push_str(" It mounts no workspace.");
                 } else {
-                    text.push_str(" Its workspaces (default first): ");
+                    text.push_str(" Its workspaces: ");
                     text.push_str(
                         &mounted
                             .iter()
@@ -202,6 +202,17 @@ impl MemoryPlugin {
                 }
             }
             None => text.push_str("\nThis session is in no project."),
+        }
+        if let Some(name) = state.default_workspace.as_deref() {
+            text.push_str(&format!(
+                "\nDefault workspace: `{name}`{} — plain paths and `bash` resolve there.",
+                state
+                    .workspaces
+                    .iter()
+                    .find(|w| w.name == name)
+                    .map(|w| format!(" ({} {})", w.label(), w.root))
+                    .unwrap_or_default()
+            ));
         }
         let cards = Cards::new(&self.decks, &state.mounts);
         if cards.mounts().is_empty() {

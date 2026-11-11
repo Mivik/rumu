@@ -544,6 +544,7 @@ async fn assistant_intro_names_the_project_and_its_workspaces() {
             ),
         ];
         state.mounted = vec!["app".into(), "proj".into()];
+        state.default_workspace = Some("app".into());
         state.project = Some(PROJECT.into());
         state.mounts.push(rumu_core::CardMount {
             deck: PROJECT.into(),
@@ -570,6 +571,10 @@ async fn assistant_intro_names_the_project_and_its_workspaces() {
         "default first: {workspaces}"
     );
     assert!(list.contains(", ro)"), "{workspaces}");
+    assert!(
+        text.contains("\nDefault workspace: `app` (local "),
+        "the default is named: {text}"
+    );
     let project_mount = text
         .lines()
         .find(|l| l.contains("@rumu:/cards/project"))

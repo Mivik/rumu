@@ -264,17 +264,18 @@ impl WorkspacePlugin {
             let names = self.workspaces.project(deck.id());
             if names.is_empty() {
                 text.push_str(
-                    "\nIt mounts no workspace; `@scratch` is the default. Add some through \
-                     `@rumu:/project/workspaces`.",
+                    "\nIt mounts no workspace; `@scratch` is now the default workspace. Add some \
+                     through `@rumu:/project/workspaces`.",
                 );
             } else {
                 text.push_str(&format!(
-                    "\nIts workspaces (default first): {}",
+                    "\nIts workspaces: {}; `{}` is now the default workspace.",
                     names
                         .iter()
                         .map(|n| format!("`{n}`"))
                         .collect::<Vec<_>>()
-                        .join(", ")
+                        .join(", "),
+                    names[0]
                 ));
             }
         }

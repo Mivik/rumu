@@ -4907,7 +4907,7 @@ async fn card_mount_moves_between_projects_and_creates_one() {
     assert!(
         out.content
             .text
-            .contains("Its workspaces (default first): `app`"),
+            .contains("Its workspaces: `app`; `app` is now the default workspace."),
         "{}",
         out.content.text
     );
