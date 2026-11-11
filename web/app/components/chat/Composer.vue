@@ -19,6 +19,10 @@
 // upload keeps its tile (the server's word arrived as a toast) until retried
 // or removed. The writing stays plain text: like the Claude and ChatGPT web
 // apps, the sent message leads with its images (`withLeadingAnchors`).
+//
+// On a phone the sheet folds to one line while you are elsewhere — a touch
+// on the transcript or the sidebar — and unfolds when touched again. It stays
+// open while it holds images or a decision.
 import { computed, nextTick, onBeforeUnmount, onMounted, reactive, ref, watch } from 'vue'
 import { t } from '../../i18n'
 import { compactBranch, isBusy, sendPrompt, state, stopTurn } from '../../lib/store'
@@ -48,6 +52,7 @@ const MAX_IMAGES = 20
 
 const draft = ref('')
 const attachments = ref<PendingImage[]>([])
+const rootEl = ref<HTMLElement>()
 const textareaEl = ref<HTMLTextAreaElement>()
 const fileEl = ref<HTMLInputElement>()
 
@@ -152,7 +157,47 @@ function onPick(e: Event): void {
   input.value = ''
 }
 
+// ---- folding (below `sm` only; the classes carry the breakpoint) ----
+
+const engaged = ref(false)
+const idle = computed(
+  () =>
+    !engaged.value &&
+    !!state.sessionId &&
+    !attachments.value.length &&
+    !state.decisions.some((d) => d.session === state.sessionId),
+)
+
+/** A press elsewhere in the app folds the sheet; floating panels (pickers,
+ *  the lightbox) are teleported out of the app root and don't count. */
+function onPressAnywhere(e: PointerEvent): void {
+  const root = rootEl.value
+  const target = e.target as Node
+  if (root && !root.contains(target) && root.closest('#__nuxt')?.contains(target)) engaged.value = false
+}
+
+/** Set by a press that unfolds the sheet: the footer grows under the finger
+ *  before it lifts, so the click it ends in must not land on a footer key. */
+let unfolding = false
+
+function onPress(): void {
+  unfolding = idle.value && matchMedia('(width < 40rem)').matches // `max-sm`
+  engaged.value = true
+}
+
+function onClickCapture(e: MouseEvent): void {
+  if (!unfolding) return
+  unfolding = false
+  if (e.target === textareaEl.value) return
+  e.preventDefault()
+  e.stopPropagation()
+  textareaEl.value?.focus()
+}
+
+onMounted(() => document.addEventListener('pointerdown', onPressAnywhere, true))
+
 onBeforeUnmount(() => {
+  document.removeEventListener('pointerdown', onPressAnywhere, true)
   for (const item of attachments.value) {
     item.ctrl.abort()
     URL.revokeObjectURL(item.url)
@@ -223,8 +268,12 @@ const placeholder = computed(() => {
 <template>
   <!-- the footer's empty stretch is part of the page: clicking it writes -->
   <div
-    class="composer mx-auto flex w-full max-w-[var(--col-max)] flex-col rounded-sheet"
+    ref="rootEl"
+    class="composer relative mx-auto flex w-full max-w-[var(--col-max)] flex-col rounded-sheet"
     :class="{ 'is-drag': dragDepth > 0 }"
+    @pointerdown="onPress"
+    @click.capture="onClickCapture"
+    @focusin="engaged = true"
     @click.self="textareaEl?.focus()"
     @dragenter="onDragenter"
     @dragover="onDragover"
@@ -281,58 +330,91 @@ const placeholder = computed(() => {
     <textarea
       ref="textareaEl"
       v-model="draft"
-      class="max-h-[240px] min-h-[calc(2lh+1rem)] resize-none rounded-none border-0 bg-transparent px-4 pb-1 text-message leading-normal [field-sizing:content] focus:shadow-none"
-      :class="attachments.length ? 'pt-2' : 'pt-3'"
+      class="max-h-[240px] min-h-[calc(2lh+1rem)] resize-none rounded-none border-0 bg-transparent px-4 pb-1 text-message leading-normal transition-[min-height,max-height,padding] duration-300 ease-soft [field-sizing:content] focus:shadow-none"
+      :class="[
+        attachments.length ? 'pt-2' : 'pt-3',
+        idle &&
+          'max-sm:max-h-[calc(1lh+1.25rem)] max-sm:min-h-[calc(1lh+1.25rem)] max-sm:overflow-hidden max-sm:py-2.5',
+        idle && isBusy && 'max-sm:pr-12',
+      ]"
       :placeholder="placeholder"
       @keydown="onKeydown"
       @paste="onPaste"
     />
-    <div class="flex min-w-0 items-center gap-1.5 pt-0.5 pr-2 pb-2 pl-3" @click.self="textareaEl?.focus()">
-      <ModelPicker />
-      <span class="flex-1" @click.self="textareaEl?.focus()" />
-      <input
-        ref="fileEl"
-        type="file"
-        accept="image/*"
-        multiple
-        class="hidden"
-        :aria-label="t('chat.composer.attach')"
-        @change="onPick"
-      />
+    <!-- folded: only stopping stays a single press away -->
+    <Transition
+      enter-active-class="transition duration-200 ease-soft"
+      enter-from-class="scale-75 opacity-0"
+      leave-active-class="transition duration-100"
+      leave-to-class="scale-75 opacity-0"
+    >
       <button
-        class="composer-attach"
-        :title="t('chat.composer.attach')"
-        :aria-label="t('chat.composer.attach')"
-        @click="fileEl?.click()"
+        v-if="idle && isBusy"
+        class="composer-stop absolute top-[calc(50%-16px)] right-1.5 sm:hidden"
+        :title="t('chat.composer.stop')"
+        :aria-label="t('chat.composer.stop')"
+        @pointerdown.stop
+        @click="stopTurn()"
       >
-        <Icon name="image" :size="16" />
+        <Icon name="stop" :size="16" />
       </button>
-      <EffortPicker />
-      <Transition
-        enter-active-class="transition duration-200 ease-spring"
-        enter-from-class="scale-75 opacity-0"
-        leave-active-class="transition duration-100"
-        leave-to-class="scale-75 opacity-0"
-      >
-        <button
-          v-if="isBusy"
-          class="composer-stop"
-          :title="t('chat.composer.stop')"
-          :aria-label="t('chat.composer.stop')"
-          @click="stopTurn()"
+    </Transition>
+    <div
+      class="grid grid-rows-[1fr] transition-[grid-template-rows,opacity] duration-300 ease-soft"
+      :class="idle && 'max-sm:grid-rows-[0fr] max-sm:opacity-0'"
+    >
+      <div class="min-h-0 overflow-hidden">
+        <div
+          class="flex min-w-0 items-center gap-1.5 pt-0.5 pr-2 pb-2 pl-3"
+          @click.self="textareaEl?.focus()"
         >
-          <Icon name="stop" :size="16" />
-        </button>
-      </Transition>
-      <button
-        class="composer-send"
-        :disabled="!canSend"
-        :title="isBusy ? t('chat.composer.steer') : t('chat.composer.send')"
-        :aria-label="isBusy ? t('chat.composer.steer') : t('chat.composer.send')"
-        @click="submit"
-      >
-        <Icon name="send" :size="16" />
-      </button>
+          <ModelPicker />
+          <span class="flex-1" @click.self="textareaEl?.focus()" />
+          <input
+            ref="fileEl"
+            type="file"
+            accept="image/*"
+            multiple
+            class="hidden"
+            :aria-label="t('chat.composer.attach')"
+            @change="onPick"
+          />
+          <button
+            class="composer-attach"
+            :title="t('chat.composer.attach')"
+            :aria-label="t('chat.composer.attach')"
+            @click="fileEl?.click()"
+          >
+            <Icon name="image" :size="16" />
+          </button>
+          <EffortPicker />
+          <Transition
+            enter-active-class="transition duration-200 ease-spring"
+            enter-from-class="scale-75 opacity-0"
+            leave-active-class="transition duration-100"
+            leave-to-class="scale-75 opacity-0"
+          >
+            <button
+              v-if="isBusy"
+              class="composer-stop"
+              :title="t('chat.composer.stop')"
+              :aria-label="t('chat.composer.stop')"
+              @click="stopTurn()"
+            >
+              <Icon name="stop" :size="16" />
+            </button>
+          </Transition>
+          <button
+            class="composer-send"
+            :disabled="!canSend"
+            :title="isBusy ? t('chat.composer.steer') : t('chat.composer.send')"
+            :aria-label="isBusy ? t('chat.composer.steer') : t('chat.composer.send')"
+            @click="submit"
+          >
+            <Icon name="send" :size="16" />
+          </button>
+        </div>
+      </div>
     </div>
   </div>
 </template>
