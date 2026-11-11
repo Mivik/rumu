@@ -91,6 +91,10 @@ pub enum Error {
         source: PredicateError,
     },
 
+    /// A title was asked for while no model writes them.
+    #[error("no model writes session titles; pick one in Settings")]
+    NoTitleModel,
+
     /// A session answering an `ask` keeps its mounts, so it has no project.
     #[error("a session answering a question keeps its mounts")]
     AskedSessionMounts,

@@ -11,13 +11,13 @@ import { layout } from '../../lib/layout'
 import { openPage, pageUp, replacePage } from '../../lib/router'
 import { refreshSettings } from '../../lib/state/models'
 import { connected, state } from '../../lib/store'
-import ProfilesSettings from '../settings/ProfilesSettings.vue'
+import DefaultsSettings from '../settings/DefaultsSettings.vue'
 import ProvidersSettings from '../settings/ProvidersSettings.vue'
 import Icon from '../ui/Icon.vue'
 import PageSheet from './PageSheet.vue'
 
 const SECTIONS = [
-  { key: 'profiles', icon: 'model' },
+  { key: 'defaults', icon: 'model' },
   { key: 'providers', icon: 'link' },
 ] as const
 type Section = (typeof SECTIONS)[number]['key']
@@ -50,6 +50,13 @@ onBeforeUnmount(() => observer?.disconnect())
 watchEffect(() => {
   if (wide.value && !section.value) replacePage(SECTIONS[0].key)
 })
+
+/** Another section opens; the open one goes back to its own page (the
+ *  first crumb of its trail). */
+function choose(key: Section): void {
+  if (key !== section.value) openPage('settings', key)
+  else layout.settingsTrail[0]?.go?.()
+}
 
 // A page booted from its address mounts before the socket is up.
 watch(connected, (up) => up && void refreshSettings(), { immediate: true })
@@ -96,8 +103,8 @@ watch(connected, (up) => up && void refreshSettings(), { immediate: true })
               : 'text-ink-2 hover:bg-surface/70 hover:text-ink'
           "
           :aria-current="s.key === section ? 'page' : undefined"
-          :disabled="layout.settingsBusy && s.key !== section"
-          @click="s.key !== section && openPage('settings', s.key)"
+          :disabled="layout.settingsBusy"
+          @click="choose(s.key)"
         >
           <Icon
             :name="s.icon"
@@ -111,7 +118,7 @@ watch(connected, (up) => up && void refreshSettings(), { immediate: true })
       </nav>
     </template>
 
-    <ProfilesSettings v-if="section === 'profiles'" />
+    <DefaultsSettings v-if="section === 'defaults'" />
     <ProvidersSettings v-else-if="section === 'providers'" />
   </PageSheet>
 </template>

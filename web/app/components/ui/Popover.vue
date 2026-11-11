@@ -20,6 +20,8 @@ const props = withDefaults(
     wide?: boolean
     /** A compact action menu (tight padding, narrow panel). */
     menu?: boolean
+    /** The trigger fills its row, as a form field does. */
+    block?: boolean
     /** The panel's ARIA role; `menu` for an action menu. */
     role?: 'dialog' | 'menu'
     /** Teleport target; position absolutely inside it. A modal `<dialog>`
@@ -30,6 +32,7 @@ const props = withDefaults(
     placement: 'bottom-end',
     wide: false,
     menu: false,
+    block: false,
     role: 'dialog',
   },
 )
@@ -112,7 +115,7 @@ onBeforeUnmount(close)
 </script>
 
 <template>
-  <div ref="anchor" class="inline-flex min-w-0">
+  <div ref="anchor" class="min-w-0" :class="block ? 'flex w-full' : 'inline-flex'">
     <slot name="trigger" :open="open" :toggle="toggle" />
   </div>
   <Teleport :to="to || 'body'">

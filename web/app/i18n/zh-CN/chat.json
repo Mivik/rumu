@@ -4,6 +4,7 @@
     "close": "关闭会话列表",
     "new": "开始会话",
     "delete": "删除会话",
+    "retitle": "重新生成标题",
     "unseen": "有新动态",
     "deleteConfirm": "删除",
     "deletePrompt": "删除这个会话？",

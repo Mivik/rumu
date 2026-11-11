@@ -1,5 +1,5 @@
 // Model settings (`settings.*`) and the composer's model pick. A branch runs
-// on its last `model.use` marker, or the default profile. A pick made in a
+// on its last `model.use` marker, or the default model. A pick made in a
 // session stays pending until the next prompt or regeneration carries it;
 // the server records it only when it changes the branch's model. Every pick
 // is also remembered (prefs) as the one a new session starts on.
@@ -21,6 +21,9 @@ export const PROTOCOLS: Protocol[] = ['anthropic', 'openai', 'openai_responses',
 
 /** Tried after a model's native protocol, in order. */
 const FALLBACK: Protocol[] = ['openai', 'anthropic', 'openai_responses', 'gemini']
+
+/** The built-in provider, whose models are the custom ones: `rumu/<name>`. */
+export const CUSTOM_PROVIDER = 'rumu'
 
 export const PROTOCOL_LABELS: Record<Protocol, string> = {
   anthropic: 'Anthropic',
@@ -94,10 +97,11 @@ export function onSettingsUpdated(p: { settings: SettingsInfo }): void {
   models.settings = p.settings
 }
 
-/** Every enabled model, by ref. */
+/** Every custom or enabled model, by ref. */
 export function modelByRef(ref: string): ModelInfo | null {
-  for (const p of models.settings?.providers ?? []) {
-    const m = p.models.find((x) => x.ref === ref)
+  const s = models.settings
+  for (const list of [s?.custom ?? [], ...(s?.providers ?? []).map((p) => p.models)]) {
+    const m = list.find((x) => x.ref === ref)
     if (m) return m
   }
   return null
@@ -113,10 +117,7 @@ export function currentPick(): ModelUse | null {
 }
 
 function exists(use: ModelUse): boolean {
-  const s = models.settings
-  if (!s) return true
-  const target = use.target
-  return 'profile' in target ? s.profiles.some((p) => p.name === target.profile) : !!modelByRef(target.model)
+  return !models.settings || !!modelByRef(use.model)
 }
 
 export function pick(use: ModelUse): void {
@@ -129,14 +130,13 @@ export function pick(use: ModelUse): void {
 }
 
 export function sameUse(a: ModelUse, b: ModelUse): boolean {
-  return JSON.stringify(a.target) === JSON.stringify(b.target) && (a.effort ?? null) === (b.effort ?? null)
+  return a.model === b.model && (a.effort ?? null) === (b.effort ?? null)
 }
 
-/** A pick resolved for display: what it names, the model behind it, and
- *  the effort it runs at. */
+/** A pick resolved for display: the model it names (the default one when
+ *  none), and the effort it runs at. */
 export interface Resolved {
   label: string
-  profile: string | null
   model: ModelInfo | null
   modelRef: string | null
   effort: Effort | null
@@ -145,30 +145,15 @@ export interface Resolved {
 export function resolvePick(use: ModelUse | null): Resolved | null {
   const s = models.settings
   if (!s) return null
-  let profile: string | null = null
-  let ref: string | null = null
-  let effort: Effort | null = use?.effort ?? null
-  if (!use) {
-    profile = s.roles.default ?? null
-  } else if ('profile' in use.target) {
-    profile = use.target.profile
-  } else {
-    ref = use.target.model
-  }
-  if (profile !== null) {
-    const p = s.profiles.find((x) => x.name === profile)
-    ref = p?.model ?? null
-    effort = effort ?? p?.effort ?? null
-  }
+  const ref = use?.model ?? s.roles.default ?? null
   const model = ref ? modelByRef(ref) : null
+  const effort = use?.effort ?? model?.route?.effort ?? 'high'
   const efforts = model?.efforts ?? []
-  const shown = efforts.length ? nearestEffort(effort ?? 'high', efforts) : null
   return {
-    label: profile ?? model?.name ?? ref ?? t('settings.noModel'),
-    profile,
+    label: model?.name ?? ref ?? t('settings.noModel'),
     model,
     modelRef: ref,
-    effort: shown,
+    effort: efforts.length ? nearestEffort(effort, efforts) : null,
   }
 }
 

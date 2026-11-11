@@ -25,6 +25,7 @@ import {
   moveSession,
   openLibrary,
   openSession,
+  retitleSession,
   sortedSessions,
   startSessionIn,
   state,
@@ -32,6 +33,7 @@ import {
 import type { Project, SessionInfo } from '../lib/types'
 import { layout } from '../lib/layout'
 import { openPage, sheetOf, type Page } from '../lib/router'
+import { models } from '../lib/state/models'
 import { prefs } from '../lib/state/prefs'
 import { requestComposerFocus } from '../lib/state/ui'
 import ProjectSeal from './brand/ProjectSeal.vue'
@@ -213,6 +215,9 @@ function assistantName(id: string): string {
 const waiting = computed(
   () => new Set(state.decisions.map((d) => d.session).filter((s) => s !== state.sessionId)),
 )
+
+/** Titles are the title model's to write, so a session's can be redone. */
+const titledByModel = computed(() => models.settings?.titles === 'model' && !!models.settings.roles.title)
 
 /** The session whose action menu is asking for delete confirmation. The menu
  *  opens on its action list every time, so a reopened menu never starts on the
@@ -506,6 +511,16 @@ const otherLocale = computed<Locale>(
                     {{ t('chat.sidebar.lastActive', { at: row.last }) }}
                   </p>
                   <div class="mx-1 mb-1 h-px bg-line-soft/70" />
+                  <button
+                    v-if="titledByModel"
+                    type="button"
+                    role="menuitem"
+                    class="flex w-full items-center gap-2 rounded-control px-2.5 py-1.5 text-left text-secondary text-ink-2 transition-colors duration-150 hover:bg-surface-2 hover:text-ink focus-visible:bg-surface-2 focus-visible:text-ink"
+                    @click="(close(), retitleSession(row.s.id))"
+                  >
+                    <Icon name="regenerate" :size="14" />
+                    {{ t('chat.sidebar.retitle') }}
+                  </button>
                   <button
                     type="button"
                     role="menuitem"

@@ -1,12 +1,15 @@
-//! Session titles: the first prompt, truncated, right away; then, when a
-//! profile is bound to the `title` role, a generated one in the background.
+//! Generated session titles: with [`rumu_core::Titles::Model`], the first
+//! prompt's truncated title is replaced in the background by one the `title`
+//! role's model writes, and can be written anew on request.
 
 use std::sync::Arc;
 
-use rumu_core::{Content, ModelPick, Node, NodeBody, NodeId, Role, SessionId, SessionInfo, now};
+use rumu_core::{
+    Content, ModelPick, Node, NodeBody, NodeId, Role, SessionId, SessionInfo, Titles, now,
+};
 use serde_json::json;
 
-use crate::Kernel;
+use crate::{Error, Kernel};
 
 /// Title length, in characters.
 pub(crate) const TITLE_CHARS: usize = 60;
@@ -25,26 +28,50 @@ impl Kernel {
     pub(crate) fn spawn_title(self: &Arc<Self>, session: SessionInfo, prompt: String) {
         let k = self.clone();
         tokio::spawn(async move {
-            let truncated = session.title.clone();
-            let title = match k.generate_title(&session.id, &prompt).await {
-                Ok(Some(t)) => t,
-                Ok(None) => return,
-                Err(e) => {
-                    tracing::warn!(session = %session.id, error = %e, "title generation failed");
-                    return;
-                }
-            };
-            let Ok(Some(mut current)) = k.store.get_session(&session.id) else {
-                return;
-            };
-            if current.title != truncated {
-                return;
-            }
-            current.title = title;
-            if k.store.update_session(&current).is_ok() {
-                k.push("session.updated", json!({ "session": current }));
+            if let Err(e) = k.write_title(&session, &prompt).await {
+                tracing::warn!(session = %session.id, error = %e, "title generation failed");
             }
         });
+    }
+
+    /// Generate `id`'s title anew from the first prompt of its active
+    /// branch; a session with no prompt yet keeps its title.
+    pub async fn retitle(&self, id: &SessionId) -> crate::Result<()> {
+        if self.llm.titles() != Titles::Model {
+            return Err(Error::NoTitleModel);
+        }
+        let session = self
+            .store
+            .get_session(id)?
+            .ok_or_else(|| Error::SessionNotFound(id.clone()))?;
+        let (nodes, _) = self.branch_path(&session.active_branch)?;
+        let prompt = nodes.iter().find_map(|n| match &n.body {
+            NodeBody::User { content } if !content.text.trim().is_empty() => {
+                Some(content.text.clone())
+            }
+            _ => None,
+        });
+        match prompt {
+            Some(prompt) => self.write_title(&session, &prompt).await,
+            None => Ok(()),
+        }
+    }
+
+    /// Generate a title from `prompt` and set it on `session`, unless its
+    /// title changed while the model wrote it.
+    async fn write_title(&self, session: &SessionInfo, prompt: &str) -> crate::Result<()> {
+        let Some(title) = self.generate_title(&session.id, prompt).await? else {
+            return Ok(());
+        };
+        let Some(mut current) = self.store.get_session(&session.id)? else {
+            return Ok(());
+        };
+        if current.title == session.title && current.title != title {
+            current.title = title;
+            self.store.update_session(&current)?;
+            self.push("session.updated", json!({ "session": current }));
+        }
+        Ok(())
     }
 
     async fn generate_title(

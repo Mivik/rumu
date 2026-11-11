@@ -31,7 +31,8 @@ use rumu_core::kind;
 use rumu_core::{
     Branch, BranchId, BranchKind, BranchStatus, Content, Effect, Event, HookSpec, Inbox, Node,
     NodeBody, NodeId, PathState, Plugin, Post, Runtime, SYSTEM_SOURCE, SessionId, SessionInfo,
-    SessionRoot, TaskId, ToolCall, ToolSpec, TurnError, WorkspaceUse, Workspaces, now, tool_schema,
+    SessionRoot, TaskId, Titles, ToolCall, ToolSpec, TurnError, WorkspaceUse, Workspaces, now,
+    tool_schema,
 };
 use rumu_store::Store;
 use serde_json::{Value, json};
@@ -940,17 +941,24 @@ impl Kernel {
         }
 
         if let NodeBody::User { content } = &body {
-            // Session title = first user prompt, truncated to 60 chars.
+            // The session title: a prompt truncated (the first, or each
+            // latest), then maybe a generated one.
             let mut session = self
                 .store
                 .get_session(&b.session)?
                 .ok_or_else(|| Error::SessionNotFound(b.session.clone()))?;
-            if session.title.is_empty() {
-                session.title = content.text.chars().take(TITLE_CHARS).collect();
+            let titles = self.llm.titles();
+            let first = session.title.is_empty();
+            let title: String = content.text.chars().take(TITLE_CHARS).collect();
+            if (first || titles == Titles::Last)
+                && !title.trim().is_empty()
+                && title != session.title
+            {
+                session.title = title;
                 session.updated_at = at;
                 self.store.update_session(&session)?;
                 self.push("session.updated", json!({ "session": session.clone() }));
-                if self.llm.has_role(rumu_core::Role::Title) && !content.text.trim().is_empty() {
+                if first && titles == Titles::Model {
                     self.spawn_title(session, content.text.clone());
                 }
             }

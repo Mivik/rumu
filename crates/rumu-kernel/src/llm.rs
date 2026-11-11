@@ -3,22 +3,18 @@
 use std::sync::Arc;
 
 use async_trait::async_trait;
-use rumu_core::{ModelPick, Node, ReasoningBlock, Role, ToolCall, ToolSpec, Usage};
+use rumu_core::{ModelPick, Node, ReasoningBlock, Titles, ToolCall, ToolSpec, Usage};
 
 /// A model-call failure.
 #[derive(Debug, thiserror::Error)]
 pub enum LlmError {
-    /// No default model profile is configured.
+    /// No default model is configured.
     #[error("no default model is configured; set one in Settings")]
     MissingModel,
 
     /// A model ref whose provider is not configured.
     #[error("unknown model `{0}`")]
     UnknownModel(String),
-
-    /// A model profile that does not exist.
-    #[error("unknown model profile `{0}`")]
-    UnknownProfile(String),
 
     /// The model's provider has no endpoint for the protocol it runs on.
     #[error("no endpoint of its provider can serve `{0}`")]
@@ -76,11 +72,9 @@ impl LlmError {
     /// the provider cut the stream without concluding it.
     pub fn is_transient(&self) -> bool {
         match self {
-            Self::MissingModel
-            | Self::UnknownModel(_)
-            | Self::UnknownProfile(_)
-            | Self::NoEndpoint(_)
-            | Self::Client(_) => false,
+            Self::MissingModel | Self::UnknownModel(_) | Self::NoEndpoint(_) | Self::Client(_) => {
+                false
+            }
             Self::MissingEnd => true,
             Self::Request(m) | Self::Stream(m) => transient_message(m),
         }
@@ -179,10 +173,10 @@ pub trait Llm: Send + Sync {
         on_delta: Option<OnDelta>,
     ) -> std::result::Result<LlmResponse, LlmError>;
 
-    /// Whether a profile is bound to `role`: background jobs for an unbound
-    /// role are skipped.
-    fn has_role(&self, _role: Role) -> bool {
-        false
+    /// Where session titles come from: [`Titles::Model`] only when a model
+    /// is bound to the `title` role.
+    fn titles(&self) -> Titles {
+        Titles::First
     }
 }
 
@@ -249,7 +243,7 @@ mod tests {
             .is_transient()
         );
         assert!(!LlmError::MissingModel.is_transient());
-        assert!(!LlmError::UnknownProfile("cheap".into()).is_transient());
+        assert!(!LlmError::UnknownModel("rumu/cheap".into()).is_transient());
         assert!(!LlmError::Client("bad proxy url".into()).is_transient());
         // The provider cut the stream without concluding it: replayable.
         assert!(LlmError::MissingEnd.is_transient());

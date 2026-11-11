@@ -673,13 +673,17 @@ async fn dispatch(state: &AppState, method: &str, p: &Value) -> Result<Value> {
             let id = str_param(p, "id")?;
             settings_edit(state, |s| s.remove_provider(id))
         }
-        "settings.set_profile" => {
+        "settings.set_custom" => {
             let edit = parse_params(p)?;
-            settings_edit(state, |s| s.set_profile(edit))
+            settings_edit(state, |s| s.set_custom(edit))
         }
-        "settings.remove_profile" => {
+        "settings.remove_custom" => {
             let name = str_param(p, "name")?;
-            settings_edit(state, |s| s.remove_profile(name))
+            settings_edit(state, |s| s.remove_custom(name))
+        }
+        "settings.set_titles" => {
+            let titles = parse_params(&p["titles"])?;
+            settings_edit(state, |s| s.set_titles(titles))
         }
         "settings.set_roles" => {
             let roles = parse_params(p)?;
@@ -771,6 +775,12 @@ async fn dispatch(state: &AppState, method: &str, p: &Value) -> Result<Value> {
         "session.seen" => {
             let session: SessionId = str_param(p, "session")?.into();
             Ok(json!({ "session": kernel.mark_seen(&session)? }))
+        }
+
+        "session.retitle" => {
+            let session: SessionId = str_param(p, "session")?.into();
+            kernel.retitle(&session).await?;
+            Ok(json!({}))
         }
 
         "session.delete" => {

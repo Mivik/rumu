@@ -55,12 +55,14 @@ fn rewrite(patch: Value) -> HookOutput {
 /// Replays the script and resolves `$task` placeholders (task ids are random).
 struct FakeLlm {
     inner: ScriptedLlm,
+    titles: std::sync::Mutex<rumu_core::Titles>,
 }
 
 impl FakeLlm {
     fn new(scripted: Vec<LlmResponse>) -> Self {
         Self {
             inner: ScriptedLlm::strict(scripted),
+            titles: Default::default(),
         }
     }
 
@@ -85,6 +87,10 @@ impl Llm for FakeLlm {
             .await?;
         fill_task_id(&mut resp, nodes);
         Ok(resp)
+    }
+
+    fn titles(&self) -> rumu_core::Titles {
+        *self.titles.lock().unwrap()
     }
 }
 
@@ -822,6 +828,49 @@ fn result_text(nodes: &[Node], call_id: &str) -> (String, bool) {
 
 // ---------- turns ----------
 
+/// Titled by the latest prompt, the title follows each one; by the first,
+/// it stays.
+#[tokio::test]
+async fn titles_follow_the_first_or_the_latest_prompt() {
+    let (kernel, llm, _s, b) = setup(
+        vec![],
+        vec![
+            LlmResponse::text("a"),
+            LlmResponse::text("b"),
+            LlmResponse::text("c"),
+        ],
+    )
+    .await;
+    let title = || kernel.list_sessions().unwrap().remove(0).title;
+    run_turn(&kernel, &b, "first").await;
+    run_turn(&kernel, &b, "second").await;
+    assert_eq!(title(), "first");
+    *llm.titles.lock().unwrap() = rumu_core::Titles::Last;
+    run_turn(&kernel, &b, "third").await;
+    assert_eq!(title(), "third");
+}
+
+/// A title is written anew on request, from the first prompt, only while a
+/// model writes them.
+#[tokio::test]
+async fn retitle_asks_the_title_model() {
+    let (kernel, llm, session, b) = setup(
+        vec![],
+        vec![LlmResponse::text("a"), LlmResponse::text("\"Greetings.\"")],
+    )
+    .await;
+    run_turn(&kernel, &b, "hello there").await;
+    assert!(matches!(
+        kernel.retitle(&session).await,
+        Err(rumu_kernel::Error::NoTitleModel)
+    ));
+    *llm.titles.lock().unwrap() = rumu_core::Titles::Model;
+    kernel.retitle(&session).await.unwrap();
+    assert_eq!(kernel.list_sessions().unwrap().remove(0).title, "Greetings");
+    let asked = llm.projections().pop().unwrap();
+    assert!(matches!(&asked[0].body, NodeBody::User { content } if content.text == "hello there"));
+}
+
 #[tokio::test]
 async fn tool_calling_turn_and_title() {
     let plugin = Arc::new(plugin_with(
@@ -1321,7 +1370,7 @@ async fn retry_after_failure_appends_after_the_marker() {
 /// is recorded before the loop runs again, so the retry uses it.
 #[tokio::test(start_paused = true)]
 async fn retry_applies_the_current_choice() {
-    use rumu_core::{ModelTarget, ModelUse};
+    use rumu_core::ModelUse;
     let (kernel, llm, branch) = flaky_setup(
         vec![LlmResponse::text("recovered")],
         usize::MAX,
@@ -1335,7 +1384,7 @@ async fn retry_applies_the_current_choice() {
 
     *llm.fail.lock().unwrap() = 0;
     let cheap = ModelUse {
-        target: ModelTarget::Profile("cheap".into()),
+        model: "rumu/cheap".into(),
         effort: None,
     };
     let choice = rumu_kernel::Choice {
@@ -5097,10 +5146,10 @@ async fn live_turns_snapshot_the_stream_in_flight() {
 
 #[tokio::test]
 async fn model_use_marker_is_written_only_when_the_pick_changes() {
-    use rumu_core::{Effort, ModelTarget, ModelUse};
+    use rumu_core::{Effort, ModelUse};
     let (kernel, llm, _s, b) = setup(vec![], vec![LlmResponse::text("ok")]).await;
     let cheap = ModelUse {
-        target: ModelTarget::Profile("cheap".into()),
+        model: "rumu/cheap".into(),
         effort: Some(Effort::Low),
     };
     assert!(kernel.use_model(&b, cheap.clone()).await.unwrap());
@@ -5122,7 +5171,7 @@ async fn model_use_marker_is_written_only_when_the_pick_changes() {
         NodeBody::Note { content, .. } if !content.text.is_empty())));
 
     let other = ModelUse {
-        target: ModelTarget::Model("p/m".into()),
+        model: "p/m".into(),
         effort: None,
     };
     assert!(kernel.use_model(&b, other.clone()).await.unwrap());

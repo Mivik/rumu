@@ -300,6 +300,16 @@ export async function deleteSession(id: SessionId): Promise<void> {
   }
 }
 
+/** Have the title model write the session's title anew; it arrives as a
+ *  `session.updated` push. */
+export async function retitleSession(id: SessionId): Promise<void> {
+  try {
+    await rumu.request('session.retitle', { session: id })
+  } catch (err) {
+    toast('error', t('errors.retitleSession'), (err as Error).message)
+  }
+}
+
 /** An attachment sent with a prompt: the uploaded blob, plus the name it was
  * attached under. */
 export interface PromptAttachment {

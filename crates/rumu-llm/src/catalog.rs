@@ -3,7 +3,7 @@
 //! serves it on. Only what rumu uses is kept; models that cannot call tools
 //! are dropped.
 
-use std::collections::BTreeMap;
+use std::collections::{BTreeMap, HashMap};
 
 use rumu_core::{Effort, ModelCost, Protocol};
 use serde::Deserialize;
@@ -23,6 +23,9 @@ pub fn default_efforts(protocol: Protocol) -> Vec<Effort> {
 #[derive(Debug, Clone, Default)]
 pub struct Catalog {
     providers: BTreeMap<String, CatalogProvider>,
+    /// The providers listing each model id, in id order: an id nothing
+    /// lists is answered without a scan.
+    index: HashMap<String, Vec<String>>,
 }
 
 #[derive(Debug, Clone)]
@@ -242,8 +245,14 @@ impl Catalog {
                 };
                 (id, provider)
             })
-            .collect();
-        Ok(Self { providers })
+            .collect::<BTreeMap<String, CatalogProvider>>();
+        let mut index: HashMap<String, Vec<String>> = HashMap::new();
+        for (id, p) in &providers {
+            for m in p.models.keys() {
+                index.entry(m.clone()).or_default().push(id.clone());
+            }
+        }
+        Ok(Self { providers, index })
     }
 
     /// Provider `id`.
@@ -264,10 +273,15 @@ impl Catalog {
     /// that lists it (as is, or without a vendor prefix): `home`, the
     /// first-party providers, any provider.
     pub fn lookup(&self, home: Option<&str>, id: &str) -> Option<&CatalogModel> {
-        let mut order: Vec<&str> = home.into_iter().collect();
-        order.extend(first_party());
-        order.extend(self.providers.keys().map(String::as_str));
-        self.find(order.into_iter(), id).map(|(_, m)| m)
+        let listing = |key: &str| self.index.get(key).map(Vec::as_slice).unwrap_or_default();
+        // Of any provider, the first (in id order) that lists it.
+        let any = listing(id)
+            .iter()
+            .chain(listing(bare(id)))
+            .map(String::as_str)
+            .min()?;
+        let order = home.into_iter().chain(first_party()).chain([any]);
+        self.find(order, id).map(|(_, m)| m)
     }
 
     /// A name for model `id`: the catalog's; else that of a model it extends,

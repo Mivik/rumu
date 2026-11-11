@@ -1,5 +1,6 @@
 <script setup lang="ts">
-// Providers: a preset (its endpoints filled in) or a custom address whose
+// Providers: the built-in one (its custom models), then the configured
+// ones: a preset (its endpoints filled in) or a custom address whose
 // endpoints are detected; its key; which of its listed models are enabled
 // (one by one, or every match of a search, new ones included); and the
 // protocol a model is held to.
@@ -9,6 +10,7 @@ import { rumu } from '../../lib/api'
 import { layout } from '../../lib/layout'
 import { SWAP } from '../../lib/motion'
 import {
+  CUSTOM_PROVIDER,
   PROTOCOL_LABELS,
   PROTOCOLS,
   editSettings,
@@ -23,6 +25,7 @@ import type { Protocol } from '../../lib/generated/Protocol'
 import type { ProviderInfo } from '../../lib/generated/ProviderInfo'
 import Icon from '../ui/Icon.vue'
 import Modal from '../ui/Modal.vue'
+import CustomModels from './CustomModels.vue'
 import ModelSettings from './ModelSettings.vue'
 
 interface Form {
@@ -48,7 +51,8 @@ const SHOWN = 100
 const providers = computed(() => models.settings?.providers ?? [])
 const presets = computed(() => models.settings?.presets ?? [])
 
-/** The open provider's id; `''` adds one. */
+/** The open provider's id; `''` adds one. The built-in one opens its
+ *  custom models. */
 const editing = ref<string | null>(null)
 /** Adding: pick a preset or a custom endpoint first. */
 const picking = ref(false)
@@ -67,9 +71,7 @@ const form = reactive<Form>(blank())
 const pristine = ref('')
 const saved = computed(() => providers.value.find((p) => p.id === editing.value) ?? null)
 /** What the name field falls back to when empty: the preset's name, else the id. */
-const defaultName = computed(
-  () => presets.value.find((p) => p.id === form.preset)?.name ?? form.id.trim(),
-)
+const defaultName = computed(() => presets.value.find((p) => p.id === form.preset)?.name ?? form.id.trim())
 const isNew = computed(() => editing.value === '')
 const dirty = computed(() => JSON.stringify(form) !== pristine.value)
 const busy = ref(false)
@@ -80,7 +82,8 @@ const pendingDelete = ref(false)
 watchEffect(() => (layout.settingsBusy = busy.value))
 onBeforeUnmount(() => (layout.settingsBusy = false))
 
-const formShown = computed(() => editing.value !== null && !picking.value)
+const customShown = computed(() => editing.value === CUSTOM_PROVIDER)
+const formShown = computed(() => editing.value !== null && !picking.value && !customShown.value)
 
 function blank(): Form {
   return { id: '', name: '', preset: null, endpoints: {}, api_key: '', models: [], protocols: {} }
@@ -115,6 +118,12 @@ function open(p: ProviderInfo): void {
   fill(p)
 }
 
+function openCustom(): void {
+  pendingDelete.value = false
+  picking.value = false
+  editing.value = CUSTOM_PROVIDER
+}
+
 function startAdd(): void {
   pendingDelete.value = false
   editing.value = ''
@@ -134,11 +143,13 @@ watchEffect(() => {
   layout.settingsTrail =
     editing.value === null
       ? []
-      : picking.value
-        ? [root, { label: adding.label }]
-        : isNew.value
-          ? [root, adding, { label: preset?.name ?? t('settings.customProvider') }]
-          : [root, { label: saved.value?.name ?? editing.value }]
+      : customShown.value
+        ? [root, { label: t('settings.custom') }]
+        : picking.value
+          ? [root, { label: adding.label }]
+          : isNew.value
+            ? [root, adding, { label: preset?.name ?? t('settings.customProvider') }]
+            : [root, { label: saved.value?.name ?? editing.value }]
 })
 onBeforeUnmount(() => (layout.settingsTrail = []))
 
@@ -370,7 +381,13 @@ async function save(): Promise<void> {
   const endpoints: Record<string, string> = {}
   for (const p of usableProtocols.value) endpoints[p] = form.endpoints[p]!.trim()
   const protocols = Object.fromEntries(Object.entries(form.protocols).filter(([m]) => enabled.value.has(m)))
-  const params: Record<string, unknown> = { id, name: form.name.trim(), endpoints, models: form.models, protocols }
+  const params: Record<string, unknown> = {
+    id,
+    name: form.name.trim(),
+    endpoints,
+    models: form.models,
+    protocols,
+  }
   if (form.preset) params.preset = form.preset
   if (form.api_key) params.api_key = form.api_key
   // Its list changes only with where it is reached and how.
@@ -421,6 +438,7 @@ watch(
     if (!ref) return
     layout.showingModel = null
     const slash = ref.indexOf('/')
+    if (ref.slice(0, slash) === CUSTOM_PROVIDER) return openCustom()
     const p = providers.value.find((x) => x.id === ref.slice(0, slash))
     if (!p) return
     open(p)
@@ -443,6 +461,17 @@ async function refreshModels(): Promise<void> {
       <Transition v-bind="SWAP" mode="out-in">
         <!-- the list -->
         <div v-if="editing === null" class="flex flex-col gap-2">
+          <button
+            type="button"
+            class="flex items-center gap-3 rounded-card border border-line-soft bg-surface px-3 py-2.5 text-left transition-colors hover:bg-surface-2"
+            @click="openCustom"
+          >
+            <span class="font-semibold text-ink">{{ t('settings.custom') }}</span>
+            <span class="ml-auto text-meta text-ink-3">{{
+              t('settings.modelCount', { n: models.settings?.custom.length ?? 0 })
+            }}</span>
+            <Icon name="chevron" :size="12" class="text-ink-3" />
+          </button>
           <button
             v-for="p in providers"
             :key="p.id"
@@ -531,6 +560,8 @@ async function refreshModels(): Promise<void> {
             {{ t('settings.customProvider') }}
           </button>
         </div>
+
+        <CustomModels v-else-if="customShown" />
 
         <!-- the provider's form -->
         <form v-else-if="formShown" class="flex flex-col gap-5" @submit.prevent="save">

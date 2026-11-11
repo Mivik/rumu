@@ -9,8 +9,8 @@
 //! runs on its native protocol when its provider has an endpoint for it,
 //! else the first of [`Protocol::FALLBACK`] it has, unless the settings hold
 //! it to one. The key is never logged. Which model a call runs on is
-//! resolved per call from a [`ModelPick`] through the profiles and roles of
-//! the [`ModelConfig`].
+//! resolved per call from a [`ModelPick`] through the roles and custom
+//! models of the [`ModelConfig`].
 //!
 //! On Anthropic, reasoning is always requested explicitly (adaptive thinking
 //! at the resolved effort), with replayed thinking blocks that no longer
@@ -43,9 +43,9 @@ use genai::resolver::{AuthData, Endpoint};
 use genai::{Client, ModelIden, ServiceTarget};
 use rumu_blob::Blobs;
 use rumu_core::{
-    Attachment, Content, Effort, ModelConfig, ModelInfo, ModelPick, ModelTarget, Node, NodeBody,
-    ProfileSettings, Protocol, ProviderSettings, ReasoningBlock, Role, Roles, Segment, ToolCall,
-    ToolSpec, Usage, image_label, split_model_ref,
+    Attachment, CUSTOM_PROVIDER, Content, CustomModel, Effort, ModelConfig, ModelInfo, ModelPick,
+    Node, NodeBody, Protocol, ProviderSettings, ReasoningBlock, Role, Roles, Segment, Titles,
+    ToolCall, ToolSpec, Usage, image_label, split_model_ref,
 };
 use rumu_kernel::{Delta, Llm, LlmError, LlmResponse, OnDelta};
 use serde_json::{Value, json};
@@ -58,7 +58,7 @@ pub use probe::{Probe, probe};
 /// The beta that enables `thinking.block_binding`.
 const THINKING_BINDING_BETA: &str = "thinking-binding-controls-2026-08-01";
 
-/// The genai adapter. Its providers, profiles and roles come from the
+/// The genai adapter. Its providers, custom models and roles come from the
 /// settings and can be replaced while running: a request uses the
 /// configuration it started with.
 #[derive(Default)]
@@ -72,8 +72,9 @@ pub struct GenaiLlm {
 #[derive(Default)]
 struct Resolved {
     providers: BTreeMap<String, Provider>,
-    profiles: BTreeMap<String, ProfileSettings>,
+    custom: BTreeMap<String, CustomModel>,
     roles: Roles,
+    titles: Titles,
     catalog: Arc<Catalog>,
 }
 
@@ -105,8 +106,9 @@ impl GenaiLlm {
     }
 
     /// Use `config` from the next request on. Refused (nothing changes)
-    /// when a profile names a provider that is not configured, a role a
-    /// profile that does not exist, or a model is held to a protocol its
+    /// when a custom model routes to a provider that is not configured (or
+    /// to a custom model), a role
+    /// names a model of neither, or a model is held to a protocol its
     /// provider has no endpoint for.
     pub fn configure(&self, config: &ModelConfig, catalog: Arc<Catalog>) -> Result<(), LlmError> {
         let mut providers = BTreeMap::new();
@@ -126,27 +128,31 @@ impl GenaiLlm {
             };
             providers.insert(id.clone(), provider);
         }
-        for (name, profile) in &config.profiles {
-            let known =
-                split_model_ref(&profile.model).is_some_and(|(p, _)| providers.contains_key(p));
+        for (name, c) in &config.custom {
+            let known = split_model_ref(&c.model).is_some_and(|(p, _)| providers.contains_key(p));
             if !known {
                 return Err(LlmError::UnknownModel(format!(
-                    "{} (profile `{name}`)",
-                    profile.model
+                    "{} (custom model `{name}`)",
+                    c.model
                 )));
             }
         }
         for role in [Role::Default, Role::Title] {
-            if let Some(name) = config.roles.get(role)
-                && !config.profiles.contains_key(name)
-            {
-                return Err(LlmError::UnknownProfile(name.to_owned()));
+            if let Some(r) = config.roles.get(role) {
+                let known = split_model_ref(r).is_some_and(|(p, m)| match p {
+                    CUSTOM_PROVIDER => config.custom.contains_key(m),
+                    _ => providers.contains_key(p),
+                });
+                if !known {
+                    return Err(LlmError::UnknownModel(r.to_owned()));
+                }
             }
         }
         *self.config.write().expect("llm config lock") = Arc::new(Resolved {
             providers,
-            profiles: config.profiles.clone(),
+            custom: config.custom.clone(),
             roles: config.roles.clone(),
+            titles: config.titles,
             catalog,
         });
         Ok(())
@@ -227,6 +233,7 @@ pub fn model_info(
         image_input: known.is_none_or(|m| m.image_input),
         cost: known.and_then(|m| m.cost),
         known: known.is_some(),
+        route: None,
     }
 }
 
@@ -270,33 +277,37 @@ fn adapter_kind(protocol: Protocol) -> AdapterKind {
 }
 
 impl Resolved {
-    /// The model `pick` names: `None` for a role no profile is bound to
-    /// (the default role must be bound).
+    /// The model `pick` names: `None` for a role no model is bound to (the
+    /// default role must be bound).
     fn resolve(&self, pick: ModelPick<'_>) -> Result<Option<Target>, LlmError> {
         match pick {
             ModelPick::Role(role) => match self.roles.get(role) {
-                Some(name) => self.profile(name, None).map(Some),
+                Some(r) => self.model(r, None).map(Some),
                 None if role == Role::Default => Err(LlmError::MissingModel),
                 None => Ok(None),
             },
-            ModelPick::Use(u) => match &u.target {
-                ModelTarget::Profile(name) => self.profile(name, u.effort).map(Some),
-                ModelTarget::Model(r) => self.model(r, u.effort).map(Some),
-            },
+            ModelPick::Use(u) => self.model(&u.model, u.effort).map(Some),
         }
     }
 
-    fn profile(&self, name: &str, effort: Option<Effort>) -> Result<Target, LlmError> {
-        let p = self
-            .profiles
-            .get(name)
-            .ok_or_else(|| LlmError::UnknownProfile(name.to_owned()))?;
-        self.model(&p.model, effort.or(p.effort))
+    /// `model_ref` at `effort`; a custom one is the model it routes to, at
+    /// `effort` over its own.
+    fn model(&self, model_ref: &str, effort: Option<Effort>) -> Result<Target, LlmError> {
+        match split_model_ref(model_ref) {
+            Some((CUSTOM_PROVIDER, name)) => {
+                let c = self
+                    .custom
+                    .get(name)
+                    .ok_or_else(|| LlmError::UnknownModel(model_ref.to_owned()))?;
+                self.provider_model(&c.model, effort.or(c.effort))
+            }
+            _ => self.provider_model(model_ref, effort),
+        }
     }
 
-    /// `model_ref` at `effort` (unset is high), moved to the nearest effort
-    /// the model takes.
-    fn model(&self, model_ref: &str, effort: Option<Effort>) -> Result<Target, LlmError> {
+    /// Configured provider model `model_ref` at `effort` (unset is high),
+    /// moved to the nearest effort the model takes.
+    fn provider_model(&self, model_ref: &str, effort: Option<Effort>) -> Result<Target, LlmError> {
         let unknown = || LlmError::UnknownModel(model_ref.to_owned());
         let (provider_id, model_id) = split_model_ref(model_ref).ok_or_else(unknown)?;
         let provider = self.providers.get(provider_id).ok_or_else(unknown)?;
@@ -534,11 +545,12 @@ impl Llm for GenaiLlm {
         }
     }
 
-    fn has_role(&self, role: Role) -> bool {
+    fn titles(&self) -> Titles {
         let r = self.resolved();
-        r.roles
-            .get(role)
-            .is_some_and(|p| r.profiles.contains_key(p))
+        match r.titles {
+            Titles::Model if r.roles.title.is_none() => Titles::First,
+            t => t,
+        }
     }
 }
 
@@ -1960,9 +1972,9 @@ mod tests {
                 ..Default::default()
             },
         );
-        c.profiles.insert(
+        c.custom.insert(
             "cheap".into(),
-            ProfileSettings {
+            CustomModel {
                 model: "a/m".into(),
                 effort: Some(Effort::Minimal),
             },
@@ -1971,7 +1983,7 @@ mod tests {
     }
 
     #[test]
-    fn resolves_profiles_roles_and_models() {
+    fn resolves_roles_custom_and_provider_models() {
         let llm = GenaiLlm::default();
         let mut c = config();
         llm.configure(&c, Arc::default()).unwrap();
@@ -1982,18 +1994,18 @@ mod tests {
             Err(LlmError::MissingModel)
         ));
         assert!(r.resolve(ModelPick::Role(Role::Title)).unwrap().is_none());
-        assert!(!llm.has_role(Role::Title));
+        assert_eq!(llm.titles(), Titles::First);
 
-        // A profile's effort, moved to the nearest the model takes; a
-        // marker's override wins.
+        // A custom model runs on the model it routes to, at its effort moved
+        // to the nearest the model takes; a marker's override wins.
         let pick = rumu_core::ModelUse {
-            target: ModelTarget::Profile("cheap".into()),
+            model: "rumu/cheap".into(),
             effort: None,
         };
         let t = r.resolve(ModelPick::Use(&pick)).unwrap().unwrap();
         assert_eq!((t.model_ref.as_str(), t.effort), ("a/m", Some(Effort::Low)));
         let pick = rumu_core::ModelUse {
-            target: ModelTarget::Model("a/custom".into()),
+            model: "a/custom".into(),
             effort: Some(Effort::Max),
         };
         let t = r.resolve(ModelPick::Use(&pick)).unwrap().unwrap();
@@ -2002,28 +2014,45 @@ mod tests {
             ("custom", Some(Effort::Max))
         );
         let gone = rumu_core::ModelUse {
-            target: ModelTarget::Profile("gone".into()),
+            model: "rumu/gone".into(),
             effort: None,
         };
         assert!(matches!(
             r.resolve(ModelPick::Use(&gone)),
-            Err(LlmError::UnknownProfile(_))
+            Err(LlmError::UnknownModel(_))
         ));
 
-        c.roles.title = Some("cheap".into());
+        // A role names a custom model or a provider's.
+        // Titles come from a model only while one is bound to the role.
+        c.titles = Titles::Model;
         llm.configure(&c, Arc::default()).unwrap();
-        assert!(llm.has_role(Role::Title));
+        assert_eq!(llm.titles(), Titles::First);
+        c.roles.title = Some("rumu/cheap".into());
+        c.roles.default = Some("a/m".into());
+        llm.configure(&c, Arc::default()).unwrap();
+        assert_eq!(llm.titles(), Titles::Model);
+        let t = llm
+            .resolved()
+            .resolve(ModelPick::Role(Role::Default))
+            .unwrap()
+            .unwrap();
+        assert_eq!(t.model_ref, "a/m");
 
         // Refused configurations leave the previous one in place.
-        c.roles.default = Some("gone".into());
-        assert!(llm.configure(&c, Arc::default()).is_err());
+        for bad in ["rumu/gone", "b/m"] {
+            c.roles.default = Some(bad.into());
+            assert!(llm.configure(&c, Arc::default()).is_err());
+        }
         c.roles.default = None;
-        c.profiles.get_mut("cheap").unwrap().model = "b/m".into();
+        c.custom.get_mut("cheap").unwrap().model = "b/m".into();
         assert!(matches!(
             llm.configure(&c, Arc::default()),
             Err(LlmError::UnknownModel(_))
         ));
-        assert!(llm.has_role(Role::Title));
+        // A custom model never routes to another.
+        c.custom.get_mut("cheap").unwrap().model = "rumu/cheap".into();
+        assert!(llm.configure(&c, Arc::default()).is_err());
+        assert_eq!(llm.titles(), Titles::Model);
     }
 
     #[test]

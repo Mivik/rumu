@@ -14,12 +14,13 @@
 //!     models: [claude-*, gpt-5]
 //!     pinned: [gpt-5]
 //!     protocols: { gpt-5: openai }
-//! profiles:
+//! custom:                       # the built-in provider's models: rumu/<name>
 //!   main: { model: gateway/claude-opus-5-5, effort: high }
 //!   cheap: { model: deepseek/deepseek-chat, effort: low }
-//! roles:
-//!   default: main
-//!   title: cheap
+//! roles:                        # model refs, custom or not
+//!   default: rumu/main
+//!   title: rumu/cheap
+//! titles: model                 # session titles: first, last or model
 //! ```
 //!
 //! The ids each provider lists are fetched from its endpoints and cached at
@@ -33,8 +34,8 @@ use std::sync::{Arc, Mutex, RwLock};
 use std::time::{Duration, SystemTime};
 
 use rumu_core::{
-    Effort, IoError, ModelConfig, ModelInfo, PresetInfo, ProfileInfo, ProfileSettings, Protocol,
-    ProviderInfo, ProviderSettings, Roles, SettingsInfo, enabled_models, split_model_ref,
+    CUSTOM_PROVIDER, CustomModel, Effort, IoError, ModelConfig, ModelInfo, PresetInfo, Protocol,
+    ProviderInfo, ProviderSettings, Roles, SettingsInfo, Titles, enabled_models, split_model_ref,
 };
 use rumu_kernel::LlmError;
 use rumu_llm::{Catalog, GenaiLlm, endpoints, model_info, presets};
@@ -135,11 +136,11 @@ struct Listing {
     error: Option<String>,
 }
 
-/// A `settings.set_profile` request; `rename` replaces the profile of that
-/// name, and roles bound to it follow.
+/// A `settings.set_custom` request; `rename` replaces the custom model of
+/// that name, and roles bound to it follow.
 #[derive(Debug, Deserialize)]
 #[serde(deny_unknown_fields)]
-pub struct ProfileEdit {
+pub struct CustomEdit {
     name: String,
     #[serde(default)]
     rename: Option<String>,
@@ -154,6 +155,9 @@ pub struct Settings {
     file: Mutex<File>,
     catalog: RwLock<Arc<Catalog>>,
     listed: Mutex<BTreeMap<String, Listing>>,
+    /// Each provider's [`ProviderInfo`], derived once from its settings, its
+    /// listing and the catalog, and dropped when one of those changes.
+    infos: Mutex<BTreeMap<String, ProviderInfo>>,
     llm: Arc<GenaiLlm>,
 }
 
@@ -194,6 +198,7 @@ impl Settings {
             file: Mutex::new(file),
             catalog: RwLock::new(catalog),
             listed: Mutex::new(listed),
+            infos: Mutex::default(),
             llm,
         })
     }
@@ -204,25 +209,29 @@ impl Settings {
 
     pub fn info(&self) -> SettingsInfo {
         let file = self.lock();
-        let catalog = self.catalog();
+        // Held while deriving, so no info of the replaced catalog is cached.
+        let catalog = self.catalog.read().expect("catalog lock");
         let listed = self.listed.lock().expect("listed lock");
+        let mut infos = self.infos.lock().expect("infos lock");
         let m = &file.model;
         SettingsInfo {
             providers: m
                 .providers
                 .iter()
-                .map(|(id, p)| provider_info(&catalog, id, p, listed.get(id)))
-                .collect(),
-            profiles: m
-                .profiles
-                .iter()
-                .map(|(name, p)| ProfileInfo {
-                    name: name.clone(),
-                    model: p.model.clone(),
-                    effort: p.effort,
+                .map(|(id, p)| {
+                    infos
+                        .entry(id.clone())
+                        .or_insert_with(|| provider_info(&catalog, id, p, listed.get(id)))
+                        .clone()
                 })
                 .collect(),
+            custom: m
+                .custom
+                .iter()
+                .map(|(name, c)| custom_info(&catalog, m, name, c))
+                .collect(),
             roles: m.roles.clone(),
+            titles: m.titles,
             presets: offered(&catalog),
         }
     }
@@ -232,6 +241,11 @@ impl Settings {
         if id.is_empty() || id.contains('/') {
             return Err(SettingsError::Invalid(format!(
                 "provider id `{id}` must be non-empty and without `/`"
+            )));
+        }
+        if id == CUSTOM_PROVIDER {
+            return Err(SettingsError::Invalid(format!(
+                "provider id `{id}` is the built-in provider's"
             )));
         }
         let mut models: Vec<String> = Vec::new();
@@ -303,8 +317,15 @@ impl Settings {
         let (provider, model) = split_model_ref(model_ref)
             .ok_or_else(|| SettingsError::Invalid(format!("not a model ref: `{model_ref}`")))?;
         let file = self.lock();
-        let p = file
-            .model
+        let m = &file.model;
+        if provider == CUSTOM_PROVIDER {
+            let c = m
+                .custom
+                .get(model)
+                .ok_or_else(|| SettingsError::Invalid(format!("unknown custom model `{model}`")))?;
+            return Ok(custom_info(&self.catalog(), m, model, c));
+        }
+        let p = m
             .providers
             .get(provider)
             .ok_or_else(|| SettingsError::Invalid(format!("unknown provider `{provider}`")))?;
@@ -335,15 +356,19 @@ impl Settings {
     }
 
     pub fn remove_provider(&self, id: &str) -> Result<SettingsInfo> {
+        let of = |r: &str| split_model_ref(r).is_some_and(|(p, _)| p == id);
         self.edit(|file| {
-            if let Some((name, _)) = file
-                .profiles
-                .iter()
-                .find(|(_, p)| split_model_ref(&p.model).is_some_and(|(p, _)| p == id))
-            {
+            if let Some((name, _)) = file.custom.iter().find(|(_, c)| of(&c.model)) {
                 return Err(SettingsError::Invalid(format!(
-                    "profile `{name}` uses provider `{id}`"
+                    "custom model `{name}` uses provider `{id}`"
                 )));
+            }
+            if let Some(r) = [&file.roles.default, &file.roles.title]
+                .into_iter()
+                .flatten()
+                .find(|r| of(r))
+            {
+                return Err(SettingsError::Invalid(format!("`{r}` is a default model")));
             }
             file.providers.remove(id);
             Ok(())
@@ -354,28 +379,29 @@ impl Settings {
         })
     }
 
-    pub fn set_profile(&self, edit: ProfileEdit) -> Result<SettingsInfo> {
+    pub fn set_custom(&self, edit: CustomEdit) -> Result<SettingsInfo> {
         let name = edit.name.trim().to_owned();
         if name.is_empty() {
-            return Err(SettingsError::Invalid("a profile needs a name".into()));
+            return Err(SettingsError::Invalid("a custom model needs a name".into()));
         }
         self.edit(|file| {
             if let Some(old) = edit.rename.as_deref().filter(|o| *o != name) {
-                if file.profiles.contains_key(&name) {
+                if file.custom.contains_key(&name) {
                     return Err(SettingsError::Invalid(format!(
-                        "profile `{name}` already exists"
+                        "custom model `{name}` already exists"
                     )));
                 }
-                file.profiles.remove(old);
+                file.custom.remove(old);
+                let (old, new) = (custom_ref(old), custom_ref(&name));
                 for slot in [&mut file.roles.default, &mut file.roles.title] {
-                    if slot.as_deref() == Some(old) {
-                        *slot = Some(name.clone());
+                    if slot.as_deref() == Some(&old) {
+                        *slot = Some(new.clone());
                     }
                 }
             }
-            file.profiles.insert(
+            file.custom.insert(
                 name,
-                ProfileSettings {
+                CustomModel {
                     model: edit.model.trim().to_owned(),
                     effort: edit.effort,
                 },
@@ -384,14 +410,22 @@ impl Settings {
         })
     }
 
-    pub fn remove_profile(&self, name: &str) -> Result<SettingsInfo> {
+    pub fn remove_custom(&self, name: &str) -> Result<SettingsInfo> {
         self.edit(|file| {
-            file.profiles.remove(name);
+            file.custom.remove(name);
+            let gone = custom_ref(name);
             for slot in [&mut file.roles.default, &mut file.roles.title] {
-                if slot.as_deref() == Some(name) {
+                if slot.as_deref() == Some(&gone) {
                     *slot = None;
                 }
             }
+            Ok(())
+        })
+    }
+
+    pub fn set_titles(&self, titles: Titles) -> Result<SettingsInfo> {
+        self.edit(|file| {
+            file.titles = titles;
             Ok(())
         })
     }
@@ -417,6 +451,8 @@ impl Settings {
                 let _ = self.llm.configure(&file.model, catalog);
                 return Err(e);
             }
+            let mut infos = self.infos.lock().expect("infos lock");
+            infos.retain(|id, _| file.model.providers.get(id) == next.model.providers.get(id));
             *file = next;
         }
         Ok(self.info())
@@ -433,7 +469,11 @@ impl Settings {
         }
         std::fs::write(&cache, &bytes).map_err(IoError::at("writing", &cache))?;
         let catalog = Arc::new(catalog);
-        *self.catalog.write().expect("catalog lock") = catalog.clone();
+        {
+            let mut current = self.catalog.write().expect("catalog lock");
+            *current = catalog.clone();
+            self.infos.lock().expect("infos lock").clear();
+        }
         let file = self.lock();
         if let Err(e) = self.llm.configure(&file.model, catalog) {
             warn!(error = %e, "model settings are invalid; fix them in Settings");
@@ -461,6 +501,7 @@ impl Settings {
         };
         let result = rumu_llm::list_models(&endpoints, &key).await;
         let mut listed = self.listed.lock().expect("listed lock");
+        self.infos.lock().expect("infos lock").remove(id);
         let listing = listed.entry(id.to_owned()).or_default();
         match result {
             Ok(ids) => {
@@ -538,6 +579,29 @@ fn provider_info(
         names,
         list_error: listing.error,
     }
+}
+
+fn custom_ref(name: &str) -> String {
+    format!("{CUSTOM_PROVIDER}/{name}")
+}
+
+/// Custom model `name`: what is known of the model it routes to, under its
+/// own ref and name.
+fn custom_info(catalog: &Catalog, m: &ModelConfig, name: &str, c: &CustomModel) -> ModelInfo {
+    let target = split_model_ref(&c.model).and_then(|(provider, id)| {
+        let p = m.providers.get(provider)?;
+        Some(model_info(catalog, provider, p, &endpoints(p), id))
+    });
+    let mut info = target.unwrap_or_else(|| {
+        let none = ProviderSettings::default();
+        model_info(catalog, CUSTOM_PROVIDER, &none, &BTreeMap::new(), name)
+    });
+    info.model_ref = custom_ref(name);
+    info.id = name.to_owned();
+    info.name = name.to_owned();
+    info.pinned = false;
+    info.route = Some(c.clone());
+    info
 }
 
 /// The presets offered: the built-in ones, then the catalog's other
@@ -682,8 +746,8 @@ mod tests {
         }
     }
 
-    fn profile(name: &str, model: &str) -> ProfileEdit {
-        ProfileEdit {
+    fn custom(name: &str, model: &str) -> CustomEdit {
+        CustomEdit {
             name: name.into(),
             rename: None,
             model: model.into(),
@@ -710,6 +774,13 @@ mod tests {
             .map(|m| m.id.as_str())
             .collect();
         assert_eq!(ids, ["n", "m"]);
+        // A provider's info is derived once, and anew after its settings
+        // change.
+        s.set_titles(Titles::Last).unwrap();
+        assert!(s.infos.lock().unwrap().contains_key("a"));
+        let info = s.pin("a/m", true).unwrap();
+        assert!(info.providers[0].models.iter().all(|m| m.pinned));
+        s.pin("a/m", false).unwrap();
         // Endpoints are stored as what differs from the preset's.
         let mut edit = provider("a", None);
         edit.endpoints = [(Protocol::Openai, "https://gw.example/v1/".to_owned())].into();
@@ -726,41 +797,59 @@ mod tests {
         bad.preset = Some("nowhere".into());
         assert!(s.set_provider(bad).is_err());
 
-        // A profile on an unknown provider, or a role on an unknown profile,
-        // is refused.
+        // The built-in provider's id is taken.
+        assert!(s.set_provider(provider(CUSTOM_PROVIDER, None)).is_err());
+
+        // A custom model on an unknown provider, or a role on an unknown
+        // model, is refused.
         assert!(matches!(
-            s.set_profile(profile("main", "b/m")),
+            s.set_custom(custom("main", "b/m")),
             Err(SettingsError::Llm(LlmError::UnknownModel(_)))
         ));
-        s.set_profile(profile("main", "a/m")).unwrap();
+        let info = s.set_custom(custom("main", "a/m")).unwrap();
+        let main = &info.custom[0];
+        assert_eq!(
+            (main.model_ref.as_str(), main.name.as_str()),
+            ("rumu/main", "main")
+        );
+        assert_eq!(main.route.as_ref().unwrap().model, "a/m");
+        assert_eq!(s.model("rumu/main").unwrap().efforts, main.efforts);
         assert!(
             s.set_roles(Roles {
-                default: Some("nope".into()),
+                default: Some("rumu/nope".into()),
                 title: None
             })
             .is_err()
         );
         s.set_roles(Roles {
-            default: Some("main".into()),
-            title: Some("main".into()),
+            default: Some("rumu/main".into()),
+            title: Some("rumu/main".into()),
         })
         .unwrap();
 
         // Renaming moves the roles along; a provider in use stays.
-        let mut edit = profile("primary", "a/n");
+        let mut edit = custom("primary", "a/n");
         edit.rename = Some("main".into());
-        let info = s.set_profile(edit).unwrap();
-        assert_eq!(info.roles.default.as_deref(), Some("primary"));
+        let info = s.set_custom(edit).unwrap();
+        assert_eq!(info.roles.default.as_deref(), Some("rumu/primary"));
         assert!(s.remove_provider("a").is_err());
 
         let again = Settings::load(home.path(), llm).unwrap();
         let file = again.lock().model.clone();
         assert_eq!(file.providers["a"].api_key, "k");
-        assert_eq!(file.profiles["primary"].model, "a/n");
-        assert_eq!(file.roles.title.as_deref(), Some("primary"));
+        assert_eq!(file.custom["primary"].model, "a/n");
+        assert_eq!(file.roles.title.as_deref(), Some("rumu/primary"));
 
-        s.remove_profile("primary").unwrap();
+        s.remove_custom("primary").unwrap();
         assert_eq!(s.info().roles, Roles::default());
+        // A provider a role names directly stays too.
+        s.set_roles(Roles {
+            default: Some("a/m".into()),
+            title: None,
+        })
+        .unwrap();
+        assert!(s.remove_provider("a").is_err());
+        s.set_roles(Roles::default()).unwrap();
         s.remove_provider("a").unwrap();
 
         #[cfg(unix)]

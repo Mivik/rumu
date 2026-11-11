@@ -107,6 +107,7 @@ export {
   defaultAssistant,
   regenerateFrom,
   retryBranch,
+  retitleSession,
   refreshAssistants,
   refreshTasks,
   sendPrompt,

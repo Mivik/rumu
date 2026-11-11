@@ -6,23 +6,17 @@ import { computed } from 'vue'
 import { t } from '../../i18n'
 import { currentPick, models, pick, resolvePick } from '../../lib/state/models'
 import type { Effort } from '../../lib/generated/Effort'
-import type { ModelUse } from '../../lib/generated/ModelUse'
 import Icon from '../ui/Icon.vue'
 import Popover from '../ui/Popover.vue'
 
 const resolved = computed(() => resolvePick(currentPick()))
 const efforts = computed<Effort[]>(() => resolved.value?.model?.efforts ?? [])
 
-/** What the effort applies to: the pick, or with none the default profile. */
-const target = computed<ModelUse['target'] | null>(() => {
-  const own = currentPick()?.target
-  if (own) return own
-  const profile = models.settings?.roles.default
-  return profile ? { profile } : null
-})
+/** What the effort applies to: the pick, or with none the default model. */
+const target = computed(() => currentPick()?.model ?? models.settings?.roles.default ?? null)
 
 function choose(e: Effort, close: () => void): void {
-  if (target.value) pick({ target: target.value, effort: e })
+  if (target.value) pick({ model: target.value, effort: e })
   close()
 }
 </script>

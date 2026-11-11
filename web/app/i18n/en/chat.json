@@ -4,6 +4,7 @@
     "close": "Close sessions",
     "new": "Start session",
     "delete": "Delete session",
+    "retitle": "Regenerate title",
     "unseen": "New activity",
     "deleteConfirm": "Delete",
     "deletePrompt": "Delete this session?",

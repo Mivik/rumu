@@ -29,12 +29,14 @@ protocol when the provider has an endpoint for it, else on openai, anthropic,
 openai_responses, gemini in that order, unless it is held to one. What is
 known about models (efforts, context, prices) comes from the
 [models.dev](https://models.dev) catalog; both lists are cached in
-`RUMU_HOME/cache/` and refreshed daily. A **profile** names a model and a
-reasoning effort
-(`cheap`, `main`, …), and **roles** bind profiles to jobs: `default` for
-sessions that pick nothing, `title` for generated session titles. Sessions
-and roles name the profile, so pointing a profile at a newer model moves all
-of them. The composer picks a profile or a model (and effort) per branch; the
+`RUMU_HOME/cache/` and refreshed daily. The built-in **custom** provider
+holds models of your own (`rumu/main`, `rumu/cheap`, …), each routed to
+another provider's model at a reasoning effort. Sessions and roles name the
+custom model, so pointing it at a newer model moves all of them. **Roles**
+bind models, custom or not, to jobs: `default` for sessions that pick
+nothing, `title` for generated session titles. A session is titled by its
+first prompt, its latest one, or a summary the `title` model writes of the
+first. The composer picks a model (and effort) per branch; the
 pick is recorded on the branch (a `model.use` marker) when the next prompt is
 sent. Settings are saved to `RUMU_HOME/settings.yaml` (owner-only, since it
 holds the keys) and apply from the next model call, without a restart.
@@ -58,7 +60,7 @@ from the Rust serde types by ts-rs. After changing a wire type, run
 `cargo test` to regenerate `web/app/lib/generated`; those files are checked in
 because the web build imports them.
 
-`RUMU_HOME` (default `~/.rumu`) holds `settings.yaml` (providers, profiles and roles),
+`RUMU_HOME` (default `~/.rumu`) holds `settings.yaml` (providers, custom models and roles),
 `config.yaml` (external plugins),
 `workspaces.yaml` (the workspace registry), `projects.yaml` (the workspaces
 each project mounts), `decks/` (cards, assistants, projects and their
