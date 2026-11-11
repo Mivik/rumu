@@ -254,7 +254,9 @@ impl Cards {
         let public = mounted.card_path(path);
         match raw.link().map(str::to_owned) {
             Some(stored) => {
-                if let Some((deck_id, target_path, target_card)) = self.target(&stored) {
+                if let Some((deck_id, target_path, target_card)) =
+                    self.decks.link_target(mounted.deck.id(), &stored)
+                {
                     let display = self.display_path(&deck_id, &target_path);
                     Ok(Some(Loaded {
                         path: public,
@@ -295,15 +297,6 @@ impl Cards {
         }
     }
 
-    /// The card a stored link points at, and its deck-local path.
-    fn target(&self, stored: &str) -> Option<(String, String, Card)> {
-        let (deck_id, path) = stored.split_once(':')?;
-        let deck = self.decks.get(deck_id)?;
-        let text = deck.read(path).ok().flatten()?;
-        let card = parse_card(path, &text);
-        Some((deck_id.to_owned(), path.to_owned(), card))
-    }
-
     /// Every visible card, keyed by public path, deduplicated by identity
     /// (deck id + path). A direct card wins over a link to it; a dangling
     /// link is included with its own content and marked.
@@ -324,7 +317,9 @@ impl Cards {
                 let public = mounted.card_path(&path);
                 match raw.link().map(str::to_owned) {
                     Some(stored) => {
-                        if let Some((deck_id, target_path, card)) = self.target(&stored) {
+                        if let Some((deck_id, target_path, card)) =
+                            self.decks.link_target(mounted.deck.id(), &stored)
+                        {
                             let display = self.display_path(&deck_id, &target_path);
                             let loaded = Loaded {
                                 path: public,
@@ -486,6 +481,12 @@ impl Cards {
                 return Err(Error::Config {
                     path: "card view".into(),
                     message: "a card cannot link to itself".into(),
+                });
+            }
+            if !self.decks.link_allowed(mounted.deck.id(), &target_deck) {
+                return Err(Error::Config {
+                    path: "card view".into(),
+                    message: "a card in a private deck can only be linked from its own deck".into(),
                 });
             }
             if let Some(target_card) = self

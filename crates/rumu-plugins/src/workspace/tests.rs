@@ -5087,3 +5087,224 @@ async fn the_sessions_project_deck_is_writable_without_approval() {
     assert!(proj_line.contains("asks the user to mount"), "{proj_line}");
     assert!(!proj_line.contains("write"), "{proj_line}");
 }
+
+// ---------- private decks ----------
+
+const PRIVATE_DECK: &str = "0193a2f1-0000-7000-8000-00000000c1c1";
+const BOSS_DECK: &str = "0193a2f1-0000-7000-8000-00000000c2c2";
+
+fn hidden_deck(home: &Path) -> rumu_cards::Deck {
+    crate::testutil::create_deck(
+        home,
+        "hidden",
+        Some(&format!(
+            "id: {PRIVATE_DECK}\nname: hidden\nprivate: true\n"
+        )),
+        &[("t", "target body\n")],
+    )
+}
+
+/// A private deck is absent from the listing and cannot be mounted by id,
+/// even with an always-allow grant: the refusal looks like an unknown id and
+/// asks the user nothing.
+#[tokio::test]
+async fn private_decks_are_unlisted_and_unmountable() {
+    let home = card_home();
+    let hidden = hidden_deck(home.path());
+    let (plugin, host, _cx) = card_plugin_for(home.path());
+    let decks = plugin.decks();
+    let main = crate::testutil::MAIN_DECK;
+    let cx = host.cx();
+
+    let out = plugin
+        .call_tool("card_mount", json!({}), &cx)
+        .await
+        .unwrap();
+    assert!(!out.is_error, "{}", out.content.text);
+    assert!(
+        !out.content.text.contains("hidden") && !out.content.text.contains(&hidden.meta.id),
+        "{}",
+        out.content.text
+    );
+
+    decks.remember(
+        rumu_cards::deck::Action::Mount,
+        rumu_cards::deck::Scope::Always,
+        "",
+        main,
+        &hidden.meta.id,
+    );
+    let out = plugin
+        .call_tool(
+            "card_mount",
+            json!({ "deck": hidden.meta.id, "at": "/cards/hidden" }),
+            &cx,
+        )
+        .await
+        .unwrap();
+    assert!(
+        out.is_error && out.content.text.contains("no deck with id"),
+        "{}",
+        out.content.text
+    );
+    assert!(
+        host.decisions.lock().unwrap().is_empty(),
+        "a private mount is refused before asking the user"
+    );
+
+    // Mounting it on the path (a user action) makes it visible.
+    host.state
+        .lock()
+        .unwrap()
+        .mounts
+        .push(rumu_core::CardMount {
+            deck: hidden.meta.id.clone(),
+            at: "/cards/hidden".into(),
+        });
+    let out = plugin
+        .call_tool("card_mount", json!({}), &cx)
+        .await
+        .unwrap();
+    assert!(
+        out.content.text.contains("hidden") && out.content.text.contains(&hidden.meta.id),
+        "{}",
+        out.content.text
+    );
+}
+
+/// A private deck listed in the session assistant's `deck.yaml` mounts is
+/// visible to its sessions.
+#[tokio::test]
+async fn private_decks_are_visible_through_the_assistant_mounts() {
+    let home = card_home();
+    let hidden = hidden_deck(home.path());
+    crate::testutil::create_deck(
+        home.path(),
+        "boss",
+        Some(&format!(
+            "id: {BOSS_DECK}\nname: boss\nassistant: true\nmounts:\n  - {{ deck: {}, at: /cards/hidden }}\n",
+            hidden.meta.id
+        )),
+        &[],
+    );
+    let (plugin, host, _cx) = card_plugin_for(home.path());
+    *host.state.lock().unwrap() = PathState {
+        workspaces: vec![],
+        default_workspace: Some(RUMU_WORKSPACE.into()),
+        assistant: BOSS_DECK.into(),
+        mounts: vec![rumu_core::CardMount {
+            deck: BOSS_DECK.into(),
+            at: "/cards/self".into(),
+        }],
+        ..Default::default()
+    };
+    let cx = host.cx();
+    let out = plugin
+        .call_tool("card_mount", json!({}), &cx)
+        .await
+        .unwrap();
+    assert!(
+        out.content.text.contains("hidden") && out.content.text.contains(&hidden.meta.id),
+        "{}",
+        out.content.text
+    );
+}
+
+/// Cross-deck links into a private deck are refused before approval, links
+/// within it work, and a link that predates the privacy only dangles.
+#[tokio::test]
+async fn private_decks_refuse_cross_deck_links() {
+    let home = card_home();
+    let hidden = hidden_deck(home.path());
+    crate::testutil::put_card(home.path(), "main", "plain", "plain\n");
+    let (plugin, host, _cx) = card_plugin_for(home.path());
+    let decks = plugin.decks();
+    let main = crate::testutil::MAIN_DECK;
+    *host.state.lock().unwrap() = PathState {
+        workspaces: vec![],
+        default_workspace: Some(RUMU_WORKSPACE.into()),
+        assistant: main.into(),
+        mounts: vec![
+            rumu_core::CardMount {
+                deck: main.into(),
+                at: "/cards/self".into(),
+            },
+            rumu_core::CardMount {
+                deck: hidden.meta.id.clone(),
+                at: "/cards/hidden".into(),
+            },
+        ],
+        ..Default::default()
+    };
+    let cx = host.cx();
+    for action in [
+        rumu_cards::deck::Action::Link,
+        rumu_cards::deck::Action::Write,
+    ] {
+        decks.remember(
+            action,
+            rumu_cards::deck::Scope::Always,
+            "",
+            main,
+            &hidden.meta.id,
+        );
+    }
+
+    // Another deck cannot link to it, and no approval is requested.
+    let out = plugin
+        .call_tool(
+            "write",
+            json!({
+                "path": "@rumu:/cards/self/link",
+                "content": "---\nlink: @rumu:/cards/hidden/t\n---\nignored\n",
+            }),
+            &cx,
+        )
+        .await
+        .unwrap();
+    assert!(
+        out.is_error && out.content.text.contains("private deck"),
+        "{}",
+        out.content.text
+    );
+    assert!(
+        host.decisions.lock().unwrap().is_empty(),
+        "the refusal comes before the approval prompt"
+    );
+
+    // Within the private deck itself a link is fine.
+    let out = plugin
+        .call_tool(
+            "write",
+            json!({
+                "path": "@rumu:/cards/hidden/own",
+                "content": "---\nlink: @rumu:/cards/hidden/t\n---\nignored\n",
+            }),
+            &cx,
+        )
+        .await
+        .unwrap();
+    assert!(!out.is_error, "{}", out.content.text);
+    let text = crate::testutil::card_text(home.path(), "hidden", "own").unwrap();
+    assert!(
+        text.contains(&format!("link: {}:t", hidden.meta.id)),
+        "{text}"
+    );
+
+    // A link written before the deck became private now shows as dangling.
+    crate::testutil::put_card(
+        home.path(),
+        "main",
+        "old",
+        format!("---\nlink: {}:t\n---\nignored\n", hidden.meta.id),
+    );
+    let out = plugin
+        .call_tool("read", json!({ "path": "@rumu:/cards/self/old" }), &cx)
+        .await
+        .unwrap();
+    assert!(
+        out.is_error && out.content.text.contains("no longer exists"),
+        "{}",
+        out.content.text
+    );
+}

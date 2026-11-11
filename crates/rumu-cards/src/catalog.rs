@@ -16,7 +16,7 @@ use serde::{Deserialize, Serialize};
 
 use rumu_core::{RUMU_WORKSPACE, Structured, Timestamp};
 
-use crate::card::{Card, parse_card};
+use crate::card::parse_card;
 use crate::deck::{Deck, Decks};
 use crate::usage_index;
 
@@ -178,7 +178,7 @@ pub fn deck_catalog(
         let mut summary = raw.summary();
         let mut dangling = None;
         if let Some(stored) = raw.link() {
-            match resolve(decks, stored) {
+            match decks.link_target(deck.id(), stored) {
                 Some((target_deck, target_path, target)) => {
                     key = target.id().map(str::to_owned);
                     summary = target.summary();
@@ -266,14 +266,6 @@ pub fn deck_catalog(
         entries,
         folded: groups.into_iter().map(|(_, f)| f).collect(),
     })
-}
-
-/// A stored link (`<deck-id>:<path>`) resolved to its content.
-fn resolve(decks: &Decks, stored: &str) -> Option<(String, String, Card)> {
-    let (deck_id, path) = stored.split_once(':')?;
-    let deck = decks.get(deck_id)?;
-    let text = deck.read(path).ok().flatten()?;
-    Some((deck_id.to_owned(), path.to_owned(), parse_card(path, &text)))
 }
 
 /// Effective scores per deck, computed once.

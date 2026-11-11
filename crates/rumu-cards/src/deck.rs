@@ -159,6 +159,10 @@ pub struct DeckMeta {
     /// `/cards/project`. Never also an assistant.
     #[serde(default, skip_serializing_if = "std::ops::Not::not")]
     pub project: bool,
+    /// Hidden from agents unless this session has it mounted: never listed,
+    /// never mountable, and its cards cannot be linked from another deck.
+    #[serde(default, skip_serializing_if = "std::ops::Not::not")]
+    pub private: bool,
     /// Mounted at the start of each of its sessions.
     #[serde(default, skip_serializing_if = "Vec::is_empty")]
     pub mounts: Vec<DeckMount>,
@@ -193,6 +197,10 @@ impl Deck {
 
     pub fn project(&self) -> bool {
         self.meta.project
+    }
+
+    pub fn private(&self) -> bool {
+        self.meta.private
     }
 
     /// Every card path in the `HEAD` tree, sorted.
@@ -530,6 +538,43 @@ impl Decks {
     /// The deck with this id.
     pub fn get(&self, id: &str) -> Option<Deck> {
         self.inner.read().unwrap().decks.get(id).cloned()
+    }
+
+    /// Is `deck_id` visible to a session running as `assistant` with `mounts`?
+    /// A public deck always is. A private deck only through this session's
+    /// mount table: mounted on it, the session's own deck, or a `deck.yaml`
+    /// mount of the assistant. Only the user puts it there.
+    pub fn visible(&self, deck_id: &str, assistant: &str, mounts: &[CardMount]) -> bool {
+        let Some(deck) = self.get(deck_id) else {
+            return false;
+        };
+        !deck.private()
+            || deck_id == assistant
+            || mounts.iter().any(|m| m.deck == deck_id)
+            || self
+                .get(assistant)
+                .is_some_and(|d| d.meta.mounts.iter().any(|m| m.deck == deck_id))
+    }
+
+    /// May a card in `from_deck` link to a card in `to_deck`? A private deck
+    /// is linked only from within itself: a link shows its target's content,
+    /// so cross-deck it would copy that content into every mount of the
+    /// other deck.
+    pub fn link_allowed(&self, from_deck: &str, to_deck: &str) -> bool {
+        from_deck == to_deck || !self.get(to_deck).is_some_and(|d| d.private())
+    }
+
+    /// A stored link (`<deck-id>:<path>`) resolved to the card at its target
+    /// and the target's deck-local path. `None` when the target is gone or
+    /// the link is not allowed (see [`link_allowed`](Self::link_allowed)).
+    pub fn link_target(&self, from_deck: &str, stored: &str) -> Option<(String, String, Card)> {
+        let (deck_id, path) = stored.split_once(':')?;
+        if !self.link_allowed(from_deck, deck_id) {
+            return None;
+        }
+        let deck = self.get(deck_id)?;
+        let text = deck.read(path).ok().flatten()?;
+        Some((deck_id.to_owned(), path.to_owned(), parse_card(path, &text)))
     }
 
     /// The default mounts of `deck_id`'s sessions (its `deck.yaml` list).
@@ -1075,6 +1120,7 @@ fn empty_meta(id: String, name: String) -> DeckMeta {
         name,
         assistant: false,
         project: false,
+        private: false,
         mounts: Vec::new(),
         allow_ask: Vec::new(),
         icon: None,

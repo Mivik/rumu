@@ -12,6 +12,7 @@ fn create_deck(home: &std::path::Path, name: &str, cards: &[(&str, &str)]) -> De
             name: name.into(),
             assistant: false,
             project: false,
+            private: false,
             mounts: Vec::new(),
             allow_ask: Vec::new(),
             icon: None,
@@ -226,6 +227,7 @@ fn deck_upsert_rename_and_delete_refresh_the_registry() {
             name: "ledger".into(),
             assistant: true,
             project: false,
+            private: false,
             mounts: Vec::new(),
             allow_ask: Vec::new(),
             icon: None,
@@ -704,4 +706,15 @@ fn a_new_deck_has_a_blank_charter_that_loads_nothing() {
     .unwrap();
     assert_eq!(deck.summary().as_deref(), Some("Reading notes."));
     assert_eq!(deck.pinned().unwrap().len(), 1);
+}
+
+#[test]
+fn private_roundtrips_through_deck_yaml() {
+    let yaml = "id: 0193a2f1-0000-7000-8000-00000000b1b1\nname: hidden\nprivate: true\n";
+    let meta: DeckMeta = crate::yaml::from_str(yaml).unwrap();
+    assert!(meta.private);
+    let text = serde_saphyr::to_string(&meta).unwrap();
+    assert!(text.contains("private: true"), "{text}");
+    let again: DeckMeta = crate::yaml::from_str(&text).unwrap();
+    assert_eq!(again, meta);
 }

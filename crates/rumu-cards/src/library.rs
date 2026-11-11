@@ -166,6 +166,7 @@ pub fn deck_create(decks: &Decks, name: &str) -> Result<LibraryDeck> {
         name: name.to_owned(),
         assistant: false,
         project: false,
+        private: false,
         mounts: Vec::new(),
         allow_ask: Vec::new(),
         icon: None,
@@ -253,10 +254,10 @@ pub fn detail(decks: &Decks, deck: &Deck, path: &str) -> Result<LibraryCardDetai
     let view = card::view_of(&raw);
     let view_rev = card::view_rev_of(&view);
     let linked = decks.linked_to(deck.id(), path);
-    let target_view = raw
-        .link_target()
-        .and_then(|(deck, path)| link_target(decks, deck, path))
-        .map(|(_, target)| card::view_of(&target));
+    let target_view = raw.link().and_then(|stored| {
+        let (_, _, card) = decks.link_target(deck.id(), stored)?;
+        Some(card::view_of(&card))
+    });
     Ok(LibraryCardDetail {
         card: card_row(decks, deck, path, &raw)?,
         view,
@@ -435,25 +436,13 @@ pub fn version(_decks: &Decks, deck: &Deck, path: &str, commit: &str) -> Result<
     })
 }
 
-/// A link's live target: where it is and its content.
-fn link_target(decks: &Decks, deck: &str, path: &str) -> Option<(LibraryRef, Card)> {
-    let text = decks.get(deck)?.read(path).ok().flatten()?;
-    let card = parse_card(path, &text);
-    Some((
-        LibraryRef {
-            deck: deck.to_owned(),
-            path: path.to_owned(),
-        },
-        card,
-    ))
-}
-
 /// Turn one raw card file into a row. A link is the link file itself with
 /// its target's content; `link` is that target, or `dangling` is set.
 fn card_row(decks: &Decks, deck: &Deck, path: &str, raw: &Card) -> Result<LibraryCard> {
-    let target = raw
-        .link_target()
-        .and_then(|(deck, path)| link_target(decks, deck, path));
+    let target = raw.link().and_then(|stored| {
+        let (deck, path, card) = decks.link_target(deck.id(), stored)?;
+        Some((LibraryRef { deck, path }, card))
+    });
     let dangling = raw.link().is_some() && target.is_none();
     let shown = target.as_ref().map_or(raw, |(_, card)| card);
     let updated = deck.repo().log_path(path)?;

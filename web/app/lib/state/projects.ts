@@ -23,8 +23,14 @@ export async function createProject(
   name: string,
   workspaces: string[] = [],
   icon?: DeckIcon,
+  privateDeck = false,
 ): Promise<Project> {
-  const res = await rumu.request<{ project: Project }>('project.create', { name, workspaces, icon })
+  const res = await rumu.request<{ project: Project }>('project.create', {
+    name,
+    workspaces,
+    icon,
+    private: privateDeck,
+  })
   await refreshProjects()
   return res.project
 }
@@ -33,7 +39,7 @@ export async function createProject(
  *  its ordered workspaces. */
 export async function updateProject(
   id: string,
-  changes: { name?: string; icon?: DeckIcon; workspaces?: string[] },
+  changes: { name?: string; icon?: DeckIcon; workspaces?: string[]; private?: boolean },
 ): Promise<Project> {
   const res = await rumu.request<{ project: Project }>('project.update', { id, ...changes })
   await refreshProjects()

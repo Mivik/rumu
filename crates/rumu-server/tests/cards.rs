@@ -66,6 +66,7 @@ fn card_home() -> (tempfile::TempDir, std::path::PathBuf) {
             name: "main".into(),
             assistant: false,
             project: false,
+            private: false,
             mounts: Vec::new(),
             allow_ask: Vec::new(),
             icon: None,

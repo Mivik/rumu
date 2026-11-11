@@ -161,8 +161,9 @@ stays a tool. Which set a workspace is in shows in its path, not in a field:
   shares the project's name), the latest activity and a new-session action.
   The workspace registry is a compact list below it.
 - One dialog creates a project and edits one: the seal (beside the name: a
-  tone and a glyph), the name, the charter (an
-  existing project's), and the workspaces: add a folder (registered, named
+  tone and a glyph), the name, a Private toggle (hidden from agents unless
+  the session mounts it; see [Decks](decks.md)), the charter (an existing
+  project's), and the workspaces: add a folder (registered, named
   after it, when the dialog is submitted) or, secondarily, a registered
   workspace; a new project takes the first one's name; reorder (the first is
   the default), remove. A new project is where the next new session starts.

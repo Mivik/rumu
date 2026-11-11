@@ -225,12 +225,16 @@ impl AskPlugin {
         if question.is_empty() {
             return Err("ask: `question` must not be empty".into());
         }
-        let Some(to) = self.decks.get(&args.to).filter(Deck::assistant) else {
+        let Some(to) = self
+            .decks
+            .get(&args.to)
+            .filter(|d| d.assistant() && self.decks.visible(d.id(), &from, &state.mounts))
+        else {
             let names: Vec<String> = self
                 .decks
                 .assistants()
                 .into_iter()
-                .filter(|d| d.id() != from)
+                .filter(|d| d.id() != from && self.decks.visible(d.id(), &from, &state.mounts))
                 .map(|d| format!("`{}` ({})", d.id(), d.meta.name))
                 .collect();
             return Err(ToolError::model(format!(

@@ -230,6 +230,14 @@ impl WorkspacePlugin {
             if dest.as_ref() == Some(&(target_deck.clone(), target_path.clone())) {
                 return Err(ToolError::model("a card cannot link to itself"));
             }
+            let link_deck = cards.deck_for(public).map(|d| d.meta.id);
+            if let Some(from_deck) = &link_deck
+                && !self.decks().link_allowed(from_deck, &target_deck)
+            {
+                return Err(ToolError::model(
+                    "a card in a private deck can only be linked from its own deck",
+                ));
+            }
             // Links are one level deep, even when the target deck is not
             // mounted right now.
             if let Some(deck) = self.decks().get(&target_deck)
@@ -243,7 +251,6 @@ impl WorkspacePlugin {
             let stored = format!("{target_deck}:{target_path}");
             let changed = existing.as_ref().and_then(|c| c.link()) != Some(stored.as_str());
             // Only a link into another deck shares anything new.
-            let link_deck = cards.deck_for(public).map(|d| d.meta.id);
             if changed && Some(&target_deck) != link_deck.as_ref() {
                 let request = serde_json::json!({
                     "kind": "card_link",

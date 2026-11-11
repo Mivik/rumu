@@ -12,6 +12,7 @@ fn test_decks() -> (tempfile::TempDir, Decks, Deck, Deck) {
         name: name.into(),
         assistant,
         project: false,
+        private: false,
         mounts: Vec::new(),
         allow_ask: Vec::new(),
         icon: None,

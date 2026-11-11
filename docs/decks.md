@@ -49,12 +49,25 @@ The first-call note states these rules.
   id: 3f6c2a91-5d4e-4b7a-9c01-8e2f6a4b1d30   # UUIDv4, assigned by rumu
   name: ledger
   assistant: true            # listed in the roster; sessions can run as it
+  private: true              # optional: hidden from agents unless mounted
   mounts:                    # mounted at the start of each of its sessions
     - { deck: <deck-id>, at: /cards/user }              # writes ask the user
     - { deck: <deck-id>, at: /cards/notes, write: true } # writes need no approval
   allow_ask: [<deck-id>]     # these assistants may ask it without a prompt
   ```
 
+- **Private decks.** A deck with `private: true` is visible to an agent only
+  through the session's mount table: mounted on the path, the session's own
+  deck, or listed in its assistant's `deck.yaml` mounts. Only the user puts it
+  there (creating a session in its project, dragging a session into it, or
+  editing the assistant's mounts). A private deck is skipped in `card_mount`'s
+  listing, and mounting it by id is refused exactly like an unknown id, before
+  any approval (an "always allow" grant does not help). `ask` to a private
+  assistant likewise fails as unknown, and the first-call note does not name
+  it.
+- **Private links.** A link into a private deck from a different deck neither
+  resolves nor can be created: it shows as dangling and writing it is refused.
+  Links within the private deck itself are ordinary links.
 - Everything refers to a deck by id: grants, session roots, mounts, links, and
   the model's `card_mount` and `ask` arguments (`card_mount` with no arguments
   lists the ids). Names are for display only and are never looked up.

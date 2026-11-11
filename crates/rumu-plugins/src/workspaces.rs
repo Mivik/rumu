@@ -215,6 +215,8 @@ pub struct Project {
     #[ts(optional)]
     #[serde(skip_serializing_if = "Option::is_none")]
     pub icon: Option<DeckIcon>,
+    /// Hidden from agents unless this session has it mounted.
+    pub private: bool,
 }
 
 /// Every project deck, by name.
@@ -236,6 +238,7 @@ pub fn project_of(deck: &Deck, registry: &Workspaces) -> Project {
         description: deck.summary(),
         workspaces: registry.project(deck.id()),
         icon: deck.meta.icon.clone(),
+        private: deck.private(),
     }
 }
 
@@ -247,12 +250,14 @@ pub fn create_project(
     name: &str,
     workspaces: Vec<String>,
     icon: Option<DeckIcon>,
+    private: bool,
 ) -> Result<Deck> {
     let deck = decks.upsert(DeckMeta {
         id: String::new(),
         name: name.to_owned(),
         assistant: false,
         project: true,
+        private,
         mounts: Vec::new(),
         allow_ask: Vec::new(),
         icon,
@@ -272,7 +277,7 @@ pub fn seed_project(home: &Path, decks: &Decks, registry: &Workspaces) -> Result
     if !rumu_cards::deck::valid_deck_name(&name) || decks.name_taken(&name, None) {
         return Ok(());
     }
-    create_project(home, decks, registry, &name, vec![ws.name], None)?;
+    create_project(home, decks, registry, &name, vec![ws.name], None, false)?;
     Ok(())
 }
 

@@ -473,6 +473,8 @@ async fn dispatch(state: &AppState, method: &str, p: &Value) -> Result<Value> {
                 workspaces: Vec<String>,
                 #[serde(default)]
                 icon: Option<rumu_cards::DeckIcon>,
+                #[serde(default)]
+                private: bool,
             }
             let req: Create = parse_params(p)?;
             let deck = rumu_plugins::create_project(
@@ -482,6 +484,7 @@ async fn dispatch(state: &AppState, method: &str, p: &Value) -> Result<Value> {
                 &req.name,
                 req.workspaces,
                 req.icon,
+                req.private,
             )?;
             Ok(json!({ "project": rumu_plugins::project_of(&deck, &state.workspaces) }))
         }
@@ -500,18 +503,27 @@ async fn dispatch(state: &AppState, method: &str, p: &Value) -> Result<Value> {
                 workspaces: Option<Vec<String>>,
                 #[serde(default)]
                 icon: Option<rumu_cards::DeckIcon>,
+                #[serde(default)]
+                private: Option<bool>,
             }
             let req: Update = parse_params(p)?;
             let mut deck = project_deck(state, &req.id)?;
             let name = req.name.filter(|n| *n != deck.meta.name);
             let icon = req.icon.map(rumu_cards::DeckIcon::normalized);
-            if name.is_some() || icon.as_ref().is_some_and(|i| *i != deck.meta.icon) {
+            let private = req.private.filter(|p| *p != deck.private());
+            if name.is_some()
+                || icon.as_ref().is_some_and(|i| *i != deck.meta.icon)
+                || private.is_some()
+            {
                 let mut meta = deck.meta.clone();
                 if let Some(name) = name {
                     meta.name = name;
                 }
                 if let Some(icon) = icon {
                     meta.icon = icon;
+                }
+                if let Some(private) = private {
+                    meta.private = private;
                 }
                 state.decks.upsert(meta)?;
                 deck = project_deck(state, &req.id)?;
@@ -603,6 +615,7 @@ async fn dispatch(state: &AppState, method: &str, p: &Value) -> Result<Value> {
                 name: req.name.clone(),
                 assistant: true,
                 project: false,
+                private: existing.as_ref().is_some_and(|d| d.private()),
                 mounts,
                 allow_ask: req.allow_ask,
                 icon: existing.as_ref().and_then(|d| d.meta.icon.clone()),

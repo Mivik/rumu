@@ -259,7 +259,9 @@ the catalog lists the cards.",
                 .decks
                 .assistants()
                 .into_iter()
-                .filter(|d| d.id() != deck.id())
+                .filter(|d| {
+                    d.id() != deck.id() && self.decks.visible(d.id(), deck.id(), &state.mounts)
+                })
                 .map(|d| match d.summary() {
                     Some(s) => format!("`{}` (id {}: {s})", d.meta.name, d.id()),
                     None => format!("`{}` (id {})", d.meta.name, d.id()),

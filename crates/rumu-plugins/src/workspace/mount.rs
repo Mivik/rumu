@@ -61,6 +61,12 @@ impl WorkspacePlugin {
         let session = cx.session.to_string();
         let mut lines = Vec::new();
         for deck in self.decks().list() {
+            if !self
+                .decks()
+                .visible(deck.id(), &state.assistant, &state.mounts)
+            {
+                continue;
+            }
             let mounted = cards
                 .mounts()
                 .iter()
@@ -171,7 +177,10 @@ impl WorkspacePlugin {
             ));
         }
         let at = normalize_mount_point(at).map_err(ToolError::model)?;
-        let Some(deck) = self.decks().get(deck_id) else {
+        let visible = self
+            .decks()
+            .visible(deck_id, &state.assistant, &state.mounts);
+        let Some(deck) = self.decks().get(deck_id).filter(|_| visible) else {
             return Err(ToolError::model(format!(
                 "no deck with id `{deck_id}` (`card_mount` with no arguments lists the decks)"
             )));
@@ -249,6 +258,7 @@ impl WorkspacePlugin {
             name,
             Vec::new(),
             None,
+            false,
         )
         .map_err(|e| ToolError::model(format!("creating project `{name}`: {e}")))?;
         self.check_mount_point(state, &deck, &at)?;

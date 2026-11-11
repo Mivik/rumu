@@ -32,12 +32,14 @@ const form = reactive<{
   tone: string
   workspaces: string[]
   folders: Record<string, string>
+  private: boolean
 }>({
   name: '',
   glyph: '',
   tone: '',
   workspaces: [],
   folders: {},
+  private: false,
 })
 const pristine = ref(JSON.stringify(form))
 const busy = ref(false)
@@ -88,6 +90,7 @@ function reset(): void {
     : PROJECT_TONES[Math.floor(Math.random() * (PROJECT_TONES.length - 1))]!
   form.workspaces = [...(p?.workspaces ?? [])]
   form.folders = {}
+  form.private = p?.private ?? false
   pristine.value = JSON.stringify(form)
 }
 
@@ -145,13 +148,18 @@ async function save(): Promise<void> {
       await saveWorkspace({ name, root, read_only: false })
     form.folders = {}
     const icon = { glyph: form.glyph.trim() || undefined, tone: form.tone || undefined }
-    const changes = { name: form.name.trim(), workspaces: form.workspaces, icon }
+    const changes = {
+      name: form.name.trim(),
+      workspaces: form.workspaces,
+      icon,
+      private: form.private,
+    }
     const p = project.value
     if (p) {
       await updateProject(p.id, changes)
       reset()
     } else {
-      const created = await createProject(changes.name, changes.workspaces, icon)
+      const created = await createProject(changes.name, changes.workspaces, icon, form.private)
       chooseLandingProject(created.id)
       replacePage(created.id)
     }
@@ -269,6 +277,12 @@ watch([creating, () => project.value?.id], reset, { immediate: true })
           />
         </div>
       </div>
+
+      <label class="flex items-center gap-2 text-secondary">
+        <input v-model="form.private" type="checkbox" />
+        {{ t('projects.private') }}
+        <span class="text-micro text-ink-3">{{ t('projects.privateHint') }}</span>
+      </label>
 
       <div class="flex flex-col gap-1.5">
         <span class="field-label">{{ t('projects.workspaces') }}</span>

@@ -16,4 +16,8 @@ workspaces: Array<string>,
 /**
  * Its seal, when set.
  */
-icon?: DeckIcon, };
+icon?: DeckIcon, 
+/**
+ * Hidden from agents unless this session has it mounted.
+ */
+private: boolean, };

@@ -5,6 +5,8 @@
   "create": "创建",
   "createError": "创建项目失败",
   "name": "名字",
+  "private": "私有",
+  "privateHint": "对其他助手隐藏",
   "charter": "章程",
   "workspaces": "工作区",
   "default": "默认",

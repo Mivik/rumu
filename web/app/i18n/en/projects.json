@@ -5,6 +5,8 @@
   "create": "Create",
   "createError": "Couldn't create the project",
   "name": "Name",
+  "private": "Private",
+  "privateHint": "hidden from other assistants",
   "charter": "Charter",
   "workspaces": "Workspaces",
   "default": "default",
