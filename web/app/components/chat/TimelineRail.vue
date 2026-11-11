@@ -11,9 +11,10 @@
 // drum, the one nearest the pointer at the front and highlighted. Moving along
 // the rail turns the drum; clicking jumps to the front one. Inside the wheel
 // the drum holds still — click a row or scroll to turn it. On touch there is
-// no hover to hold the wheel open, so a tap opens it and leaves it pinned:
-// press and slide to scrub, swipe the drum to turn it, tap a row to jump, and
-// a tap anywhere outside the rail dismisses it.
+// no hover, so a tap jumps to the nearest prompt and a long press (or a press
+// that slides along the rail) opens the wheel to scrub; lifting leaves it
+// pinned: swipe the drum to turn it, tap a row to jump, and a tap anywhere
+// outside the rail dismisses it.
 //
 // Drag the viewport stretch to scroll (a tap jumps); the mouse wheel scrolls
 // the conversation; Alt+↑/↓ step between prompts anywhere, and ↑/↓ + Enter
@@ -63,6 +64,10 @@ const OPEN_DELAY = 120
 const CLOSE_GRACE = 220
 /** Pointer travel before a press on the viewport becomes a drag. */
 const DRAG_SLOP = 3
+/** Touch: a press held this long opens the wheel; one that travels this far
+ *  along the rail first is a scrub, not a tap. */
+const HOLD_MS = 350
+const TAP_SLOP = 8
 
 /** The wheel: row height, the drum's angle per row, and the drum radius
  * that makes rows at the front sit exactly ITEM_H apart. */
@@ -72,9 +77,12 @@ const RADIUS = ITEM_H / ((STEP_DEG * Math.PI) / 180)
 const WHEEL_H = 212
 /** Rows rendered on each side of the front one (the rest are behind). */
 const WHEEL_SPAN = 5
-/** Scroll over the wheel: px of wheel delta per row; snap after it rests. */
-const WHEEL_ROW_DELTA = 36
+/** Scroll over the wheel: px of wheel delta per row (about a notch of a
+ *  mouse wheel); snap after it rests. A swipe on the drum turns it by
+ *  SWIPE_ROW_DELTA px per row, close to following the finger. */
+const WHEEL_ROW_DELTA = 80
 const WHEEL_SNAP = 140
+const SWIPE_ROW_DELTA = 36
 
 // ---- state: y positions are track coordinates (0 = the layer's top, which
 // is the scroll area's top, and the scroll content's origin at scrollTop 0) ----
@@ -304,6 +312,7 @@ const inWheel = ref(false)
 let touchPinned = false
 
 let openTimer: ReturnType<typeof setTimeout> | undefined
+let holdTimer: ReturnType<typeof setTimeout> | undefined
 let closeTimer: ReturnType<typeof setTimeout> | undefined
 let snapTimer: ReturnType<typeof setTimeout> | undefined
 
@@ -452,7 +461,7 @@ function onWheelMove(e: PointerEvent): void {
     if (Math.abs(dy) < DRAG_SLOP) return
     dragMoved = true
   }
-  wheelPos.value = clampPos(dragFromPos + dy / WHEEL_ROW_DELTA)
+  wheelPos.value = clampPos(dragFromPos + dy / SWIPE_ROW_DELTA)
 }
 
 function onWheelUp(e: PointerEvent): void {
@@ -479,10 +488,13 @@ function pickRow(i: number): void {
 
 // ---- the strip: hover / click / scrub ----
 
-/** A touch scrub is underway (pointer captured by the strip). */
+/** A touch press on the strip, while it may still be a tap (its start y). */
+let pressY: number | null = null
+/** A touch scrub is underway: the wheel is open and follows the finger. */
 let scrubbing = false
-/** The click that trails a scrub's pointerup is already handled. */
-let swallowClick = false
+/** The last press on the strip was a mouse's: only those click. Touch is
+ *  settled by its own pointer events, never by the click that trails them. */
+let mousePress = false
 
 function onStripEnter(e: PointerEvent): void {
   railHover.value = true
@@ -499,40 +511,50 @@ function onStripLeave(): void {
   closeTimer = setTimeout(closeWheel, CLOSE_GRACE)
 }
 
+/** A long press (or a slide) turns a touch into a scrub: the wheel opens
+ *  beside the finger and stays pinned once it lifts. */
+function startScrub(y: number): void {
+  clearTimeout(holdTimer)
+  pressY = null
+  scrubbing = true
+  touchPinned = true
+  follow(y)
+  openWheel()
+  navigator.vibrate?.(8)
+}
+
 function onStripMove(e: PointerEvent): void {
   if (dragging.value) return
   if (e.pointerType === 'mouse' || scrubbing) follow(trackY(e))
+  else if (pressY !== null && Math.abs(trackY(e) - pressY) >= TAP_SLOP) startScrub(trackY(e))
 }
 
 function onStripDown(e: PointerEvent): void {
-  swallowClick = false
-  if (e.pointerType === 'mouse' || !e.isPrimary) return
-  scrubbing = true
-  touchPinned = true
+  mousePress = e.pointerType === 'mouse'
+  if (mousePress || !e.isPrimary) return
   ;(e.currentTarget as HTMLElement).setPointerCapture(e.pointerId)
-  follow(trackY(e))
-  openWheel()
+  const y = trackY(e)
+  pressY = y
+  holdTimer = setTimeout(() => startScrub(y), HOLD_MS)
 }
 
-function onStripUp(): void {
-  if (!scrubbing) return
+/** A touch let go before it was held or moved is a tap: jump. */
+function onStripUp(e: PointerEvent): void {
+  clearTimeout(holdTimer)
+  if (pressY !== null) pick(nearestAt(trackY(e)))
+  pressY = null
   scrubbing = false
-  // A touch leaves the wheel open rather than jumping where the finger left
-  // it: tap a row to jump, or tap outside to dismiss.
-  swallowClick = true
 }
 
 function onStripCancel(): void {
+  clearTimeout(holdTimer)
+  pressY = null
   scrubbing = false
   closeWheel()
 }
 
 function onStripClick(e: MouseEvent): void {
-  if (swallowClick) {
-    swallowClick = false
-    return
-  }
-  pick(nearestAt(trackY(e)))
+  if (mousePress) pick(nearestAt(trackY(e)))
 }
 
 /** The mouse wheel over the rail scrolls the conversation, as it would
@@ -558,7 +580,7 @@ watch(wheelOpen, (v) => {
   else document.removeEventListener('pointerdown', onDocPointerDown, true)
 })
 
-// ---- the viewport handle: drag to scroll, tap to jump (mouse) / open (touch) ----
+// ---- the viewport handle: drag to scroll, tap to jump, hold to open (touch) ----
 
 /** Track point → scroll-content position. */
 function unmap(y: number): number {
@@ -567,8 +589,9 @@ function unmap(y: number): number {
 }
 
 /** Past the slop, scrollTop follows the pointer 1:1 in track space; a press
- * that never moves is a click. A mouse click jumps to the nearest prompt; a
- * touch tap pins the wheel, exactly as a tap on the rail beside the handle. */
+ * that never moves jumps to the nearest prompt. A touch held still opens the
+ * wheel as on the rest of the rail (the strip, which the moves bubble to,
+ * then scrubs it). */
 function onBoxDown(e: PointerEvent): void {
   const sc = scrollEl.value
   if (!sc || !layerEl.value) return
@@ -579,25 +602,21 @@ function onBoxDown(e: PointerEvent): void {
   const startY = trackY(e)
   // where in the content the pointer grabbed (kept fixed while dragging)
   const grab = unmap(startY) - sc.scrollTop
+  if (e.pointerType !== 'mouse') holdTimer = setTimeout(() => startScrub(startY), HOLD_MS)
   const move = (ev: PointerEvent): void => {
+    if (scrubbing) return
     const y = trackY(ev)
     if (!dragging.value) {
       if (Math.abs(y - startY) < DRAG_SLOP) return
+      clearTimeout(holdTimer)
       dragging.value = true
       closeWheel()
     }
     sc.scrollTop = Math.max(0, Math.min(S - C, unmap(y) - grab))
   }
   const up = (ev: PointerEvent): void => {
-    if (!dragging.value && ev.type === 'pointerup') {
-      if (ev.pointerType === 'mouse') {
-        pick(nearestAt(trackY(ev)))
-      } else {
-        touchPinned = true
-        follow(trackY(ev))
-        openWheel()
-      }
-    }
+    clearTimeout(holdTimer)
+    if (!dragging.value && !scrubbing && ev.type === 'pointerup') pick(nearestAt(trackY(ev)))
     dragging.value = false
     el.removeEventListener('pointermove', move)
     el.removeEventListener('pointerup', up)
@@ -681,6 +700,7 @@ onBeforeUnmount(() => {
   resize?.disconnect()
   scrollEl.value?.removeEventListener('scroll', onScrollSync)
   cancelTimers()
+  clearTimeout(holdTimer)
   clearTimeout(snapTimer)
 })
 </script>
@@ -708,6 +728,7 @@ onBeforeUnmount(() => {
         @pointerup="onStripUp"
         @pointercancel="onStripCancel"
         @click="onStripClick"
+        @contextmenu.prevent
         @wheel="onStripScroll"
         @keydown="onStripKey"
         @focus="railFocus = true"
