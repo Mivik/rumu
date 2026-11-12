@@ -4,6 +4,7 @@ import type { ModelInfo } from "./ModelInfo";
 import type { PresetInfo } from "./PresetInfo";
 import type { ProviderInfo } from "./ProviderInfo";
 import type { Roles } from "./Roles";
+import type { SkillsInfo } from "./SkillsInfo";
 import type { Titles } from "./Titles";
 
 /**
@@ -13,4 +14,4 @@ export type SettingsInfo = { providers: Array<ProviderInfo>,
 /**
  * The built-in provider's models.
  */
-custom: Array<ModelInfo>, roles: Roles, titles: Titles, presets: Array<PresetInfo>, mcp: Array<McpServerInfo>, };
+custom: Array<ModelInfo>, roles: Roles, titles: Titles, presets: Array<PresetInfo>, mcp: Array<McpServerInfo>, skills: SkillsInfo, };

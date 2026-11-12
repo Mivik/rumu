@@ -97,5 +97,12 @@
   "addHeader": "添加请求头",
   "mcpStatus": "连接",
   "reconnect": "重新连接",
-  "remove": "移除"
+  "remove": "移除",
+  "skills": "Skill",
+  "skillRepos": "从 git 安装",
+  "skillRepoUrl": "Git 地址",
+  "installSkills": "安装",
+  "updateSkills": "更新",
+  "skillsFound": "已发现（{n}）",
+  "skillShadowed": "被同名覆盖"
 }

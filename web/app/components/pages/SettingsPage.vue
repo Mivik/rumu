@@ -14,6 +14,7 @@ import { connected, state } from '../../lib/store'
 import DefaultsSettings from '../settings/DefaultsSettings.vue'
 import McpSettings from '../settings/McpSettings.vue'
 import ProvidersSettings from '../settings/ProvidersSettings.vue'
+import SkillsSettings from '../settings/SkillsSettings.vue'
 import Icon from '../ui/Icon.vue'
 import PageSheet from './PageSheet.vue'
 
@@ -21,6 +22,7 @@ const SECTIONS = [
   { key: 'defaults', icon: 'model' },
   { key: 'providers', icon: 'link' },
   { key: 'mcp', icon: 'tool' },
+  { key: 'skills', icon: 'note' },
 ] as const
 type Section = (typeof SECTIONS)[number]['key']
 
@@ -123,5 +125,6 @@ watch(connected, (up) => up && void refreshSettings(), { immediate: true })
     <DefaultsSettings v-if="section === 'defaults'" />
     <ProvidersSettings v-else-if="section === 'providers'" />
     <McpSettings v-else-if="section === 'mcp'" />
+    <SkillsSettings v-else-if="section === 'skills'" />
   </PageSheet>
 </template>

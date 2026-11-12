@@ -33,5 +33,7 @@
   "manageMcp": "管理",
   "toolsOn": "{n}/{total} 个工具",
   "allTools": "全部",
-  "noTools": "全不选"
+  "noTools": "全不选",
+  "skills": "Skill",
+  "skillGone": "未找到，点击移除"
 }

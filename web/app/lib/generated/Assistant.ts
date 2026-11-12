@@ -22,6 +22,10 @@ mounts: Array<DeckMount>,
  */
 mcp: { [key in string]: Array<string> }, 
 /**
+ * The rules enabling the skills its sessions see.
+ */
+skills: Array<string>, 
+/**
  * The one sessions run as when none is named.
  */
 default: boolean, };

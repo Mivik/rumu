@@ -54,4 +54,8 @@ model?: ModelUse | null,
 /**
  * The MCP servers from the session's root.
  */
-mcp: { [key in string]: Array<string> }, };
+mcp: { [key in string]: Array<string> }, 
+/**
+ * The skill rules from the session's root.
+ */
+skills: Array<string>, };

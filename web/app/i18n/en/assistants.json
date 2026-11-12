@@ -33,5 +33,7 @@
   "manageMcp": "Manage",
   "toolsOn": "{n}/{total} tools",
   "allTools": "All",
-  "noTools": "None"
+  "noTools": "None",
+  "skills": "Skills",
+  "skillGone": "Not found; click to remove"
 }

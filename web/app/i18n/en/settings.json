@@ -97,5 +97,12 @@
   "addHeader": "Add header",
   "mcpStatus": "Connection",
   "reconnect": "Reconnect",
-  "remove": "Remove"
+  "remove": "Remove",
+  "skills": "Skills",
+  "skillRepos": "Installed from git",
+  "skillRepoUrl": "Git URL",
+  "installSkills": "Install",
+  "updateSkills": "Update",
+  "skillsFound": "Found ({n})",
+  "skillShadowed": "shadowed"
 }

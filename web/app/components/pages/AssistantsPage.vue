@@ -2,7 +2,7 @@
 // The assistants page (`/assistants/<id>`, `?new` for a new one). Each
 // assistant is a deck (`decks/<id>/deck.yaml`) with a pinned
 // `instructions.md`; the form edits its name, default mounts, instructions,
-// MCP servers and who may ask it. Saves go through `assistant.upsert` /
+// MCP servers, skills and who may ask it. Saves go through `assistant.upsert` /
 // `assistant.delete`; `assistant.set_default` picks the one sessions run as
 // by default.
 import { computed, onBeforeUnmount, onMounted, reactive, ref, watch } from 'vue'
@@ -32,6 +32,8 @@ interface Form {
   instructions: string
   /** Each bound server with the rules enabling its tools. */
   mcp: Record<string, string[]>
+  /** The rules enabling skills. */
+  skills: string[]
   allow_ask: string[]
 }
 
@@ -42,6 +44,7 @@ function blank(): Form {
     mounts: [],
     instructions: '',
     mcp: {},
+    skills: [],
     allow_ask: [],
   }
 }
@@ -195,14 +198,33 @@ function toggleServer(name: string): void {
   form.mcp = Object.fromEntries(Object.entries(next).sort(([a], [b]) => (a < b ? -1 : 1)))
 }
 
-/** Flip one tool with a rule naming it, when the other rules would not
- *  already put it there. */
+/** `rules` with `id` flipped by a rule naming it, when the other rules
+ *  would not already put it there. */
+function flip(rules: string[], id: string): string[] {
+  const rest = rules.filter((r) => r !== id && r !== `!${id}`)
+  const want = !rulesEnable(rules, id)
+  if (rulesEnable(rest, id) !== want) rest.push(want ? id : `!${id}`)
+  return rest
+}
+
 function toggleTool(server: string, tool: string): void {
-  const current = form.mcp[server]!
-  const rules = current.filter((r) => r !== tool && r !== `!${tool}`)
-  const want = !rulesEnable(current, tool)
-  if (rulesEnable(rules, tool) !== want) rules.push(want ? tool : `!${tool}`)
-  form.mcp[server] = rules
+  form.mcp[server] = flip(form.mcp[server]!, tool)
+}
+
+/** The usable skills, then names the rules keep that none is. */
+const skillOptions = computed(() => {
+  const found = [
+    ...new Set(
+      (models.settings?.skills.skills ?? []).filter((s) => !s.error && !s.shadowed).map((s) => s.name),
+    ),
+  ]
+  const gone = form.skills.filter((r) => !r.startsWith('!') && !r.includes('*') && !found.includes(r))
+  return [...found.map((name) => ({ name, gone: false })), ...gone.map((name) => ({ name, gone: true }))]
+})
+const allSkills = computed(() => form.skills.includes('*'))
+
+function toggleSkill(name: string, gone: boolean): void {
+  form.skills = gone ? form.skills.filter((r) => r !== name) : flip(form.skills, name)
 }
 
 function firstLine(text?: string): string {
@@ -225,6 +247,7 @@ function fromAssistant(assistant: Assistant): Form {
     mounts: assistant.mounts.map((m) => ({ ...m })),
     instructions: assistant.instructions ?? '',
     mcp: Object.fromEntries(Object.entries(assistant.mcp).map(([k, v]) => [k, [...v]])),
+    skills: [...assistant.skills],
     allow_ask: [...assistant.allow_ask],
   }
 }
@@ -263,6 +286,7 @@ async function save(): Promise<void> {
       mounts: form.mounts,
       instructions: form.instructions.trim() || undefined,
       mcp: form.mcp,
+      skills: form.skills,
       allow_ask: form.allow_ask.filter((asker) => asker !== form.id),
     })
     await load()
@@ -615,6 +639,48 @@ onBeforeUnmount(() => window.removeEventListener('keydown', onKey, true))
                   </li>
                 </ul>
               </div>
+            </div>
+          </div>
+
+          <div class="flex flex-col gap-1.5">
+            <span class="field-label">{{ t('assistants.skills') }}</span>
+            <div class="flex flex-wrap gap-1.5">
+              <button
+                type="button"
+                class="chip"
+                :class="allSkills ? 'tone-tool' : 'tone-neutral'"
+                :aria-pressed="allSkills"
+                @click="form.skills = allSkills ? [] : ['*']"
+              >
+                <Icon :name="allSkills ? 'ok' : 'plus'" :size="12" />
+                {{ t('assistants.allTools') }}
+              </button>
+              <button
+                v-for="skill in skillOptions"
+                :key="skill.name"
+                type="button"
+                class="chip font-mono"
+                :class="
+                  skill.gone
+                    ? 'tone-danger line-through'
+                    : rulesEnable(form.skills, skill.name)
+                      ? 'tone-tool'
+                      : 'tone-neutral'
+                "
+                :aria-pressed="!skill.gone && rulesEnable(form.skills, skill.name)"
+                :title="skill.gone ? t('assistants.skillGone') : undefined"
+                @click="toggleSkill(skill.name, skill.gone)"
+              >
+                <Icon
+                  :name="skill.gone ? 'close' : rulesEnable(form.skills, skill.name) ? 'ok' : 'plus'"
+                  :size="12"
+                />
+                {{ skill.name }}
+              </button>
+              <button type="button" class="chip tone-neutral" @click="openPage('settings', 'skills')">
+                <Icon name="settings" :size="12" />
+                {{ t('assistants.manageMcp') }}
+              </button>
             </div>
           </div>
 
