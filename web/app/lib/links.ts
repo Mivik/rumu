@@ -14,6 +14,7 @@ import {
   openLibrary,
   openLibraryAtDeck,
   openSession,
+  openTaskDetail,
   state,
 } from './store'
 import { toast } from './state/ui'
@@ -91,7 +92,7 @@ function openAddress(abs: string): boolean {
       if (!id || !state.tasks[id]) return false
       closeDrawer()
       closePage()
-      state.taskDetail = id
+      if (state.taskDetail !== id) openTaskDetail(id)
       return true
     }
   }

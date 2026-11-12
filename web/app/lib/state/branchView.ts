@@ -37,8 +37,11 @@ export function useBranchView(): BranchView {
   return inject(KEY, mainView)
 }
 
-/** Open the sub-agent branch `id` beside the chat (it replaces an open artifact). */
+/** Open the sub-agent branch `id` beside the chat (it replaces an open
+ *  artifact or task output). */
 export function openAgentView(id: BranchId | null): void {
   state.agentView = id
-  if (id) state.artifact = null
+  if (!id) return
+  state.artifact = null
+  state.taskDetail = null
 }

@@ -7,6 +7,7 @@ import { commitRoute } from '../router'
 import type { SessionView } from '../router'
 import type {
   Branch,
+  BranchId,
   Card,
   Assistant,
   DecisionAnswer,
@@ -25,7 +26,8 @@ import type { ModelUse } from '../generated/ModelUse'
 import { currentPick, models } from './models'
 import { isUnseen } from './derived'
 import { state } from './state'
-import { forkAt, loadPath, replaceTree, resyncTree } from './tree'
+import { findAgentChild, forkAt, loadPath, replaceTree, resyncTree } from './tree'
+import { openAgentView } from './branchView'
 import { requestComposerFocus, toast } from './ui'
 import { chooseLandingProject, landingAssistant, landingProject, rememberSessionPicks } from './projects'
 
@@ -233,9 +235,25 @@ export async function killTask(id: TaskId): Promise<void> {
   }
 }
 
-/** Toggle the task detail (buffered output) in the tasks panel. */
+/** The branch a background sub-agent task runs on, once it has one. */
+export function taskChild(id: TaskId): BranchId | null {
+  const tk = state.tasks[id]
+  if (tk?.kind.type !== 'agent') return null
+  return tk.kind.child_branch ?? findAgentChild(tk.call_id)?.id ?? null
+}
+
+/** Toggle a task beside the chat (it replaces an open artifact or sub-agent):
+ *  a sub-agent's transcript, or another task's output. */
 export function openTaskDetail(id: TaskId): void {
+  if (state.tasks[id]?.kind.type === 'agent') {
+    const child = taskChild(id)
+    if (child) openAgentView(state.agentView === child ? null : child)
+    return
+  }
   state.taskDetail = state.taskDetail === id ? null : id
+  if (!state.taskDetail) return
+  state.artifact = null
+  state.agentView = null
 }
 
 /** Start a session of the landing picks: who it runs as and the project it

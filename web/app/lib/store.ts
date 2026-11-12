@@ -105,6 +105,7 @@ export {
   newSession,
   openSession,
   openTaskDetail,
+  taskChild,
   compactBranch,
   defaultAssistant,
   regenerateFrom,

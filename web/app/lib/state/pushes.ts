@@ -96,9 +96,11 @@ function onNodeAppended(p: NodeAppendedPush): void {
     node.body.type === 'tool_result' &&
     !node.body.is_error &&
     artifactOf(node.body.content) &&
-    (state.artifact || (!state.agentView && window.matchMedia('(min-width: 80rem)').matches))
+    (state.artifact ||
+      (!state.agentView && !state.taskDetail && window.matchMedia('(min-width: 80rem)').matches))
   ) {
     state.artifact = node.id
+    state.taskDetail = null
   }
   // The finalized Assistant node replaces the streaming buffer.
   if (node.body.type === 'assistant') delete state.deltas[branch]

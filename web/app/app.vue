@@ -11,6 +11,7 @@ import SettingsPage from './components/pages/SettingsPage.vue'
 import Lightbox from './components/Lightbox.vue'
 import AgentPanel from './components/chat/AgentPanel.vue'
 import ArtifactPanel from './components/chat/ArtifactPanel.vue'
+import TaskOutputPanel from './components/chat/TaskOutputPanel.vue'
 import { openArtifact } from './lib/artifacts'
 import Toasts from './components/Toasts.vue'
 import { closePanels, layout } from './lib/layout'
@@ -52,6 +53,10 @@ const artifactOpen = computed(() => !state.page && !!state.sessionId && !!openAr
 const agentOpen = computed(
   () => !state.page && !artifactOpen.value && !!state.agentView && !!state.branches[state.agentView],
 )
+/** Or a background task's output. */
+const taskOpen = computed(
+  () => !state.page && !artifactOpen.value && !agentOpen.value && !!state.taskDetail && !!state.tasks[state.taskDetail],
+)
 
 onMounted(() => {
   lg = window.matchMedia('(min-width: 64rem)')
@@ -88,7 +93,7 @@ onBeforeUnmount(() => {
     v-else
     class="desk grid h-full grid-cols-1 transition-[grid-template-columns] duration-350 ease-in-out lg:grid-cols-[280px_minmax(0,1fr)] lg:gap-x-4 lg:pr-4 xl:overflow-x-clip xl:pr-0"
     :class="
-      artifactOpen || agentOpen
+      artifactOpen || agentOpen || taskOpen
         ? 'xl:grid-cols-[280px_minmax(0,1fr)_minmax(0,1fr)]'
         : 'xl:grid-cols-[280px_minmax(0,1fr)_minmax(0,0fr)]'
     "
@@ -111,11 +116,12 @@ onBeforeUnmount(() => {
         class="col-start-1 row-start-1 lg:col-start-2"
       />
     </Transition>
-    <!-- the third sheet at xl, over the chat below it: an open artifact, or
-         a sub-agent's transcript -->
+    <!-- the third sheet at xl, over the chat below it: an open artifact, a
+         sub-agent's transcript, or a background task's output -->
     <Transition v-bind="SIDE_SHEET">
       <ArtifactPanel v-if="artifactOpen" key="artifact" :class="SIDE" />
       <AgentPanel v-else-if="agentOpen" key="agent" :class="SIDE" />
+      <TaskOutputPanel v-else-if="taskOpen" key="task" :class="SIDE" />
     </Transition>
     <Lightbox />
     <Toasts />
