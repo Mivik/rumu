@@ -1,23 +1,8 @@
 {
   "phrase": {
-    "separator": ", ",
-    "read": "read {count} file | read {count} files",
-    "write": "wrote {count} file | wrote {count} files",
-    "edit": "edited {count} file | edited {count} files",
-    "readCard": "read {count} card | read {count} cards",
-    "writeCard": "wrote {count} card | wrote {count} cards",
-    "editCard": "edited {count} card | edited {count} cards",
-    "list": "listed {count} directory | listed {count} directories",
-    "bash": "ran {count} command | ran {count} commands",
-    "code": "ran {count} script | ran {count} scripts",
-    "agent": "started {count} sub-agent | started {count} sub-agents",
-    "search": "searched {count} time | searched {count} times",
-    "workspaceUse": "switched {count} workspace | switched {count} workspaces",
-    "other": "called {count} tool | called {count} tools",
     "catalog": "looked through the card catalog",
     "thoughtFor": "thought for {duration}",
-    "thinking": "thinking",
-    "show": "showed {count} file | showed {count} files"
+    "thinking": "thinking"
   },
   "verb": {
     "read": "read",
@@ -27,9 +12,6 @@
     "writeCard": "wrote",
     "editCard": "edited",
     "list": "listed",
-    "bash": "ran",
-    "code": "ran",
-    "agent": "started",
     "search": "searched",
     "workspaceUse": "switched to",
     "workspaceList": "listed",
@@ -46,7 +28,11 @@
   },
   "activity": {
     "error": "· error | · {count} errors",
-    "blocked": "blocked | {count} blocked"
+    "blocked": "blocked | {count} blocked",
+    "worked": "worked for {duration} · {count} call | worked for {duration} · {count} calls"
+  },
+  "running": {
+    "silent": "no output for {duration}"
   },
   "thought": {
     "thinking": "Thinking",

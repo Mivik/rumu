@@ -1,23 +1,8 @@
 {
   "phrase": {
-    "separator": "，",
-    "read": "读取 {count} 个文件",
-    "write": "写入 {count} 个文件",
-    "edit": "编辑 {count} 个文件",
-    "readCard": "读取 {count} 张卡片",
-    "writeCard": "写入 {count} 张卡片",
-    "editCard": "编辑 {count} 张卡片",
-    "list": "列出 {count} 个目录",
-    "bash": "运行 {count} 条命令",
-    "code": "运行 {count} 个脚本",
-    "agent": "启动 {count} 个子代理",
-    "search": "搜索 {count} 次",
-    "workspaceUse": "切换 {count} 个工作区",
-    "other": "调用 {count} 个工具",
     "catalog": "查阅了卡片目录",
     "thoughtFor": "思考了 {duration}",
-    "thinking": "思考中",
-    "show": "展示了 {count} 个文件"
+    "thinking": "思考中"
   },
   "verb": {
     "read": "读取",
@@ -27,9 +12,6 @@
     "writeCard": "写入",
     "editCard": "编辑",
     "list": "列出",
-    "bash": "运行",
-    "code": "运行",
-    "agent": "启动",
     "search": "搜索",
     "workspaceUse": "切换到",
     "workspaceList": "列出",
@@ -46,7 +28,11 @@
   },
   "activity": {
     "error": "· 错误 | · {count} 个错误",
-    "blocked": "已拦截 | {count} 个已拦截"
+    "blocked": "已拦截 | {count} 个已拦截",
+    "worked": "工作 {duration} · {count} 次调用"
+  },
+  "running": {
+    "silent": "{duration} 无输出"
   },
   "thought": {
     "thinking": "思考中",

@@ -2,9 +2,11 @@
 // message, then ONE assistant group per turn (assistant → tool results →
 // assistant …) with a single header, plus "context" strips collapsing
 // consecutive notes/markers. Inside a group, the work between two pieces of
-// visible text — each step's reasoning and its tool results — is one
-// "activity" run, folded into a summary line ("Thought for 4s, read 3 files");
-// only answer text and context pills stand on their own.
+// visible text — each step's reasoning and its tool results, and while the
+// turn runs its calls still waiting on a result — is one "activity" run,
+// open while it is the frontier and folded into a summary line after
+// ("Worked for 3m 12s · 27 calls"); only answer text and context pills stand
+// on their own.
 
 import { computed } from 'vue'
 import type { BranchId, Node, ToolCall } from '../types'
@@ -77,7 +79,14 @@ export interface ActivityRecall {
   kind: 'recall'
   nodes: Node[]
 }
-export type ActivityStep = ActivityThought | ActivityTools | ActivityCatalog | ActivityRecall
+/** The live turn's calls still waiting on their result, each with the
+ *  assistant node that made it (its `at` is when the call started). */
+export interface ActivityRunning {
+  kind: 'running'
+  calls: { call: ToolCall; assistant: Node }[]
+}
+export type ActivityStep =
+  ActivityThought | ActivityTools | ActivityCatalog | ActivityRecall | ActivityRunning
 export interface GroupActivityItem {
   kind: 'activity'
   steps: ActivityStep[]
@@ -282,20 +291,18 @@ export function buildTimeline(nodes: Node[], calls: CallsOnPath, branch: BranchI
       flushCtx()
     }
   }
+  // The calls still running close the run they belong to: the frontier.
+  if (live) {
+    const running = live.assistants.flatMap((a) =>
+      a.body.type === 'assistant'
+        ? a.body.tool_calls.filter((c) => !answered.has(c.call_id)).map((call) => ({ call, assistant: a }))
+        : [],
+    )
+    if (running.length) pushActivity(live, { kind: 'running', calls: running })
+  }
   if (live && delta?.reasoning) pushActivity(live, { kind: 'thought', node: null, streaming: true })
   if (live && delta?.text) live.items.push({ kind: 'text', node: null, streaming: true })
   // No user prompt on the path yet (a brand-new session mid-request):
   // nothing to hang the group under, so leave the timeline alone.
   return out
-}
-
-/** The group's tool calls still waiting on their result in `nodes`. */
-export function pendingCalls(g: TimelineGroup, nodes: Node[]): ToolCall[] {
-  const answered = new Set<string>()
-  for (const n of nodes) {
-    if (n.body.type === 'tool_result') answered.add(n.body.call_id)
-  }
-  return g.assistants.flatMap((a) =>
-    a.body.type === 'assistant' ? a.body.tool_calls.filter((c) => !answered.has(c.call_id)) : [],
-  )
 }

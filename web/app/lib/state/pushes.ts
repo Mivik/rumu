@@ -132,14 +132,15 @@ function onLlmDelta(p: LlmDeltaPush): void {
   applyDelta(p)
 }
 
-/** A foreground tool's live output (used by the running-tool rows). */
+/** A foreground tool's live output (the run's running rows). */
 function onToolProgress(p: ToolProgressPush): void {
   const key = `${p.branch}:${p.call_id}`
   let buf = state.toolProgress[key]
   if (!buf) {
-    buf = { branch: p.branch, call_id: p.call_id, text: '', data: null }
+    buf = { branch: p.branch, call_id: p.call_id, text: '', data: null, at: 0 }
     state.toolProgress[key] = buf
   }
+  buf.at = Date.now()
   if (p.append) buf.text = (buf.text + p.append).slice(-MAX_LIVE_OUTPUT)
   if (p.data) buf.data = p.data
 }

@@ -60,6 +60,8 @@
   --danger-soft: #fbe7ea;
   --agent: #0c7f84;
   --agent-soft: #ddf1f1;
+  /* amber: a live thing gone quiet (a call silent too long) */
+  --warn: #a8670f;
 
   /* the desk: paper grain + a faint warm light from the top-left corner */
   --grain: url("data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' width='180' height='180'%3E%3Cfilter id='n'%3E%3CfeTurbulence type='fractalNoise' baseFrequency='.85' numOctaves='3' stitchTiles='stitch'/%3E%3CfeColorMatrix values='0 0 0 0 .35 0 0 0 0 .24 0 0 0 0 .14 0 0 0 .07 0'/%3E%3C/filter%3E%3Crect width='100%25' height='100%25' filter='url(%23n)'/%3E%3C/svg%3E");
@@ -109,6 +111,7 @@
     --danger-soft: #3d1f25;
     --agent: #5cc8ce;
     --agent-soft: #173031;
+    --warn: #e2a64b;
 
     --grain: url("data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' width='180' height='180'%3E%3Cfilter id='n'%3E%3CfeTurbulence type='fractalNoise' baseFrequency='.85' numOctaves='3' stitchTiles='stitch'/%3E%3CfeColorMatrix values='0 0 0 0 1 0 0 0 0 .92 0 0 0 0 .82 0 0 0 .045 0'/%3E%3C/filter%3E%3Crect width='100%25' height='100%25' filter='url(%23n)'/%3E%3C/svg%3E");
     --lamp: color-mix(in srgb, var(--brand) 6%, transparent);
@@ -185,6 +188,7 @@
   --color-danger-soft: var(--danger-soft);
   --color-agent: var(--agent);
   --color-agent-soft: var(--agent-soft);
+  --color-warn: var(--warn);
   --color-scrim: var(--scrim);
 
   --shadow-soft: var(--shadow-soft-v);

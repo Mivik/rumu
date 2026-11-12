@@ -34,7 +34,7 @@ export {
 } from './state/derived'
 export type { OwedReply, SiblingAlternative } from './state/derived'
 
-export { buildTimeline, compactionOf, pendingCalls, timeline } from './state/timeline'
+export { buildTimeline, compactionOf, timeline } from './state/timeline'
 export { openAgentView, provideBranchView, useBranchView } from './state/branchView'
 export type { BranchView } from './state/branchView'
 export { trace } from './state/trace'
@@ -42,6 +42,7 @@ export type { TraceKind, TraceRow } from './state/trace'
 export type {
   ActivityCatalog,
   ActivityRecall,
+  ActivityRunning,
   ActivityStep,
   ActivityThought,
   ActivityTools,

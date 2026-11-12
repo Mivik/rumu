@@ -1,8 +1,7 @@
 // Tool rows, parsed for display: the abbreviated call/result a row shows,
 // the full call for its tooltip, status, and the card / sub-agent it
-// touches — plus the counted phrases ("read 3 files", "ran 2 commands") an
-// activity run folds them into. Shared by ToolList (the rows) and
-// ActivityRun (the summary line).
+// touches — plus a lone call's phrase ("read store.ts"). Shared by ToolList
+// (the rows) and ActivityRun (the summary line).
 
 import type { Attachment, Branch, FilePatch, Node, TaskStatus } from './types'
 import { INTERNAL_WORKSPACE } from './types'
@@ -365,10 +364,10 @@ export function toolRowTitle(v: ToolRowView): string {
 }
 
 // ---------------------------------------------------------------------------
-// Folded phrases
+// Run summary
 
-/** Catalog key suffix for each call kind (see tools.json). */
-const KIND_KEYS: Record<string, string> = {
+/** Verb key for each call kind with a target to name (see tools.json). */
+const VERB_KEYS: Record<string, string> = {
   read: 'read',
   write: 'write',
   edit: 'edit',
@@ -376,25 +375,9 @@ const KIND_KEYS: Record<string, string> = {
   'write:card': 'writeCard',
   'edit:card': 'editCard',
   list: 'list',
-  bash: 'bash',
-  code: 'code',
-  agent: 'agent',
   search: 'search',
   workspace_use: 'workspaceUse',
   show: 'show',
-}
-
-/** A lone call's phrase names its target: "read store.ts". A command says
- * its intent, or is left to its row's `$` line ("ran 1 command"). */
-const TARGETED = new Set(['read', 'write', 'edit', 'list', 'search', 'workspace_use', 'show'])
-
-function kindKey(v: ToolRowView): string {
-  if (v.toolCardId) return `${v.name}:card`
-  return KIND_KEYS[v.name] ? v.name : 'other'
-}
-
-function catalogKind(key: string): string {
-  return key === 'other' ? 'other' : (KIND_KEYS[key] ?? 'other')
 }
 
 /** A piece of a summary line; `mono` marks a literal (a file, a command). */
@@ -403,32 +386,18 @@ export interface PhrasePart {
   mono?: boolean
 }
 
-/** Lowercase phrases for a run's tool calls, counted per kind in order of
- * first appearance; a lone call names its target instead. */
-export function toolPhrases(views: ToolRowView[]): PhrasePart[][] {
-  if (views.length === 1) {
-    const v = views[0]!
-    const key = kindKey(v)
-    if (v.description) return [[{ text: v.description }]]
-    if (key === 'other') {
-      return [[{ text: `${t('tools.verb.other')} ` }, { text: v.name, mono: true }]]
-    }
-    if (TARGETED.has(key) && v.callText) {
-      const verb =
-        key === 'workspace_use'
-          ? v.callText === 'list'
-            ? t('tools.verb.workspaceList')
-            : t('tools.verb.workspaceUse')
-          : t(`tools.verb.${catalogKind(key)}` as MessageKey)
-      return [[{ text: `${verb} ` }, { text: v.callText, mono: true }]]
-    }
+/** A lone call's phrase: its intent, or its verb and target ("read
+ * store.ts"); a call with neither names the tool. */
+export function toolPhrase(v: ToolRowView): PhrasePart[] {
+  if (v.description) return [{ text: v.description }]
+  const key = v.toolCardId ? `${v.name}:card` : v.name
+  const verbKey = VERB_KEYS[key]
+  if (verbKey && v.callText) {
+    const verb =
+      key === 'workspace_use' && v.callText === 'list'
+        ? t('tools.verb.workspaceList')
+        : t(`tools.verb.${verbKey}` as MessageKey)
+    return [{ text: `${verb} ` }, { text: v.callText, mono: true }]
   }
-  const counts = new Map<string, number>()
-  for (const v of views) {
-    const key = kindKey(v)
-    counts.set(key, (counts.get(key) ?? 0) + 1)
-  }
-  return [...counts].map(([key, n]) => [
-    { text: t(`tools.phrase.${catalogKind(key)}` as MessageKey, { count: n }) },
-  ])
+  return [{ text: `${t('tools.verb.other')} ` }, { text: v.name, mono: true }]
 }

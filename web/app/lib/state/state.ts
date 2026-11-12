@@ -177,10 +177,11 @@ const initial = {
    * `compact.done`/`compact.failed` or the turn's end). */
   compacting: {} as Record<BranchId, true>,
 
-  /** Live foreground tool output, keyed by `${branch}:${call_id}`. */
+  /** Live foreground tool output, keyed by `${branch}:${call_id}`; `at` is
+   * when the last piece arrived (a call silent too long reads as stalled). */
   toolProgress: {} as Record<
     string,
-    { branch: BranchId; call_id: string; text: string; data: Tagged | null }
+    { branch: BranchId; call_id: string; text: string; data: Tagged | null; at: number }
   >,
   /** Kernel tasks of the open session (runtime-only; `task.list` + pushes). */
   tasks: {} as Record<TaskId, TaskInfo>,

@@ -1,48 +1,55 @@
 <script setup lang="ts">
 // The work between two pieces of an assistant turn's visible text — the cards
 // recalled for it, the card catalog handed to the model, each step's reasoning
-// and its tool calls. It folds into one quiet summary line of what happened:
-//   Read 3 files · 1 error [blocked] ›
-// (a lone call names its target: "Read store.ts"). Recall and catalog go with
-// every turn, so neither shows on the line; the opened body still renders
-// them. With tool calls the line doesn't count the thoughts; without any
-// (reasoning right before the answer) it names the thinking instead: "Thought
-// for 2s". The live run (the turn's tail while it thinks or calls) leads with
-// the live dot; waiting on the model, the group's "working…" line has it
-// instead. While the model thinks, a run with
-// no calls opens by itself so the reasoning streams in view, folding once the
-// answer starts unless toggled by hand. The sub-agents it started stand
-// below the line as cards (AgentCard), folded or not.
+// and its tool calls. While it is the turn's frontier (`current`) it stays
+// open, every call a row as it lands, the running ones last with their
+// elapsed time and live output (RunningTools). Once the model moves on — its
+// answer starts, the turn ends — it folds into one quiet line of what it
+// took:
+//   Worked for 3m 12s · 27 calls · 1 error [blocked] ›
+// (a lone call names itself instead: "read store.ts"). The sub-agents the run
+// started stand below the line as cards (AgentCard), folded or not. Recall
+// and catalog go with every turn, so neither shows on the line; a run without
+// calls names its thinking ("Thought for 2s"), or its recall / catalog when
+// that is all.
 // Opened, the steps show in order under a hairline: the catalog's cards,
 // each thought, each run of calls as a ToolList box. A bare thought — no
 // catalog, no calls — keeps its own disclosure (ThoughtStep).
-import { computed, ref } from 'vue'
+import { computed, onBeforeUnmount, ref, watch } from 'vue'
 import { t, locale } from '../../i18n'
-import type { ActivityRecall, ActivityStep, ActivityThought, ActivityTools } from '../../lib/store'
+import type { ActivityRecall, ActivityRunning, ActivityStep, ActivityThought } from '../../lib/store'
 import { useBranchView } from '../../lib/store'
+import type { Node } from '../../lib/types'
 import type { PhrasePart, ToolRowView } from '../../lib/toolrows'
-import { toolPhrases, toolRowTitle, toolRowView } from '../../lib/toolrows'
-import { fmtThought } from '../../lib/util'
+import { toolPhrase, toolRowTitle, toolRowView } from '../../lib/toolrows'
+import { contentText, fmtThought } from '../../lib/util'
 import { vEnter } from '../../lib/motion'
 import Icon from '../ui/Icon.vue'
 import AgentCard from './AgentCard.vue'
 import CatalogList from './CatalogList.vue'
 import RecallList from './RecallList.vue'
+import RunningTools from './RunningTools.vue'
 import ThoughtStep from './ThoughtStep.vue'
 import ToolList from './ToolList.vue'
 
-const props = withDefaults(defineProps<{ steps: ActivityStep[]; live?: boolean }>(), { live: false })
+const props = withDefaults(defineProps<{ steps: ActivityStep[]; live?: boolean; current?: boolean }>(), {
+  live: false,
+  current: false,
+})
 const activeDelta = useBranchView().delta
 
 const thoughts = computed(() => props.steps.filter((s): s is ActivityThought => s.kind === 'thought'))
 const views = computed<ToolRowView[]>(() =>
-  props.steps.flatMap((s) => (s.kind === 'tools' ? (s as ActivityTools).rows.map(toolRowView) : [])),
+  props.steps.flatMap((s) => (s.kind === 'tools' ? s.rows.map(toolRowView) : [])),
 )
+const running = computed(() => props.steps.find((s): s is ActivityRunning => s.kind === 'running') ?? null)
 const hasCatalog = computed(() => props.steps.some((s) => s.kind === 'catalog'))
 const recalls = computed(() => props.steps.filter((s): s is ActivityRecall => s.kind === 'recall'))
 const recalledCount = computed(() => recalls.value.reduce((n, s) => n + s.nodes.length, 0))
 /** Anything to fold? A lone thought keeps its own disclosure instead. */
-const folds = computed(() => views.value.length > 0 || hasCatalog.value || recalls.value.length > 0)
+const folds = computed(
+  () => views.value.length > 0 || running.value !== null || hasCatalog.value || recalls.value.length > 0,
+)
 
 /** The live step is still reasoning (its answer / tool calls haven't started). */
 const thinking = computed(() =>
@@ -60,25 +67,68 @@ function thoughtPhrase(): string {
   return t('tools.phrase.thoughtFor', { duration: fmtThought(ms) })
 }
 
-/** The phrases joined by commas, the first one capitalized. Recall and the
- *  catalog go with every turn, so they stay off a line that has anything else
- *  to say; a run of only them names them, or the line would be empty. */
-const summary = computed<PhrasePart[][]>(() => {
-  const phrases: PhrasePart[][] = []
-  phrases.push(...toolPhrases(views.value))
-  if (!views.value.length && thoughts.value.length) phrases.push([{ text: thoughtPhrase() }])
-  if (!phrases.length && recalledCount.value) {
-    phrases.push([{ text: t('cards.pills.recalled', { count: recalledCount.value }) }])
+// The frontier's span ticks while it runs.
+const now = ref(Date.now())
+let timer: ReturnType<typeof setInterval> | undefined
+watch(
+  () => props.current,
+  (c) => {
+    if (timer) clearInterval(timer)
+    timer = c ? setInterval(() => (now.value = Date.now()), 1000) : undefined
+  },
+  { immediate: true },
+)
+onBeforeUnmount(() => timer && clearInterval(timer))
+
+/** The part of a node's time that belongs to this run, as [start, end]. A
+ * step that also wrote answer text straddles two runs — its reasoning ends
+ * the one before the text, its calls open the one after — so a thought
+ * counts only its reasoning, and the step behind a call only from the end
+ * of its text (its calls come last). A step without text is all this run's. */
+function spanOf(n: Node, as: 'thought' | 'caller'): [number, number] {
+  const end = n.at
+  const start = end - (n.dur_ms ?? 0)
+  const b = n.body
+  if (b.type !== 'assistant' || !contentText(b.content).trim()) return [start, end]
+  return as === 'thought' ? [start, start + (b.reason_ms ?? 0)] : [end, end]
+}
+
+/** Wall time of the run: from the first of its spans' starts to the last
+ * end (now, while it is the frontier). */
+const spanMs = computed(() => {
+  const spans: [number, number][] = []
+  for (const s of props.steps) {
+    if (s.kind === 'thought' && s.node) spans.push(spanOf(s.node, 'thought'))
+    if (s.kind === 'tools') {
+      for (const r of s.rows) {
+        spans.push(spanOf(r.result, 'caller'))
+        if (r.assistant) spans.push(spanOf(r.assistant, 'caller'))
+      }
+    }
+    if (s.kind === 'running') for (const c of s.calls) spans.push(spanOf(c.assistant, 'caller'))
   }
-  if (!phrases.length && hasCatalog.value) phrases.push([{ text: t('tools.phrase.catalog') }])
-  return phrases
+  if (!spans.length) return 0
+  const start = Math.min(...spans.map((s) => s[0]))
+  const end = props.current ? now.value : Math.max(...spans.map((s) => s[1]))
+  return Math.max(0, end - start)
 })
+
+/** The run's line: a lone call names itself; more say how long they took
+ * and how many there were; without calls, the thinking (or recall /
+ * catalog, when that is all there is). */
 const summaryParts = computed<PhrasePart[]>(() => {
-  const parts = summary.value.flatMap((p, i) => (i ? [{ text: t('tools.phrase.separator') }, ...p] : p))
+  const calls = views.value.length + (running.value?.calls.length ?? 0)
+  let parts: PhrasePart[]
+  if (calls === 1 && views.value.length === 1) parts = toolPhrase(views.value[0]!)
+  else if (calls)
+    parts = [{ text: t('tools.activity.worked', { duration: fmtThought(spanMs.value), count: calls }) }]
+  else if (thoughts.value.length) parts = [{ text: thoughtPhrase() }]
+  else if (recalledCount.value) parts = [{ text: t('cards.pills.recalled', { count: recalledCount.value }) }]
+  else parts = [{ text: t('tools.phrase.catalog') }]
   const first = parts[0]
   // Only English capitalizes the line; Chinese has no case to fix.
   if (first && locale.value.startsWith('en')) {
-    parts[0] = { ...first, text: first.text.charAt(0).toUpperCase() + first.text.slice(1) }
+    parts = [{ ...first, text: first.text.charAt(0).toUpperCase() + first.text.slice(1) }, ...parts.slice(1)]
   }
   return parts
 })
@@ -94,13 +144,14 @@ function stepKey(s: ActivityStep): string {
   if (s.kind === 'thought') return s.node?.id ?? 'thought:live'
   if (s.kind === 'catalog') return `catalog:${s.node.id}`
   if (s.kind === 'recall') return `recall:${s.nodes[0]?.id ?? ''}`
+  if (s.kind === 'running') return 'running'
   return `tools:${s.rows[0]?.result.id ?? ''}`
 }
 
-/** Tri-state: null = auto — a run without calls stays open while its model
- *  thinks, so the reasoning streams in view; everything else starts folded. */
+/** Tri-state: null = auto — open while it is the turn's frontier, folded
+ *  once the model moves on. */
 const manual = ref<boolean | null>(null)
-const open = computed(() => (manual.value !== null ? manual.value : thinking.value && !views.value.length))
+const open = computed(() => (manual.value !== null ? manual.value : props.current))
 /** Steps present when it opens reveal with it; later ones fade in. */
 const revealed = ref<Set<string>>(new Set())
 function toggleOpen(): void {
@@ -130,7 +181,7 @@ function toggleOpen(): void {
           :size="12"
           class="flex-none"
         />
-        <span class="min-w-0 truncate"
+        <span class="min-w-0 truncate tabular-nums"
           ><span v-for="(p, i) in summaryParts" :key="i" :class="{ 'font-mono font-medium': p.mono }">{{
             p.text
           }}</span></span
@@ -160,16 +211,21 @@ function toggleOpen(): void {
           v-enter="revealed.has(stepKey(s)) ? false : 'enter-fade'"
           :node="s.node"
         />
+        <RunningTools v-else-if="s.kind === 'running'" v-enter="'enter-fade'" :step="s" />
         <!-- without calls the run's line already names the thinking: the
              reasoning shows bare, not behind a second disclosure -->
         <ThoughtStep
           v-else-if="s.kind === 'thought'"
           v-enter="revealed.has(stepKey(s)) ? false : 'enter-fade'"
           :node="s.node"
-          :flat="!views.length"
+          :flat="!views.length && !running"
         />
         <ToolList v-else v-enter="revealed.has(stepKey(s)) ? false : 'enter-fade'" :rows="s.rows" />
       </template>
+    </div>
+    <!-- while folded, the calls still running stay in view -->
+    <div v-else-if="running" class="mt-2 flex w-full flex-col gap-2">
+      <RunningTools :step="running" />
     </div>
     <!-- the sub-agents it started stand outside the fold -->
     <div v-if="agents.length" class="mt-2 flex w-full flex-col gap-1.5">

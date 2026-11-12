@@ -2,11 +2,11 @@
 // One assistant group = the consecutive assistant steps of one turn. Plain
 // left-aligned text (no bubble) at the column's full width; the cat mascot
 // heads the turn on a line of its own. Between pieces of answer text, the
-// steps' reasoning and tool calls fold into one ActivityRun summary line, live
-// as "thinking" while the model reasons. While the turn runs, its frontier
-// always carries the live dot: the trailing activity run, the streaming
-// text's caret, the running calls, or — while it waits on the model — a
-// "working…" line of its own.
+// steps' reasoning and tool calls form one ActivityRun: open while it is the
+// turn's frontier, folded to a summary line once the model moves on. While
+// the turn runs, its frontier always carries the live dot: the trailing
+// activity run (its running calls included), the streaming text's caret, or —
+// while it waits on the model — a "working…" line of its own.
 // One muted meta line at the bottom:
 // usage stays visible (hover for the full request/turn breakdown);
 // copy/regenerate/fork reveal on hover once the turn has finished.
@@ -15,7 +15,7 @@ import { computed, onBeforeUnmount, ref, watch } from 'vue'
 import { t } from '../../i18n'
 import type { Node } from '../../lib/types'
 import type { TimelineGroup } from '../../lib/store'
-import { forkSession, pendingCalls, regenerateFrom, state, useBranchView } from '../../lib/store'
+import { forkSession, regenerateFrom, state, useBranchView } from '../../lib/store'
 import type { CatState } from '../../lib/cat'
 import { renderMarkdown } from '../../lib/markdown'
 import { contentText, copyText } from '../../lib/util'
@@ -27,7 +27,6 @@ import ActivityRun from './ActivityRun.vue'
 import ArtifactCard from './ArtifactCard.vue'
 import BranchSwitcher from './BranchSwitcher.vue'
 import ContextPills from './ContextPills.vue'
-import RunningTools from './RunningTools.vue'
 import UsageHud from './UsageHud.vue'
 
 const props = withDefaults(defineProps<{ group: TimelineGroup; live?: boolean; prompt?: Node | null }>(), {
@@ -57,8 +56,12 @@ const catState = computed<CatState>(() => {
   return d?.text ? 'working' : d?.reasoning ? 'thinking' : 'waiting'
 })
 
-/** Calls of the live turn still waiting on their result (RunningTools). */
-const pending = computed(() => (props.live ? pendingCalls(props.group, view.nodes.value) : []))
+/** The live turn has calls still waiting on their result (the trailing
+ * run's running step). */
+const running = computed(() => {
+  const tail = props.group.items.at(-1)
+  return props.live && tail?.kind === 'activity' && tail.steps.at(-1)?.kind === 'running'
+})
 
 function textOf(n: Node): string {
   return contentText(bodyOf(n).content)
@@ -135,7 +138,7 @@ onBeforeUnmount(() => retryTimer && clearInterval(retryTimer))
  * nothing yet — so the dot needs a line of its own ("working…"): beside the
  * mascot before anything shows, else at the end. */
 const idle = computed(() => {
-  if (!props.live || retrying.value || compacting.value || pending.value.length) return false
+  if (!props.live || retrying.value || compacting.value || running.value) return false
   const d = activeDelta.value
   return !d?.reasoning && !d?.text
 })
@@ -188,6 +191,7 @@ const bare = computed(() => !items.value.length && !props.group.assistants.lengt
         v-enter="'enter-fade'"
         :steps="item.steps"
         :live="live && !idle && i === items.length - 1"
+        :current="live && i === items.length - 1"
       />
       <ArtifactCard v-else-if="item.kind === 'artifact'" v-enter="'enter-fade'" :node="item.node" />
       <div
@@ -212,8 +216,6 @@ const bare = computed(() => !items.value.length && !props.group.assistants.lengt
       />
     </template>
 
-    <!-- live output of the calls still running -->
-    <RunningTools v-if="live" v-enter="'enter-fade'" :calls="pending" />
     <span v-if="idle && !bare" v-enter="'enter-fade'" class="working-line">
       <span class="dot-live size-1.5 rounded-full bg-brand" />{{ t('chat.assistant.working') }}
     </span>
