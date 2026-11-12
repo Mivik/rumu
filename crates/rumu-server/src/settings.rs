@@ -259,6 +259,30 @@ impl Settings {
         self
     }
 
+    /// Clone a repository of skills from git.
+    pub async fn install_skills(&self, url: &str, name: Option<&str>) -> Result<SettingsInfo> {
+        self.skills
+            .install(url, name)
+            .await
+            .map_err(SettingsError::Invalid)?;
+        Ok(self.info())
+    }
+
+    /// Pull an installed repository of skills.
+    pub async fn update_skills(&self, name: &str) -> Result<SettingsInfo> {
+        self.skills
+            .update(name)
+            .await
+            .map_err(SettingsError::Invalid)?;
+        Ok(self.info())
+    }
+
+    /// Delete an installed repository of skills.
+    pub fn remove_skills(&self, name: &str) -> Result<SettingsInfo> {
+        self.skills.remove(name).map_err(SettingsError::Invalid)?;
+        Ok(self.info())
+    }
+
     fn catalog(&self) -> Arc<Catalog> {
         self.catalog.read().expect("catalog lock").clone()
     }

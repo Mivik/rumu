@@ -180,3 +180,62 @@ async fn intro_note_lists_the_enabled_skills_once() {
         "{text}"
     );
 }
+
+#[tokio::test]
+async fn installs_updates_and_removes_a_repository() {
+    let home = tempfile::tempdir().unwrap();
+    let git = |dir: &Path, args: &[&str]| {
+        std::process::Command::new("git")
+            .args(["-c", "user.name=t", "-c", "user.email=t@example.com"])
+            .args(args)
+            .current_dir(dir)
+            .output()
+            .map(|o| o.status.success())
+    };
+    let origin = home.path().join("origin.git");
+    write(&origin.join("SKILL.md"), &skill_md("solo", "One skill."));
+    if !matches!(git(&origin, &["init", "-q"]), Ok(true)) {
+        eprintln!("git not found; skipping");
+        return;
+    }
+    assert!(git(&origin, &["add", "."]).unwrap());
+    assert!(git(&origin, &["commit", "-qm", "init"]).unwrap());
+
+    let skills = Skills::with_dirs(&home.path().join("rumu"), Vec::new(), None);
+    let url = origin.display().to_string();
+    assert_eq!(skills.install(&url, None).await.unwrap(), "origin");
+    assert!(
+        skills
+            .install(&url, None)
+            .await
+            .unwrap_err()
+            .contains("already installed")
+    );
+    let info = skills.info();
+    assert_eq!(info.repos[0].url.as_deref(), Some(url.as_str()));
+    assert_eq!(info.skills[0].name, "solo");
+
+    write(
+        &origin.join("SKILL.md"),
+        &skill_md("solo", "Still one skill."),
+    );
+    assert!(git(&origin, &["commit", "-qam", "edit"]).unwrap());
+    skills.update("origin").await.unwrap();
+    assert_eq!(skills.info().skills[0].description, "Still one skill.");
+
+    let bad = skills
+        .install("/no/such/repo", Some("gone"))
+        .await
+        .unwrap_err();
+    assert!(!bad.is_empty());
+    assert!(!home.path().join("rumu/skills/gone").exists());
+
+    skills.remove("origin").unwrap();
+    assert!(skills.info().repos.is_empty());
+    assert!(
+        skills
+            .remove("origin")
+            .unwrap_err()
+            .contains("no installed repository")
+    );
+}

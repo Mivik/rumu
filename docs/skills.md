@@ -22,7 +22,7 @@ Read from the Agent Skills specification and its guide for clients.
 ## Where skills are found
 
 - In precedence order:
-  1. Repositories under `RUMU_HOME/skills/<repo>`: each
+  1. Repositories installed from git, under `RUMU_HOME/skills/<repo>`: each
      directory with a `SKILL.md`, at most three levels down (a repository
      can be one skill or hold many, as under `skills/`).
   2. `~/.agents/skills` and then `~/.claude/skills` on the rumu host, at
@@ -37,6 +37,15 @@ Read from the Agent Skills specification and its guide for clients.
   and `-_.`, not starting with `.`).
 - Settings › Skills lists every skill found, with its directory, why it is
   unusable, or that it is shadowed by an earlier one of the same name.
+
+## Installed repositories
+
+- Settings › Skills installs a repository from a git URL, under a name (by
+  default the URL's last segment without `.git`). rumu runs
+  `git clone --depth 1`, never prompting, so a private repository needs
+  credentials git already has.
+- The clone is the record: Settings shows its `origin`, pulls it
+  (fast-forward only) and deletes it. Nothing is written to `settings.yaml`.
 
 ## Assistants
 

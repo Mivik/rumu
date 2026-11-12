@@ -719,6 +719,22 @@ async fn dispatch(state: &AppState, method: &str, p: &Value) -> Result<Value> {
             let name = str_param(p, "name")?;
             settings_edit(state, |s| s.remove_mcp(name))
         }
+        "settings.install_skills" => {
+            let url = str_param(p, "url")?;
+            let name = p.get("name").and_then(Value::as_str);
+            let info = json!(state.settings.install_skills(url, name).await?);
+            state.kernel.settings_changed(info.clone());
+            Ok(info)
+        }
+        "settings.update_skills" => {
+            let info = json!(state.settings.update_skills(str_param(p, "name")?).await?);
+            state.kernel.settings_changed(info.clone());
+            Ok(info)
+        }
+        "settings.remove_skills" => {
+            let name = str_param(p, "name")?;
+            settings_edit(state, |s| s.remove_skills(name))
+        }
         "settings.reconnect_mcp" => {
             state.settings.reconnect_mcp(str_param(p, "name")?);
             Ok(json!({}))
