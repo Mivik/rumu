@@ -1,5 +1,6 @@
 //! The `rumu` binary: axum WebSocket server + static frontend.
 
+mod auth;
 mod settings;
 mod ws;
 
@@ -31,6 +32,7 @@ async fn main() -> Result<()> {
         .unwrap_or_else(|_| dirs_home().unwrap_or_default().join(".rumu"));
     std::fs::create_dir_all(&home)
         .with_context(|| format!("creating RUMU_HOME at {}", home.display()))?;
+    let token = auth::Token::load(&home)?;
     let port: u16 = std::env::var("RUMU_PORT")
         .ok()
         .and_then(|p| p.parse().ok())
@@ -76,17 +78,32 @@ async fn main() -> Result<()> {
     let stale = settings.stale_lists();
     settings::spawn_refresh(&settings, &kernel, settings.catalog_stale(), stale);
 
-    let app = ws::router(ws::AppState {
-        kernel,
-        decks,
-        home: home.clone(),
-        workspaces,
-        blobs,
-        settings,
-    });
+    let app = ws::router(
+        ws::AppState {
+            kernel,
+            decks,
+            home: home.clone(),
+            workspaces,
+            blobs,
+            settings,
+        },
+        token.clone(),
+    );
     let addr = SocketAddr::new(host, port);
     let listener = tokio::net::TcpListener::bind(addr).await?;
+    let addr = listener.local_addr()?;
     info!(home = %home.display(), %addr, "listening on http://{addr}");
+    let browser_host = if host.is_unspecified() {
+        if host.is_ipv6() {
+            IpAddr::V6(std::net::Ipv6Addr::LOCALHOST)
+        } else {
+            IpAddr::V4(Ipv4Addr::LOCALHOST)
+        }
+    } else {
+        host
+    };
+    let browser_addr = SocketAddr::new(browser_host, addr.port());
+    info!("Open http://{browser_addr}/#token={}", token.value());
     axum::serve(listener, app).await?;
     Ok(())
 }

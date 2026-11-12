@@ -45,14 +45,25 @@ pick is recorded on the branch (a `model.use` marker) when the next prompt is
 sent. Settings are saved to `RUMU_HOME/settings.yaml` (owner-only, since it
 holds the keys) and apply from the next model call, without a restart.
 
-`bash` runs unsandboxed on the machine hosting the server, so the server is
-meant to be local-only: it binds `127.0.0.1` by default and rejects
-cross-origin WebSocket upgrades.
+The server generates a shared access token on first start, saves it in
+`RUMU_HOME/token` (owner-only), and prints a link like
+`http://127.0.0.1:7878/#token=…`. Open that link once: the browser removes the
+token from the address bar and remembers it in a persistent HttpOnly cookie.
+Without the link, enter the token on the connection screen. Restarts keep the
+same token. API clients send `Authorization: Bearer <token>` on HTTP requests
+and WebSocket handshakes; the `smoke` example reads the local token file or
+`RUMU_TOKEN`.
+
+`bash` runs unsandboxed on the machine hosting the server. Anyone with the
+token has full access, so keep the link private. The server still binds
+`127.0.0.1` by default and rejects cross-origin requests. For remote access,
+use HTTPS through a reverse proxy (preserving `Host` and `Origin`) or an SSH
+tunnel; the token does not encrypt plain HTTP traffic.
 
 The release build embeds `web/dist`: run `pnpm build` before
 `cargo build --release`. Debug builds read `web/dist` from disk, so a
 `pnpm build` is picked up without recompiling.
-Frontend dev: `cd web && pnpm dev` (Nuxt on 5173, proxies `/ws` to 7878), or
+Frontend dev: `cd web && pnpm dev` (Nuxt on 5173, proxies `/auth`, `/ws` and `/blobs` to 7878), or
 `pnpm mock` to run the real server from the repo root with a scripted LLM
 (`RUMU_HOME=web/mock/home RUMU_LLM=script:web/mock/demo.yaml`). No model
 endpoint is needed: `web/mock/demo.yaml` cycles through scripted replies that

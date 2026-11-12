@@ -1,6 +1,8 @@
 // Boot the store (WS connection + push handlers) once, client-side.
 import { defineNuxtPlugin } from '#app'
 import { t } from '../i18n'
+import { auth, captureToken, initAuth, setToken } from '../lib/auth'
+import { rumu } from '../lib/api'
 import { followLink } from '../lib/links'
 import { startApp } from '../lib/store'
 import { toast } from '../lib/state/ui'
@@ -26,6 +28,16 @@ async function copyCode(btn: HTMLButtonElement): Promise<void> {
 }
 
 export default defineNuxtPlugin(() => {
+  initAuth()
+  // Opening the token link into the running page changes only the fragment,
+  // which does not reload the document — so watch for it here too.
+  window.addEventListener('hashchange', () => {
+    const token = captureToken()
+    if (token !== null && auth.status !== 'ready') {
+      setToken(token)
+      rumu.reconnect()
+    }
+  })
   startApp()
 
   // Clicks inside rendered markdown: copy a fence; follow rumu addresses and

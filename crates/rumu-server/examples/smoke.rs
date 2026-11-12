@@ -1,7 +1,8 @@
 //! Live smoke test for a running rumu server.
 //!
 //! Usage: `cargo run -p rumu-server --example smoke` (optional `RUMU_WS` env,
-//! default `ws://127.0.0.1:7878/ws`).
+//! default `ws://127.0.0.1:7878/ws`). Reads the token from `RUMU_TOKEN`
+//! or `<RUMU_HOME>/token` (default `~/.rumu/token`).
 //!
 //! Creates a session, prompts twice, prints the assistant replies and the
 //! Usage (including cached_tokens) of each turn to verify prompt caching
@@ -9,7 +10,10 @@
 
 use futures_util::{SinkExt, StreamExt};
 use serde_json::{Value, json};
-use tokio_tungstenite::{connect_async, tungstenite::Message};
+use tokio_tungstenite::{
+    connect_async,
+    tungstenite::{Message, client::IntoClientRequest},
+};
 use tracing::info;
 
 #[tokio::main]
@@ -21,7 +25,23 @@ async fn main() -> anyhow::Result<()> {
         .with_writer(std::io::stdout)
         .init();
     let url = std::env::var("RUMU_WS").unwrap_or_else(|_| "ws://127.0.0.1:7878/ws".to_owned());
-    let (ws, _) = connect_async(&url).await?;
+    let token = match std::env::var("RUMU_TOKEN") {
+        Ok(token) => token,
+        Err(_) => {
+            let home = std::env::var_os("RUMU_HOME")
+                .map(std::path::PathBuf::from)
+                .unwrap_or_else(|| {
+                    std::path::PathBuf::from(std::env::var_os("HOME").unwrap_or_default())
+                        .join(".rumu")
+                });
+            std::fs::read_to_string(home.join("token"))?
+        }
+    };
+    let mut handshake = url.as_str().into_client_request()?;
+    handshake
+        .headers_mut()
+        .insert("authorization", format!("Bearer {}", token.trim()).parse()?);
+    let (ws, _) = connect_async(handshake).await?;
     info!("connected to {url}");
     let (mut sink, mut stream) = ws.split();
 

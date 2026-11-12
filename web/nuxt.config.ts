@@ -47,6 +47,16 @@ export default defineNuxtConfig({
         { rel: 'apple-touch-icon', sizes: '180x180', href: '/apple-touch-icon.png' },
         { rel: 'manifest', href: '/site.webmanifest' },
       ],
+      script: [
+        {
+          // Strip the access token out of the address bar before anything
+          // renders (lib/auth.ts reads it from the global). replaceState
+          // rewrites the current history entry in place, so the token URL
+          // never lands in back/forward history either.
+          innerHTML:
+            "try{var p=new URLSearchParams(location.hash.slice(1));if(p.has('token')){window.__rumuToken=p.get('token');p.delete('token');var r=p.toString();history.replaceState(history.state,'',location.pathname+location.search+(r?'#'+r:''))}}catch(e){}",
+        },
+      ],
     },
   },
 
@@ -85,6 +95,11 @@ export default defineNuxtConfig({
     // target, e.g. another port.
     devProxy: {
       '/ws': { target: process.env.RUMU_WS ?? 'ws://localhost:7878/ws', ws: true },
+      '/auth': {
+        target: (process.env.RUMU_WS ?? 'ws://localhost:7878/ws')
+          .replace(/^ws/, 'http')
+          .replace(/\/ws$/, '/auth'),
+      },
       '/blobs': {
         target: (process.env.RUMU_WS ?? 'ws://localhost:7878/ws')
           .replace(/^ws/, 'http')

@@ -1,7 +1,6 @@
 //! WebSocket protocol, blob routes and static serving.
 
 use std::collections::HashMap;
-use std::net::IpAddr;
 use std::sync::Arc;
 
 use axum::Json;
@@ -9,10 +8,8 @@ use axum::Router;
 use axum::body::Bytes;
 use axum::extract::ws::{Message, WebSocket, WebSocketUpgrade};
 use axum::extract::{DefaultBodyLimit, Path, Query, State};
-use axum::http::header::{
-    CACHE_CONTROL, CONTENT_SECURITY_POLICY, CONTENT_TYPE, HOST, ORIGIN, X_CONTENT_TYPE_OPTIONS,
-};
-use axum::http::{HeaderMap, StatusCode, Uri};
+use axum::http::header::{CONTENT_SECURITY_POLICY, CONTENT_TYPE, X_CONTENT_TYPE_OPTIONS};
+use axum::http::{StatusCode, Uri};
 use axum::response::{IntoResponse, Response};
 use axum::routing::{get, post};
 use futures_util::{SinkExt, StreamExt};
@@ -114,8 +111,8 @@ pub struct AppState {
 #[allow_missing = true]
 struct WebAssets;
 
-pub fn router(state: AppState) -> Router {
-    Router::new()
+pub fn router(state: AppState, token: crate::auth::Token) -> Router {
+    let routes = Router::new()
         .route("/ws", get(ws_upgrade))
         // Registered routes take precedence over the SPA fallback below, so
         // `/blobs` is never swallowed by index.html.
@@ -123,7 +120,8 @@ pub fn router(state: AppState) -> Router {
             "/blobs",
             post(blob_upload).layer(DefaultBodyLimit::max(BLOB_BODY_LIMIT)),
         )
-        .route("/blobs/{hash}", get(blob_get))
+        .route("/blobs/{hash}", get(blob_get));
+    crate::auth::protect(routes, token)
         .fallback(static_asset)
         .with_state(state)
 }
@@ -154,52 +152,8 @@ fn not_found() -> &'static str {
     "rumu server is running (no web/dist found; run `pnpm build` in web/ and rebuild; connect via /ws)\n"
 }
 
-async fn ws_upgrade(
-    State(state): State<AppState>,
-    headers: HeaderMap,
-    ws: WebSocketUpgrade,
-) -> Response {
-    if !origin_allowed(&headers) {
-        return (
-            StatusCode::FORBIDDEN,
-            "cross-origin websocket upgrade refused\n",
-        )
-            .into_response();
-    }
+async fn ws_upgrade(State(state): State<AppState>, ws: WebSocketUpgrade) -> Response {
     ws.on_upgrade(move |socket| handle_socket(state, socket))
-}
-
-/// Browsers send `Origin` on WebSocket upgrades; refuse cross-site ones so a
-/// visited page cannot drive a local agent (cross-site WebSocket hijacking).
-/// Same-origin (`Origin`'s host:port equals `Host`) and the Nuxt dev server
-/// are allowed; clients without an `Origin` (the smoke example, tests) pass.
-/// The host must be `localhost` or an IP literal: a DNS-rebound domain would
-/// otherwise be "same-origin" with itself.
-fn origin_allowed(headers: &HeaderMap) -> bool {
-    let Some(origin) = headers.get(ORIGIN) else {
-        return true;
-    };
-    let Some(authority) = origin
-        .to_str()
-        .ok()
-        .and_then(|o| o.parse::<Uri>().ok())
-        .and_then(|u| u.authority().cloned())
-    else {
-        return false;
-    };
-    let host = headers
-        .get(HOST)
-        .and_then(|h| h.to_str().ok())
-        .unwrap_or_default();
-    let name = authority
-        .host()
-        .trim_start_matches('[')
-        .trim_end_matches(']');
-    let local_name = name.eq_ignore_ascii_case("localhost") || name.parse::<IpAddr>().is_ok();
-    let a = authority.as_str();
-    (local_name && a.eq_ignore_ascii_case(host))
-        || a.eq_ignore_ascii_case("localhost:5173")
-        || a.eq_ignore_ascii_case("127.0.0.1:5173")
 }
 
 /// `POST /blobs?name=<url-encoded file name>`: the raw request body is the
@@ -208,13 +162,9 @@ fn origin_allowed(headers: &HeaderMap) -> bool {
 /// back. A body the ingest refuses is a 400 naming why.
 async fn blob_upload(
     State(state): State<AppState>,
-    headers: HeaderMap,
     Query(params): Query<HashMap<String, String>>,
     bytes: Bytes,
 ) -> Response {
-    if !origin_allowed(&headers) {
-        return (StatusCode::FORBIDDEN, "cross-origin upload refused\n").into_response();
-    }
     let name = params.get("name").cloned().filter(|n| !n.trim().is_empty());
     let blobs = state.blobs.clone();
     // Normalization is CPU-bound: keep it off the async executor.
@@ -230,19 +180,11 @@ async fn blob_upload(
     }
 }
 
-/// `GET /blobs/{hash}`: the stored bytes. A blob never changes once written,
-/// so the response is immutable and caches forever. An image is served as
+/// `GET /blobs/{hash}`: the stored bytes, never publicly cached. An image is served as
 /// itself; any other blob (an artifact snapshot) only ever as sandboxed plain
 /// text, so model-written HTML never runs on rumu's origin — the web renders
 /// it in a sandboxed frame instead.
-async fn blob_get(
-    State(state): State<AppState>,
-    headers: HeaderMap,
-    Path(hash): Path<String>,
-) -> Response {
-    if !origin_allowed(&headers) {
-        return (StatusCode::FORBIDDEN, "cross-origin blob refused\n").into_response();
-    }
+async fn blob_get(State(state): State<AppState>, Path(hash): Path<String>) -> Response {
     let bytes = match state.blobs.get(&hash) {
         Ok(bytes) => bytes,
         Err(e) => return blob_error(&e),
@@ -260,10 +202,6 @@ async fn blob_get(
     (
         [
             (CONTENT_TYPE, mime),
-            (
-                CACHE_CONTROL,
-                "public, max-age=31536000, immutable".to_owned(),
-            ),
             (X_CONTENT_TYPE_OPTIONS, "nosniff".to_owned()),
             (CONTENT_SECURITY_POLICY, "sandbox".to_owned()),
         ],

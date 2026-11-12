@@ -1,6 +1,8 @@
 <script setup lang="ts">
 import { computed, onBeforeUnmount, onMounted, ref, type Component } from 'vue'
 import Sidebar from './components/Sidebar.vue'
+import AuthGate from './components/AuthGate.vue'
+import { auth } from './lib/auth'
 import ChatView from './components/chat/ChatView.vue'
 import AssistantsPage from './components/pages/AssistantsPage.vue'
 import LibraryPage from './components/pages/LibraryPage.vue'
@@ -65,6 +67,7 @@ onBeforeUnmount(() => {
 </script>
 
 <template>
+  <AuthGate v-if="auth.status !== 'ready'" />
   <!-- Two sheets of paper on the canvas (three while an artifact or a
        sub-agent is open at xl): the sessions (a card at lg, the
        drawer below it) and the chat — the one the conversation is written on.
@@ -82,6 +85,7 @@ onBeforeUnmount(() => {
        gutter, so the desk drops its padding there, and clips the sheet while
        it slides past the edge (motion.ts, SIDE_SHEET). -->
   <div
+    v-else
     class="desk grid h-full grid-cols-1 transition-[grid-template-columns] duration-350 ease-in-out lg:grid-cols-[280px_minmax(0,1fr)] lg:gap-x-4 lg:pr-4 xl:overflow-x-clip xl:pr-0"
     :class="
       artifactOpen || agentOpen

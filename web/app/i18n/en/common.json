@@ -1,4 +1,10 @@
 {
+  "auth": {
+    "token": "Access token",
+    "connect": "Connect",
+    "invalid": "Invalid token",
+    "unreachable": "Server unreachable"
+  },
   "offlineReconnecting": "Reconnecting…",
   "connected": "connected",
   "working": "rumu is working",

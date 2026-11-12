@@ -7,6 +7,7 @@
 
 import { ref, type Ref } from 'vue'
 import type { WsMessage } from './types'
+import { authorize } from './auth'
 
 export type PushHandler = (params: Record<string, unknown>) => void
 
@@ -43,6 +44,7 @@ export class RumuClient {
   private attempts = 0
   private reconnectTimer: ReturnType<typeof setTimeout> | null = null
   private stopped = false
+  private generation = 0
 
   constructor(url: string = defaultWsUrl()) {
     this.url = url
@@ -51,12 +53,19 @@ export class RumuClient {
   /** Start connecting; `onReady` runs after every (re)connection. */
   start(onReady: () => void): void {
     this.onConnected = onReady
+    this.reconnect()
+  }
+
+  reconnect(): void {
+    this.stop()
     this.stopped = false
-    this.connect()
+    void this.connect()
   }
 
   stop(): void {
     this.stopped = true
+    this.generation += 1
+    this.connected.value = false
     if (this.reconnectTimer !== null) clearTimeout(this.reconnectTimer)
     this.reconnectTimer = null
     this.ws?.close()
@@ -64,12 +73,21 @@ export class RumuClient {
     this.failPending(new Error('client stopped'))
   }
 
-  private connect(): void {
+  private async connect(): Promise<void> {
     if (this.stopped) return
+    const generation = this.generation
+    try {
+      if (typeof window !== 'undefined' && !(await authorize())) return
+    } catch {
+      if (generation === this.generation) this.scheduleReconnect()
+      return
+    }
+    if (this.stopped || generation !== this.generation) return
     const ws = new WebSocket(this.url)
     this.ws = ws
 
     ws.addEventListener('open', () => {
+      if (this.ws !== ws) return
       this.attempts = 0
       this.connected.value = true
       this.onConnected?.()
