@@ -55,11 +55,20 @@ async fn main() -> Result<()> {
     if fresh {
         rumu_plugins::seed_project(&home, &decks, &workspaces)?;
     }
-    let plugins = load_plugins(&home, &config, decks.clone(), workspaces.clone()).await?;
+    let mcp = rumu_plugins::McpHub::new(&home);
+    let plugins = load_plugins(
+        &home,
+        &config,
+        decks.clone(),
+        workspaces.clone(),
+        mcp.clone(),
+    )
+    .await?;
     let genai = Arc::new(GenaiLlm::default().with_blobs(blobs.clone()));
-    let settings = Arc::new(settings::Settings::load(&home, genai.clone())?);
+    let settings = Arc::new(settings::Settings::load(&home, genai.clone(), mcp.clone())?);
     let llm = load_llm(genai)?;
     let kernel = Kernel::new(store.clone(), llm, plugins, workspaces.clone())?;
+    settings::spawn_mcp_updates(&settings, &kernel, &mcp);
     spawn_blob_gc(store, blobs.clone());
     let stale = settings.stale_lists();
     settings::spawn_refresh(&settings, &kernel, settings.catalog_stale(), stale);
@@ -140,12 +149,14 @@ async fn load_plugins(
     config: &rumu_plugins::Config,
     decks: rumu_cards::Decks,
     workspaces: rumu_core::Workspaces,
+    mcp: Arc<rumu_plugins::McpHub>,
 ) -> Result<Vec<Arc<dyn Plugin>>> {
     let plugins = rumu_plugins::load_all(
         home,
         config,
         decks,
         workspaces,
+        mcp,
         &[rumu_kernel::agent_tool()],
     )
     .await?;

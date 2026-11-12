@@ -202,9 +202,9 @@ struct ShowArgs {
 struct SearchArgs {
     /// search terms
     query: String,
-    /// `@rumu:/cards/<prefix>` or `@rumu:/sessions[/<session>]`
+    /// `@rumu:/cards/<prefix>`, `@rumu:/sessions[/<session>]` or `@rumu:/tools[/<server>]`
     scope: Option<String>,
-    /// max hits (default 10)
+    /// max hits (default 10; 5 for tools)
     limit: Option<u64>,
 }
 
@@ -314,12 +314,13 @@ the same path again adds a version."
             },
             ToolSpec {
                 name: "search".into(),
-                description: "Search cards (default) or past conversations by text. Both are \
-relevance-ranked and match any term. `scope` narrows it: `@rumu:/cards/<mount>/<prefix>` for a \
-mounted deck's cards, `@rumu:/sessions` for all past conversations you can see (yours and \
+                description: "Search cards (default), past conversations or MCP tools by text. \
+All are relevance-ranked and match any term. `scope` narrows it: `@rumu:/cards/<mount>/<prefix>` \
+for a mounted deck's cards, `@rumu:/sessions` for all past conversations you can see (yours and \
 mounted assistants'), `@rumu:/sessions/by-assistant/<deck id>` for one assistant's, \
-`@rumu:/sessions/<session>` for one. Returns addresses with short snippets, never full text — \
-follow up with `read`."
+`@rumu:/sessions/<session>` for one. Cards and conversations return addresses with short \
+snippets, never full text — follow up with `read`. `@rumu:/tools[/<server>]` searches the \
+session's MCP tools; each hit shows its input schema, ready for `call_tool`."
                     .into(),
                 schema: tool_schema::<SearchArgs>(),
                 background: false,
@@ -438,7 +439,7 @@ pub(super) fn card_load_err(public: &str, source: impl std::fmt::Display) -> Too
 /// `unknown path ...`.
 pub(super) fn unknown_rumu_path(abs: &Utf8UnixPath) -> ToolError {
     ToolError::model(format!(
-        "unknown path `{RUMU_WORKSPACE}:{abs}` (roots: /cards, /history, /sessions, /tasks)"
+        "unknown path `{RUMU_WORKSPACE}:{abs}` (roots: /cards, /history, /sessions, /tasks, /tools)"
     ))
 }
 
@@ -446,7 +447,8 @@ pub(super) fn unknown_rumu_path(abs: &Utf8UnixPath) -> ToolError {
 fn bad_scope() -> ToolError {
     ToolError::model(format!(
         "`scope` must address the `{RUMU_WORKSPACE}` workspace: \
-         `{RUMU_WORKSPACE}:/cards/<prefix>` or `{RUMU_WORKSPACE}:/sessions[/<session>]`"
+         `{RUMU_WORKSPACE}:/cards/<prefix>`, `{RUMU_WORKSPACE}:/sessions[/<session>]` or \
+         `{RUMU_WORKSPACE}:/tools[/<server>]`"
     ))
 }
 
@@ -1124,6 +1126,12 @@ impl WorkspacePlugin {
         if abs.starts_with("/tasks") {
             return self.task_read(abs, offset, limit, cx).await;
         }
+        if crate::mcp::is_tools_path(abs) {
+            let out = crate::mcp::read(&self.mcp(), &*cx.state()?, abs).await?;
+            return slice_lines(out.content.text, offset, limit)
+                .map(ToolOutput::ok)
+                .map_err(ToolError::model);
+        }
         Err(unknown_rumu_path(abs))
     }
 
@@ -1146,7 +1154,8 @@ impl WorkspacePlugin {
         }
         match abs.as_str() {
             "/" => {
-                let mut roots = "cards/\nhistory/\nsessions/\ntasks/\nworkspaces/".to_owned();
+                let mut roots =
+                    "cards/\nhistory/\nsessions/\ntasks/\ntools/\nworkspaces/".to_owned();
                 if cx.state()?.project.is_some() {
                     roots.push_str("\nproject/");
                 }
@@ -1163,6 +1172,9 @@ impl WorkspacePlugin {
             _ if abs.starts_with("/history") => self.history_list(abs, cx).await,
             _ if abs.starts_with("/sessions") => self.session_list(abs, cx).await,
             _ if abs.starts_with("/tasks") => self.task_read(abs, None, None, cx).await,
+            _ if crate::mcp::is_tools_path(abs) => {
+                crate::mcp::list(&self.mcp(), &*cx.state()?, abs).await
+            }
             _ => Err(unknown_rumu_path(abs)),
         }
     }
@@ -1177,7 +1189,7 @@ impl WorkspacePlugin {
         cx: &Cx,
     ) -> ToolResult<ToolOutput> {
         let args: SearchArgs = parse_args("search", args)?;
-        let limit = args.limit.unwrap_or(10).max(1) as usize;
+        let limit = args.limit.map(|l| l.max(1) as usize);
         let scope = args.scope.as_deref().unwrap_or("");
         // An omitted scope means the whole card library; a given one is a
         // qualified path prefix that must land in the `@rumu` workspace.
@@ -1192,6 +1204,11 @@ impl WorkspacePlugin {
         let Utf8TypedPathBuf::Unix(abs) = abs else {
             return Err(bad_scope());
         };
+        if crate::mcp::is_tools_path(&abs) {
+            let limit = limit.unwrap_or(crate::mcp::SEARCH_LIMIT);
+            return crate::mcp::search(&self.mcp(), state, &abs, &args.query, limit).await;
+        }
+        let limit = limit.unwrap_or(10);
         if abs.starts_with("/sessions") {
             return self.session_search(&args.query, &abs, limit, cx).await;
         }

@@ -429,6 +429,7 @@ pub struct SettingsInfo {
     pub roles: Roles,
     pub titles: Titles,
     pub presets: Vec<PresetInfo>,
+    pub mcp: Vec<crate::McpServerInfo>,
 }
 
 #[cfg(test)]

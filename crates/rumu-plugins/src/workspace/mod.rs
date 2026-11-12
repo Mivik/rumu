@@ -67,6 +67,8 @@ pub struct WorkspacePlugin {
     // `label:root` keys of workspaces with neither AGENTS.md nor
     // CLAUDE.md — the ssh probe is not free, so misses are remembered.
     agents_missing: Mutex<std::collections::HashSet<String>>,
+    /// The MCP servers behind `@rumu:/tools`.
+    mcp: Option<std::sync::Arc<crate::McpHub>>,
 }
 
 impl WorkspacePlugin {
@@ -79,7 +81,21 @@ impl WorkspacePlugin {
             ssh_ctl_dir: ssh_ctl_dir(),
             ssh_uname: Mutex::new(HashMap::new()),
             agents_missing: Mutex::new(std::collections::HashSet::new()),
+            mcp: None,
         }
+    }
+
+    /// Serve `@rumu:/tools` from `hub`.
+    pub fn with_mcp(mut self, hub: std::sync::Arc<crate::McpHub>) -> Self {
+        self.mcp = Some(hub);
+        self
+    }
+
+    /// The MCP servers, or an empty hub's answer when there are none.
+    fn mcp(&self) -> std::sync::Arc<crate::McpHub> {
+        self.mcp
+            .clone()
+            .unwrap_or_else(|| crate::McpHub::new(&self.home))
     }
 
     /// The deck registry behind `/cards`.

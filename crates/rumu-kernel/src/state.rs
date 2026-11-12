@@ -91,6 +91,7 @@ fn fold_node(st: &mut PathState, body: &NodeBody) {
     } else if let Some(root) = content.decode::<SessionRoot>() {
         st.assistant = root.assistant.clone();
         st.asked_by = root.asked_by;
+        st.mcp = root.mcp;
         // The session's own deck is always at `/cards/self`.
         st.mounts = vec![CardMount {
             deck: root.assistant,
@@ -207,6 +208,7 @@ mod tests {
             assistant: "x".into(),
             asked_by: None,
             mounts,
+            mcp: Vec::new(),
         })
     }
 

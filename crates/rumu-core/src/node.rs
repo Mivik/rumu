@@ -507,6 +507,9 @@ pub struct SessionRoot {
     /// starts in at [`crate::PROJECT_MOUNT`].
     #[serde(default, skip_serializing_if = "Vec::is_empty")]
     pub mounts: Vec<CardMount>,
+    /// The deck's MCP servers, seeded at session start.
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub mcp: Vec<String>,
 }
 
 impl Structured for SessionRoot {
@@ -690,6 +693,9 @@ pub struct PathState {
     /// The last `model.use` marker: unset runs on the default role.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub model: Option<crate::ModelUse>,
+    /// The MCP servers from the session's root.
+    #[serde(default)]
+    pub mcp: Vec<String>,
 }
 
 #[cfg(test)]

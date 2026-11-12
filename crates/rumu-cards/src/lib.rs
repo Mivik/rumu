@@ -204,6 +204,7 @@ mod tests {
                 private: false,
                 mounts: Vec::new(),
                 allow_ask: Vec::new(),
+                mcp: Vec::new(),
                 icon: None,
             })
             .unwrap();

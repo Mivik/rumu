@@ -410,6 +410,7 @@ async fn dispatch(state: &AppState, method: &str, p: &Value) -> Result<Value> {
                     assistant: deck.id().to_owned(),
                     asked_by: None,
                     mounts,
+                    mcp: deck.meta.mcp.clone(),
                 })
                 .await?;
             Ok(json!({ "session": session, "branch": branch }))
@@ -584,6 +585,8 @@ async fn dispatch(state: &AppState, method: &str, p: &Value) -> Result<Value> {
                 instructions: Option<String>,
                 #[serde(default)]
                 allow_ask: Vec<String>,
+                #[serde(default)]
+                mcp: Vec<String>,
             }
             let req: Upsert = serde_json::from_value(p.clone())
                 .map_err(|e| ServerError::InvalidParams(e.to_string()))?;
@@ -618,6 +621,7 @@ async fn dispatch(state: &AppState, method: &str, p: &Value) -> Result<Value> {
                 private: existing.as_ref().is_some_and(|d| d.private()),
                 mounts,
                 allow_ask: req.allow_ask,
+                mcp: req.mcp,
                 icon: existing.as_ref().and_then(|d| d.meta.icon.clone()),
             };
             let deck = state.decks.upsert(meta)?;
@@ -701,6 +705,19 @@ async fn dispatch(state: &AppState, method: &str, p: &Value) -> Result<Value> {
         "settings.set_roles" => {
             let roles = parse_params(p)?;
             settings_edit(state, |s| s.set_roles(roles))
+        }
+        // MCP servers: their status and tools follow as pushes.
+        "settings.set_mcp" => {
+            let edit = parse_params(p)?;
+            settings_edit(state, |s| s.set_mcp(edit))
+        }
+        "settings.remove_mcp" => {
+            let name = str_param(p, "name")?;
+            settings_edit(state, |s| s.remove_mcp(name))
+        }
+        "settings.reconnect_mcp" => {
+            state.settings.reconnect_mcp(str_param(p, "name")?);
+            Ok(json!({}))
         }
 
         // The workspace registry (`workspaces.yaml`). Every change is pushed

@@ -7,6 +7,7 @@
 //!   (`@rumu:/cards`, `@rumu:/sessions`) and `workspace_use`
 //! - [`CodePlugin`] — the `code` tool: model-written JavaScript that composes
 //!   the other tools through `Cx::invoke` (hybrid mode)
+//! - [`McpPlugin`] — `call_tool` over the MCP servers of [`McpHub`]
 //! - [`StdioPlugin`] — host side of the external plugin protocol
 //!
 //! The kernel itself owns the `agent` tool. Entry point for the server:
@@ -21,6 +22,7 @@ mod ask;
 mod code;
 mod config;
 mod error;
+mod mcp;
 mod memory;
 mod stdio;
 mod workspace;
@@ -30,6 +32,7 @@ pub use ask::{AskPlugin, Assistant, assistant_of};
 pub use code::CodePlugin;
 pub use config::{Config, load_config};
 pub use error::{Error, Result};
+pub use mcp::{McpHub, McpPlugin};
 pub use memory::MemoryPlugin;
 pub use stdio::{StdioError, StdioPlugin};
 pub use workspace::{BackendError, WorkspacePlugin};
@@ -41,7 +44,7 @@ pub use workspaces::{
 #[cfg(test)]
 pub(crate) mod testutil;
 
-/// Load every plugin: memory, workspace, ask, then the external stdio plugins
+/// Load every plugin: memory, workspace, ask, mcp, then the external stdio plugins
 /// registered in `<home>/config.yaml` (each spawned and `initialize`d). The
 /// caller supplies the parsed [`Config`], the deck and workspace registries
 /// and the kernel's built-in tools so the `code` plugin's API stub covers
@@ -51,12 +54,14 @@ pub async fn load_all(
     config: &Config,
     decks: rumu_cards::Decks,
     workspaces: rumu_core::Workspaces,
+    mcp: Arc<McpHub>,
     builtin_tools: &[rumu_core::ToolSpec],
 ) -> Result<Vec<Arc<dyn Plugin>>> {
     let mut plugins: Vec<Arc<dyn Plugin>> = vec![
         Arc::new(MemoryPlugin::new(decks.clone())),
-        Arc::new(WorkspacePlugin::new(home, decks.clone(), workspaces)),
+        Arc::new(WorkspacePlugin::new(home, decks.clone(), workspaces).with_mcp(mcp.clone())),
         Arc::new(AskPlugin::new(decks)),
+        Arc::new(McpPlugin::new(home, mcp)),
     ];
     for spec in config.external_specs(home)? {
         let plugin = StdioPlugin::spawn(&spec.name, &spec.argv, &spec.cwd)

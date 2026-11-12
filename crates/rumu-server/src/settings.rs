@@ -25,6 +25,9 @@
 //! compact:                      # automatic compaction
 //!   auto: true                  # false: only manual and on overflow
 //!   at: 0.7                     # lowers the threshold: a window fraction or tokens
+//! mcp:                          # MCP servers (docs/mcp.md)
+//!   github: { command: [github-mcp-server, stdio], env: { GITHUB_TOKEN: … } }
+//!   linear: { url: https://mcp.example/mcp, headers: { Authorization: … } }
 //! ```
 //!
 //! The ids each provider lists are fetched from its endpoints and cached at
@@ -38,11 +41,13 @@ use std::sync::{Arc, Mutex, RwLock};
 use std::time::{Duration, SystemTime};
 
 use rumu_core::{
-    CUSTOM_PROVIDER, CustomModel, Effort, IoError, ModelConfig, ModelInfo, PresetInfo, Protocol,
-    ProviderInfo, ProviderSettings, Roles, SettingsInfo, Titles, enabled_models, split_model_ref,
+    CUSTOM_PROVIDER, CustomModel, Effort, IoError, McpServerSettings, ModelConfig, ModelInfo,
+    PresetInfo, Protocol, ProviderInfo, ProviderSettings, Roles, SettingsInfo, Titles,
+    enabled_models, split_model_ref, valid_mcp_name,
 };
 use rumu_kernel::LlmError;
 use rumu_llm::{Catalog, GenaiLlm, endpoints, model_info, presets};
+use rumu_plugins::McpHub;
 use serde::{Deserialize, Serialize};
 use tracing::{info, warn};
 
@@ -78,6 +83,8 @@ type Result<T> = std::result::Result<T, SettingsError>;
 struct File {
     #[serde(flatten)]
     model: ModelConfig,
+    #[serde(skip_serializing_if = "BTreeMap::is_empty")]
+    mcp: BTreeMap<String, McpServerSettings>,
 }
 
 /// A `settings.set_provider` request. The web never sees stored keys, so
@@ -135,6 +142,21 @@ pub fn spawn_refresh(
     });
 }
 
+/// Push the settings whenever an MCP server's status or tools change.
+pub fn spawn_mcp_updates(
+    settings: &Arc<Settings>,
+    kernel: &Arc<rumu_kernel::Kernel>,
+    mcp: &McpHub,
+) {
+    let (settings, kernel) = (settings.clone(), kernel.clone());
+    let mut changed = mcp.subscribe();
+    tokio::spawn(async move {
+        while changed.changed().await.is_ok() {
+            kernel.settings_changed(serde_json::json!(settings.info()));
+        }
+    });
+}
+
 /// A provider's last model list.
 #[derive(Debug, Clone, Default)]
 struct Listing {
@@ -155,6 +177,23 @@ pub struct CustomEdit {
     effort: Option<Effort>,
 }
 
+/// A `settings.set_mcp` request. The web never sees stored `env` and
+/// `headers` values, so a `null` value keeps the stored one; a key left out
+/// is removed.
+#[derive(Debug, Deserialize)]
+#[serde(deny_unknown_fields)]
+pub struct McpEdit {
+    name: String,
+    #[serde(default)]
+    command: Vec<String>,
+    #[serde(default)]
+    url: Option<String>,
+    #[serde(default)]
+    env: BTreeMap<String, Option<String>>,
+    #[serde(default)]
+    headers: BTreeMap<String, Option<String>>,
+}
+
 /// The loaded settings, applied to the model adapter they configure.
 pub struct Settings {
     home: PathBuf,
@@ -165,13 +204,14 @@ pub struct Settings {
     /// listing and the catalog, and dropped when one of those changes.
     infos: Mutex<BTreeMap<String, ProviderInfo>>,
     llm: Arc<GenaiLlm>,
+    mcp: Arc<McpHub>,
 }
 
 impl Settings {
     /// Read the file (missing is all defaults) and the cached catalog, and
     /// configure `llm` from them. An invalid file is reported and the
     /// adapter left unconfigured, so it can be fixed from the web.
-    pub fn load(home: &Path, llm: Arc<GenaiLlm>) -> Result<Self> {
+    pub fn load(home: &Path, llm: Arc<GenaiLlm>, mcp: Arc<McpHub>) -> Result<Self> {
         let path = home.join(SETTINGS_FILE);
         let file: File = match std::fs::read_to_string(&path) {
             Ok(text) => rumu_cards::yaml::from_str::<Option<File>>(&text)
@@ -187,6 +227,7 @@ impl Settings {
         if let Err(e) = llm.configure(&file.model, catalog.clone()) {
             warn!(error = %e, "model settings are invalid; fix them in Settings");
         }
+        mcp.configure(&file.mcp);
         let listed = file
             .model
             .providers
@@ -206,6 +247,7 @@ impl Settings {
             listed: Mutex::new(listed),
             infos: Mutex::default(),
             llm,
+            mcp,
         })
     }
 
@@ -239,6 +281,7 @@ impl Settings {
             roles: m.roles.clone(),
             titles: m.titles,
             presets: offered(&catalog),
+            mcp: self.mcp.info(&file.mcp),
         }
     }
 
@@ -547,6 +590,92 @@ impl Settings {
             .collect()
     }
 
+    /// Add server `edit.name`, or replace it, and (re)connect it.
+    pub fn set_mcp(&self, edit: McpEdit) -> Result<SettingsInfo> {
+        let name = edit.name.trim().to_owned();
+        if !valid_mcp_name(&name) {
+            return Err(SettingsError::Invalid(format!(
+                "MCP server name `{name}` must be 1–64 letters, digits, `_` or `-`"
+            )));
+        }
+        let command: Vec<String> = edit
+            .command
+            .iter()
+            .map(|a| a.trim().to_owned())
+            .filter(|a| !a.is_empty())
+            .collect();
+        let url = edit
+            .url
+            .map(|u| u.trim().to_owned())
+            .filter(|u| !u.is_empty());
+        if command.is_empty() == url.is_none() {
+            return Err(SettingsError::Invalid(
+                "an MCP server needs either a command or a URL".into(),
+            ));
+        }
+        self.edit_mcp(|servers| {
+            let old = servers.remove(&name).unwrap_or_default();
+            let merge = |edit: BTreeMap<String, Option<String>>,
+                         old: &BTreeMap<String, String>,
+                         what: &str| {
+                let mut out = BTreeMap::new();
+                for (k, v) in edit {
+                    let k = k.trim().to_owned();
+                    if k.is_empty() {
+                        continue;
+                    }
+                    let v = match v {
+                        Some(v) => v,
+                        None => old.get(&k).cloned().ok_or_else(|| {
+                            SettingsError::Invalid(format!("{what} `{k}` has no value"))
+                        })?,
+                    };
+                    out.insert(k, v);
+                }
+                Ok::<_, SettingsError>(out)
+            };
+            let env = merge(edit.env, &old.env, "variable")?;
+            let headers = merge(edit.headers, &old.headers, "header")?;
+            servers.insert(
+                name.clone(),
+                McpServerSettings {
+                    command,
+                    env,
+                    url,
+                    headers,
+                },
+            );
+            Ok(())
+        })
+    }
+
+    pub fn remove_mcp(&self, name: &str) -> Result<SettingsInfo> {
+        self.edit_mcp(|servers| {
+            servers.remove(name);
+            Ok(())
+        })
+    }
+
+    /// Reconnect server `name`.
+    pub fn reconnect_mcp(&self, name: &str) {
+        self.mcp.reconnect(name);
+    }
+
+    fn edit_mcp(
+        &self,
+        f: impl FnOnce(&mut BTreeMap<String, McpServerSettings>) -> Result<()>,
+    ) -> Result<SettingsInfo> {
+        {
+            let mut file = self.lock();
+            let mut next = file.clone();
+            f(&mut next.mcp)?;
+            save(&self.home.join(SETTINGS_FILE), &next)?;
+            self.mcp.configure(&next.mcp);
+            *file = next;
+        }
+        Ok(self.info())
+    }
+
     fn lock(&self) -> std::sync::MutexGuard<'_, File> {
         self.file.lock().expect("settings lock")
     }
@@ -776,7 +905,7 @@ mod tests {
     fn edits_round_trip_and_invalid_ones_change_nothing() {
         let home = tempfile::tempdir().unwrap();
         let llm = Arc::new(GenaiLlm::default());
-        let s = Settings::load(home.path(), llm.clone()).unwrap();
+        let s = Settings::load(home.path(), llm.clone(), McpHub::new(home.path())).unwrap();
 
         let info = s.set_provider(provider("a", Some("k"))).unwrap();
         assert!(info.providers[0].has_api_key);
@@ -852,7 +981,7 @@ mod tests {
         assert_eq!(info.roles.default.as_deref(), Some("rumu/primary"));
         assert!(s.remove_provider("a").is_err());
 
-        let again = Settings::load(home.path(), llm).unwrap();
+        let again = Settings::load(home.path(), llm, McpHub::new(home.path())).unwrap();
         let file = again.lock().model.clone();
         assert_eq!(file.providers["a"].api_key, "k");
         assert_eq!(file.custom["primary"].model, "a/n");
@@ -885,7 +1014,12 @@ mod tests {
     #[test]
     fn offers_the_catalogs_providers_after_the_built_in_ones() {
         let home = tempfile::tempdir().unwrap();
-        let s = Settings::load(home.path(), Arc::new(GenaiLlm::default())).unwrap();
+        let s = Settings::load(
+            home.path(),
+            Arc::new(GenaiLlm::default()),
+            McpHub::new(home.path()),
+        )
+        .unwrap();
         *s.catalog.write().unwrap() = Arc::new(
             Catalog::parse(
                 br#"{

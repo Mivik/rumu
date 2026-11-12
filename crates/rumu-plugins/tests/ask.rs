@@ -164,9 +164,16 @@ async fn kernel(home: &std::path::Path) -> Arc<Kernel> {
 async fn kernel_on(home: &std::path::Path, llm: Arc<dyn Llm>) -> Arc<Kernel> {
     let config = load_config(home).unwrap();
     let decks = rumu_cards::Decks::load(home).unwrap();
-    let plugins = rumu_plugins::load_all(home, &config, decks, Default::default(), &[])
-        .await
-        .unwrap();
+    let plugins = rumu_plugins::load_all(
+        home,
+        &config,
+        decks,
+        Default::default(),
+        rumu_plugins::McpHub::new(home),
+        &[],
+    )
+    .await
+    .unwrap();
     Kernel::new(
         Arc::new(Store::in_memory()),
         llm,

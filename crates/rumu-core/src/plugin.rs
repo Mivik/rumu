@@ -465,6 +465,8 @@ pub struct Consult {
     pub asked_by: String,
     /// The deck's default mounts (an `ask` session forces them to read).
     pub mounts: Vec<crate::CardMount>,
+    /// The deck's MCP servers.
+    pub mcp: Vec<String>,
     pub prompt: Content,
 }
 

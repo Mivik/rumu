@@ -586,11 +586,18 @@ async fn show_snapshots_a_file_as_an_artifact() {
     std::fs::write(dir.path().join("page.html"), "<p>v1</p>").unwrap();
 
     let out = plugin
-        .call_tool("show", json!({ "path": "page.html", "title": " Demo " }), &cx)
+        .call_tool(
+            "show",
+            json!({ "path": "page.html", "title": " Demo " }),
+            &cx,
+        )
         .await
         .unwrap();
     assert!(!out.is_error, "{}", out.content.text);
-    assert_eq!(out.content.text, "showed proj:page.html to the user (9 bytes)");
+    assert_eq!(
+        out.content.text,
+        "showed proj:page.html to the user (9 bytes)"
+    );
     let a: rumu_core::Artifact = out.content.data.as_ref().unwrap().decode().unwrap();
     assert_eq!(a.path, "proj:page.html");
     assert_eq!(a.title, "Demo");
@@ -608,7 +615,10 @@ async fn show_snapshots_a_file_as_an_artifact() {
         .await
         .unwrap();
     let a: rumu_core::Artifact = out.content.data.as_ref().unwrap().decode().unwrap();
-    assert_eq!((a.title.as_str(), a.kind), ("notes.MD", rumu_core::ArtifactKind::Markdown));
+    assert_eq!(
+        (a.title.as_str(), a.kind),
+        ("notes.MD", rumu_core::ArtifactKind::Markdown)
+    );
 
     // Missing files, binary files and `@rumu` are refused.
     for (path, needle) in [
@@ -623,7 +633,11 @@ async fn show_snapshots_a_file_as_an_artifact() {
             .call_tool("show", json!({ "path": path }), &cx)
             .await
             .unwrap();
-        assert!(out.is_error && out.content.text.contains(needle), "{path}: {}", out.content.text);
+        assert!(
+            out.is_error && out.content.text.contains(needle),
+            "{path}: {}",
+            out.content.text
+        );
         assert!(out.content.data.is_none());
     }
 }
@@ -1108,7 +1122,7 @@ async fn rumu_workspace_edges() {
     let out = plugin.call_tool("list", json!({}), &cx).await.unwrap();
     assert_eq!(
         out.content.text,
-        "cards/\nhistory/\nsessions/\ntasks/\nworkspaces/"
+        "cards/\nhistory/\nsessions/\ntasks/\ntools/\nworkspaces/"
     );
 
     // Unknown paths name the roots.

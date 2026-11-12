@@ -32,6 +32,7 @@ jiff = "0.2"
 json-patch = "4"
 regex = "1"
 reqwest = { version = "0.13", default-features = false, features = ["rustls"] }
+rmcp = { version = "3.9", default-features = false, features = ["client", "transport-child-process", "transport-streamable-http-client-reqwest", "reqwest"] }
 rquickjs = "0.14"
 rust-embed = { version = "8", features = ["mime-guess"] }
 schemars = "1"

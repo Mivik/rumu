@@ -31,6 +31,8 @@ pub struct Assistant {
     pub allow_ask: Vec<String>,
     /// Its `deck.yaml` default mounts.
     pub mounts: Vec<DeckMount>,
+    /// The MCP servers its sessions use.
+    pub mcp: Vec<String>,
     /// The one sessions run as when none is named.
     pub default: bool,
 }
@@ -49,6 +51,7 @@ pub fn assistant_of(decks: &Decks, deck: &Deck) -> Assistant {
         instructions,
         allow_ask: deck.meta.allow_ask.clone(),
         mounts: deck.meta.mounts.clone(),
+        mcp: deck.meta.mcp.clone(),
         default: decks.default_assistant() == deck.meta.id,
     }
 }
@@ -281,6 +284,7 @@ impl AskPlugin {
                 assistant: to.id().to_owned(),
                 asked_by: from.clone(),
                 mounts,
+                mcp: to.meta.mcp.clone(),
                 prompt: Content::text(prompt),
             })
             .await

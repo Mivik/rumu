@@ -169,6 +169,7 @@ pub fn deck_create(decks: &Decks, name: &str) -> Result<LibraryDeck> {
         private: false,
         mounts: Vec::new(),
         allow_ask: Vec::new(),
+        mcp: Vec::new(),
         icon: None,
     })?;
     library_deck(&deck)
