@@ -943,9 +943,11 @@ impl Kernel {
             }
         }
 
-        if let NodeBody::User { content } = &body {
-            // The session title: a prompt truncated (the first, or each
-            // latest), then maybe a generated one.
+        // The session title: a prompt truncated (the first, or each latest),
+        // then maybe a generated one. Only the session's own conversation
+        // line counts: a sub-agent's task is a User node too, but it belongs
+        // to the Agent branch and says nothing about the session.
+        if let (NodeBody::User { content }, BranchKind::Main) = (&body, &b.kind) {
             let mut session = self
                 .store
                 .get_session(&b.session)?

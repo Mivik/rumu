@@ -852,6 +852,41 @@ async fn titles_follow_the_first_or_the_latest_prompt() {
     assert_eq!(title(), "third");
 }
 
+/// With [`Titles::Last`] every prompt retitles the session — but a
+/// sub-agent's task is a User node on the child branch, not one of the
+/// session's own prompts, so the parent's prompt keeps the title.
+#[tokio::test]
+async fn sub_agent_task_does_not_retitle_the_session() {
+    let plugin = Arc::new(plugin_with(
+        "branch",
+        &["agent"],
+        vec![],
+        noop_hooks(),
+        Arc::new(|_, _, _| ToolOutput::ok("")),
+    ));
+    let (kernel, llm, _session, b) = setup(
+        vec![plugin],
+        vec![
+            LlmResponse::calls(vec![ToolCall::new(
+                "e1",
+                "agent",
+                json!({"background": false, "task": "find the config file"}),
+            )]),
+            // the sub-agent ends with a plain reply
+            LlmResponse::text("config lives in /etc/rumu"),
+            // the parent finishes
+            LlmResponse::text("all done"),
+        ],
+    )
+    .await;
+    *llm.titles.lock().unwrap() = rumu_core::Titles::Last;
+    run_turn(&kernel, &b, "look around").await;
+    assert_eq!(
+        kernel.list_sessions().unwrap().remove(0).title,
+        "look around"
+    );
+}
+
 /// A title is written anew on request, from the first prompt, only while a
 /// model writes them.
 #[tokio::test]
