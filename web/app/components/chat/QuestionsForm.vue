@@ -90,9 +90,12 @@ function onCustomKey(e: KeyboardEvent): void {
 </script>
 
 <template>
-  <div>
+  <!-- The tabs stay on the panel while the question, its options and the keys
+       scroll under them: a phone's panel is short, and which question you are
+       on should not depend on how far down you are. -->
+  <div class="flex min-h-0 flex-1 flex-col">
     <!-- tabs, when there are several questions -->
-    <div v-if="request.questions.length > 1" class="mt-2 flex flex-wrap gap-1" role="tablist">
+    <div v-if="request.questions.length > 1" class="mt-2 flex flex-none flex-wrap gap-1" role="tablist">
       <button
         v-for="(q, i) in request.questions"
         :key="i"
@@ -110,65 +113,69 @@ function onCustomKey(e: KeyboardEvent): void {
       </button>
     </div>
 
-    <p class="mt-2.5 text-message leading-snug font-semibold text-ink">{{ question.question }}</p>
-    <p v-if="question.multiple" class="mt-0.5 text-micro text-ink-3">{{ t('chat.ask.multiple') }}</p>
+    <div class="min-h-0 flex-1 overflow-y-auto">
+      <p class="mt-2.5 text-message leading-snug font-semibold text-ink">{{ question.question }}</p>
+      <p v-if="question.multiple" class="mt-0.5 text-micro text-ink-3">{{ t('chat.ask.multiple') }}</p>
 
-    <div
-      class="mt-2 divide-y divide-line-soft overflow-hidden rounded-control bg-surface ring-1 ring-line-soft"
-      :role="question.multiple ? 'group' : 'radiogroup'"
-      :aria-label="question.question"
-    >
-      <button
-        v-for="o in question.options"
-        :key="o.label"
-        type="button"
-        :role="question.multiple ? 'checkbox' : 'radio'"
-        :aria-checked="draft.selected.includes(o.label)"
-        class="q-option"
-        :class="{ 'is-on': draft.selected.includes(o.label) }"
-        @click="pick(o.label)"
+      <div
+        class="mt-2 divide-y divide-line-soft overflow-hidden rounded-control bg-surface ring-1 ring-line-soft"
+        :role="question.multiple ? 'group' : 'radiogroup'"
+        :aria-label="question.question"
       >
-        <span class="q-mark" :class="question.multiple ? 'rounded-[5px]' : 'rounded-full'">
-          <Icon v-if="question.multiple" name="ok" :size="11" />
-        </span>
-        <span class="min-w-0">
-          <span class="block text-secondary font-semibold text-ink">{{ o.label }}</span>
-          <span v-if="o.description" class="block text-meta text-ink-3">{{ o.description }}</span>
-        </span>
-      </button>
-      <!-- the user's own words: always there -->
-      <div class="q-option" :class="{ 'is-on': question.options.length && draft.own }">
         <button
-          v-if="question.options.length"
+          v-for="o in question.options"
+          :key="o.label"
           type="button"
           :role="question.multiple ? 'checkbox' : 'radio'"
-          :aria-checked="draft.own"
-          :aria-label="t('chat.ask.custom')"
-          class="q-mark"
-          :class="question.multiple ? 'rounded-[5px]' : 'rounded-full'"
-          @click="toggleOwn"
+          :aria-checked="draft.selected.includes(o.label)"
+          class="q-option"
+          :class="{ 'is-on': draft.selected.includes(o.label) }"
+          @click="pick(o.label)"
         >
-          <Icon v-if="question.multiple" name="ok" :size="11" />
+          <span class="q-mark" :class="question.multiple ? 'rounded-[5px]' : 'rounded-full'">
+            <Icon v-if="question.multiple" name="ok" :size="11" />
+          </span>
+          <span class="min-w-0">
+            <span class="block text-secondary font-semibold text-ink">{{ o.label }}</span>
+            <span v-if="o.description" class="block text-meta text-ink-3">{{ o.description }}</span>
+          </span>
         </button>
-        <input
-          ref="customEl"
-          v-model="draft.custom"
-          class="min-w-0 flex-1 border-0 bg-transparent p-0 text-secondary focus:shadow-none"
-          :placeholder="question.options.length ? t('chat.ask.custom') : t('chat.ask.answer')"
-          @focus="useOwn"
-          @keydown="onCustomKey"
-        />
+        <!-- the user's own words: always there -->
+        <div class="q-option" :class="{ 'is-on': question.options.length && draft.own }">
+          <button
+            v-if="question.options.length"
+            type="button"
+            :role="question.multiple ? 'checkbox' : 'radio'"
+            :aria-checked="draft.own"
+            :aria-label="t('chat.ask.custom')"
+            class="q-mark"
+            :class="question.multiple ? 'rounded-[5px]' : 'rounded-full'"
+            @click="toggleOwn"
+          >
+            <Icon v-if="question.multiple" name="ok" :size="11" />
+          </button>
+          <input
+            ref="customEl"
+            v-model="draft.custom"
+            class="min-w-0 flex-1 border-0 bg-transparent p-0 text-secondary focus:shadow-none"
+            :placeholder="question.options.length ? t('chat.ask.custom') : t('chat.ask.answer')"
+            @focus="useOwn"
+            @keydown="onCustomKey"
+          />
+        </div>
       </div>
-    </div>
 
-    <div class="mt-2.5 flex items-center justify-end gap-1.5">
-      <button type="button" class="btn px-3 py-1" @click="answerDecision(id, {})">
-        {{ t('chat.ask.skip') }}
-      </button>
-      <button v-if="!last" type="button" class="btn px-3 py-1" @click="next">{{ t('chat.ask.next') }}</button>
-      <button v-else type="button" class="btn btn-primary px-3 py-1" :disabled="!complete" @click="submit">
-        {{ t('chat.ask.submit') }}
-      </button>
+      <div class="mt-2.5 flex items-center justify-end gap-1.5">
+        <button type="button" class="btn px-3 py-1" @click="answerDecision(id, {})">
+          {{ t('chat.ask.skip') }}
+        </button>
+        <button v-if="!last" type="button" class="btn px-3 py-1" @click="next">
+          {{ t('chat.ask.next') }}
+        </button>
+        <button v-else type="button" class="btn btn-primary px-3 py-1" :disabled="!complete" @click="submit">
+          {{ t('chat.ask.submit') }}
+        </button>
+      </div>
     </div>
   </div>
 </template>

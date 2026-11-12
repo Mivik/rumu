@@ -12,7 +12,9 @@
 // While rumu works, sending steers the turn and a stop button joins it.
 //
 // A tool call waiting on the user's approval unfolds from the top of the
-// sheet (DecisionPanel), above the writing.
+// sheet (DecisionPanel), above the writing. The sheet is a column that may
+// shrink (min-h-0): a request taller than the room the sheet has scrolls
+// inside its panel instead of growing the sheet past the window's foot.
 //
 // Images attach three ways — paste, drop, the footer's picture key — and
 // upload the moment they arrive, into the tray above the writing; a failed
@@ -269,7 +271,7 @@ const placeholder = computed(() => {
   <!-- the footer's empty stretch is part of the page: clicking it writes -->
   <div
     ref="rootEl"
-    class="composer relative mx-auto flex w-full max-w-[var(--col-max)] flex-col rounded-sheet"
+    class="composer relative mx-auto flex w-full max-w-[var(--col-max)] min-h-0 flex-col rounded-sheet"
     :class="{ 'is-drag': dragDepth > 0 }"
     @pointerdown="onPress"
     @click.capture="onClickCapture"

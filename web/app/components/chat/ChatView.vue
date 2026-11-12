@@ -171,7 +171,9 @@ function composerRoot(): HTMLElement | null {
           <TraceView v-else />
         </Transition>
 
-        <div ref="composerEl" class="px-3 pt-1 pb-3 sm:px-6 sm:pb-5">
+        <!-- min-h-0: a tall decision panel shrinks into the room left above the
+             sheet's foot instead of pushing the send row past its edge -->
+        <div ref="composerEl" class="flex min-h-0 flex-col px-3 pt-1 pb-3 sm:px-6 sm:pb-5">
           <!-- steering prompts accepted while busy, until they are written -->
           <div
             v-if="queuedPrompts.length"

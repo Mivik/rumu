@@ -8,6 +8,11 @@
 // the rest wait their turn (other sessions' requests are marked in the
 // sidebar). Escape declines (or dismisses the questions), unless focus is in
 // a text field.
+//
+// It never grows past the room the sheet has: the sheet hands it whatever
+// height is left above the writing, and the panel caps and scrolls within
+// that — so a long request on a phone no longer pushes the writing and its
+// send key off the sheet's bottom edge.
 import { computed, onBeforeUnmount, onMounted, shallowRef, watch } from 'vue'
 import { t } from '../../i18n'
 import { answerDecision, state } from '../../lib/store'
@@ -135,12 +140,12 @@ onBeforeUnmount(() => window.removeEventListener('keydown', onKey, true))
         <div
           v-if="shown && view"
           :key="shown.id"
-          class="max-h-[min(70vh,560px)] overflow-y-auto border-b border-line-soft bg-surface-2/50 px-4 pt-3 pb-3"
+          class="flex h-full max-h-[min(70dvh,560px)] flex-col border-b border-line-soft bg-surface-2/50 px-4 pt-3 pb-3"
           role="alertdialog"
           aria-modal="false"
           :aria-label="view.title"
         >
-          <div class="flex items-center gap-2">
+          <div class="flex flex-none items-center gap-2">
             <RumuCat state="waiting" :size="34" :paper="false" class="-my-1" />
             <p class="min-w-0 text-message font-semibold text-ink">{{ view.title }}</p>
             <span v-if="pending.length > 1" class="ml-auto text-micro text-ink-3 tabular-nums">
@@ -148,7 +153,7 @@ onBeforeUnmount(() => window.removeEventListener('keydown', onKey, true))
             </span>
           </div>
           <QuestionsForm v-if="shown.request.kind === 'questions'" :id="shown.id" :request="shown.request" />
-          <template v-else>
+          <div v-else class="min-h-0 flex-1 overflow-y-auto">
             <div v-if="view.before !== undefined" class="mt-2 grid gap-2 sm:grid-cols-2">
               <div>
                 <p class="text-micro text-ink-3">{{ t('chat.ask.before') }}</p>
@@ -204,7 +209,7 @@ onBeforeUnmount(() => window.removeEventListener('keydown', onKey, true))
                 {{ t('chat.ask.once') }}
               </button>
             </div>
-          </template>
+          </div>
         </div>
       </Transition>
     </div>
