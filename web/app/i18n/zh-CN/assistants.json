@@ -27,5 +27,8 @@
   "mountTaken": "同一个卡组只能挂载一次",
   "unmount": "取消挂载",
   "pickDeck": "选择卡组",
-  "changeDeck": "更换卡组"
+  "changeDeck": "更换卡组",
+  "mcp": "MCP 服务器",
+  "mcpGone": "未配置，点击移除",
+  "manageMcp": "管理"
 }

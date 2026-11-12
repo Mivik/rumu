@@ -18,6 +18,10 @@ allow_ask: Array<string>,
  */
 mounts: Array<DeckMount>, 
 /**
+ * The MCP servers its sessions use.
+ */
+mcp: Array<string>, 
+/**
  * The one sessions run as when none is named.
  */
 default: boolean, };

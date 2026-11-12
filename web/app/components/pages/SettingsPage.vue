@@ -12,6 +12,7 @@ import { openPage, pageUp, replacePage } from '../../lib/router'
 import { refreshSettings } from '../../lib/state/models'
 import { connected, state } from '../../lib/store'
 import DefaultsSettings from '../settings/DefaultsSettings.vue'
+import McpSettings from '../settings/McpSettings.vue'
 import ProvidersSettings from '../settings/ProvidersSettings.vue'
 import Icon from '../ui/Icon.vue'
 import PageSheet from './PageSheet.vue'
@@ -19,6 +20,7 @@ import PageSheet from './PageSheet.vue'
 const SECTIONS = [
   { key: 'defaults', icon: 'model' },
   { key: 'providers', icon: 'link' },
+  { key: 'mcp', icon: 'tool' },
 ] as const
 type Section = (typeof SECTIONS)[number]['key']
 
@@ -120,5 +122,6 @@ watch(connected, (up) => up && void refreshSettings(), { immediate: true })
 
     <DefaultsSettings v-if="section === 'defaults'" />
     <ProvidersSettings v-else-if="section === 'providers'" />
+    <McpSettings v-else-if="section === 'mcp'" />
   </PageSheet>
 </template>

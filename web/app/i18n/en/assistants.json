@@ -27,5 +27,8 @@
   "mountTaken": "A deck can be mounted only once",
   "unmount": "Unmount",
   "pickDeck": "Pick a deck",
-  "changeDeck": "Change deck"
+  "changeDeck": "Change deck",
+  "mcp": "MCP servers",
+  "mcpGone": "Not configured; click to remove",
+  "manageMcp": "Manage"
 }

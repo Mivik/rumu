@@ -1,14 +1,15 @@
 <script setup lang="ts">
 // The assistants page (`/assistants/<id>`, `?new` for a new one). Each
 // assistant is a deck (`decks/<id>/deck.yaml`) with a pinned
-// `instructions.md`; the form edits its name, default mounts, instructions
-// and who may ask it. Saves go through `assistant.upsert` /
+// `instructions.md`; the form edits its name, default mounts, instructions,
+// MCP servers and who may ask it. Saves go through `assistant.upsert` /
 // `assistant.delete`; `assistant.set_default` picks the one sessions run as
 // by default.
 import { computed, onBeforeUnmount, onMounted, reactive, ref, watch } from 'vue'
 import { t } from '../../i18n'
 import { rumu } from '../../lib/api'
 import { openPage, pageUp, replacePage } from '../../lib/router'
+import { models, refreshSettings } from '../../lib/state/models'
 import {
   connected,
   defaultAssistant,
@@ -29,6 +30,7 @@ interface Form {
   name: string
   mounts: DeckMount[]
   instructions: string
+  mcp: string[]
   allow_ask: string[]
 }
 
@@ -38,6 +40,7 @@ function blank(): Form {
     name: '',
     mounts: [],
     instructions: '',
+    mcp: [],
     allow_ask: [],
   }
 }
@@ -157,6 +160,16 @@ function removeMount(index: number): void {
 
 const askOptions = computed(() => assistants.value.filter((a) => a.id !== form.id))
 
+/** The configured MCP servers, then names the assistant keeps that are
+ *  no longer configured. */
+const mcpOptions = computed(() => {
+  const configured = (models.settings?.mcp ?? []).map((s) => s.name)
+  return [
+    ...configured.map((name) => ({ name, gone: false })),
+    ...form.mcp.filter((n) => !configured.includes(n)).map((name) => ({ name, gone: true })),
+  ]
+})
+
 /** Load the form from the open assistant (a blank one when adding). */
 function reset(): void {
   saveError.value = ''
@@ -172,6 +185,7 @@ function fromAssistant(assistant: Assistant): Form {
     name: assistant.name,
     mounts: assistant.mounts.map((m) => ({ ...m })),
     instructions: assistant.instructions ?? '',
+    mcp: [...assistant.mcp],
     allow_ask: [...assistant.allow_ask],
   }
 }
@@ -189,6 +203,7 @@ async function load(): Promise<void> {
     const [, choices] = await Promise.all([
       refreshAssistants(),
       rumu.request<AssistantOptions>('assistant.options'),
+      refreshSettings(),
     ])
     options.value = choices
   } catch (err) {
@@ -208,6 +223,7 @@ async function save(): Promise<void> {
       name,
       mounts: form.mounts,
       instructions: form.instructions.trim() || undefined,
+      mcp: form.mcp,
       allow_ask: form.allow_ask.filter((asker) => asker !== form.id),
     })
     await load()
@@ -488,6 +504,38 @@ onBeforeUnmount(() => window.removeEventListener('keydown', onKey, true))
             <span class="field-label">{{ t('assistants.instructions') }}</span>
             <textarea v-model="form.instructions" rows="6" class="w-full resize-y" />
           </label>
+
+          <div class="flex flex-col gap-1.5">
+            <span class="field-label">{{ t('assistants.mcp') }}</span>
+            <div class="flex flex-wrap gap-1.5">
+              <button
+                v-for="server in mcpOptions"
+                :key="server.name"
+                type="button"
+                class="chip font-mono"
+                :class="
+                  server.gone
+                    ? 'tone-danger line-through'
+                    : form.mcp.includes(server.name)
+                      ? 'tone-tool'
+                      : 'tone-neutral'
+                "
+                :aria-pressed="form.mcp.includes(server.name)"
+                :title="server.gone ? t('assistants.mcpGone') : undefined"
+                @click="toggle(form.mcp, server.name)"
+              >
+                <Icon
+                  :name="server.gone ? 'close' : form.mcp.includes(server.name) ? 'ok' : 'plus'"
+                  :size="12"
+                />
+                {{ server.name }}
+              </button>
+              <button type="button" class="chip tone-neutral" @click="openPage('settings', 'mcp')">
+                <Icon name="settings" :size="12" />
+                {{ t('assistants.manageMcp') }}
+              </button>
+            </div>
+          </div>
 
           <div v-if="askOptions.length" class="flex flex-col gap-1.5">
             <span class="field-label">{{ t('assistants.allowAsk') }}</span>
