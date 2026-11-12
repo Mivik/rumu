@@ -1,10 +1,9 @@
 {
   "title": "助手",
-  "pick": "选择一个助手，或新建一个。",
   "manage": "编辑助手",
   "new": "新建助手",
   "name": "名字",
-  "mounts": "默认挂载",
+  "mounts": "挂载的卡组",
   "instructions": "指令",
   "allowAsk": "免确认询问它",
   "create": "创建",
@@ -35,5 +34,12 @@
   "allTools": "全部",
   "noTools": "全不选",
   "skills": "Skill",
-  "skillGone": "未找到，点击移除"
+  "skillGone": "未找到，点击移除",
+  "namePlaceholder": "给助手起个名字",
+  "copyId": "复制 ID",
+  "newSession": "新会话",
+  "carriesDecks": "挂载了 {n} 个卡组",
+  "carriesMcp": "{n} 个 MCP 服务器",
+  "carriesSkills": "{n} 个 Skill",
+  "carriesAllSkills": "全部 Skill"
 }

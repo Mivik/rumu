@@ -16,6 +16,17 @@ export function hash(s: string): number {
   return h >>> 0
 }
 
+/** A small seeded PRNG (mulberry32) over the hash of `seed`. */
+export function random(seed: string): () => number {
+  let h = hash(seed)
+  return () => {
+    h = (h + 0x6d2b79f5) | 0
+    let x = Math.imul(h ^ (h >>> 15), h | 1)
+    x ^= x + Math.imul(x ^ (x >>> 7), x | 61)
+    return ((x ^ (x >>> 14)) >>> 0) / 4294967296
+  }
+}
+
 export function projectTone(p: Sealed): ProjectTone {
   const set = p.icon?.tone
   if (set && (PROJECT_TONES as readonly string[]).includes(set)) return set as ProjectTone

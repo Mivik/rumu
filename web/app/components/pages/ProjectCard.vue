@@ -5,7 +5,7 @@
 // The card itself opens the project.
 import { computed } from 'vue'
 import { locale, t } from '../../i18n'
-import { hash, projectTone, toneColor } from '../../lib/projectIcon'
+import { projectTone, random, toneColor } from '../../lib/projectIcon'
 import { startSessionIn, state } from '../../lib/store'
 import type { Project } from '../../lib/types'
 import ProjectSeal from '../brand/ProjectSeal.vue'
@@ -13,17 +13,6 @@ import Icon from '../ui/Icon.vue'
 
 const props = defineProps<{ project: Project }>()
 defineEmits<{ open: [] }>()
-
-/** A small seeded PRNG (mulberry32) over the id's hash. */
-function random(seed: string): () => number {
-  let h = hash(seed)
-  return () => {
-    h = (h + 0x6d2b79f5) | 0
-    let x = Math.imul(h ^ (h >>> 15), h | 1)
-    x ^= x + Math.imul(x ^ (x >>> 7), x | 61)
-    return ((x ^ (x >>> 14)) >>> 0) / 4294967296
-  }
-}
 
 /** Three soft lights — the tone and its two hue neighbours — placed by the
  * id; `--k` scales how much tone they carry (less in the dark). */

@@ -1,6 +1,6 @@
 <script setup lang="ts">
 // Left column: the wordmark with the language key beside it, the landing,
-// library and projects entries, and the sessions grouped by
+// library, assistants and projects entries, and the sessions grouped by
 // project (a two-level tree). Each project group carries its sessions, newest
 // first; the last group holds the sessions without a project. A drag between
 // groups moves the session. At the foot, the connection status.
@@ -37,6 +37,7 @@ import { models } from '../lib/state/models'
 import { prefs } from '../lib/state/prefs'
 import { requestComposerFocus } from '../lib/state/ui'
 import ProjectSeal from './brand/ProjectSeal.vue'
+import RumuCat from './brand/RumuCat.vue'
 import RumuMark from './brand/RumuMark.vue'
 import Icon from './ui/Icon.vue'
 import Popover from './ui/Popover.vue'
@@ -353,6 +354,19 @@ const otherLocale = computed<Locale>(
       </span>
       <span class="flex-1">{{ t('library.title') }}</span>
       <span class="text-micro text-ink-3 tabular-nums">{{ state.cards.length }}</span>
+    </button>
+
+    <button
+      class="mt-0.5"
+      :class="navTone('assistants')"
+      :aria-current="onPage === 'assistants' ? 'page' : undefined"
+      @click="page('assistants')"
+    >
+      <span class="flex size-5 flex-none items-center justify-center leading-0">
+        <RumuCat :size="18" :paper="false" />
+      </span>
+      <span class="flex-1">{{ t('assistants.title') }}</span>
+      <span class="text-micro text-ink-3 tabular-nums">{{ state.assistants.length }}</span>
     </button>
 
     <button
