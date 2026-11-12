@@ -6,19 +6,16 @@
 // full call/result lives in the row's tooltip and its own expansion
 // (args/output). "ok" rows carry no status word (the icon suffices), errors
 // keep theirs, and a call a hook blocked gets a small rubber stamp (stamped
-// on, when it happens live) and starts expanded. `agent` calls get an "open
-// sub-agent" pill that jumps to the child branch and badges for a clean
-// context / a workspace scope.
+// on, when it happens live) and starts expanded. `agent` calls are plain
+// rows here: the AgentCard below the run is where a sub-agent shows.
 import { computed, ref } from 'vue'
 import { t } from '../../i18n'
-import type { Branch } from '../../lib/types'
 import type { ToolRowInfo } from '../../lib/store'
-import { openAgentView, openTaskDetail, state } from '../../lib/store'
+import { openTaskDetail, state } from '../../lib/store'
 import { cardById } from '../../lib/cards'
-import type { ToolRowView, ToolStatus } from '../../lib/toolrows'
+import type { ToolRowView } from '../../lib/toolrows'
 import { argsOf, outputJson, toolRowTitle, toolRowView } from '../../lib/toolrows'
 import { taskStatusWord } from '../../lib/tasks'
-import { shortId, workspaceLabel } from '../../lib/util'
 import { highlightLine } from '../../lib/markdown'
 import { vEnter } from '../../lib/motion'
 import Icon from '../ui/Icon.vue'
@@ -99,23 +96,9 @@ function toggle(v: ToolRowView): void {
   else expanded.value.add(id)
 }
 
-/** Status icon color: agent rows read agent, failures danger, else tool. */
-const statusIcon: Record<ToolStatus, string> = {
-  ok: 'text-tool',
-  error: 'text-danger',
-  blocked: 'text-danger',
-}
-function iconClass(v: ToolRowView): string {
-  return v.agentChild ? 'text-agent' : statusIcon[v.status]
-}
-
-function nameClass(v: ToolRowView): string {
-  if (v.agentChild) return 'text-agent'
+/** Status color of a row's icon and name: failures danger, else tool. */
+function statusClass(v: ToolRowView): string {
   return v.status === 'ok' ? 'text-tool' : 'text-danger'
-}
-
-function openAgent(b: Branch): void {
-  openAgentView(b.id)
 }
 
 function liveTaskOutput(id: string | null): string {
@@ -143,9 +126,9 @@ function liveTaskOutput(id: string | null): string {
         <Icon
           :name="v.status === 'ok' ? 'tool' : v.status === 'blocked' ? 'blocked' : 'error'"
           :size="12"
-          :class="iconClass(v)"
+          :class="statusClass(v)"
         />
-        <span class="max-w-[40%] flex-none truncate font-mono text-meta font-medium" :class="nameClass(v)">{{
+        <span class="max-w-[40%] flex-none truncate font-mono text-meta font-medium" :class="statusClass(v)">{{
           nameLabel(v)
         }}</span>
         <span
@@ -157,16 +140,6 @@ function liveTaskOutput(id: string | null): string {
         <span v-else-if="v.callText" class="min-w-0 truncate font-mono text-meta text-ink-2">{{
           v.callText
         }}</span>
-        <span
-          v-if="v.agentNoContext"
-          class="flex-none rounded-xs border border-agent/40 px-1 font-mono text-micro text-agent"
-          >{{ t('tools.row.noContext') }}</span
-        >
-        <span
-          v-if="v.agentScope"
-          class="flex-none rounded-xs border border-agent/40 px-1 font-mono text-micro text-agent"
-          >{{ t('tools.row.scope', { names: v.agentScope.map(workspaceLabel).join(', ') }) }}</span
-        >
         <span v-if="v.diff" class="max-w-[40%] flex-none truncate text-micro text-ink-3">
           · <span class="font-medium text-pine">+{{ v.diff.added }}</span>
           <span v-if="v.diff.removed" class="font-medium text-danger">−{{ v.diff.removed }}</span>
@@ -177,11 +150,6 @@ function liveTaskOutput(id: string | null): string {
         >
           · {{ v.resultText }}
         </span>
-        <span
-          v-if="v.name === 'agent' && v.taskStatus === 'running'"
-          class="flex-none rounded-xs border border-agent/40 px-1 font-mono text-micro text-agent"
-          >{{ t('tools.row.runningInBackground') }}</span
-        >
         <span class="ml-auto flex flex-none items-center gap-2">
           <Chip
             v-if="v.taskId"
@@ -224,19 +192,6 @@ function liveTaskOutput(id: string | null): string {
           />
         </span>
       </button>
-
-      <Chip
-        v-if="v.agentChild"
-        class="mt-0.5 mb-1.5 ml-[30px] self-start"
-        icon="agent"
-        icon-after="external"
-        tone="agent"
-        clickable
-        :title="t('tools.row.subAgentTitle', { id: shortId(v.agentChild.id) })"
-        @click="openAgent(v.agentChild)"
-      >
-        {{ t('tools.row.openSubAgent') }}
-      </Chip>
 
       <!-- dedicated bodies fill the expanded row edge to edge -->
       <FileDiff

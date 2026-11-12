@@ -44,9 +44,6 @@
     "thoughtFor": "思考了 {duration}"
   },
   "row": {
-    "noContext": "无上下文",
-    "scope": "范围 {names}",
-    "runningInBackground": "后台运行中",
     "task": "任务 {id} · {status}",
     "openSubAgent": "打开子代理",
     "subAgentTitle": "子代理分支 {id}",

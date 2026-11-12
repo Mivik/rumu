@@ -44,10 +44,6 @@ export interface ToolRowView {
   /** The call id of that card use (the drawer opens its exact snapshot). */
   cardUseRef: string | null
   agentChild: Branch | null
-  /** `agent` rows: the sub-agent asks for a clean context. */
-  agentNoContext: boolean
-  /** `agent` rows: the workspace names the sub-agent is limited to. */
-  agentScope: string[] | null
   /** Set when this call started a kernel background task. */
   taskId: string | null
   taskStatus: TaskStatus | null
@@ -182,25 +178,6 @@ function callShort(name: string, call: Call): string {
     default:
       return preview(argSummary(call), 40)
   }
-}
-
-/** `inherit` of an `agent` call, if it is an object. */
-function inheritOf(args: Args): Args {
-  const raw = args?.inherit
-  return raw && typeof raw === 'object' && !Array.isArray(raw) ? (raw as Args) : null
-}
-
-/** True when an `agent` call asks for `context: "none"`. */
-function agentNoContext(args: Args): boolean {
-  return inheritOf(args)?.context === 'none'
-}
-
-/** The workspace names an `agent` call is scoped to, or null for all. */
-function agentScope(args: Args): string[] | null {
-  const raw = inheritOf(args)?.workspaces
-  if (!Array.isArray(raw)) return null
-  const names = raw.filter((w): w is string => typeof w === 'string')
-  return names.length ? names : null
 }
 
 /** `+N −M` counts for a write/edit row: from the result's hunks, or — for
@@ -391,8 +368,6 @@ export function toolRowView(row: ToolRowInfo): ToolRowView {
     toolCardId,
     cardUseRef: toolCardId && callId ? callId : null,
     agentChild,
-    agentNoContext: name === 'agent' && agentNoContext(args),
-    agentScope: name === 'agent' ? agentScope(args) : null,
     taskId: taskId ?? null,
     taskStatus: task?.status ?? null,
     taskLabel: task ? taskLabel(task) : null,

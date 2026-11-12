@@ -44,9 +44,6 @@
     "thoughtFor": "Thought for {duration}"
   },
   "row": {
-    "noContext": "no context",
-    "scope": "scope {names}",
-    "runningInBackground": "running in background",
     "task": "task {id} · {status}",
     "openSubAgent": "open sub-agent",
     "subAgentTitle": "sub-agent branch {id}",
