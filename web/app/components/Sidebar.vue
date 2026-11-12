@@ -395,11 +395,11 @@ const otherLocale = computed<Locale>(
         @drop="dropOn($event, group)"
       >
         <div
-          class="group/head flex items-center gap-1 rounded-control px-1.5 py-1.5 transition-colors duration-150 hover:bg-surface-2/60"
+          class="group/head flex items-stretch rounded-control transition-colors duration-150 hover:bg-surface-2/60"
         >
           <button
             type="button"
-            class="flex min-w-0 flex-1 items-center gap-1 text-left text-micro font-bold text-ink-3"
+            class="flex min-w-0 flex-1 items-center gap-1 py-1.5 pl-1.5 text-left text-micro font-bold text-ink-3"
             :aria-expanded="!collapsed(group)"
             @click="toggleGroup(group)"
           >
@@ -416,7 +416,7 @@ const otherLocale = computed<Locale>(
             }}</span>
           </button>
           <div
-            class="flex h-6 flex-none items-center transition-opacity duration-150 pointer-fine:opacity-0 pointer-fine:group-hover/head:opacity-100 pointer-fine:focus-within:opacity-100"
+            class="flex flex-none items-center gap-1 py-1.5 pr-1.5 transition-opacity duration-150 pointer-fine:opacity-0 pointer-fine:group-hover/head:opacity-100 pointer-fine:focus-within:opacity-100"
           >
             <button
               type="button"
