@@ -511,6 +511,10 @@ pub struct SessionRoot {
     /// session start.
     #[serde(default, skip_serializing_if = "std::collections::BTreeMap::is_empty")]
     pub mcp: crate::McpUse,
+    /// The rules enabling the deck's skills ([`crate::rules_enable`]), seeded
+    /// at session start.
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub skills: Vec<String>,
 }
 
 impl Structured for SessionRoot {
@@ -697,6 +701,9 @@ pub struct PathState {
     /// The MCP servers from the session's root.
     #[serde(default)]
     pub mcp: crate::McpUse,
+    /// The skill rules from the session's root.
+    #[serde(default)]
+    pub skills: Vec<String>,
 }
 
 #[cfg(test)]

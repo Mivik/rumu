@@ -467,6 +467,8 @@ pub struct Consult {
     pub mounts: Vec<crate::CardMount>,
     /// The deck's MCP servers.
     pub mcp: crate::McpUse,
+    /// The rules enabling the deck's skills.
+    pub skills: Vec<String>,
     pub prompt: Content,
 }
 

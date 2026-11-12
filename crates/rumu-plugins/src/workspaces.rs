@@ -261,6 +261,7 @@ pub fn create_project(
         mounts: Vec::new(),
         allow_ask: Vec::new(),
         mcp: Default::default(),
+        skills: Vec::new(),
         icon,
     })?;
     set_project_workspaces(home, registry, deck.id(), workspaces)?;

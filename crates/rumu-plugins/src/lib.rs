@@ -8,6 +8,7 @@
 //! - [`CodePlugin`] — the `code` tool: model-written JavaScript that composes
 //!   the other tools through `Cx::invoke` (hybrid mode)
 //! - [`McpPlugin`] — `call_tool` over the MCP servers of [`McpHub`]
+//! - [`SkillsPlugin`] — the first-call note listing the [`Skills`] enabled
 //! - [`StdioPlugin`] — host side of the external plugin protocol
 //!
 //! The kernel itself owns the `agent` tool. Entry point for the server:
@@ -24,6 +25,7 @@ mod config;
 mod error;
 mod mcp;
 mod memory;
+mod skills;
 mod stdio;
 mod workspace;
 mod workspaces;
@@ -34,6 +36,7 @@ pub use config::{Config, load_config};
 pub use error::{Error, Result};
 pub use mcp::{McpHub, McpPlugin};
 pub use memory::MemoryPlugin;
+pub use skills::{SKILLS_DIR, Skills, SkillsPlugin};
 pub use stdio::{StdioError, StdioPlugin};
 pub use workspace::{BackendError, WorkspacePlugin};
 pub use workspaces::{
@@ -44,7 +47,7 @@ pub use workspaces::{
 #[cfg(test)]
 pub(crate) mod testutil;
 
-/// Load every plugin: memory, workspace, ask, mcp, then the external stdio plugins
+/// Load every plugin: memory, workspace, ask, mcp, skills, then the external stdio plugins
 /// registered in `<home>/config.yaml` (each spawned and `initialize`d). The
 /// caller supplies the parsed [`Config`], the deck and workspace registries
 /// and the kernel's built-in tools so the `code` plugin's API stub covers
@@ -55,13 +58,19 @@ pub async fn load_all(
     decks: rumu_cards::Decks,
     workspaces: rumu_core::Workspaces,
     mcp: Arc<McpHub>,
+    skills: Arc<Skills>,
     builtin_tools: &[rumu_core::ToolSpec],
 ) -> Result<Vec<Arc<dyn Plugin>>> {
     let mut plugins: Vec<Arc<dyn Plugin>> = vec![
         Arc::new(MemoryPlugin::new(decks.clone())),
-        Arc::new(WorkspacePlugin::new(home, decks.clone(), workspaces).with_mcp(mcp.clone())),
+        Arc::new(
+            WorkspacePlugin::new(home, decks.clone(), workspaces)
+                .with_mcp(mcp.clone())
+                .with_skills(skills.clone()),
+        ),
         Arc::new(AskPlugin::new(decks)),
         Arc::new(McpPlugin::new(home, mcp)),
+        Arc::new(SkillsPlugin::new(skills)),
     ];
     for spec in config.external_specs(home)? {
         let plugin = StdioPlugin::spawn(&spec.name, &spec.argv, &spec.cwd)

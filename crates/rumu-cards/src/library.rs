@@ -170,6 +170,7 @@ pub fn deck_create(decks: &Decks, name: &str) -> Result<LibraryDeck> {
         mounts: Vec::new(),
         allow_ask: Vec::new(),
         mcp: Default::default(),
+        skills: Vec::new(),
         icon: None,
     })?;
     library_deck(&deck)

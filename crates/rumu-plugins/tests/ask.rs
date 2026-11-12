@@ -170,6 +170,7 @@ async fn kernel_on(home: &std::path::Path, llm: Arc<dyn Llm>) -> Arc<Kernel> {
         decks,
         Default::default(),
         rumu_plugins::McpHub::new(home),
+        Arc::new(rumu_plugins::Skills::with_dirs(home, Vec::new(), None)),
         &[],
     )
     .await

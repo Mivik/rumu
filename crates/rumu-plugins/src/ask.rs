@@ -33,6 +33,8 @@ pub struct Assistant {
     pub mounts: Vec<DeckMount>,
     /// The MCP servers its sessions use.
     pub mcp: rumu_core::McpUse,
+    /// The rules enabling the skills its sessions see.
+    pub skills: Vec<String>,
     /// The one sessions run as when none is named.
     pub default: bool,
 }
@@ -52,6 +54,7 @@ pub fn assistant_of(decks: &Decks, deck: &Deck) -> Assistant {
         allow_ask: deck.meta.allow_ask.clone(),
         mounts: deck.meta.mounts.clone(),
         mcp: deck.meta.mcp.clone(),
+        skills: deck.meta.skills.clone(),
         default: decks.default_assistant() == deck.meta.id,
     }
 }
@@ -285,6 +288,7 @@ impl AskPlugin {
                 asked_by: from.clone(),
                 mounts,
                 mcp: to.meta.mcp.clone(),
+                skills: to.meta.skills.clone(),
                 prompt: Content::text(prompt),
             })
             .await

@@ -56,16 +56,19 @@ async fn main() -> Result<()> {
         rumu_plugins::seed_project(&home, &decks, &workspaces)?;
     }
     let mcp = rumu_plugins::McpHub::new(&home);
+    let skills = Arc::new(rumu_plugins::Skills::new(&home));
     let plugins = load_plugins(
         &home,
         &config,
         decks.clone(),
         workspaces.clone(),
         mcp.clone(),
+        skills.clone(),
     )
     .await?;
     let genai = Arc::new(GenaiLlm::default().with_blobs(blobs.clone()));
-    let settings = Arc::new(settings::Settings::load(&home, genai.clone(), mcp.clone())?);
+    let settings =
+        Arc::new(settings::Settings::load(&home, genai.clone(), mcp.clone())?.with_skills(skills));
     let llm = load_llm(genai)?;
     let kernel = Kernel::new(store.clone(), llm, plugins, workspaces.clone())?;
     settings::spawn_mcp_updates(&settings, &kernel, &mcp);
@@ -150,6 +153,7 @@ async fn load_plugins(
     decks: rumu_cards::Decks,
     workspaces: rumu_core::Workspaces,
     mcp: Arc<rumu_plugins::McpHub>,
+    skills: Arc<rumu_plugins::Skills>,
 ) -> Result<Vec<Arc<dyn Plugin>>> {
     let plugins = rumu_plugins::load_all(
         home,
@@ -157,6 +161,7 @@ async fn load_plugins(
         decks,
         workspaces,
         mcp,
+        skills,
         &[rumu_kernel::agent_tool()],
     )
     .await?;

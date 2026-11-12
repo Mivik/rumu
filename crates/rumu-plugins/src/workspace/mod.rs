@@ -69,6 +69,8 @@ pub struct WorkspacePlugin {
     agents_missing: Mutex<std::collections::HashSet<String>>,
     /// The MCP servers behind `@rumu:/tools`.
     mcp: Option<std::sync::Arc<crate::McpHub>>,
+    /// The skills behind `@rumu:/skills`.
+    skills: Option<std::sync::Arc<crate::Skills>>,
 }
 
 impl WorkspacePlugin {
@@ -82,6 +84,7 @@ impl WorkspacePlugin {
             ssh_uname: Mutex::new(HashMap::new()),
             agents_missing: Mutex::new(std::collections::HashSet::new()),
             mcp: None,
+            skills: None,
         }
     }
 
@@ -89,6 +92,19 @@ impl WorkspacePlugin {
     pub fn with_mcp(mut self, hub: std::sync::Arc<crate::McpHub>) -> Self {
         self.mcp = Some(hub);
         self
+    }
+
+    /// Serve `@rumu:/skills` from `skills`.
+    pub fn with_skills(mut self, skills: std::sync::Arc<crate::Skills>) -> Self {
+        self.skills = Some(skills);
+        self
+    }
+
+    /// The skills, or none found anywhere.
+    fn skills(&self) -> std::sync::Arc<crate::Skills> {
+        self.skills.clone().unwrap_or_else(|| {
+            std::sync::Arc::new(crate::Skills::with_dirs(&self.home, Vec::new(), None))
+        })
     }
 
     /// The MCP servers, or an empty hub's answer when there are none.

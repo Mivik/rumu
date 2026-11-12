@@ -15,6 +15,7 @@ mod node;
 mod plugin;
 mod schema;
 mod settings;
+mod skill;
 mod task;
 mod workspace;
 
@@ -29,6 +30,7 @@ pub use node::*;
 pub use plugin::*;
 pub use schema::*;
 pub use settings::*;
+pub use skill::*;
 pub use task::*;
 pub use workspace::*;
 

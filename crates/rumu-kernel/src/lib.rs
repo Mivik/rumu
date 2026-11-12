@@ -659,6 +659,7 @@ impl Kernel {
             asked_by: None,
             mounts: Vec::new(),
             mcp: Default::default(),
+            skills: Vec::new(),
         })
         .await
     }

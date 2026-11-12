@@ -168,6 +168,7 @@ pub(crate) fn create_deck(
                 mounts: Vec::new(),
                 allow_ask: Vec::new(),
                 mcp: Default::default(),
+                skills: Vec::new(),
                 icon: None,
             })
             .unwrap(),

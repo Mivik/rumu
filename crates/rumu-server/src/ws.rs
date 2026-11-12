@@ -411,6 +411,7 @@ async fn dispatch(state: &AppState, method: &str, p: &Value) -> Result<Value> {
                     asked_by: None,
                     mounts,
                     mcp: deck.meta.mcp.clone(),
+                    skills: deck.meta.skills.clone(),
                 })
                 .await?;
             Ok(json!({ "session": session, "branch": branch }))
@@ -587,6 +588,8 @@ async fn dispatch(state: &AppState, method: &str, p: &Value) -> Result<Value> {
                 allow_ask: Vec<String>,
                 #[serde(default)]
                 mcp: rumu_core::McpUse,
+                #[serde(default)]
+                skills: Vec<String>,
             }
             let req: Upsert = serde_json::from_value(p.clone())
                 .map_err(|e| ServerError::InvalidParams(e.to_string()))?;
@@ -622,6 +625,7 @@ async fn dispatch(state: &AppState, method: &str, p: &Value) -> Result<Value> {
                 mounts,
                 allow_ask: req.allow_ask,
                 mcp: req.mcp,
+                skills: req.skills,
                 icon: existing.as_ref().and_then(|d| d.meta.icon.clone()),
             };
             let deck = state.decks.upsert(meta)?;

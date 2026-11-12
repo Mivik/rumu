@@ -4,7 +4,7 @@ A **deck** is a directory of cards that are mounted, shared and approved
 together: the user, a project, a domain, an assistant. Decks are the only unit
 of memory, permission and history. An **assistant** is a deck as well. Its pinned cards are its persona and
 instructions, and its `deck.yaml` names the decks it mounts by default and
-the [MCP servers](mcp.md) it uses. An assistant has no other configuration.
+the [MCP servers](mcp.md) and [skills](skills.md) it uses. An assistant has no other configuration.
 
 ## Where a card belongs
 
@@ -55,6 +55,7 @@ The first-call note states these rules.
     - { deck: <deck-id>, at: /cards/notes, write: true } # writes need no approval
   allow_ask: [<deck-id>]     # these assistants may ask it without a prompt
   mcp: { github: ["*"] }     # MCP servers in settings.yaml, with the tools enabled
+  skills: ["*"]              # the skills enabled (docs/skills.md)
   ```
 
 - **Private decks.** A deck with `private: true` is visible to an agent only

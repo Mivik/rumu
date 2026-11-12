@@ -173,6 +173,10 @@ pub struct DeckMeta {
     /// the rules enabling its tools.
     #[serde(default, skip_serializing_if = "std::collections::BTreeMap::is_empty")]
     pub mcp: rumu_core::McpUse,
+    /// The rules enabling the skills its sessions see
+    /// ([`rumu_core::rules_enable`]; `*` is all, new ones included).
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub skills: Vec<String>,
     /// A project's seal.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub icon: Option<DeckIcon>,
@@ -1128,6 +1132,7 @@ fn empty_meta(id: String, name: String) -> DeckMeta {
         mounts: Vec::new(),
         allow_ask: Vec::new(),
         mcp: Default::default(),
+        skills: Vec::new(),
         icon: None,
     }
 }

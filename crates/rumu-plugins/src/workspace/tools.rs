@@ -439,7 +439,7 @@ pub(super) fn card_load_err(public: &str, source: impl std::fmt::Display) -> Too
 /// `unknown path ...`.
 pub(super) fn unknown_rumu_path(abs: &Utf8UnixPath) -> ToolError {
     ToolError::model(format!(
-        "unknown path `{RUMU_WORKSPACE}:{abs}` (roots: /cards, /history, /sessions, /tasks, /tools)"
+        "unknown path `{RUMU_WORKSPACE}:{abs}` (roots: /cards, /history, /sessions, /skills, /tasks, /tools)"
     ))
 }
 
@@ -1132,6 +1132,12 @@ impl WorkspacePlugin {
                 .map(ToolOutput::ok)
                 .map_err(ToolError::model);
         }
+        if crate::skills::is_skills_path(abs) {
+            let out = crate::skills::read(&self.skills(), &*cx.state()?, abs)?;
+            return slice_lines(out.content.text, offset, limit)
+                .map(ToolOutput::ok)
+                .map_err(ToolError::model);
+        }
         Err(unknown_rumu_path(abs))
     }
 
@@ -1155,7 +1161,7 @@ impl WorkspacePlugin {
         match abs.as_str() {
             "/" => {
                 let mut roots =
-                    "cards/\nhistory/\nsessions/\ntasks/\ntools/\nworkspaces/".to_owned();
+                    "cards/\nhistory/\nsessions/\nskills/\ntasks/\ntools/\nworkspaces/".to_owned();
                 if cx.state()?.project.is_some() {
                     roots.push_str("\nproject/");
                 }
@@ -1174,6 +1180,9 @@ impl WorkspacePlugin {
             _ if abs.starts_with("/tasks") => self.task_read(abs, None, None, cx).await,
             _ if crate::mcp::is_tools_path(abs) => {
                 crate::mcp::list(&self.mcp(), &*cx.state()?, abs).await
+            }
+            _ if crate::skills::is_skills_path(abs) => {
+                crate::skills::list(&self.skills(), &*cx.state()?, abs)
             }
             _ => Err(unknown_rumu_path(abs)),
         }

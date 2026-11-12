@@ -20,6 +20,7 @@ fn deck_with(home: &Path, paths: &[String]) -> (Decks, Deck) {
             mounts: Vec::new(),
             allow_ask: Vec::new(),
             mcp: Default::default(),
+            skills: Vec::new(),
             icon: None,
         })
         .unwrap();

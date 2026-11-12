@@ -139,6 +139,7 @@ impl Kernel {
                 asked_by: Some(consult.asked_by),
                 mounts: consult.mounts,
                 mcp: consult.mcp,
+                skills: consult.skills,
             })
             .await?;
         self.inner

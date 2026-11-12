@@ -47,7 +47,7 @@ use rumu_core::{
 };
 use rumu_kernel::LlmError;
 use rumu_llm::{Catalog, GenaiLlm, endpoints, model_info, presets};
-use rumu_plugins::McpHub;
+use rumu_plugins::{McpHub, Skills};
 use serde::{Deserialize, Serialize};
 use tracing::{info, warn};
 
@@ -205,6 +205,7 @@ pub struct Settings {
     infos: Mutex<BTreeMap<String, ProviderInfo>>,
     llm: Arc<GenaiLlm>,
     mcp: Arc<McpHub>,
+    skills: Arc<Skills>,
 }
 
 impl Settings {
@@ -248,7 +249,14 @@ impl Settings {
             infos: Mutex::default(),
             llm,
             mcp,
+            skills: Arc::new(Skills::with_dirs(home, Vec::new(), None)),
         })
+    }
+
+    /// Show `skills` (none are found by default).
+    pub fn with_skills(mut self, skills: Arc<Skills>) -> Self {
+        self.skills = skills;
+        self
     }
 
     fn catalog(&self) -> Arc<Catalog> {
@@ -256,6 +264,8 @@ impl Settings {
     }
 
     pub fn info(&self) -> SettingsInfo {
+        // Scanned before taking the locks: it reads directories.
+        let skills = self.skills.info();
         let file = self.lock();
         // Held while deriving, so no info of the replaced catalog is cached.
         let catalog = self.catalog.read().expect("catalog lock");
@@ -282,6 +292,7 @@ impl Settings {
             titles: m.titles,
             presets: offered(&catalog),
             mcp: self.mcp.info(&file.mcp),
+            skills,
         }
     }
 

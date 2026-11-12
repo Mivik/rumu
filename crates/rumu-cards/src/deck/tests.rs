@@ -16,6 +16,7 @@ fn create_deck(home: &std::path::Path, name: &str, cards: &[(&str, &str)]) -> De
             mounts: Vec::new(),
             allow_ask: Vec::new(),
             mcp: Default::default(),
+            skills: Vec::new(),
             icon: None,
         })
         .unwrap();
@@ -232,6 +233,7 @@ fn deck_upsert_rename_and_delete_refresh_the_registry() {
             mounts: Vec::new(),
             allow_ask: Vec::new(),
             mcp: Default::default(),
+            skills: Vec::new(),
             icon: None,
         })
         .unwrap();
