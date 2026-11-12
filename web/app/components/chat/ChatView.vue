@@ -172,8 +172,6 @@ function composerRoot(): HTMLElement | null {
         </Transition>
 
         <div ref="composerEl" class="px-3 pt-1 pb-3 sm:px-6 sm:pb-5">
-          <!-- running background tasks of this branch + opened task output -->
-          <TasksPanel />
           <!-- steering prompts accepted while busy, until they are written -->
           <div
             v-if="queuedPrompts.length"
@@ -188,6 +186,8 @@ function composerRoot(): HTMLElement | null {
               >{{ q.text }}
             </div>
           </div>
+          <!-- background tasks of this branch: a tab on the composer's edge -->
+          <TasksPanel />
           <Composer />
         </div>
       </div>

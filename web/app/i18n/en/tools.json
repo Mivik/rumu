@@ -81,7 +81,7 @@
     "unavailable": "diff unavailable — file too large or not text"
   },
   "tasks": {
-    "label": "tasks",
+    "running": "{count} background task running | {count} background tasks running",
     "kill": "kill {id}",
     "killAria": "kill task {id}",
     "close": "Close task output"

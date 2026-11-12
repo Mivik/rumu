@@ -81,7 +81,7 @@
     "unavailable": "差异不可用 — 文件过大或非文本"
   },
   "tasks": {
-    "label": "任务",
+    "running": "{count} 个后台任务运行中",
     "kill": "终止 {id}",
     "killAria": "终止任务 {id}",
     "close": "关闭任务输出"
