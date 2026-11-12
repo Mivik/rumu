@@ -9,7 +9,7 @@ import { computed, onBeforeUnmount, ref } from 'vue'
 import { t } from '../../i18n'
 import type { ActivityRunning } from '../../lib/store'
 import { state, useBranchView } from '../../lib/store'
-import { argsOf } from '../../lib/toolrows'
+import { argsOf, displayCall } from '../../lib/toolrows'
 import { argSummary, fmtThought } from '../../lib/util'
 import Icon from '../ui/Icon.vue'
 
@@ -24,7 +24,8 @@ onBeforeUnmount(() => clearInterval(timer))
 
 const rows = computed(() => {
   const branch = view.branch.value
-  return props.step.calls.map(({ call, assistant }) => {
+  return props.step.calls.map(({ call: raw, assistant }) => {
+    const call = displayCall(raw)
     const args = argsOf(call)
     const progress = branch ? state.toolProgress[`${branch}:${call.call_id}`] : undefined
     // the call starts when the step that made it lands

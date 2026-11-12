@@ -20,6 +20,8 @@ export type ToolStatus = 'ok' | 'error' | 'blocked'
 export interface ToolRowView {
   row: ToolRowInfo
   name: string
+  /** The args as displayed (an MCP call's own args). */
+  args: unknown
   /** Abbreviated call target for the row ("store.ts", a clipped command). */
   callText: string
   /** Abbreviated result ("12 lines", "exit 1"). */
@@ -94,6 +96,17 @@ export function argsOf(call: { args: unknown } | null): Args {
   return call?.args && typeof call.args === 'object' && !Array.isArray(call.args)
     ? (call.args as Record<string, unknown>)
     : null
+}
+
+/** A call as the user reads it: an MCP `call_tool` stands for the tool it
+ * calls, named `<server>/<tool>` (no clash with a built-in) with its own args. */
+export function displayCall<C extends { name: string; args: unknown }>(call: C): C
+export function displayCall<C extends { name: string; args: unknown }>(call: C | null): C | null
+export function displayCall<C extends { name: string; args: unknown }>(call: C | null): C | null {
+  if (call?.name !== 'call_tool') return call
+  const args = argsOf(call)
+  if (typeof args?.tool !== 'string') return call
+  return { ...call, name: args.tool, args: args.args ?? {} }
 }
 
 function strArg(args: Args, key: string): string {
@@ -264,6 +277,32 @@ interface ParsedRow {
   diff: DiffCounts | null
 }
 
+/** Parsed JSON outputs, per result node: parsed when a row first opens. */
+const jsonCache = new WeakMap<Node, object | null>()
+
+/** An ok output that is a JSON object or array (an MCP tool's usual
+ * answer), for the opened row to show as a tree. */
+export function outputJson(v: ToolRowView): object | null {
+  if (v.status !== 'ok') return null
+  let json = jsonCache.get(v.row.result)
+  if (json === undefined) {
+    json = parseJson(v.output)
+    jsonCache.set(v.row.result, json)
+  }
+  return json
+}
+
+function parseJson(text: string): object | null {
+  const s = text.trim()
+  if (!s.startsWith('{') && !s.startsWith('[')) return null
+  try {
+    const v: unknown = JSON.parse(s)
+    return v && typeof v === 'object' ? v : null
+  } catch {
+    return null
+  }
+}
+
 /** Parsed summaries per immutable result node (the timeline recomputes on deltas). */
 const parsedCache = new WeakMap<Node, ParsedRow>()
 
@@ -281,11 +320,12 @@ export function toolRowView(row: ToolRowInfo): ToolRowView {
   const attachments = content?.attachments ?? []
   const isError = row.result.body.type === 'tool_result' && row.result.body.is_error
   const blocked = isError ? blockedReasonOf(output) : null
-  const name = row.call?.name ?? 'tool'
+  const call = displayCall(row.call)
+  const name = call?.name ?? 'tool'
   // A card tool's target id, for its row chip: the current read/write/edit
   // whose path addresses `@rumu:/cards/<id>` (qualified always; `/cards/<id>`
   // and `cards/<id>` when `@rumu` is the branch default).
-  const args = argsOf(row.call)
+  const args = argsOf(call)
   let toolCardId: string | null = null
   if (args && (name === 'read' || name === 'write' || name === 'edit')) {
     const path = typeof args.path === 'string' ? args.path : null
@@ -305,8 +345,8 @@ export function toolRowView(row: ToolRowInfo): ToolRowView {
     const diff = diffOf(name, patch, args)
     parsed = {
       locale,
-      callShort: callShort(name, row.call),
-      callFull: callFull(name, row.call),
+      callShort: callShort(name, call),
+      callFull: callFull(name, call),
       diff,
       // A blocked row is already explained by its stamp; an error keeps a
       // clipped first line so the row hints at what went wrong (a bash
@@ -332,6 +372,7 @@ export function toolRowView(row: ToolRowInfo): ToolRowView {
   return {
     row,
     name,
+    args: call?.args,
     callText: parsed.callShort,
     resultText: parsed.result,
     callFull: parsed.callFull,

@@ -16,10 +16,10 @@ import type { ToolRowInfo } from '../../lib/store'
 import { openAgentView, openTaskDetail, state } from '../../lib/store'
 import { cardById } from '../../lib/cards'
 import type { ToolRowView, ToolStatus } from '../../lib/toolrows'
-import { argsOf, toolRowTitle, toolRowView } from '../../lib/toolrows'
+import { argsOf, outputJson, toolRowTitle, toolRowView } from '../../lib/toolrows'
 import { taskStatusWord } from '../../lib/tasks'
 import { shortId, workspaceLabel } from '../../lib/util'
-import { highlightLine, prettyJson } from '../../lib/markdown'
+import { highlightLine } from '../../lib/markdown'
 import { vEnter } from '../../lib/motion'
 import Icon from '../ui/Icon.vue'
 import Chip from '../ui/Chip.vue'
@@ -29,6 +29,7 @@ import BashView from './BashView.vue'
 import FileDiff from './FileDiff.vue'
 import FileView from './FileView.vue'
 import ImageThumb from './ImageThumb.vue'
+import JsonTree from './JsonTree.vue'
 
 const props = defineProps<{ rows: ToolRowInfo[] }>()
 
@@ -260,13 +261,16 @@ function liveTaskOutput(id: string | null): string {
         </div>
         <div v-else-if="v.row.call">
           <div class="mb-1 text-micro font-semibold text-ink-3">{{ t('tools.detail.args') }}</div>
-          <pre class="code">{{ prettyJson(v.row.call.args) }}</pre>
+          <div class="code whitespace-normal"><JsonTree :value="v.args" bare /></div>
         </div>
         <div>
           <div class="mb-1 text-micro font-semibold text-ink-3">
             {{ v.status === 'ok' ? t('tools.detail.output') : t('tools.detail.outputError') }}
           </div>
-          <pre class="code" :class="{ 'border-danger/40 text-danger': v.status !== 'ok' }">{{
+          <div v-if="outputJson(v)" class="code whitespace-normal">
+            <JsonTree :value="outputJson(v)" bare />
+          </div>
+          <pre v-else class="code" :class="{ 'border-danger/40 text-danger': v.status !== 'ok' }">{{
             v.output || t('common.empty')
           }}</pre>
         </div>

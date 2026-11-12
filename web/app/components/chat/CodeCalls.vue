@@ -9,13 +9,15 @@ import { t } from '../../i18n'
 import type { Branch, Content, Decision, FilePatch, Tagged } from '../../lib/types'
 import { openAgentView, state, useBranchView } from '../../lib/store'
 import { argSummary, shortId } from '../../lib/util'
-import { highlightLine, prettyJson } from '../../lib/markdown'
+import { highlightLine } from '../../lib/markdown'
+import { displayCall } from '../../lib/toolrows'
 import { patchOfData } from '../../lib/diff'
 import Icon from '../ui/Icon.vue'
 import Chip from '../ui/Chip.vue'
 import BashView from './BashView.vue'
 import FileDiff from './FileDiff.vue'
 import FileView from './FileView.vue'
+import JsonTree from './JsonTree.vue'
 
 const props = defineProps<{ parentCall: string }>()
 const view = useBranchView()
@@ -39,8 +41,7 @@ const calls = computed<CodeCallRow[]>(() => {
     if (b.type !== 'tool_result' || !b.invoke || b.invoke.parent !== props.parentCall) continue
     out.push({
       call_id: b.call_id,
-      name: b.invoke.name,
-      args: b.invoke.args,
+      ...displayCall({ name: b.invoke.name, args: b.invoke.args }),
       blocked: b.invoke.blocked ?? null,
       is_error: b.is_error,
       output: b.content.text,
@@ -223,7 +224,7 @@ const iconTone: Record<Status, string> = {
           <template v-else>
             <div>
               <div class="mb-1 text-micro font-semibold text-ink-3">{{ t('tools.detail.args') }}</div>
-              <pre class="code">{{ prettyJson(c.args) }}</pre>
+              <div class="code whitespace-normal"><JsonTree :value="c.args" bare /></div>
             </div>
             <div>
               <div class="mb-1 text-micro font-semibold text-ink-3">

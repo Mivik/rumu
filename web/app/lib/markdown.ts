@@ -307,14 +307,3 @@ export function renderMarkdown(
   })
   return DOMPurify.sanitize(linked)
 }
-
-/** One-line JSON for compact display; falls back to String(v). */
-export function prettyJson(v: unknown): string {
-  if (v === undefined) return ''
-  if (typeof v === 'string') return v
-  try {
-    return JSON.stringify(v, null, 2)
-  } catch {
-    return String(v)
-  }
-}

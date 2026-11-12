@@ -2,14 +2,15 @@
 // One JSON value as a foldable tree. Objects and arrays open a level at a
 // time; strings keep their line breaks, so a node's text reads as text rather
 // than one escaped line, and a very long one shows its head until asked.
+// `bare` lists a root object's fields with no fold of its own (a call's args).
 import { computed, ref } from 'vue'
 import { t } from '../../i18n'
 import Icon from '../ui/Icon.vue'
 
-const props = withDefaults(defineProps<{ value: unknown; name?: string | number; depth?: number }>(), {
-  name: undefined,
-  depth: 0,
-})
+const props = withDefaults(
+  defineProps<{ value: unknown; name?: string | number; depth?: number; bare?: boolean }>(),
+  { name: undefined, depth: 0, bare: false },
+)
 
 /** Levels open on first show: a node's body, content and payload. */
 const OPEN_DEPTH = 4
@@ -47,9 +48,11 @@ const tone = computed(() => {
 </script>
 
 <template>
-  <div class="font-mono text-micro">
+  <!-- the root sets the type; nested levels inherit it -->
+  <div :class="depth ? '' : bare ? 'font-mono text-meta' : 'font-mono text-micro'">
     <template v-if="isBranch">
       <button
+        v-if="!bare"
         type="button"
         class="flex items-baseline gap-1 rounded-xs text-left hover:bg-surface-2 disabled:hover:bg-transparent"
         :disabled="!entries.length"
@@ -65,7 +68,10 @@ const tone = computed(() => {
         <span v-if="name !== undefined" class="text-ink-2">{{ name }}:</span>
         <span class="text-ink-3">{{ shape }}</span>
       </button>
-      <div v-if="open && entries.length" class="ml-[5px] border-l border-line-soft pl-2.5">
+      <div v-if="bare">
+        <JsonTree v-for="[k, v] in entries" :key="k" :value="v" :name="k" :depth="depth + 1" />
+      </div>
+      <div v-else-if="open && entries.length" class="ml-[5px] border-l border-line-soft pl-2.5">
         <JsonTree v-for="[k, v] in entries" :key="k" :value="v" :name="k" :depth="depth + 1" />
       </div>
     </template>
