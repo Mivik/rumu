@@ -5,20 +5,32 @@
 // back to the call's own strings — a legacy edit diffed in the browser (no
 // line numbers: they would be made up), a create's content as all-added.
 // Rows cap at MAX_ROWS with a "N more lines" note so huge files stay fast.
-import { computed } from 'vue'
+// `clip` (an edit standing in the conversation, EditCard) shows a small diff
+// whole and a big one's first CLIP_ROWS under a fade, with a footer that
+// says how much is left and where its other hunks start; either opens it
+// all, the hunk at that hunk. A clipped diff scrolls with the page, no box.
+import { computed, nextTick, ref } from 'vue'
 import { t } from '../../i18n'
 import type { FilePatch } from '../../lib/types'
 import { diffLines, splitLines } from '../../lib/diff'
 import { highlightLine, langForPath } from '../../lib/markdown'
 
-const props = defineProps<{
-  patch: FilePatch | null
-  /** The called path (may carry a `<ws>:` prefix) — picks the grammar. */
-  path: string
-  args: Record<string, unknown> | null
-}>()
+const props = withDefaults(
+  defineProps<{
+    patch: FilePatch | null
+    /** The called path (may carry a `<ws>:` prefix) — picks the grammar. */
+    path: string
+    args: Record<string, unknown> | null
+    clip?: boolean
+  }>(),
+  { clip: false },
+)
 
 const MAX_ROWS = 500
+/** A clipped diff this long or shorter (context and gaps included) shows whole. */
+const FULL_ROWS = 40
+/** What a longer one shows before its fade. */
+const CLIP_ROWS = 24
 
 type Row =
   | { kind: 'line'; sign: ' ' | '-' | '+'; text: string; old: number | null; new: number | null }
@@ -64,15 +76,43 @@ const rows = computed<Row[]>(() => {
   return splitLines(strArg('content')).map((text, i) => line('+', text, null, i + 1))
 })
 
+/** A clipped diff the user opened in full. */
+const unclipped = ref(false)
+const clipped = computed(() => props.clip && !unclipped.value && rows.value.length > FULL_ROWS)
+const limit = computed(() => (clipped.value ? CLIP_ROWS : MAX_ROWS))
+
 /** Only shown rows are highlighted; reading grammarVersion inside (via
  * highlightLine) re-highlights them once a lazily loaded grammar lands. */
 const shown = computed(() => {
   const lang = langForPath(props.path)
   return rows.value
-    .slice(0, MAX_ROWS)
+    .slice(0, limit.value)
     .map((r) => (r.kind === 'line' ? { ...r, html: highlightLine(r.text, lang) } : r))
 })
 const hidden = computed(() => rows.value.length - shown.value.length)
+
+/** The hunks the clip hides, by the row a hunk starts at and its first new
+ * line number: the footer's "L88 · L131" jumps. */
+const hiddenHunks = computed(() => {
+  if (!clipped.value) return []
+  const out: { row: number; line: number }[] = []
+  rows.value.forEach((r, i) => {
+    const next = rows.value[i + 1]
+    if (r.kind === 'gap' && i >= CLIP_ROWS && next?.kind === 'line') {
+      out.push({ row: i + 1, line: next.new ?? next.old ?? 0 })
+    }
+  })
+  return out
+})
+
+const root = ref<HTMLElement | null>(null)
+/** Open the whole diff; with a row, bring it into view. */
+async function unclip(row?: number): Promise<void> {
+  unclipped.value = true
+  if (row === undefined) return
+  await nextTick()
+  root.value?.querySelector(`[data-row="${row}"]`)?.scrollIntoView({ block: 'center', behavior: 'smooth' })
+}
 
 /** Gutter width in ch, sized to the largest line number shown. */
 const numWidth = computed(() => {
@@ -95,10 +135,12 @@ function rowClass(row: Row): string {
 <template>
   <div
     v-if="rows.length"
+    ref="root"
     class="fdiff"
+    :class="{ 'is-clip': clip, 'is-clipped': clipped }"
     :style="{ '--fdiff-num': numWidth, '--fdiff-gutters': Number(gutters.old) + Number(gutters.new) }"
   >
-    <div v-for="(row, i) in shown" :key="i" class="fdiff-row" :class="rowClass(row)">
+    <div v-for="(row, i) in shown" :key="i" class="fdiff-row" :class="rowClass(row)" :data-row="i">
       <template v-if="row.kind === 'line'">
         <span v-if="gutters.old" class="fdiff-num">{{ row.old ?? '' }}</span>
         <span v-if="gutters.new" class="fdiff-num">{{ row.new ?? '' }}</span>
@@ -108,7 +150,18 @@ function rowClass(row: Row): string {
       <span v-else-if="row.kind === 'gap'" class="fdiff-gap">⋯</span>
       <span v-else class="fdiff-note">{{ row.text }}</span>
     </div>
-    <div v-if="hidden > 0" class="fdiff-more">
+    <div v-if="clipped" class="fdiff-clipbar">
+      <button type="button" class="fdiff-unclip" @click="unclip()">
+        {{ t('tools.diff.showAll', { count: hidden }) }}
+      </button>
+      <span v-if="hiddenHunks.length" class="fdiff-hunks">
+        {{ t('tools.diff.otherHunks') }}
+        <button v-for="h in hiddenHunks" :key="h.row" type="button" class="fdiff-hunk" @click="unclip(h.row)">
+          L{{ h.line }}
+        </button>
+      </span>
+    </div>
+    <div v-else-if="hidden > 0" class="fdiff-more">
       {{ t('tools.diff.moreLines', { count: hidden }) }}
     </div>
   </div>
@@ -195,5 +248,52 @@ function rowClass(row: Row): string {
   padding: 3px 10px;
   border-top: 1px solid var(--line-soft);
   color: var(--ink-3);
+}
+
+/* In the conversation (EditCard) the diff grows with the page: no inner
+ * scroll box but the sideways one. */
+.fdiff.is-clip {
+  max-height: none;
+  overflow-y: hidden;
+}
+
+/* the clip's fade over its last rows, under the footer */
+.fdiff.is-clipped {
+  position: relative;
+}
+
+.fdiff-clipbar {
+  position: sticky;
+  left: 0;
+  display: flex;
+  flex-wrap: wrap;
+  align-items: baseline;
+  gap: 4px 12px;
+  width: 100%;
+  padding: 4px 10px;
+  border-top: 1px solid var(--line-soft);
+  background: var(--surface);
+  font-family: var(--font-sans);
+  box-shadow: 0 -28px 24px -4px var(--surface);
+}
+
+.fdiff-unclip {
+  font-weight: 500;
+  color: var(--tool);
+}
+
+.fdiff-unclip:hover,
+.fdiff-hunk:hover {
+  text-decoration: underline;
+}
+
+.fdiff-hunks {
+  color: var(--ink-3);
+}
+
+.fdiff-hunk {
+  margin-left: 6px;
+  font-family: var(--font-mono);
+  color: var(--ink-2);
 }
 </style>

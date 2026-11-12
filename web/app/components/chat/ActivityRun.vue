@@ -7,26 +7,34 @@
 // answer starts, the turn ends — it folds into one quiet line of what it
 // took:
 //   Worked for 3m 12s · 27 calls · 1 error [blocked] ›
-// (a lone call names itself instead: "read store.ts"). The sub-agents the run
-// started stand below the line as cards (AgentCard), folded or not. Recall
-// and catalog go with every turn, so neither shows on the line; a run without
-// calls names its thinking ("Thought for 2s"), or its recall / catalog when
-// that is all.
+// (a lone call names itself instead: "read store.ts"). Folded or not, what
+// the run changed stands outside the fold: each edited file as an EditCard,
+// and the sub-agents it started as AgentCards. Recall and catalog go with
+// every turn, so neither shows on the line; a run without calls names its
+// thinking ("Thought for 2s"), or its recall / catalog when that is all.
 // Opened, the steps show in order under a hairline: the catalog's cards,
-// each thought, each run of calls as a ToolList box. A bare thought — no
-// catalog, no calls — keeps its own disclosure (ThoughtStep).
+// each thought, each run of calls as a ToolList box, each edit as its card.
+// A bare thought — no catalog, no calls — keeps its own disclosure
+// (ThoughtStep).
 import { computed, onBeforeUnmount, ref, watch } from 'vue'
 import { t, locale } from '../../i18n'
-import type { ActivityRecall, ActivityRunning, ActivityStep, ActivityThought } from '../../lib/store'
+import type {
+  ActivityRecall,
+  ActivityRunning,
+  ActivityStep,
+  ActivityThought,
+  ToolRowInfo,
+} from '../../lib/store'
 import { useBranchView } from '../../lib/store'
 import type { Node } from '../../lib/types'
 import type { PhrasePart, ToolRowView } from '../../lib/toolrows'
-import { toolPhrase, toolRowTitle, toolRowView } from '../../lib/toolrows'
+import { isFileEdit, toolPhrase, toolRowTitle, toolRowView } from '../../lib/toolrows'
 import { contentText, fmtThought } from '../../lib/util'
 import { vEnter } from '../../lib/motion'
 import Icon from '../ui/Icon.vue'
 import AgentCard from './AgentCard.vue'
 import CatalogList from './CatalogList.vue'
+import EditCard from './EditCard.vue'
 import RecallList from './RecallList.vue'
 import RunningTools from './RunningTools.vue'
 import ThoughtStep from './ThoughtStep.vue'
@@ -42,6 +50,7 @@ const thoughts = computed(() => props.steps.filter((s): s is ActivityThought => 
 const views = computed<ToolRowView[]>(() =>
   props.steps.flatMap((s) => (s.kind === 'tools' ? s.rows.map(toolRowView) : [])),
 )
+const edits = computed(() => views.value.filter(isFileEdit))
 const running = computed(() => props.steps.find((s): s is ActivityRunning => s.kind === 'running') ?? null)
 const hasCatalog = computed(() => props.steps.some((s) => s.kind === 'catalog'))
 const recalls = computed(() => props.steps.filter((s): s is ActivityRecall => s.kind === 'recall'))
@@ -140,6 +149,36 @@ const agents = computed(() => views.value.filter((v) => v.name === 'agent'))
 /** Each call's full facts, one per line, for the summary's tooltip. */
 const summaryTitle = computed(() => views.value.map(toolRowTitle).join('\n'))
 
+/** The opened body, in order: a tools step splits around its edits, which
+ *  show as cards between the rows of the calls before and after them. */
+type Block =
+  | { kind: 'step'; key: string; step: ActivityStep }
+  | { kind: 'rows'; key: string; rows: ToolRowInfo[] }
+  | { kind: 'edit'; key: string; view: ToolRowView }
+const blocks = computed<Block[]>(() => {
+  const out: Block[] = []
+  for (const s of props.steps) {
+    if (s.kind !== 'tools') {
+      out.push({ kind: 'step', key: stepKey(s), step: s })
+      continue
+    }
+    let rows: ToolRowInfo[] = []
+    const flush = (): void => {
+      if (rows.length) out.push({ kind: 'rows', key: `rows:${rows[0]!.result.id}`, rows })
+      rows = []
+    }
+    for (const row of s.rows) {
+      const v = toolRowView(row)
+      if (isFileEdit(v)) {
+        flush()
+        out.push({ kind: 'edit', key: `edit:${row.result.id}`, view: v })
+      } else rows.push(row)
+    }
+    flush()
+  }
+  return out
+})
+
 function stepKey(s: ActivityStep): string {
   if (s.kind === 'thought') return s.node?.id ?? 'thought:live'
   if (s.kind === 'catalog') return `catalog:${s.node.id}`
@@ -152,11 +191,11 @@ function stepKey(s: ActivityStep): string {
  *  once the model moves on. */
 const manual = ref<boolean | null>(null)
 const open = computed(() => (manual.value !== null ? manual.value : props.current))
-/** Steps present when it opens reveal with it; later ones fade in. */
+/** Blocks present when it opens reveal with it; later ones fade in. */
 const revealed = ref<Set<string>>(new Set())
 function toggleOpen(): void {
   manual.value = !open.value
-  if (manual.value) revealed.value = new Set(props.steps.map(stepKey))
+  if (manual.value) revealed.value = new Set(blocks.value.map((b) => b.key))
 }
 </script>
 
@@ -200,32 +239,42 @@ function toggleOpen(): void {
     </div>
 
     <div v-if="open" class="activity-body reveal">
-      <template v-for="s in steps" :key="stepKey(s)">
+      <template v-for="b in blocks" :key="b.key">
+        <EditCard
+          v-if="b.kind === 'edit'"
+          v-enter="revealed.has(b.key) ? false : 'enter-fade'"
+          :view="b.view"
+        />
+        <ToolList
+          v-else-if="b.kind === 'rows'"
+          v-enter="revealed.has(b.key) ? false : 'enter-fade'"
+          :rows="b.rows"
+        />
         <RecallList
-          v-if="s.kind === 'recall'"
-          v-enter="revealed.has(stepKey(s)) ? false : 'enter-fade'"
-          :nodes="s.nodes"
+          v-else-if="b.step.kind === 'recall'"
+          v-enter="revealed.has(b.key) ? false : 'enter-fade'"
+          :nodes="b.step.nodes"
         />
         <CatalogList
-          v-else-if="s.kind === 'catalog'"
-          v-enter="revealed.has(stepKey(s)) ? false : 'enter-fade'"
-          :node="s.node"
+          v-else-if="b.step.kind === 'catalog'"
+          v-enter="revealed.has(b.key) ? false : 'enter-fade'"
+          :node="b.step.node"
         />
-        <RunningTools v-else-if="s.kind === 'running'" v-enter="'enter-fade'" :step="s" />
+        <RunningTools v-else-if="b.step.kind === 'running'" v-enter="'enter-fade'" :step="b.step" />
         <!-- without calls the run's line already names the thinking: the
              reasoning shows bare, not behind a second disclosure -->
         <ThoughtStep
-          v-else-if="s.kind === 'thought'"
-          v-enter="revealed.has(stepKey(s)) ? false : 'enter-fade'"
-          :node="s.node"
+          v-else-if="b.step.kind === 'thought'"
+          v-enter="revealed.has(b.key) ? false : 'enter-fade'"
+          :node="b.step.node"
           :flat="!views.length && !running"
         />
-        <ToolList v-else v-enter="revealed.has(stepKey(s)) ? false : 'enter-fade'" :rows="s.rows" />
       </template>
     </div>
-    <!-- while folded, the calls still running stay in view -->
-    <div v-else-if="running" class="mt-2 flex w-full flex-col gap-2">
-      <RunningTools :step="running" />
+    <!-- folded, what it changed and what still runs stay in view -->
+    <div v-else-if="edits.length || running" class="mt-2 flex w-full flex-col gap-2">
+      <EditCard v-for="v in edits" :key="v.row.result.id" :view="v" />
+      <RunningTools v-if="running" :step="running" />
     </div>
     <!-- the sub-agents it started stand outside the fold -->
     <div v-if="agents.length" class="mt-2 flex w-full flex-col gap-1.5">

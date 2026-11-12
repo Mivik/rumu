@@ -58,6 +58,7 @@
   },
   "assistant": {
     "working": "working…",
+    "changed": "changed {count} file | changed {count} files",
     "retrying": "retrying {attempt}/{max} · {seconds}s",
     "copy": "Copy reply",
     "regenerate": "Regenerate reply",

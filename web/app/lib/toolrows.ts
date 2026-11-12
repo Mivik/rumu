@@ -1,7 +1,8 @@
 // Tool rows, parsed for display: the abbreviated call/result a row shows,
 // the full call for its tooltip, status, and the card / sub-agent it
-// touches — plus a lone call's phrase ("read store.ts"). Shared by ToolList
-// (the rows) and ActivityRun (the summary line).
+// touches — plus a lone call's phrase ("read store.ts") and which rows are
+// file edits (their diffs stand outside an activity run's fold). Shared by
+// ToolList (the rows), EditCard and ActivityRun (the summary line).
 
 import type { Attachment, Branch, FilePatch, Node, TaskStatus } from './types'
 import { INTERNAL_WORKSPACE } from './types'
@@ -400,4 +401,13 @@ export function toolPhrase(v: ToolRowView): PhrasePart[] {
     return [{ text: `${verb} ` }, { text: v.callText, mono: true }]
   }
   return [{ text: `${t('tools.verb.other')} ` }, { text: v.name, mono: true }]
+}
+
+/** A successful edit of a workspace file: its diff stands outside the
+ * run's fold, as an EditCard. Card edits stay rows (the card chip opens
+ * them); a failed edit is a row with its error. */
+export function isFileEdit(v: ToolRowView): boolean {
+  return (
+    (v.name === 'write' || v.name === 'edit') && v.status === 'ok' && !v.toolCardId && v.row.call !== null
+  )
 }

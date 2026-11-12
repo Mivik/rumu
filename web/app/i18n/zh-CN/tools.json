@@ -34,6 +34,10 @@
   "running": {
     "silent": "{duration} 无输出"
   },
+  "edit": {
+    "created": "新文件",
+    "hunks": "{count} 处"
+  },
   "thought": {
     "thinking": "思考中",
     "thought": "已思考",
@@ -64,6 +68,8 @@
   },
   "diff": {
     "moreLines": "还有 {count} 行",
+    "showAll": "展开全部 · 还有 {count} 行",
+    "otherHunks": "其余改动：",
     "unavailable": "差异不可用 — 文件过大或非文本"
   },
   "tasks": {

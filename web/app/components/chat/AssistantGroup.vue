@@ -3,12 +3,14 @@
 // left-aligned text (no bubble) at the column's full width; the cat mascot
 // heads the turn on a line of its own. Between pieces of answer text, the
 // steps' reasoning and tool calls form one ActivityRun: open while it is the
-// turn's frontier, folded to a summary line once the model moves on. While
-// the turn runs, its frontier always carries the live dot: the trailing
-// activity run (its running calls included), the streaming text's caret, or —
-// while it waits on the model — a "working…" line of its own.
+// turn's frontier, folded to a summary line once the model moves on, its
+// edits standing outside the fold. While the turn runs, its frontier
+// always carries the live dot: the trailing activity run (its running calls
+// included), the streaming text's caret, or — while it waits on the model —
+// a "working…" line of its own.
 // One muted meta line at the bottom:
-// usage stays visible (hover for the full request/turn breakdown);
+// usage and the files the turn changed stay visible (hover usage for the
+// full request/turn breakdown);
 // copy/regenerate/fork reveal on hover once the turn has finished.
 // Only the `live` group (the last one, while a turn runs) shows the stream.
 import { computed, onBeforeUnmount, ref, watch } from 'vue'
@@ -18,6 +20,7 @@ import type { TimelineGroup } from '../../lib/store'
 import { forkSession, regenerateFrom, state, useBranchView } from '../../lib/store'
 import type { CatState } from '../../lib/cat'
 import { renderMarkdown } from '../../lib/markdown'
+import { isFileEdit, toolRowView } from '../../lib/toolrows'
 import { contentText, copyText } from '../../lib/util'
 import { toast } from '../../lib/state/ui'
 import { vEnter } from '../../lib/motion'
@@ -61,6 +64,27 @@ const catState = computed<CatState>(() => {
 const running = computed(() => {
   const tail = props.group.items.at(-1)
   return props.live && tail?.kind === 'activity' && tail.steps.at(-1)?.kind === 'running'
+})
+
+/** The files the turn changed and the lines it added / removed, for the
+ * meta line (a file edited twice counts once). */
+const changed = computed(() => {
+  const files = new Set<string>()
+  let added = 0
+  let removed = 0
+  for (const item of props.group.items) {
+    if (item.kind !== 'activity') continue
+    for (const s of item.steps) {
+      if (s.kind !== 'tools') continue
+      for (const v of s.rows.map(toolRowView)) {
+        if (!isFileEdit(v)) continue
+        files.add(v.callFull)
+        added += v.diff?.added ?? 0
+        removed += v.diff?.removed ?? 0
+      }
+    }
+  }
+  return files.size ? { count: files.size, added, removed } : null
 })
 
 function textOf(n: Node): string {
@@ -224,6 +248,11 @@ const bare = computed(() => !items.value.length && !props.group.assistants.lengt
     <div v-if="hasBody" class="-mt-0.5 flex min-h-6 items-center gap-2">
       <!-- usage only for a finished turn; the live one is still changing -->
       <UsageHud v-if="!live" :group="group" />
+      <span v-if="!live && changed" class="text-micro text-ink-3 tabular-nums">
+        {{ t('chat.assistant.changed', { count: changed.count }) }}
+        <span class="font-medium text-pine">+{{ changed.added }}</span>
+        <span v-if="changed.removed" class="font-medium text-danger">−{{ changed.removed }}</span>
+      </span>
       <span class="flex-1" />
       <span
         v-if="!live && !view.sub"

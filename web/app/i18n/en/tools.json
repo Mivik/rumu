@@ -34,6 +34,10 @@
   "running": {
     "silent": "no output for {duration}"
   },
+  "edit": {
+    "created": "new file",
+    "hunks": "{count} place | {count} places"
+  },
   "thought": {
     "thinking": "Thinking",
     "thought": "Thought",
@@ -64,6 +68,8 @@
   },
   "diff": {
     "moreLines": "{count} more line | {count} more lines",
+    "showAll": "Show all · {count} more line | Show all · {count} more lines",
+    "otherHunks": "Other changes:",
     "unavailable": "diff unavailable — file too large or not text"
   },
   "tasks": {

@@ -58,6 +58,7 @@
   },
   "assistant": {
     "working": "工作中…",
+    "changed": "改了 {count} 个文件",
     "retrying": "重试 {attempt}/{max} · {seconds} 秒",
     "copy": "复制回复",
     "regenerate": "重新生成回复",
