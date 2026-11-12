@@ -43,7 +43,7 @@ const output = computed(() => {
         </span>
         <span v-else class="truncate text-meta font-semibold" :title="task.summary">{{ task.summary }}</span>
         <span class="flex items-center gap-1.5 text-micro text-ink-3">
-          <span v-if="running" class="dot-live size-1.5 rounded-full bg-brand" />
+          <span v-if="running" class="dot-live dot-task size-1.5 rounded-full bg-pine" />
           <span :class="{ 'text-danger': task.is_error }">{{
             taskStatusWord(task.status === 'done' && task.is_error ? 'failed' : task.status)
           }}</span>

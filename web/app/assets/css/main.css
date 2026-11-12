@@ -1425,9 +1425,17 @@
     animation-delay: 260ms;
   }
 
-  /* the coral dot while rumu works: a halo breathing out of it */
+  /* a live dot: a halo breathing out of it. The halo takes the dot's own
+   * color (--dot-live), coral unless the state names another one. */
   .dot-live {
+    --dot-live: var(--brand);
     animation: halo 1.6s ease-out infinite;
+  }
+
+  /* a running background task: pine, so it reads as a process of its own
+   * rather than rumu working the turn */
+  .dot-live.dot-task {
+    --dot-live: var(--pine);
   }
 
   /* bars that grow in from the left (width comes from an inline style;
@@ -1665,10 +1673,10 @@
 
 @keyframes halo {
   0% {
-    box-shadow: 0 0 0 0 color-mix(in srgb, var(--brand) 55%, transparent);
+    box-shadow: 0 0 0 0 color-mix(in srgb, var(--dot-live, var(--brand)) 55%, transparent);
   }
   100% {
-    box-shadow: 0 0 0 7px color-mix(in srgb, var(--brand) 0%, transparent);
+    box-shadow: 0 0 0 7px color-mix(in srgb, var(--dot-live, var(--brand)) 0%, transparent);
   }
 }
 

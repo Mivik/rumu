@@ -92,7 +92,7 @@ watch(
       <Icon name="agent" :size="16" class="flex-none text-agent" />
       <span class="flex items-center gap-1.5 text-[15px] font-bold">
         {{ t('chat.agentView.title') }}
-        <span v-if="busy" class="dot-live size-1.5 rounded-full bg-brand" />
+        <span v-if="busy" class="dot-live dot-task size-1.5 rounded-full bg-pine" />
       </span>
       <button
         class="icon-btn ml-auto size-7 flex-none"
