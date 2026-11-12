@@ -186,6 +186,11 @@ impl Server {
     /// Connect, replacing any connection.
     async fn connect(self: Arc<Self>) {
         let _held = self.connecting.lock().await;
+        self.establish().await;
+    }
+
+    /// Connect, replacing any connection; the caller holds `connecting`.
+    async fn establish(self: &Arc<Self>) {
         self.set(|s| {
             s.snap.status = McpStatus::Connecting;
             s.snap.error = None;
@@ -306,14 +311,16 @@ impl Server {
         self.snapshot()
     }
 
-    /// The current connection, connecting again when there is none.
+    /// The connection, connecting again when it is gone. The check and the
+    /// connect happen under `connecting`, so concurrent callers that find
+    /// it gone reconnect once, not once each.
     async fn client(self: &Arc<Self>) -> Result<Arc<Client>, String> {
         self.ready().await;
-        let current = self.state.lock().expect("mcp state lock").client.clone();
-        if let Some(c) = current {
+        let _held = self.connecting.lock().await;
+        if let Some(c) = self.live() {
             return Ok(c);
         }
-        self.clone().connect().await;
+        self.establish().await;
         let s = self.state.lock().expect("mcp state lock");
         s.client.clone().ok_or_else(|| {
             s.snap
@@ -323,15 +330,26 @@ impl Server {
         })
     }
 
-    /// Call `tool`. A dropped connection is reconnected once.
+    fn live(&self) -> Option<Arc<Client>> {
+        let s = self.state.lock().expect("mcp state lock");
+        s.client.clone().filter(|c| !c.is_transport_closed())
+    }
+
+    /// Call `tool`. A call is never retried: when the connection drops
+    /// mid-call the tool may have run, so the error goes to the model and
+    /// the next call reconnects. Dropping the future (an abort) sends
+    /// `notifications/cancelled`.
     pub async fn call(self: &Arc<Self>, tool: &str, args: JsonObject) -> Result<Value, String> {
         let params = CallToolRequestParams::new(tool.to_owned()).with_arguments(args);
         let client = self.client().await?;
-        let result = match client.call_tool(params.clone()).await {
-            Err(ServiceError::TransportClosed | ServiceError::TransportSend(_)) => {
-                warn!(server = self.name, "mcp connection dropped; reconnecting");
-                self.clone().connect().await;
-                self.client().await?.call_tool(params).await
+        let result = match client.call_tool(params).await {
+            Err(e @ (ServiceError::TransportClosed | ServiceError::TransportSend(_))) => {
+                warn!(server = self.name, "mcp connection dropped");
+                let mut s = self.state.lock().expect("mcp state lock");
+                if s.client.as_ref().is_some_and(|c| Arc::ptr_eq(c, &client)) {
+                    s.client = None;
+                }
+                Err(e)
             }
             r => r,
         };

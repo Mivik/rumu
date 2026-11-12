@@ -174,6 +174,35 @@ async fn call_tool_returns_text_errors_and_structured_content() {
 }
 
 #[tokio::test]
+async fn a_dropped_call_is_not_retried_and_reconnects_once() {
+    let home = tempfile::tempdir().unwrap();
+    let Some(hub) = hub(home.path()).await else {
+        return;
+    };
+    let fake = hub.server("fake").unwrap();
+    let log = home.path().join("ran");
+    let mut args = JsonObject::new();
+    args.insert("log".into(), json!(log.display().to_string()));
+    assert!(fake.call("crash", args).await.is_err());
+    assert_eq!(std::fs::read_to_string(&log).unwrap(), "ran\n");
+
+    let echo = || {
+        let fake = fake.clone();
+        async move {
+            let mut args = JsonObject::new();
+            args.insert("text".into(), json!("hi"));
+            fake.call("echo", args).await
+        }
+    };
+    let (a, b, c) = tokio::join!(echo(), echo(), echo());
+    for r in [a, b, c] {
+        assert_eq!(r.unwrap()["content"][0]["text"], "hi");
+    }
+    let starts = std::fs::read_to_string(home.path().join("starts")).unwrap();
+    assert_eq!(starts.lines().count(), 2);
+}
+
+#[tokio::test]
 async fn intro_note_lists_the_servers_once() {
     let home = tempfile::tempdir().unwrap();
     let Some(hub) = hub(home.path()).await else {
