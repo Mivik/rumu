@@ -32,7 +32,7 @@ pub struct Assistant {
     /// Its `deck.yaml` default mounts.
     pub mounts: Vec<DeckMount>,
     /// The MCP servers its sessions use.
-    pub mcp: Vec<String>,
+    pub mcp: rumu_core::McpUse,
     /// The one sessions run as when none is named.
     pub default: bool,
 }

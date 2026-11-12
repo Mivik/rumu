@@ -208,7 +208,7 @@ mod tests {
             assistant: "x".into(),
             asked_by: None,
             mounts,
-            mcp: Vec::new(),
+            mcp: Default::default(),
         })
     }
 

@@ -30,5 +30,8 @@
   "changeDeck": "Change deck",
   "mcp": "MCP servers",
   "mcpGone": "Not configured; click to remove",
-  "manageMcp": "Manage"
+  "manageMcp": "Manage",
+  "toolsOn": "{n}/{total} tools",
+  "allTools": "All",
+  "noTools": "None"
 }

@@ -54,4 +54,4 @@ model?: ModelUse | null,
 /**
  * The MCP servers from the session's root.
  */
-mcp: Array<string>, };
+mcp: { [key in string]: Array<string> }, };

@@ -30,5 +30,8 @@
   "changeDeck": "更换卡组",
   "mcp": "MCP 服务器",
   "mcpGone": "未配置，点击移除",
-  "manageMcp": "管理"
+  "manageMcp": "管理",
+  "toolsOn": "{n}/{total} 个工具",
+  "allTools": "全部",
+  "noTools": "全不选"
 }

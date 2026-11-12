@@ -54,7 +54,7 @@ The first-call note states these rules.
     - { deck: <deck-id>, at: /cards/user }              # writes ask the user
     - { deck: <deck-id>, at: /cards/notes, write: true } # writes need no approval
   allow_ask: [<deck-id>]     # these assistants may ask it without a prompt
-  mcp: [github]              # MCP servers in settings.yaml its sessions use
+  mcp: { github: ["*"] }     # MCP servers in settings.yaml, with the tools enabled
   ```
 
 - **Private decks.** A deck with `private: true` is visible to an agent only

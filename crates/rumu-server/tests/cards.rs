@@ -69,7 +69,7 @@ fn card_home() -> (tempfile::TempDir, std::path::PathBuf) {
             private: false,
             mounts: Vec::new(),
             allow_ask: Vec::new(),
-            mcp: Vec::new(),
+            mcp: Default::default(),
             icon: None,
         })
         .unwrap();

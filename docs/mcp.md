@@ -17,6 +17,7 @@ harnesses' own docs.
 | Loading a found tool | Provider-native: the schema is injected into the conversation and the tool called by name | Not portable across providers, so one generic `call_tool` |
 | Tool naming | `mcp__<server>__<tool>` (Claude Code), `<server>_<tool>` (OpenCode) | `<server>/<tool>`, as in its path |
 | Approval | Per tool or per server, varies | None: binding a server to an assistant authorizes it |
+| Narrowing a server's tools | Allow and deny lists per server (Codex `enabled_tools`/`disabled_tools`) | Rules per binding, as for models |
 
 ## Servers
 
@@ -49,12 +50,21 @@ harnesses' own docs.
 
 ## Assistants
 
-- An assistant's `deck.yaml` names the servers it uses, set on the
-  assistant page:
+- An assistant's `deck.yaml` names the servers it uses, each with the rules
+  enabling its tools, set on the assistant page:
 
   ```yaml
-  mcp: [github, linear]
+  mcp:
+    github: ["*", "!delete_*"]   # all but these, new tools included
+    linear: [list_issues]        # only this one
   ```
+
+  The rules work like a provider's model rules: `*` matches any run of
+  characters, `!` excludes, and a rule naming a tool wins over a pattern.
+  Binding a server enables `*`; its tool count on the assistant page opens
+  a checklist of the tools the server lists now. Unchecking under `*` adds
+  `!tool`, so tools the server adds later are in; checking from none adds
+  the tool's name, so they are out.
 
 - A session records its assistant's servers on its root, so changing the
   assistant affects new sessions only. Forks and sub-agents inherit them; an
@@ -81,4 +91,5 @@ harnesses' own docs.
   and images come back as the tool result, `isError` as an error. An unknown
   name is refused with the server's tool names. It can run in the
   background, and `code` scripts reach it as `rumu.call_tool`.
-- Servers outside the session's list are neither listed nor callable.
+- Servers outside the session's list, and tools its rules leave out, are
+  neither listed nor callable; a server's tool count is of the enabled ones.

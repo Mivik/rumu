@@ -65,3 +65,8 @@ pub struct McpToolInfo {
     #[ts(optional)]
     pub description: Option<String>,
 }
+
+/// An assistant's MCP servers: each server's name in `settings.yaml`, with
+/// the rules enabling its tools ([`crate::rules_enable`]; `*` is all of
+/// them, new ones included).
+pub type McpUse = BTreeMap<String, Vec<String>>;

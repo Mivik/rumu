@@ -260,7 +260,7 @@ pub fn create_project(
         private,
         mounts: Vec::new(),
         allow_ask: Vec::new(),
-        mcp: Vec::new(),
+        mcp: Default::default(),
         icon,
     })?;
     set_project_workspaces(home, registry, deck.id(), workspaces)?;

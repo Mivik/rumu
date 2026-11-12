@@ -169,9 +169,10 @@ pub struct DeckMeta {
     /// Assistant deck ids that may ask it without a prompt.
     #[serde(default, skip_serializing_if = "Vec::is_empty")]
     pub allow_ask: Vec<String>,
-    /// The MCP servers (names in `settings.yaml`) its sessions use.
-    #[serde(default, skip_serializing_if = "Vec::is_empty")]
-    pub mcp: Vec<String>,
+    /// The MCP servers (names in `settings.yaml`) its sessions use, each with
+    /// the rules enabling its tools.
+    #[serde(default, skip_serializing_if = "std::collections::BTreeMap::is_empty")]
+    pub mcp: rumu_core::McpUse,
     /// A project's seal.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub icon: Option<DeckIcon>,
@@ -1126,7 +1127,7 @@ fn empty_meta(id: String, name: String) -> DeckMeta {
         private: false,
         mounts: Vec::new(),
         allow_ask: Vec::new(),
-        mcp: Vec::new(),
+        mcp: Default::default(),
         icon: None,
     }
 }

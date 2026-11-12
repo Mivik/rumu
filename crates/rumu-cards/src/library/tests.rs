@@ -15,7 +15,7 @@ fn test_decks() -> (tempfile::TempDir, Decks, Deck, Deck) {
         private: false,
         mounts: Vec::new(),
         allow_ask: Vec::new(),
-        mcp: Vec::new(),
+        mcp: Default::default(),
         icon: None,
     };
     let main = decks.upsert(new("main", true)).unwrap();

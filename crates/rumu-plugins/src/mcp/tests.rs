@@ -45,9 +45,17 @@ async fn hub(home: &std::path::Path) -> Option<Arc<McpHub>> {
     Some(hub)
 }
 
+/// Each server with all its tools.
+fn all(servers: &[&str]) -> rumu_core::McpUse {
+    servers
+        .iter()
+        .map(|s| (s.to_string(), vec!["*".to_owned()]))
+        .collect()
+}
+
 fn state(servers: &[&str]) -> PathState {
     PathState {
-        mcp: servers.iter().map(|s| s.to_string()).collect(),
+        mcp: all(servers),
         ..Default::default()
     }
 }
@@ -132,7 +140,7 @@ async fn call_tool_returns_text_errors_and_structured_content() {
     };
     let plugin = McpPlugin::new(home.path(), hub);
     let fake = FakeRuntime::arc();
-    fake.state.lock().unwrap().mcp = vec!["fake".into()];
+    fake.state.lock().unwrap().mcp = all(&["fake"]);
     let cx = fake.cx();
     let call = |args| plugin.call_tool("call_tool", args, &cx);
 
@@ -186,7 +194,7 @@ async fn intro_note_lists_the_servers_once() {
         .unwrap();
     assert!(none.effects.is_empty());
 
-    fake.state.lock().unwrap().mcp = vec!["fake".into(), "broken".into()];
+    fake.state.lock().unwrap().mcp = all(&["fake", "broken"]);
     let out = plugin
         .on_hook(INTRO_HOOK, &event, &fake.cx())
         .await
@@ -194,4 +202,49 @@ async fn intro_note_lists_the_servers_once() {
     let text = &out.effects[0].text;
     assert!(text.contains("- `fake`: 3 tools\n  Echo things."), "{text}");
     assert!(text.contains("- `broken`: unavailable ("), "{text}");
+}
+
+#[tokio::test]
+async fn rules_narrow_a_servers_tools() {
+    let home = tempfile::tempdir().unwrap();
+    let Some(hub) = hub(home.path()).await else {
+        return;
+    };
+    let rules = |r: &[&str]| PathState {
+        mcp: [("fake".to_owned(), r.iter().map(|s| s.to_string()).collect())].into(),
+        ..Default::default()
+    };
+    let text = |out: ToolResult<ToolOutput>| out.unwrap().content.text;
+
+    // All but one: new tools would be in too.
+    let st = rules(&["*", "!fail"]);
+    assert!(text(list(&hub, &st, path("/tools")).await).contains("fake/ — 2 tools"));
+    let tools = text(list(&hub, &st, path("/tools/fake")).await);
+    assert!(tools.contains("echo") && !tools.contains("fail"), "{tools}");
+    let err = read(&hub, &st, path("/tools/fake/fail")).await.unwrap_err();
+    assert!(
+        err.to_string().contains("its tools: `echo`, `list_issues`"),
+        "{err}"
+    );
+    let hits = text(search(&hub, &st, path("/tools"), "always fails", 5).await);
+    assert!(!hits.contains("fake/fail"), "{hits}");
+
+    // Only the one named.
+    let st = rules(&["echo"]);
+    assert_eq!(
+        text(list(&hub, &st, path("/tools/fake")).await),
+        "echo — Echo the given text back.\n"
+    );
+    let plugin = McpPlugin::new(home.path(), hub);
+    let fake = FakeRuntime::arc();
+    fake.state.lock().unwrap().mcp = st.mcp.clone();
+    let out = plugin
+        .call_tool(
+            "call_tool",
+            json!({ "tool": "fake/list_issues" }),
+            &fake.cx(),
+        )
+        .await
+        .unwrap();
+    assert!(out.is_error && out.content.text.contains("has no tool `list_issues`"));
 }

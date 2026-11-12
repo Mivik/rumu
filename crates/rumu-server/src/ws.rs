@@ -586,7 +586,7 @@ async fn dispatch(state: &AppState, method: &str, p: &Value) -> Result<Value> {
                 #[serde(default)]
                 allow_ask: Vec<String>,
                 #[serde(default)]
-                mcp: Vec<String>,
+                mcp: rumu_core::McpUse,
             }
             let req: Upsert = serde_json::from_value(p.clone())
                 .map_err(|e| ServerError::InvalidParams(e.to_string()))?;

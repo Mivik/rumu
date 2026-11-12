@@ -20,7 +20,7 @@ use rumu_cards::recall::{Doc, rank_docs};
 use rumu_core::{
     Content, Cx, Decision, Event, HookOutput, HookSpec, Manifest, McpStatus, PathState, Plugin,
     RUMU_WORKSPACE, Structured, ToolError, ToolOutput, ToolResult, ToolResultExt, ToolSpec,
-    Utf8UnixPath, parse_args, tool_schema,
+    Utf8UnixPath, parse_args, rules_enable, tool_schema,
 };
 use schemars::JsonSchema;
 use serde::{Deserialize, Serialize};
@@ -126,7 +126,7 @@ input schema) or `list {RUMU_WORKSPACE}:/tools/<server>`, and read one's input s
             effects: vec![Content::note_with(
                 text,
                 &McpIntro {
-                    servers: state.mcp.clone(),
+                    servers: state.mcp.keys().cloned().collect(),
                 },
             )],
             decision: Decision::Pass,
@@ -237,12 +237,12 @@ async fn intro(hub: &McpHub, state: &PathState) -> String {
 `search` (scope `{RUMU_WORKSPACE}:/tools`) or `list {RUMU_WORKSPACE}:/tools/<server>`, and call \
 them with `call_tool`."
     );
-    for name in &state.mcp {
+    for (name, rules) in &state.mcp {
         let _ = write!(text, "\n- `{name}`: ");
         match hub.server(name) {
             None => text.push_str("not configured"),
             Some(server) => {
-                let snap = server.ready().await;
+                let snap = enabled(server.ready().await, rules);
                 text.push_str(&status_line(&snap));
                 if let Some(i) = snap
                     .instructions
@@ -281,22 +281,34 @@ fn names(tools: &[Tool]) -> String {
         .join(", ")
 }
 
-/// Server `name`, when the session has it, with its tools.
+/// `snap` with only the tools `rules` enable.
+fn enabled(mut snap: Snapshot, rules: &[String]) -> Snapshot {
+    snap.tools = snap
+        .tools
+        .iter()
+        .filter(|t| rules_enable(rules, &t.name))
+        .cloned()
+        .collect();
+    snap
+}
+
+/// Server `name`, when the session has it, with the tools it enables.
 async fn bound(hub: &McpHub, state: &PathState, name: &str) -> ToolResult<(Arc<Server>, Snapshot)> {
-    if !state.mcp.iter().any(|n| n == name) {
+    let Some(rules) = state.mcp.get(name) else {
         return Err(ToolError::model(format!(
             "no MCP server `{name}` in this session{}",
             if state.mcp.is_empty() {
                 String::new()
             } else {
-                format!(" (it has: {})", state.mcp.join(", "))
+                let names: Vec<&str> = state.mcp.keys().map(String::as_str).collect();
+                format!(" (it has: {})", names.join(", "))
             }
         )));
-    }
+    };
     let server = hub
         .server(name)
         .ok_or_else(|| ToolError::model(format!("MCP server `{name}` is not configured")))?;
-    let snap = server.ready().await;
+    let snap = enabled(server.ready().await, rules);
     if snap.status != McpStatus::Ready {
         return Err(ToolError::model(format!(
             "MCP server `{name}` is {}",
@@ -375,9 +387,9 @@ pub async fn list(hub: &McpHub, state: &PathState, abs: &Utf8UnixPath) -> ToolRe
                 return Ok("This session has no MCP servers.".into());
             }
             let mut out = String::new();
-            for name in &state.mcp {
+            for (name, rules) in &state.mcp {
                 let status = match hub.server(name) {
-                    Some(s) => status_line(&s.ready().await),
+                    Some(s) => status_line(&enabled(s.ready().await, rules)),
                     None => "not configured".into(),
                 };
                 let _ = writeln!(out, "{name}/ — {status}");
@@ -433,7 +445,7 @@ pub async fn search(
     limit: usize,
 ) -> ToolResult<ToolOutput> {
     let servers: Vec<&str> = match tools_path(abs) {
-        Some(ToolsPath::Root) => state.mcp.iter().map(String::as_str).collect(),
+        Some(ToolsPath::Root) => state.mcp.keys().map(String::as_str).collect(),
         Some(ToolsPath::Server(name)) => vec![name],
         _ => {
             return Err(ToolError::model(format!(

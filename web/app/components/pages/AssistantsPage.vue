@@ -9,7 +9,7 @@ import { computed, onBeforeUnmount, onMounted, reactive, ref, watch } from 'vue'
 import { t } from '../../i18n'
 import { rumu } from '../../lib/api'
 import { openPage, pageUp, replacePage } from '../../lib/router'
-import { models, refreshSettings } from '../../lib/state/models'
+import { models, refreshSettings, rulesEnable } from '../../lib/state/models'
 import {
   connected,
   defaultAssistant,
@@ -30,7 +30,8 @@ interface Form {
   name: string
   mounts: DeckMount[]
   instructions: string
-  mcp: string[]
+  /** Each bound server with the rules enabling its tools. */
+  mcp: Record<string, string[]>
   allow_ask: string[]
 }
 
@@ -40,7 +41,7 @@ function blank(): Form {
     name: '',
     mounts: [],
     instructions: '',
-    mcp: [],
+    mcp: {},
     allow_ask: [],
   }
 }
@@ -166,9 +167,47 @@ const mcpOptions = computed(() => {
   const configured = (models.settings?.mcp ?? []).map((s) => s.name)
   return [
     ...configured.map((name) => ({ name, gone: false })),
-    ...form.mcp.filter((n) => !configured.includes(n)).map((name) => ({ name, gone: true })),
+    ...Object.keys(form.mcp)
+      .filter((n) => !configured.includes(n))
+      .map((name) => ({ name, gone: true })),
   ]
 })
+
+/** The bound servers that list tools, each with the ones its rules enable. */
+const mcpTools = computed(() =>
+  (models.settings?.mcp ?? [])
+    .filter((s) => form.mcp[s.name] && s.tools.length)
+    .map((s) => ({
+      name: s.name,
+      tools: s.tools,
+      on: s.tools.filter((tool) => rulesEnable(form.mcp[s.name]!, tool.name)).length,
+    })),
+)
+/** The servers whose tool list is open. */
+const openTools = ref(new Set<string>())
+
+/** Bind a server with all its tools, or unbind it. Kept sorted, as the
+ *  server stores them, so binding back is no change. */
+function toggleServer(name: string): void {
+  const next = { ...form.mcp }
+  if (next[name]) delete next[name]
+  else next[name] = ['*']
+  form.mcp = Object.fromEntries(Object.entries(next).sort(([a], [b]) => (a < b ? -1 : 1)))
+}
+
+/** Flip one tool with a rule naming it, when the other rules would not
+ *  already put it there. */
+function toggleTool(server: string, tool: string): void {
+  const current = form.mcp[server]!
+  const rules = current.filter((r) => r !== tool && r !== `!${tool}`)
+  const want = !rulesEnable(current, tool)
+  if (rulesEnable(rules, tool) !== want) rules.push(want ? tool : `!${tool}`)
+  form.mcp[server] = rules
+}
+
+function firstLine(text?: string): string {
+  return text?.split('\n').find((l) => l.trim())?.trim() ?? ''
+}
 
 /** Load the form from the open assistant (a blank one when adding). */
 function reset(): void {
@@ -185,7 +224,7 @@ function fromAssistant(assistant: Assistant): Form {
     name: assistant.name,
     mounts: assistant.mounts.map((m) => ({ ...m })),
     instructions: assistant.instructions ?? '',
-    mcp: [...assistant.mcp],
+    mcp: Object.fromEntries(Object.entries(assistant.mcp).map(([k, v]) => [k, [...v]])),
     allow_ask: [...assistant.allow_ask],
   }
 }
@@ -516,24 +555,66 @@ onBeforeUnmount(() => window.removeEventListener('keydown', onKey, true))
                 :class="
                   server.gone
                     ? 'tone-danger line-through'
-                    : form.mcp.includes(server.name)
+                    : form.mcp[server.name]
                       ? 'tone-tool'
                       : 'tone-neutral'
                 "
-                :aria-pressed="form.mcp.includes(server.name)"
+                :aria-pressed="!!form.mcp[server.name]"
                 :title="server.gone ? t('assistants.mcpGone') : undefined"
-                @click="toggle(form.mcp, server.name)"
+                @click="toggleServer(server.name)"
               >
-                <Icon
-                  :name="server.gone ? 'close' : form.mcp.includes(server.name) ? 'ok' : 'plus'"
-                  :size="12"
-                />
+                <Icon :name="server.gone ? 'close' : form.mcp[server.name] ? 'ok' : 'plus'" :size="12" />
                 {{ server.name }}
               </button>
               <button type="button" class="chip tone-neutral" @click="openPage('settings', 'mcp')">
                 <Icon name="settings" :size="12" />
                 {{ t('assistants.manageMcp') }}
               </button>
+            </div>
+            <div v-for="server in mcpTools" :key="server.name" class="rounded-control border border-line-soft">
+              <button
+                type="button"
+                class="flex w-full items-center gap-2 px-3 py-1.5 text-left text-meta"
+                :aria-expanded="openTools.has(server.name)"
+                @click="openTools.has(server.name) ? openTools.delete(server.name) : openTools.add(server.name)"
+              >
+                <Icon
+                  name="chevron"
+                  :size="12"
+                  class="flex-none text-ink-3 transition-transform duration-150"
+                  :class="{ 'rotate-90': openTools.has(server.name) }"
+                />
+                <span class="font-mono text-ink">{{ server.name }}</span>
+                <span class="text-ink-3">{{
+                  t('assistants.toolsOn', { n: server.on, total: server.tools.length })
+                }}</span>
+              </button>
+              <div v-if="openTools.has(server.name)" class="border-t border-line-soft">
+                <div class="flex gap-1.5 px-3 py-1.5">
+                  <button type="button" class="chip tone-neutral" @click="form.mcp[server.name] = ['*']">
+                    {{ t('assistants.allTools') }}
+                  </button>
+                  <button type="button" class="chip tone-neutral" @click="form.mcp[server.name] = []">
+                    {{ t('assistants.noTools') }}
+                  </button>
+                </div>
+                <ul class="flex max-h-80 flex-col overflow-y-auto">
+                  <li v-for="tool in server.tools" :key="tool.name" class="border-t border-line-soft">
+                    <label class="flex cursor-pointer items-baseline gap-2 px-3 py-1.5">
+                      <input
+                        type="checkbox"
+                        class="flex-none self-center"
+                        :checked="rulesEnable(form.mcp[server.name]!, tool.name)"
+                        @change="toggleTool(server.name, tool.name)"
+                      />
+                      <span class="flex-none font-mono text-meta text-ink">{{ tool.name }}</span>
+                      <span class="min-w-0 truncate text-meta text-ink-3" :title="tool.description">{{
+                        firstLine(tool.description)
+                      }}</span>
+                    </label>
+                  </li>
+                </ul>
+              </div>
             </div>
           </div>
 

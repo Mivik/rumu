@@ -20,7 +20,7 @@ mounts: Array<DeckMount>,
 /**
  * The MCP servers its sessions use.
  */
-mcp: Array<string>, 
+mcp: { [key in string]: Array<string> }, 
 /**
  * The one sessions run as when none is named.
  */
