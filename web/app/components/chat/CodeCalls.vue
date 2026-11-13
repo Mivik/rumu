@@ -3,8 +3,8 @@
 // script body. Rows expand to their args/output; the hook trace of the
 // enclosing call (tool.pre/post on internal calls) is shown underneath.
 // Each invoke is an ordinary ToolResult node whose `invoke.parent` names the
-// `code` call; they nest here instead of showing as chat rows. The files the
-// script changed are left out: they stand in the chat as EditCards.
+// `code` call; they nest here instead of showing as chat rows. While the
+// row is shut, the files the script changed stand after it as EditCards.
 import { computed, ref } from 'vue'
 import { t } from '../../i18n'
 import type { Branch, Content, Decision, FilePatch, Tagged } from '../../lib/types'
@@ -12,7 +12,7 @@ import type { ToolRowInfo } from '../../lib/store'
 import { openAgentView, state } from '../../lib/store'
 import { argSummary, shortId } from '../../lib/util'
 import { highlightLine } from '../../lib/markdown'
-import { displayCall, fileEditsOf } from '../../lib/toolrows'
+import { displayCall } from '../../lib/toolrows'
 import { patchOfData } from '../../lib/diff'
 import Icon from '../ui/Icon.vue'
 import Chip from '../ui/Chip.vue'
@@ -38,10 +38,9 @@ interface CodeCallRow {
 
 const calls = computed<CodeCallRow[]>(() => {
   const out: CodeCallRow[] = []
-  const edited = new Set(fileEditsOf(props.row).map((v) => v.row.result.id))
   for (const { result: n } of props.row.invokes) {
     const b = n.body
-    if (b.type !== 'tool_result' || !b.invoke || edited.has(n.id)) continue
+    if (b.type !== 'tool_result' || !b.invoke) continue
     out.push({
       call_id: b.call_id,
       ...displayCall({ name: b.invoke.name, args: b.invoke.args }),

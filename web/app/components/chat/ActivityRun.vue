@@ -28,7 +28,7 @@ import type {
 import { useBranchView } from '../../lib/store'
 import type { Node } from '../../lib/types'
 import type { PhrasePart, ToolRowView } from '../../lib/toolrows'
-import { fileEditsOf, toolPhrase, toolRowTitle, toolRowView } from '../../lib/toolrows'
+import { fileEditsOf, isFileEdit, isRowOpen, toolPhrase, toolRowTitle, toolRowView } from '../../lib/toolrows'
 import { contentText, fmtThought } from '../../lib/util'
 import { vEnter } from '../../lib/motion'
 import Icon from '../ui/Icon.vue'
@@ -170,12 +170,14 @@ const blocks = computed<Block[]>(() => {
       rows = []
     }
     for (const row of s.rows) {
-      const edits = fileEditsOf(row)
-      // A direct edit is its own card; a script's edits follow its row.
-      if (edits[0]?.row !== row) rows.push(row)
-      for (const v of edits) {
+      const v = toolRowView(row)
+      // A script's edits follow its row while it is shut; opened, they
+      // are in its call list.
+      const edits = isFileEdit(v) ? [v] : isRowOpen(v) ? [] : fileEditsOf(row)
+      if (edits[0] !== v) rows.push(row)
+      for (const e of edits) {
         flush()
-        out.push({ kind: 'edit', key: `edit:${v.row.result.id}`, view: v })
+        out.push({ kind: 'edit', key: `edit:${e.row.result.id}`, view: e })
       }
     }
     flush()

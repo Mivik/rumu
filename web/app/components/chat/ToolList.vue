@@ -8,13 +8,13 @@
 // keep theirs, and a call a hook blocked gets a small rubber stamp (stamped
 // on, when it happens live) and starts expanded. `agent` calls are plain
 // rows here: the AgentCard below the run is where a sub-agent shows.
-import { computed, ref } from 'vue'
+import { computed } from 'vue'
 import { t } from '../../i18n'
 import type { ToolRowInfo } from '../../lib/store'
 import { openTaskDetail, state } from '../../lib/store'
 import { cardById } from '../../lib/cards'
 import type { ToolRowView } from '../../lib/toolrows'
-import { argsOf, outputJson, toolRowTitle, toolRowView } from '../../lib/toolrows'
+import { argsOf, isRowOpen, outputJson, toggleRow, toolRowTitle, toolRowView } from '../../lib/toolrows'
 import { taskStatusWord } from '../../lib/tasks'
 import { highlightLine } from '../../lib/markdown'
 import { vEnter } from '../../lib/motion'
@@ -37,16 +37,6 @@ const views = computed<ToolRowView[]>(() => props.rows.map(toolRowView))
 /** Rows already there when the box opened reveal with it; later ones slide in. */
 const revealed = new Set(props.rows.map((r) => r.result.id))
 
-const expanded = ref<Set<string>>(new Set())
-/** Rows the user collapsed manually (blocked rows start expanded). */
-const collapsed = ref<Set<string>>(new Set())
-
-function isOpen(v: ToolRowView): boolean {
-  const id = v.row.result.id
-  if (collapsed.value.has(id)) return false
-  return v.status === 'blocked' || expanded.value.has(id)
-}
-
 /** A string arg of the call: a `code` script, a `bash` command. */
 function callArg(v: ToolRowView, key: string): string {
   const raw = argsOf(v.row.call)?.[key]
@@ -57,7 +47,7 @@ function callArg(v: ToolRowView, key: string): string {
  * to one line) while closed, the whole command (highlighted) once open —
  * its body then says the exit code, so the row's result hides. */
 function isShellOpen(v: ToolRowView): boolean {
-  return v.name === 'bash' && isOpen(v)
+  return v.name === 'bash' && isRowOpen(v)
 }
 
 /** A bash row's label: `$` when a command follows it, the tool name when
@@ -89,13 +79,6 @@ function bashOf(v: ToolRowView): { output: string; failed: boolean; running: boo
   return { output: running ? live : (task.result?.text ?? live), failed: task.is_error, running }
 }
 
-function toggle(v: ToolRowView): void {
-  const id = v.row.result.id
-  if (v.status === 'blocked' && !expanded.value.has(id)) collapsed.value.add(id)
-  else if (expanded.value.has(id)) expanded.value.delete(id)
-  else expanded.value.add(id)
-}
-
 /** Status color of a row's icon and name: failures danger, else tool. */
 function statusClass(v: ToolRowView): string {
   return v.status === 'ok' ? 'text-tool' : 'text-danger'
@@ -120,11 +103,11 @@ function liveTaskOutput(id: string | null): string {
         class="flex w-full min-w-0 gap-2 px-2.5 py-1 text-left transition-colors"
         :class="[
           isShellOpen(v) ? 'items-start' : 'items-center',
-          isOpen(v) ? 'bg-surface-2' : 'hover:bg-surface-2/70',
+          isRowOpen(v) ? 'bg-surface-2' : 'hover:bg-surface-2/70',
         ]"
         :title="toolRowTitle(v)"
-        :aria-expanded="isOpen(v)"
-        @click="toggle(v)"
+        :aria-expanded="isRowOpen(v)"
+        @click="toggleRow(v)"
       >
         <Icon
           :name="v.status === 'ok' ? 'tool' : v.status === 'blocked' ? 'blocked' : 'error'"
@@ -191,28 +174,28 @@ function liveTaskOutput(id: string | null): string {
             name="chevron"
             :size="12"
             class="transition-transform duration-100"
-            :class="isOpen(v) ? 'rotate-90 text-ink-2' : 'text-ink-3/70'"
+            :class="isRowOpen(v) ? 'rotate-90 text-ink-2' : 'text-ink-3/70'"
           />
         </span>
       </button>
 
       <!-- dedicated bodies fill the expanded row edge to edge -->
       <FileDiff
-        v-if="isOpen(v) && bodyOf(v) === 'diff'"
+        v-if="isRowOpen(v) && bodyOf(v) === 'diff'"
         class="reveal"
         :patch="v.patch"
         :path="v.toolCardId ? 'card.md' : v.callFull"
         :args="argsOf(v.row.call)"
       />
       <FileView
-        v-else-if="isOpen(v) && bodyOf(v) === 'file'"
+        v-else-if="isRowOpen(v) && bodyOf(v) === 'file'"
         class="reveal"
         :text="v.output"
         :path="v.toolCardId ? 'card.md' : v.callFull"
         :args="argsOf(v.row.call)"
       />
-      <BashView v-else-if="isOpen(v) && bodyOf(v) === 'bash'" class="reveal" v-bind="bashOf(v)" />
-      <div v-else-if="isOpen(v)" class="reveal flex flex-col gap-2 pt-1 pr-2.5 pb-2.5 pl-[30px]">
+      <BashView v-else-if="isRowOpen(v) && bodyOf(v) === 'bash'" class="reveal" v-bind="bashOf(v)" />
+      <div v-else-if="isRowOpen(v)" class="reveal flex flex-col gap-2 pt-1 pr-2.5 pb-2.5 pl-[30px]">
         <div v-if="v.row.call && v.name === 'code'">
           <div class="mb-1 text-micro font-semibold text-ink-3">{{ t('tools.detail.script') }}</div>
           <pre class="code">{{ callArg(v, 'code') }}</pre>

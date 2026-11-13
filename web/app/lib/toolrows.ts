@@ -4,6 +4,7 @@
 // file edits (their diffs stand outside an activity run's fold). Shared by
 // ToolList (the rows), EditCard and ActivityRun (the summary line).
 
+import { reactive } from 'vue'
 import type { Attachment, Branch, FilePatch, Node, TaskStatus } from './types'
 import { INTERNAL_WORKSPACE } from './types'
 import type { ToolRowInfo } from './store'
@@ -426,6 +427,26 @@ export function isFileEdit(v: ToolRowView): boolean {
   return (
     (v.name === 'write' || v.name === 'edit') && v.status === 'ok' && !v.toolCardId && v.row.call !== null
   )
+}
+
+/** Rows the user expanded, and blocked rows they collapsed (blocked rows
+ * start expanded), by result node id. Shared: a `code` row's edits stand
+ * outside it only while it is shut (ActivityRun), and a box re-split around
+ * them keeps its rows' state. */
+const expandedRows = reactive(new Set<string>())
+const collapsedRows = reactive(new Set<string>())
+
+export function isRowOpen(v: ToolRowView): boolean {
+  const id = v.row.result.id
+  if (collapsedRows.has(id)) return false
+  return v.status === 'blocked' || expandedRows.has(id)
+}
+
+export function toggleRow(v: ToolRowView): void {
+  const id = v.row.result.id
+  if (v.status === 'blocked' && !expandedRows.has(id)) collapsedRows.add(id)
+  else if (expandedRows.has(id)) expandedRows.delete(id)
+  else expandedRows.add(id)
 }
 
 /** The file edits a row stands for: itself, or those its script's calls
