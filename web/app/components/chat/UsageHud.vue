@@ -1,9 +1,9 @@
 <script setup lang="ts">
 // Per-reply usage line under an assistant turn: "time · N calls · output".
 // Hover or focus opens a card for the whole reply — its totals, where the
-// time went, and every model call as a column (CallBars); a click opens the
-// stats view at this reply. In a sub-agent's panel, which the stats view does
-// not cover, a click pins the card instead.
+// time went, and every model call as a column (CallBars). A click pins the
+// card; only its own link opens the stats view at this reply (not offered in
+// a sub-agent's panel, which the stats view does not cover).
 //
 // Hovering waits OPEN_DELAY before opening, so sweeping the pointer across the
 // timeline does not flash the card; focus and tap open immediately.
@@ -116,12 +116,13 @@ watch(reply, (r) => {
   if (!r) close()
 })
 
-function onClick(): void {
-  if (view.sub) {
-    cancelOpen()
-    pinned.value = !pinned.value
-    return
-  }
+/** Tap toggles the pinned card; drop any pending dwell so it cannot reopen later. */
+function togglePin(): void {
+  cancelOpen()
+  pinned.value = !pinned.value
+}
+
+function openStats(): void {
   const r = reply.value
   if (!r) return
   close()
@@ -224,7 +225,7 @@ const tipStyle = computed<CSSProperties>(() => ({
       :aria-label="t('usage.aria')"
       :aria-expanded="open"
       :aria-describedby="open ? TIP_ID : undefined"
-      @click="onClick"
+      @click="togglePin"
     >
       <span class="font-bold text-ink-2">{{ fmtDuration(sum.activeMs) }}</span>
       <template v-if="sum.calls > 1">
@@ -314,7 +315,7 @@ const tipStyle = computed<CSSProperties>(() => ({
               v-if="!view.sub"
               type="button"
               class="-mr-1 ml-auto inline-flex items-center gap-0.5 rounded-control px-1.5 py-0.5 text-micro font-semibold text-ink-2 transition-colors hover:bg-surface-2 hover:text-ink"
-              @click="onClick"
+              @click="openStats"
             >
               {{ t('usage.open') }}
               <Icon name="chevron" :size="12" />
