@@ -117,8 +117,11 @@ function liveTaskOutput(id: string | null): string {
       :class="{ 'bg-danger-soft/40': v.status !== 'ok' }"
     >
       <button
-        class="flex w-full min-w-0 gap-2 px-2.5 py-1 text-left transition-colors hover:bg-surface-2/70"
-        :class="isShellOpen(v) ? 'items-start' : 'items-center'"
+        class="flex w-full min-w-0 gap-2 px-2.5 py-1 text-left transition-colors"
+        :class="[
+          isShellOpen(v) ? 'items-start' : 'items-center',
+          isOpen(v) ? 'bg-surface-2' : 'hover:bg-surface-2/70',
+        ]"
         :title="toolRowTitle(v)"
         :aria-expanded="isOpen(v)"
         @click="toggle(v)"
@@ -187,8 +190,8 @@ function liveTaskOutput(id: string | null): string {
           <Icon
             name="chevron"
             :size="12"
-            class="text-ink-3/70 transition-transform duration-100"
-            :class="{ 'rotate-90': isOpen(v) }"
+            class="transition-transform duration-100"
+            :class="isOpen(v) ? 'rotate-90 text-ink-2' : 'text-ink-3/70'"
           />
         </span>
       </button>

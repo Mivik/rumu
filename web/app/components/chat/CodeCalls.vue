@@ -146,8 +146,11 @@ const iconTone: Record<Status, string> = {
         :class="{ 'bg-danger-soft/30': status(c) !== 'ok' }"
       >
         <button
-          class="flex w-full min-w-0 gap-2 px-2 py-1 text-left transition-colors hover:bg-surface-2/70"
-          :class="c.name === 'bash' && isOpen(c.call_id) ? 'items-start' : 'items-center'"
+          class="flex w-full min-w-0 gap-2 px-2 py-1 text-left transition-colors"
+          :class="[
+            c.name === 'bash' && isOpen(c.call_id) ? 'items-start' : 'items-center',
+            isOpen(c.call_id) ? 'bg-surface-2' : 'hover:bg-surface-2/70',
+          ]"
           :title="`${c.name} ${summary(c)} → ${statusLabel(c)}`"
           @click="toggle(c.call_id)"
         >
@@ -183,8 +186,8 @@ const iconTone: Record<Status, string> = {
             <Icon
               name="chevron"
               :size="12"
-              class="text-ink-3/70 transition-transform duration-100"
-              :class="{ 'rotate-90': isOpen(c.call_id) }"
+              class="transition-transform duration-100"
+              :class="isOpen(c.call_id) ? 'rotate-90 text-ink-2' : 'text-ink-3/70'"
             />
           </span>
         </button>
