@@ -4,6 +4,7 @@
 import { reactive } from 'vue'
 import type { PageRoute, SessionView } from '../router'
 import type {
+  Artifact,
   Decision,
   Effect,
   Branch,
@@ -198,8 +199,9 @@ const initial = {
   drawers: [] as CardWindow[],
   /** The image shown full-size (opened by any thumbnail). */
   lightbox: null as LightboxImage | null,
-  /** The open artifact: the `show` result node it was recorded by. */
-  artifact: null as NodeId | null,
+  /** The open artifact: the `show` result node it was recorded by, or a
+   *  file a link opened that no `show` on the path recorded. */
+  artifact: null as NodeId | Artifact | null,
   /** The sub-agent branch open beside the chat. */
   agentView: null as BranchId | null,
 }

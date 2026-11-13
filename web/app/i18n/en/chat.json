@@ -137,7 +137,8 @@
     "copy": "Copy",
     "copied": "Copied {title}",
     "download": "Download",
-    "loadFailed": "Couldn't load this version"
+    "loadFailed": "Couldn't load this version",
+    "openFailed": "Couldn't open {path}"
   },
   "agentView": {
     "title": "Sub-agent",

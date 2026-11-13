@@ -17,7 +17,7 @@ use schemars::JsonSchema;
 use serde::Deserialize;
 use serde_json::{Value, json};
 
-use super::backend::{BackendError, ExecOutput, is_not_found, probe_uname};
+use super::backend::{Backend, BackendError, ExecOutput, is_not_found, probe_uname};
 use super::patch;
 use super::{WorkspacePlugin, usable_ctl_dir};
 use crate::Result;
@@ -452,6 +452,62 @@ fn bad_scope() -> ToolError {
     ))
 }
 
+/// What `show` records: a workspace file's bytes put in the blob store,
+/// titled by its file name. Errors are messages about the file.
+async fn snapshot(
+    backend: &dyn Backend,
+    blobs: rumu_blob::Result<rumu_blob::Blobs>,
+    ws: &Workspace,
+    abs: &Utf8TypedPathBuf,
+) -> std::result::Result<Artifact, String> {
+    let at = display(ws, abs);
+    let bytes = backend.read_bytes(abs).await.map_err(|e| e.to_string())?;
+    if bytes.len() > ARTIFACT_MAX_BYTES {
+        return Err(format!(
+            "{} bytes is over the {ARTIFACT_MAX_BYTES}-byte limit",
+            bytes.len()
+        ));
+    }
+    if std::str::from_utf8(&bytes).is_err() {
+        return Err("not a UTF-8 text file (images: `read` them)".into());
+    }
+    let hash = blobs
+        .and_then(|blobs| blobs.put(&bytes))
+        .map_err(|e| e.to_string())?;
+    let name = abs.file_name().unwrap_or(at.as_str()).to_owned();
+    Ok(Artifact {
+        kind: ArtifactKind::of(&name),
+        path: at,
+        title: name,
+        hash,
+        size: bytes.len() as u64,
+    })
+}
+
+/// [`snapshot`] of an address on a branch's path, outside any tool call: the
+/// web opens a file no `show` recorded this way. Nothing is recorded.
+pub async fn snapshot_file(
+    state: &PathState,
+    raw: &str,
+    blobs: rumu_blob::Blobs,
+) -> std::result::Result<Artifact, String> {
+    let not_file = || format!("`{raw}` is not a workspace file");
+    let target = target_of(state, raw).map_err(|e| match e {
+        ToolError::Model(out) => out.content.text,
+        ToolError::Fatal(e) => e.to_string(),
+    })?;
+    let Target::Real { ws, abs } = target else {
+        return Err(not_file());
+    };
+    snapshot(
+        &*super::backend_for(&super::ssh_ctl_dir(), &ws),
+        Ok(blobs),
+        &ws,
+        &abs,
+    )
+    .await
+}
+
 /// Resolve a `path` argument into a [`Target`].
 fn target_of(state: &PathState, raw: &str) -> ToolResult<Target> {
     let addr = resolve_state(state, raw).map_err(ToolError::model)?;
@@ -678,40 +734,16 @@ impl WorkspacePlugin {
                 "`show` takes a workspace file; write the content to one (e.g. in `@scratch`) first",
             ));
         };
-        let at = display(&ws, &abs);
-        let bytes = self
-            .backend_for(&ws)
-            .read_bytes(&abs)
+        let mut artifact = snapshot(&*self.backend_for(&ws), self.blobs(), &ws, &abs)
             .await
-            .map_err(|e| backend_err("show", Some(at.clone()), e))?;
-        if bytes.len() > ARTIFACT_MAX_BYTES {
-            return Err(ToolError::model(format!(
-                "show {at}: {} bytes is over the {ARTIFACT_MAX_BYTES}-byte limit",
-                bytes.len()
-            )));
-        }
-        if std::str::from_utf8(&bytes).is_err() {
-            return Err(ToolError::model(format!(
-                "show {at}: not a UTF-8 text file (images: `read` them)"
-            )));
-        }
-        let hash = self
-            .blobs()
-            .and_then(|blobs| blobs.put(&bytes))
-            .map_err(|e| backend_err("show", Some(at.clone()), e))?;
-        let name = abs.file_name().unwrap_or(at.as_str()).to_owned();
-        let title = args
+            .map_err(|e| ToolError::model(format!("show {}: {e}", display(&ws, &abs))))?;
+        if let Some(title) = args
             .title
             .map(|t| t.trim().to_owned())
             .filter(|t| !t.is_empty())
-            .unwrap_or_else(|| name.clone());
-        let artifact = Artifact {
-            kind: ArtifactKind::of(&name),
-            path: at,
-            title,
-            hash,
-            size: bytes.len() as u64,
-        };
+        {
+            artifact.title = title;
+        }
         Ok(ToolOutput::ok(format!(
             "showed {} to the user ({} bytes)",
             artifact.path, artifact.size

@@ -2,8 +2,8 @@
 // lives on the path as the `artifact` payload of a `show` result, its bytes a
 // blob, so a branch sees exactly the versions it showed; the snapshots of one
 // file on the path are its versions, in order. The open one is
-// `state.artifact` (a result node id); it shows only while that node is on
-// the current path.
+// `state.artifact`: a result node id, shown only while that node is on the
+// current path, or a file a link snapshotted (`fs.snapshot`), on no node.
 
 import { computed } from 'vue'
 import type { Artifact, Content, Node } from './types'
@@ -48,12 +48,16 @@ export function versionOf(nodeId: string | null): ArtifactVersion | null {
   return null
 }
 
-/** The open artifact, while it is on the current path. */
-export const openArtifact = computed(() => versionOf(state.artifact))
+/** The open artifact: a snapshot while it is on the current path, or a
+ *  linked file (version 0, outside the path's versions). */
+export const openArtifact = computed<Pick<ArtifactVersion, 'artifact' | 'version'> | null>(() => {
+  const open = state.artifact
+  return typeof open === 'object' && open ? { artifact: open, version: 0 } : versionOf(open)
+})
 
-export function showArtifact(nodeId: string | null): void {
-  state.artifact = nodeId
-  if (nodeId) {
+export function showArtifact(open: string | Artifact | null): void {
+  state.artifact = open
+  if (open) {
     state.agentView = null
     state.taskDetail = null
   }

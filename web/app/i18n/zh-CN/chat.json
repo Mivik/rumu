@@ -137,7 +137,8 @@
     "copy": "复制",
     "copied": "已复制 {title}",
     "download": "下载",
-    "loadFailed": "无法加载这个版本"
+    "loadFailed": "无法加载这个版本",
+    "openFailed": "无法打开 {path}"
   },
   "agentView": {
     "title": "子代理",

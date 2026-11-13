@@ -36,6 +36,7 @@ mod tools;
 mod tests;
 
 pub use backend::BackendError;
+pub use tools::snapshot_file;
 
 use std::collections::HashMap;
 use std::path::{Path, PathBuf};

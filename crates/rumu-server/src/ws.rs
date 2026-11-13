@@ -64,6 +64,10 @@ enum ServerError {
     #[error("invalid params: {0}")]
     InvalidParams(String),
 
+    /// A workspace file could not be opened (`fs.snapshot`).
+    #[error("{0}")]
+    File(String),
+
     /// An assistant edit was refused (validation or writing `deck.yaml`).
     #[error(transparent)]
     Plugins(#[from] rumu_plugins::Error),
@@ -736,6 +740,18 @@ async fn dispatch(state: &AppState, method: &str, p: &Value) -> Result<Value> {
                 .collect();
             dirs.sort_by_key(|n| n.to_lowercase());
             Ok(json!({ "path": path, "parent": path.parent(), "dirs": dirs }))
+        }
+
+        // A workspace file as the branch's tools address it, snapshotted the
+        // way `show` would without recording anything: links the web opens.
+        "fs.snapshot" => {
+            let branch: BranchId = str_param(p, "branch")?.into();
+            let path = str_param(p, "path")?;
+            let (_, path_state) = kernel.branch_path(&branch)?;
+            let artifact = rumu_plugins::snapshot_file(&path_state, path, state.blobs.clone())
+                .await
+                .map_err(ServerError::File)?;
+            Ok(json!({ "artifact": artifact }))
         }
 
         // Questions a tool call put to the user (`decision.requested`).

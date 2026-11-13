@@ -20,6 +20,7 @@ import hljs from 'highlight.js/lib/core'
 import { marked, type Token } from 'marked'
 import { shallowRef } from 'vue'
 import { t } from '../i18n'
+import { state } from './state/state'
 import { INTERNAL_WORKSPACE, SCRATCH_WORKSPACE } from './types'
 
 /** One chunk per grammar, fetched on first use. Core stays in the entry
@@ -193,6 +194,13 @@ const ADDRESS = /^@(?:rumu|scratch):[^\s<>()[\]`"']*[^\s<>()[\]`"'.,;:!?]/
 /** Where the first workspace address starts (the tokenizer's `start`). */
 const ADDRESS_START = /@(?:rumu|scratch):/
 
+/** `proj:src/a.rs` (whole, in inline code) for a registered workspace
+ *  `proj`: the names follow the URI-scheme rule, never a common scheme. */
+function isWorkspacePath(text: string): boolean {
+  const m = /^([a-z][a-z0-9.-]*):[^\s<>()[\]`"']+$/.exec(text)
+  return !!m && state.workspaces.some((w) => w.name === m[1])
+}
+
 /** An address as a plain link, for the href pass in `renderMarkdown`. */
 function addressLink(address: string, inner: string): string {
   return `<a href="${escapeHtml(address)}">${inner}</a>`
@@ -218,7 +226,7 @@ marked.use({
       const code = `<code>${escapeHtml(token.text)}</code>`
       if ((token as Token & { [IN_LINK]?: true })[IN_LINK]) return code
       const m = ADDRESS.exec(token.text)
-      return m && m[0] === token.text ? addressLink(token.text, code) : code
+      return (m && m[0] === token.text) || isWorkspacePath(token.text) ? addressLink(token.text, code) : code
     },
   },
   extensions: [

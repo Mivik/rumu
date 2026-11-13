@@ -17,7 +17,7 @@ import FileView from './FileView.vue'
 const shown = computed(() => openArtifact.value)
 const artifact = computed(() => shown.value?.artifact ?? null)
 const versions = computed(() =>
-  artifact.value ? (artifactsOnPath.value.get(artifact.value.path) ?? []) : [],
+  artifact.value && shown.value?.version ? (artifactsOnPath.value.get(artifact.value.path) ?? []) : [],
 )
 
 const where = computed(() => {

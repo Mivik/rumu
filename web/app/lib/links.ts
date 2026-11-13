@@ -1,9 +1,11 @@
 // Following links in rendered markdown (lib/markdown.ts makes the anchors):
 // `@rumu:` addresses open what they name, links inside a card body open cards
-// of the same deck, a workspace file shown on this path opens its artifact,
-// and an address nothing here shows is copied instead.
+// of the same deck, a workspace file opens beside the chat (its latest `show`
+// on this path, else as it is now), and an address nothing here shows is
+// copied instead.
 
 import { t } from '../i18n'
+import { rumu } from './api'
 import { artifactsOnPath, showArtifact } from './artifacts'
 import { cardById, mountedRef } from './cards'
 import { closePage, openPage } from './router'
@@ -20,7 +22,7 @@ import {
 } from './store'
 import { toast } from './state/ui'
 import type { Page } from './router'
-import type { LibraryRef } from './types'
+import type { Artifact, LibraryRef } from './types'
 import { copyText } from './util'
 
 /** Open a card by deck and deck-local path. A card window stays put: the
@@ -133,8 +135,8 @@ function go(page: Page, item: string | null, known = true): true {
   return true
 }
 
-/** `ws:path`: the latest snapshot of it shown on this path; `ws:` alone: the
- *  registered workspace. False when neither. */
+/** `ws:path`: the latest snapshot of it shown on this path, else the file as
+ *  it is now; `ws:` alone: the registered workspace. False when none. */
 function openWorkspaceAddress(address: string): boolean {
   const versions = artifactsOnPath.value.get(address.replace(/:\.\//, ':'))
   if (versions?.length) {
@@ -144,7 +146,18 @@ function openWorkspaceAddress(address: string): boolean {
     return true
   }
   const m = /^([^:]+):\/?$/.exec(address)
-  return !!m && state.workspaces.some((w) => w.name === m[1]) && go('workspaces', m[1]!)
+  if (m) return state.workspaces.some((w) => w.name === m[1]) && go('workspaces', m[1]!)
+  const branch = state.activeBranch
+  if (!branch) return false
+  rumu.request<{ artifact: Artifact }>('fs.snapshot', { branch, path: address }).then(
+    ({ artifact }) => {
+      closeDrawer()
+      closePage()
+      showArtifact(artifact)
+    },
+    (err) => toast('error', t('chat.artifact.openFailed', { path: address }), (err as Error).message),
+  )
+  return true
 }
 
 async function copyAddress(address: string): Promise<void> {

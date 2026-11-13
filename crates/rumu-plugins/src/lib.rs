@@ -38,7 +38,7 @@ pub use mcp::{McpHub, McpPlugin};
 pub use memory::MemoryPlugin;
 pub use skills::{SKILLS_DIR, Skills, SkillsPlugin};
 pub use stdio::{StdioError, StdioPlugin};
-pub use workspace::{BackendError, WorkspacePlugin};
+pub use workspace::{BackendError, WorkspacePlugin, snapshot_file};
 pub use workspaces::{
     PROJECTS_FILE, Project, WORKSPACES_FILE, create_project, drop_project, load_workspaces,
     project_of, projects, remove_workspace, seed_project, set_project_workspaces, upsert_workspace,
