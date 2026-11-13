@@ -20,7 +20,7 @@ import type { TimelineGroup } from '../../lib/store'
 import { forkSession, regenerateFrom, state, useBranchView } from '../../lib/store'
 import type { CatState } from '../../lib/cat'
 import { renderMarkdown } from '../../lib/markdown'
-import { isFileEdit, toolRowView } from '../../lib/toolrows'
+import { fileEditsOf } from '../../lib/toolrows'
 import { contentText, copyText } from '../../lib/util'
 import { toast } from '../../lib/state/ui'
 import { vEnter } from '../../lib/motion'
@@ -76,8 +76,7 @@ const changed = computed(() => {
     if (item.kind !== 'activity') continue
     for (const s of item.steps) {
       if (s.kind !== 'tools') continue
-      for (const v of s.rows.map(toolRowView)) {
-        if (!isFileEdit(v)) continue
+      for (const v of s.rows.flatMap(fileEditsOf)) {
         files.add(v.callFull)
         added += v.diff?.added ?? 0
         removed += v.diff?.removed ?? 0

@@ -427,3 +427,12 @@ export function isFileEdit(v: ToolRowView): boolean {
     (v.name === 'write' || v.name === 'edit') && v.status === 'ok' && !v.toolCardId && v.row.call !== null
   )
 }
+
+/** The file edits a row stands for: itself, or those its script's calls
+ * made (a blocked invoke changed nothing). */
+export function fileEditsOf(row: ToolRowInfo): ToolRowView[] {
+  const ran = row.invokes.filter(
+    (r) => r.result.body.type === 'tool_result' && !r.result.body.invoke?.blocked,
+  )
+  return [row, ...ran].map(toolRowView).filter(isFileEdit)
+}

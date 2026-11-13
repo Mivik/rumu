@@ -5,8 +5,9 @@
 //! [`engine`]) and reaches the rest of rumu only through `Cx::invoke`, so
 //! every internal call passes the same `tool.pre` / `tool.post` hooks as a
 //! direct call and queues its appends to the enclosing batch's safe point.
-//! Internal calls never become nodes. Only what the script outputs
-//! (`text()`, `attach()`, `return`, console) reaches the model.
+//! Internal calls are recorded as `invoke` result nodes the model never
+//! sees (the UI nests them under the `code` row). Only what the script
+//! outputs (`text()`, `attach()`, `return`, console) reaches the model.
 //!
 //! The tool description embeds a deterministic API stub ([`stubs`]): same
 //! plugin set → byte-identical text (cache contract).

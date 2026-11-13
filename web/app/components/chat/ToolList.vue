@@ -253,7 +253,7 @@ function liveTaskOutput(id: string | null): string {
           </div>
           <pre class="code">{{ liveTaskOutput(v.taskId) || t('common.noOutput') }}</pre>
         </div>
-        <CodeCalls v-if="v.name === 'code' && v.row.call" :parent-call="v.row.call.call_id" />
+        <CodeCalls v-if="v.name === 'code' && v.row.call" :row="v.row" />
       </div>
     </div>
   </div>

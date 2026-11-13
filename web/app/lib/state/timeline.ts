@@ -49,6 +49,8 @@ export interface ToolRowInfo {
   result: Node
   call: { call_id: string; name: string; args: unknown } | null
   assistant: Node | null
+  /** The calls a plugin (a `code` script) made through this one, in order. */
+  invokes: ToolRowInfo[]
 }
 
 /** An assistant step's answer text (`node: null` = the live stream's). */
@@ -180,8 +182,16 @@ export const timeline = computed(() => buildTimeline(pathNodes.value, callsOnPat
 export function buildTimeline(nodes: Node[], calls: CallsOnPath, branch: BranchId | null): TimelineEntry[] {
   const out: TimelineEntry[] = []
   const answered = new Set<string>()
+  const invokes = new Map<string, ToolRowInfo[]>()
   for (const n of nodes) {
-    if (n.body.type === 'tool_result') answered.add(n.body.call_id)
+    if (n.body.type !== 'tool_result') continue
+    answered.add(n.body.call_id)
+    const inv = n.body.invoke
+    if (!inv) continue
+    const call = { call_id: n.body.call_id, name: inv.name, args: inv.args }
+    const list = invokes.get(inv.parent) ?? []
+    list.push({ result: n, call, assistant: null, invokes: [] })
+    invokes.set(inv.parent, list)
   }
 
   let group: TimelineGroup | null = null
@@ -261,6 +271,7 @@ export function buildTimeline(nodes: Node[], calls: CallsOnPath, branch: BranchI
         result: n,
         call: paired?.call ?? null,
         assistant: paired?.node ?? null,
+        invokes: invokes.get(b.call_id) ?? [],
       }
       const last = g.items[g.items.length - 1]
       const step = last?.kind === 'activity' ? last.steps[last.steps.length - 1] : undefined

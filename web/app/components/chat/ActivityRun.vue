@@ -28,7 +28,7 @@ import type {
 import { useBranchView } from '../../lib/store'
 import type { Node } from '../../lib/types'
 import type { PhrasePart, ToolRowView } from '../../lib/toolrows'
-import { isFileEdit, toolPhrase, toolRowTitle, toolRowView } from '../../lib/toolrows'
+import { fileEditsOf, toolPhrase, toolRowTitle, toolRowView } from '../../lib/toolrows'
 import { contentText, fmtThought } from '../../lib/util'
 import { vEnter } from '../../lib/motion'
 import Icon from '../ui/Icon.vue'
@@ -50,7 +50,9 @@ const thoughts = computed(() => props.steps.filter((s): s is ActivityThought => 
 const views = computed<ToolRowView[]>(() =>
   props.steps.flatMap((s) => (s.kind === 'tools' ? s.rows.map(toolRowView) : [])),
 )
-const edits = computed(() => views.value.filter(isFileEdit))
+const edits = computed(() =>
+  props.steps.flatMap((s) => (s.kind === 'tools' ? s.rows.flatMap(fileEditsOf) : [])),
+)
 const running = computed(() => props.steps.find((s): s is ActivityRunning => s.kind === 'running') ?? null)
 const hasCatalog = computed(() => props.steps.some((s) => s.kind === 'catalog'))
 const recalls = computed(() => props.steps.filter((s): s is ActivityRecall => s.kind === 'recall'))
@@ -168,11 +170,13 @@ const blocks = computed<Block[]>(() => {
       rows = []
     }
     for (const row of s.rows) {
-      const v = toolRowView(row)
-      if (isFileEdit(v)) {
+      const edits = fileEditsOf(row)
+      // A direct edit is its own card; a script's edits follow its row.
+      if (edits[0]?.row !== row) rows.push(row)
+      for (const v of edits) {
         flush()
-        out.push({ kind: 'edit', key: `edit:${row.result.id}`, view: v })
-      } else rows.push(row)
+        out.push({ kind: 'edit', key: `edit:${v.row.result.id}`, view: v })
+      }
     }
     flush()
   }
