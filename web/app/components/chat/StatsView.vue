@@ -126,7 +126,6 @@ function replyRow(r: ReplyStat) {
     ttft: s.avgTtftMs,
     output: s.output,
     hit: s.hitRate,
-    trouble: s.retries + s.failures + s.resets,
   }
 }
 const rows = computed(() => replies.value.map((r) => ({ r, ...replyRow(r) })))
@@ -238,13 +237,7 @@ const session = computed(() => {
                 :aria-selected="inRange(i)"
                 @click="pick(i, $event)"
               >
-                <td class="py-1.5 pl-1 text-micro text-ink-3">
-                  {{ row.r.index
-                  }}<span
-                    v-if="row.trouble"
-                    class="ml-1 inline-block size-1.5 rounded-full bg-warn align-middle"
-                  />
-                </td>
+                <td class="py-1.5 pl-1 text-micro text-ink-3">{{ row.r.index }}</td>
                 <td class="truncate py-1.5 pr-2" :class="row.r.prompt ? 'text-ink' : 'text-ink-3 italic'">
                   {{ promptText(row.r) || t('usage.continued') }}
                 </td>
