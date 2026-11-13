@@ -409,8 +409,8 @@ const otherLocale = computed<Locale>(
               class="flex-none transition-transform duration-150"
               :class="{ 'rotate-90': !collapsed(group) }"
             />
-            <ProjectSeal v-if="group.project" :project="group.project" :size="14" class="mr-0.5" />
-            <span class="min-w-0 truncate text-ink-2">{{ group.name }}</span>
+            <ProjectSeal v-if="group.project" :project="group.project" :size="16" class="mr-0.5" />
+            <span class="min-w-0 truncate text-meta text-ink-2">{{ group.name }}</span>
             <span v-if="group.sessions.length" class="text-micro text-ink-3 tabular-nums">{{
               group.sessions.length
             }}</span>
