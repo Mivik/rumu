@@ -62,7 +62,7 @@ export async function refreshLists(): Promise<void> {
       state.assistant = defaultAssistant()
     }
     state.decisions = decisions
-    state.cards = await listCards()
+    await refreshCards()
   } catch (err) {
     toast('error', t('errors.listingSessions'), (err as Error).message)
   }

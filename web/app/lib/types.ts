@@ -142,7 +142,6 @@ export interface SessionTreeResult {
 }
 
 export interface BranchPathResult {
-  nodes: Node[]
   state: PathState
 }
 

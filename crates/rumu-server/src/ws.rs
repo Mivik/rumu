@@ -797,10 +797,12 @@ async fn dispatch(state: &AppState, method: &str, p: &Value) -> Result<Value> {
             Ok(json!({ "session": session }))
         }
 
+        // The state the branch's path leaves (workspaces, model, …). Its nodes
+        // are already the client's: `session.tree` and the pushes carry them.
         "branch.path" => {
             let branch: BranchId = str_param(p, "branch")?.into();
-            let (nodes, state) = kernel.branch_path(&branch)?;
-            Ok(json!({ "nodes": nodes, "state": state }))
+            let (_, state) = kernel.branch_path(&branch)?;
+            Ok(json!({ "state": state }))
         }
 
         "prompt" => {

@@ -5,7 +5,7 @@
 import { rumu } from '../api'
 import { t } from '../../i18n'
 import type { MessageKey } from '../../i18n'
-import type { Branch, BranchId, Node, NodeId, PathState, SessionTreeResult } from '../types'
+import type { Branch, BranchId, BranchPathResult, NodeId, SessionTreeResult } from '../types'
 import { state } from './state'
 import { syncLive } from './stream'
 import { toast } from './ui'
@@ -30,11 +30,7 @@ export async function resyncTree(): Promise<void> {
 
 export async function loadPath(branch: BranchId): Promise<void> {
   try {
-    const res = await rumu.request<{ nodes: Node[]; state: PathState }>('branch.path', {
-      branch,
-    })
-    // Fold in any nodes we had not seen (authoritative from the server).
-    for (const n of res.nodes) if (!state.nodes[n.id]) state.nodes[n.id] = n
+    const res = await rumu.request<BranchPathResult>('branch.path', { branch })
     state.pathState = res.state
   } catch (err) {
     toast('error', t('errors.loadingBranch'), (err as Error).message)
