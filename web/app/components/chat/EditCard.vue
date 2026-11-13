@@ -32,7 +32,8 @@ const hunks = computed(() => props.view.patch?.hunks?.length ?? 0)
   >
     <button
       type="button"
-      class="flex w-full min-w-0 items-center gap-2 bg-surface-2/60 px-2.5 py-1 text-left transition-colors hover:bg-surface-2"
+      class="flex w-full min-w-0 items-center gap-2 px-2.5 py-1 text-left transition-colors"
+      :class="open ? 'bg-surface-2/60 hover:bg-surface-2' : 'hover:bg-surface-2/70'"
       :title="toolRowTitle(view)"
       :aria-expanded="open"
       @click="open = !open"
