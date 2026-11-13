@@ -4,11 +4,12 @@
 // shows one pane at a time, the list at the root; a wide one always has a
 // section open, the first when the address names none. The header is the
 // trail — Settings › section › the section's inner page — each crumb but the
-// last going back to its page. Each section saves its own edits.
+// last going back to its page. Each section saves its own edits. Beside the
+// sessions sidebar (lg) it opens as a dialog over the desk instead (app.vue).
 import { computed, onBeforeUnmount, onMounted, ref, watch, watchEffect } from 'vue'
 import { t } from '../../i18n'
 import { layout } from '../../lib/layout'
-import { openPage, pageUp, replacePage } from '../../lib/router'
+import { closePage, openPage, pageUp, replacePage } from '../../lib/router'
 import { refreshSettings } from '../../lib/state/models'
 import { connected, state } from '../../lib/store'
 import DefaultsSettings from '../settings/DefaultsSettings.vue'
@@ -17,6 +18,8 @@ import ProvidersSettings from '../settings/ProvidersSettings.vue'
 import SkillsSettings from '../settings/SkillsSettings.vue'
 import Icon from '../ui/Icon.vue'
 import PageSheet from './PageSheet.vue'
+
+defineProps<{ modal?: boolean }>()
 
 const SECTIONS = [
   { key: 'defaults', icon: 'model' },
@@ -74,7 +77,9 @@ watch(connected, (up) => up && void refreshSettings(), { immediate: true })
     tone="text-ink-3"
     :detail="!!section"
     :item="section ?? ''"
+    :modal="modal"
     @back="pageUp"
+    @close="closePage"
   >
     <template #title>
       <template v-for="(c, i) in trail" :key="i">

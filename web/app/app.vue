@@ -14,9 +14,11 @@ import ArtifactPanel from './components/chat/ArtifactPanel.vue'
 import TaskOutputPanel from './components/chat/TaskOutputPanel.vue'
 import { openArtifact } from './lib/artifacts'
 import Toasts from './components/Toasts.vue'
+import Modal from './components/ui/Modal.vue'
+import { t } from './i18n'
 import { closePanels, layout } from './lib/layout'
 import { SIDE_SHEET, SWAP } from './lib/motion'
-import { sheetOf, type Page } from './lib/router'
+import { closePage, sheetOf, type Page } from './lib/router'
 import { state } from './lib/store'
 
 /** The side sheet's place: an overlay below xl, the third column at xl. */
@@ -36,26 +38,38 @@ const PAGES: Record<Page, Component> = {
 // viewport crosses that breakpoint.
 let lg: MediaQueryList | null = null
 /** Whether the sidebar is static (not a drawer) at the current viewport. */
-const lgUp = ref(false)
+const lgUp = ref(window.matchMedia('(min-width: 64rem)').matches)
 
 function onBreakpoint(): void {
   lgUp.value = lg?.matches ?? false
   if (lgUp.value) layout.sidebarOpen = false
 }
 
+/** Settings beside the sidebar: a dialog over the desk, not a sheet. */
+const settingsDialog = computed(() => lgUp.value && state.page?.page === 'settings')
+/** The page on the chat's sheet, if any. */
+const sheetPage = computed(() => (settingsDialog.value ? null : state.page))
+
 function onKey(e: KeyboardEvent): void {
-  if (e.key === 'Escape') closePanels()
+  if (e.key !== 'Escape') return
+  if (settingsDialog.value && !state.drawers.length) closePage()
+  else closePanels()
 }
 
 /** An artifact is open beside the chat (the session is showing). */
-const artifactOpen = computed(() => !state.page && !!state.sessionId && !!openArtifact.value)
+const artifactOpen = computed(() => !sheetPage.value && !!state.sessionId && !!openArtifact.value)
 /** A sub-agent's transcript is open beside the chat instead. */
 const agentOpen = computed(
-  () => !state.page && !artifactOpen.value && !!state.agentView && !!state.branches[state.agentView],
+  () => !sheetPage.value && !artifactOpen.value && !!state.agentView && !!state.branches[state.agentView],
 )
 /** Or a background task's output. */
 const taskOpen = computed(
-  () => !state.page && !artifactOpen.value && !agentOpen.value && !!state.taskDetail && !!state.tasks[state.taskDetail],
+  () =>
+    !sheetPage.value &&
+    !artifactOpen.value &&
+    !agentOpen.value &&
+    !!state.taskDetail &&
+    !!state.tasks[state.taskDetail],
 )
 
 onMounted(() => {
@@ -106,13 +120,13 @@ onBeforeUnmount(() => {
     />
     <!-- the chat and the pages share one cell, so a switch cross-fades -->
     <Transition v-bind="SWAP">
-      <ChatView v-show="!state.page" class="col-start-1 row-start-1 lg:col-start-2" />
+      <ChatView v-show="!sheetPage" class="col-start-1 row-start-1 lg:col-start-2" />
     </Transition>
     <Transition v-bind="SWAP">
       <component
-        :is="PAGES[state.page.page]"
-        v-if="state.page"
-        :key="sheetOf(state.page.page)"
+        :is="PAGES[sheetPage.page]"
+        v-if="sheetPage"
+        :key="sheetOf(sheetPage.page)"
         class="col-start-1 row-start-1 lg:col-start-2"
       />
     </Transition>
@@ -123,6 +137,17 @@ onBeforeUnmount(() => {
       <AgentPanel v-else-if="agentOpen" key="agent" :class="SIDE" />
       <TaskOutputPanel v-else-if="taskOpen" key="task" :class="SIDE" />
     </Transition>
+    <!-- settings at lg: a dialog over the desk, which stays as it was -->
+    <Modal
+      :open="settingsDialog"
+      :label="t('settings.title')"
+      :z="55"
+      wrapper-class="p-8"
+      panel-class="h-[min(48rem,100%)] w-[min(64rem,100%)] rounded-sheet"
+      @close="closePage"
+    >
+      <SettingsPage modal />
+    </Modal>
     <Lightbox />
     <Toasts />
 

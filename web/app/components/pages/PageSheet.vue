@@ -6,7 +6,8 @@
 // page without a list is one pane at every width. The item pane cross-fades
 // when what it shows changes: the empty pane for an item, or — keyed by
 // `item` — one item for another (a page whose pane animates its own item
-// changes, like the library's reader, leaves `item` unset).
+// changes, like the library's reader, leaves `item` unset). In a dialog
+// (`modal`) the sheet fills the dialog's panel and its header closes it.
 import { useSlots } from 'vue'
 import { t } from '../../i18n'
 import { layout, toggleSidebar } from '../../lib/layout'
@@ -26,15 +27,18 @@ defineProps<{
   pick?: string
   /** The open item's identity: a new one cross-fades in over the last. */
   item?: string
+  /** The sheet is a dialog's panel: no desk margins, and a close button. */
+  modal?: boolean
 }>()
 
-const emit = defineEmits<{ back: [] }>()
+const emit = defineEmits<{ back: []; close: [] }>()
 const split = !!useSlots().list
 </script>
 
 <template>
   <section
-    class="sheet @container m-2 flex min-h-0 min-w-0 flex-col overflow-hidden rounded-sheet bg-surface sm:m-3 lg:mx-0 lg:my-4"
+    class="@container flex min-h-0 min-w-0 flex-col overflow-hidden bg-surface"
+    :class="modal ? 'flex-1' : 'sheet m-2 rounded-sheet sm:m-3 lg:mx-0 lg:my-4'"
     :aria-label="title"
   >
     <header class="flex min-h-14 flex-none items-center gap-2 border-b border-line-soft px-4 sm:px-6">
@@ -75,6 +79,16 @@ const split = !!useSlots().list
       </h1>
       <div class="ml-auto flex min-w-0 items-center gap-2">
         <slot name="actions" />
+        <button
+          v-if="modal"
+          type="button"
+          class="icon-btn -mr-1.5 size-8 flex-none"
+          :title="t('common.close')"
+          :aria-label="t('common.close')"
+          @click="emit('close')"
+        >
+          <Icon name="close" :size="16" />
+        </button>
       </div>
     </header>
 
