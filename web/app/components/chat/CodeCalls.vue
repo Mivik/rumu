@@ -14,6 +14,7 @@ import { argSummary, shortId } from '../../lib/util'
 import { highlightLine } from '../../lib/markdown'
 import { displayCall } from '../../lib/toolrows'
 import { patchOfData } from '../../lib/diff'
+import { toolIcon } from '../../lib/toolIcon'
 import Icon from '../ui/Icon.vue'
 import Chip from '../ui/Chip.vue'
 import BashView from './BashView.vue'
@@ -157,7 +158,7 @@ const iconTone: Record<Status, string> = {
           @click="toggle(c.call_id)"
         >
           <Icon
-            :name="status(c) === 'ok' ? 'tool' : status(c) === 'blocked' ? 'blocked' : 'error'"
+            :name="status(c) === 'ok' ? toolIcon(c.name) : status(c) === 'blocked' ? 'blocked' : 'error'"
             :size="12"
             :class="iconTone[status(c)]"
           />

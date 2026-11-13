@@ -11,6 +11,7 @@ import type { ActivityRunning } from '../../lib/store'
 import { state, useBranchView } from '../../lib/store'
 import { argsOf, displayCall } from '../../lib/toolrows'
 import { argSummary, fmtThought } from '../../lib/util'
+import { toolIcon } from '../../lib/toolIcon'
 import Icon from '../ui/Icon.vue'
 
 const props = defineProps<{ step: ActivityRunning }>()
@@ -58,7 +59,7 @@ function tail(text: string): string {
     >
       <div class="flex min-w-0 items-center gap-2">
         <span class="dot-live size-1.5 flex-none rounded-full" :class="r.stalled ? 'bg-warn' : 'bg-brand'" />
-        <Icon name="tool" :size="12" class="flex-none text-tool" />
+        <Icon :name="toolIcon(r.call.name)" :size="12" class="flex-none text-tool" />
         <span class="max-w-[40%] flex-none truncate font-mono text-meta font-medium text-tool">{{
           r.call.name
         }}</span>

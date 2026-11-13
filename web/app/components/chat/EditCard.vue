@@ -8,6 +8,7 @@ import { computed, ref } from 'vue'
 import { t } from '../../i18n'
 import type { ToolRowView } from '../../lib/toolrows'
 import { argsOf, toolRowTitle } from '../../lib/toolrows'
+import { toolIcon } from '../../lib/toolIcon'
 import Icon from '../ui/Icon.vue'
 import FileDiff from './FileDiff.vue'
 
@@ -38,7 +39,7 @@ const hunks = computed(() => props.view.patch?.hunks?.length ?? 0)
       :aria-expanded="open"
       @click="open = !open"
     >
-      <Icon name="tool" :size="12" class="flex-none text-tool" />
+      <Icon :name="toolIcon(view.name)" :size="12" class="flex-none text-tool" />
       <span class="min-w-0 truncate font-mono text-meta" dir="rtl"
         ><bdi
           ><span class="text-ink-3">{{ parts.dir }}</span

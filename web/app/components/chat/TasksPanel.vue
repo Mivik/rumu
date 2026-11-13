@@ -7,6 +7,7 @@ import { computed, onBeforeUnmount, onMounted, ref } from 'vue'
 import { t } from '../../i18n'
 import { killTask, openTaskDetail, runningTasks, state, taskChild } from '../../lib/store'
 import { taskElapsed, taskLabel } from '../../lib/tasks'
+import { toolIcon } from '../../lib/toolIcon'
 import type { TaskInfo } from '../../lib/types'
 import Icon from '../ui/Icon.vue'
 
@@ -69,7 +70,7 @@ function isOpen(tk: TaskInfo): boolean {
                         @click="openTaskDetail(tk.id)"
                       >
                         <Icon
-                          :name="tk.kind.type === 'agent' ? 'agent' : 'tool'"
+                          :name="tk.kind.type === 'agent' ? 'agent' : toolIcon(tk.kind.name)"
                           :size="14"
                           :class="tk.kind.type === 'agent' ? 'text-agent' : 'text-tool'"
                         />

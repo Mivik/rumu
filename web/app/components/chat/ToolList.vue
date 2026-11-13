@@ -16,6 +16,7 @@ import { cardById } from '../../lib/cards'
 import type { ToolRowView } from '../../lib/toolrows'
 import { argsOf, isRowOpen, outputJson, toggleRow, toolRowTitle, toolRowView } from '../../lib/toolrows'
 import { taskStatusWord } from '../../lib/tasks'
+import { toolIcon } from '../../lib/toolIcon'
 import { highlightLine } from '../../lib/markdown'
 import { vEnter } from '../../lib/motion'
 import Icon from '../ui/Icon.vue'
@@ -110,7 +111,7 @@ function liveTaskOutput(id: string | null): string {
         @click="toggleRow(v)"
       >
         <Icon
-          :name="v.status === 'ok' ? 'tool' : v.status === 'blocked' ? 'blocked' : 'error'"
+          :name="v.status === 'ok' ? toolIcon(v.name) : v.status === 'blocked' ? 'blocked' : 'error'"
           :size="12"
           :class="statusClass(v)"
         />

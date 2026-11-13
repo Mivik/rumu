@@ -28,7 +28,7 @@ const carries = computed(() => {
       n: a.mounts.length,
       title: t('assistants.carriesDecks', { n: a.mounts.length }),
     },
-    servers && { icon: 'tool', n: servers, title: t('assistants.carriesMcp', { n: servers }) },
+    servers && { icon: 'mcp', n: servers, title: t('assistants.carriesMcp', { n: servers }) },
     skills !== 0 && {
       icon: 'note',
       n: skills ?? t('assistants.allTools'),

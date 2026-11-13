@@ -7,6 +7,7 @@ import { vFollow } from '../../lib/motion'
 import { killTask, state } from '../../lib/store'
 import { taskElapsed, taskStatusWord } from '../../lib/tasks'
 import { bashExit } from '../../lib/toolrows'
+import { toolIcon } from '../../lib/toolIcon'
 import Icon from '../ui/Icon.vue'
 
 const task = computed(() => (state.taskDetail ? (state.tasks[state.taskDetail] ?? null) : null))
@@ -31,7 +32,7 @@ const output = computed(() => {
   <section v-if="task" class="sheet flex min-h-0 min-w-0 flex-col overflow-hidden rounded-sheet bg-surface">
     <header class="flex min-h-14 flex-none items-center gap-2.5 border-b border-line-soft px-4">
       <Icon
-        :name="task.kind.type === 'agent' ? 'agent' : 'tool'"
+        :name="task.kind.type === 'agent' ? 'agent' : toolIcon(task.kind.name)"
         :size="16"
         class="flex-none"
         :class="task.kind.type === 'agent' ? 'text-agent' : 'text-tool'"

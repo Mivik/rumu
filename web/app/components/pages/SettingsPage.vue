@@ -24,7 +24,7 @@ defineProps<{ modal?: boolean }>()
 const SECTIONS = [
   { key: 'defaults', icon: 'model' },
   { key: 'providers', icon: 'link' },
-  { key: 'mcp', icon: 'tool' },
+  { key: 'mcp', icon: 'mcp' },
   { key: 'skills', icon: 'note' },
 ] as const
 type Section = (typeof SECTIONS)[number]['key']
