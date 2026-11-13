@@ -32,8 +32,9 @@ function isRecallNote(n: Node): boolean {
  * `card_use` record a card read/write leaves after its tool result (the
  * Context data reads it from the path; the tool row already shows the card),
  * and a `turn.error` failure record (the error row at the end shows an
- * unanswered one; in the transcript it leaves no trace), and a
- * `workspace.set` (the composer's workspace chip shows the result).
+ * unanswered one; in the transcript it leaves no trace), a `workspace.set`
+ * (the composer's workspace chip shows the result), and the empty
+ * `memory.import` recording a pinned card the introduction carried.
  * Kept out of the timeline entirely — as an empty context item it would
  * split the activity run around it in two. */
 function isSilentMarker(n: Node): boolean {
@@ -41,7 +42,7 @@ function isSilentMarker(n: Node): boolean {
   const tag = n.body.content.data?.tag
   if (tag === 'workspace.set') return true
   if (n.body.content.text !== '') return false
-  return tag === 'root' || tag === 'card_use' || tag === TURN_ERROR_TAG
+  return tag === 'root' || tag === 'card_use' || tag === 'memory.import' || tag === TURN_ERROR_TAG
 }
 
 export interface ToolRowInfo {

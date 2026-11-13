@@ -316,6 +316,71 @@ async fn update_notices() {
     }
 }
 
+/// Pinned cards are kept current: the introduction records the revisions it
+/// shows, an edit brings the new text in full, and a card pinned later is
+/// brought in once.
+#[tokio::test]
+async fn pinned_cards_follow_their_edits() {
+    let home = card_home("v1\n");
+    let pin = |body: &str| format!("---\npinned: true\n---\n{body}");
+    crate::testutil::put_card(home.path(), "main", "instructions", pin("Be brief.\n"));
+    let plugin = memory_plugin(home.path());
+    let host = FakeRuntime::arc();
+    let pre = || async {
+        let mut texts = Vec::new();
+        for hook in ["assistant-intro", "card-updates"] {
+            let out = plugin
+                .on_hook(hook, &event("llm.pre"), &host.cx())
+                .await
+                .unwrap();
+            host.apply_hook("memory", &out);
+            texts.extend(out.effects.into_iter().map(|e| e.text));
+        }
+        texts
+    };
+
+    // The introduction carries it, with an empty use record; nothing more.
+    let texts = pre().await;
+    assert!(
+        texts[0].contains("## self/instructions\nBe brief."),
+        "{texts:?}"
+    );
+    assert_eq!(texts[1..], [""]);
+    assert!(pre().await.is_empty());
+
+    // An edit: the new text, in full, once.
+    crate::testutil::put_card(home.path(), "main", "instructions", pin("Be thorough.\n"));
+    let texts = pre().await;
+    assert_eq!(texts.len(), 1, "{texts:?}");
+    assert!(
+        texts[0].starts_with("(Updated pinned card — supersedes rev "),
+        "{texts:?}"
+    );
+    assert!(
+        texts[0].ends_with("\n# self/instructions\nBe thorough.\n"),
+        "{texts:?}"
+    );
+    assert!(pre().await.is_empty());
+
+    // A card pinned since: brought in once.
+    crate::testutil::put_card(home.path(), "main", "x", pin("Answer in French.\n"));
+    let texts = pre().await;
+    assert_eq!(
+        texts,
+        ["(Pinned card, not seen on this branch before.)\n# self/x\nAnswer in French.\n"]
+    );
+    assert!(pre().await.is_empty());
+
+    // Removed: the deletion notice.
+    crate::testutil::remove_card(home.path(), "main", "instructions");
+    let texts = pre().await;
+    assert_eq!(texts.len(), 1, "{texts:?}");
+    assert!(
+        texts[0].contains("`@rumu:/cards/self/instructions` was deleted"),
+        "{texts:?}"
+    );
+}
+
 /// A deck that is not mounted sends no update notices, except for a card a
 /// mounted link still shares.
 #[tokio::test]

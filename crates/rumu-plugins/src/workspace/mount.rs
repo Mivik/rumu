@@ -292,7 +292,7 @@ impl WorkspacePlugin {
         let pinned = deck.pinned().unwrap_or_default();
         if !pinned.is_empty() {
             text.push_str("\nPinned cards:\n");
-            for card in pinned {
+            for card in &pinned {
                 text.push_str(&format!(
                     "## {point}/{}\n{}\n",
                     card.path,
@@ -313,6 +313,15 @@ impl WorkspacePlugin {
             deck: deck.meta.id.clone(),
             at: at.to_owned(),
         })];
+        // The pinned cards shown are uses of their revisions, as the
+        // introduction's are: a later change brings the new text.
+        effects.extend(pinned.into_iter().map(|card| {
+            Content::marker(&rumu_cards::usage::CardImport {
+                deck: deck.meta.id.clone(),
+                path: card.path,
+                rev: card.revision,
+            })
+        }));
         if at == PROJECT_MOUNT {
             let first = self
                 .workspaces

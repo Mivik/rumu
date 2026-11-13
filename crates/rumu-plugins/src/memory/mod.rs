@@ -14,7 +14,8 @@
 //!   prompt (BM25F over `keywords:`, path, description and body);
 //! - `card-updates` on `llm.pre`: cards (keyed by deck id and path) whose current
 //!   revision differs from the path's last-used revision get a one-line
-//!   notice.
+//!   notice; a pinned one gets its new text instead, and so does a pinned
+//!   card the path has not seen.
 
 use std::collections::BTreeSet;
 
@@ -275,23 +276,33 @@ the catalog lists the cards.",
             }
         }
         let mut pinned = Vec::new();
+        // Each pinned card shown is a use of its revision, so a later change
+        // brings the new text (see `update_notices`).
+        let mut seen = Vec::new();
         for mounted in cards.mounts() {
             for card in mounted.deck.pinned()? {
                 let public = mounted.card_path(&card.path);
                 pinned.push(format!("## {public}\n{}", card.body.trim_end()));
+                seen.push(Content::marker(&usage::CardImport {
+                    deck: mounted.deck.id().to_owned(),
+                    path: card.path.clone(),
+                    rev: card.revision.clone(),
+                }));
             }
         }
         if !pinned.is_empty() {
             text.push_str("\n\nPinned cards:\n\n");
             text.push_str(&pinned.join("\n\n"));
         }
+        let mut effects = vec![Content::note_with(
+            text,
+            &AssistantIntro {
+                name: deck.meta.name.clone(),
+            },
+        )];
+        effects.extend(seen);
         Ok(HookOutput {
-            effects: vec![Content::note_with(
-                text,
-                &AssistantIntro {
-                    name: deck.meta.name.clone(),
-                },
-            )],
+            effects,
             decision: Decision::Pass,
         })
     }
@@ -353,6 +364,23 @@ the catalog lists the cards.",
             });
             let (rev, text) = match card {
                 Some(c) if Some(c.revision.as_str()) == u.rev.as_deref() => continue,
+                // A pinned card is meant to be in context: its new text comes
+                // in full, and records the revision as seen.
+                Some(c) if c.pinned() && mounted.contains(deck_id) => {
+                    out.effects.push(Content::note_with(
+                        format!(
+                            "(Updated pinned card — supersedes rev {} seen earlier on this branch.)\n{}",
+                            u.rev.as_deref().unwrap_or("?"),
+                            card::render(&shown, &c.body),
+                        ),
+                        &usage::CardImport {
+                            deck: deck_id.clone(),
+                            path: path.clone(),
+                            rev: c.revision,
+                        },
+                    ));
+                    continue;
+                }
                 Some(c) => {
                     // An unmounted card is no longer updated.
                     if !mounted.contains(deck_id) {
@@ -404,6 +432,25 @@ the catalog lists the cards.",
                     rev,
                 },
             ));
+        }
+        // Pinned cards the branch has not seen: pinned (or written) since.
+        for m in cards.mounts() {
+            for c in m.deck.pinned()? {
+                if uses.contains_key(&(m.deck.id().to_owned(), c.path.clone())) {
+                    continue;
+                }
+                out.effects.push(Content::note_with(
+                    format!(
+                        "(Pinned card, not seen on this branch before.)\n{}",
+                        card::render(&m.card_path(&c.path), &c.body),
+                    ),
+                    &usage::CardImport {
+                        deck: m.deck.id().to_owned(),
+                        path: c.path,
+                        rev: c.revision,
+                    },
+                ));
+            }
         }
         Ok(out)
     }

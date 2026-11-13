@@ -297,7 +297,10 @@ History is git. There is no other log.
   sessions is refused.
 - The first model call of a path gets a one-time note: which assistant this is,
   the project and its workspaces, the mount table, the placement rules above,
-  and the pinned cards of the mounted decks. It is frozen as a note.
+  and the pinned cards of the mounted decks. It is frozen as a note, but
+  pinned cards stay current: when one changes (an assistant's instructions
+  edited mid-session, say), or a mounted deck has one the branch has not
+  seen, the next model call gets its text in full.
 
 ## Asking another assistant
 
