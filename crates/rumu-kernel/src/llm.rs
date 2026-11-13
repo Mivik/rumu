@@ -4,7 +4,7 @@ use std::sync::Arc;
 
 use async_trait::async_trait;
 use rumu_core::{
-    CompactSettings, ModelPick, Node, ReasoningBlock, Titles, ToolCall, ToolSpec, Usage,
+    CallStats, CompactSettings, ModelPick, Node, ReasoningBlock, Titles, ToolCall, ToolSpec, Usage,
 };
 
 /// A model-call failure.
@@ -158,9 +158,10 @@ pub type OnDelta = Arc<dyn Fn(Delta) + Send + Sync>;
 pub struct LlmResponse {
     pub text: String,
     pub reasoning: Vec<ReasoningBlock>,
-    /// Wall time spent reasoning (first reasoning delta → first text delta,
-    /// or stream end when there is no text), ms.
-    pub reason_ms: Option<u64>,
+    /// First chunk and reasoning time (first reasoning delta → first text
+    /// delta, or stream end when there is no text); the kernel adds the
+    /// retries.
+    pub stats: CallStats,
     /// Earlier reasoning was left out of this request because the provider
     /// rejected or dropped it, or because it was made by another model;
     /// recorded on the Assistant node.

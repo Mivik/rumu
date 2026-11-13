@@ -45,8 +45,8 @@ use std::path::{Path, PathBuf};
 use std::sync::Mutex;
 
 use rumu_core::{
-    Artifact, Branch, BranchId, BranchStatus, IoError, Node, NodeBody, NodeId, SessionId, SessionInfo,
-    Timestamp,
+    Artifact, Branch, BranchId, BranchStatus, IoError, Node, NodeBody, NodeId, SessionId,
+    SessionInfo, Timestamp,
 };
 use serde::{Deserialize, Serialize};
 use serde_json::Value;
@@ -1032,7 +1032,7 @@ mod tests {
                     NodeBody::Assistant {
                         content: rumu_core::Content::text("").with_attachments([attachment("ee")]),
                         reasoning: vec![],
-                        reason_ms: None,
+                        stats: Default::default(),
                         reasoning_reset: false,
                         tool_calls: vec![],
                         model: "m".into(),

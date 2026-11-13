@@ -12,16 +12,24 @@ export type NodeBody = { "type": "user", content: Content, } | { "type": "assist
  */
 reasoning?: Array<ReasoningBlock>, 
 /**
- * Wall time the model spent reasoning before its first text token, ms.
- */
-reason_ms?: number | null, 
-/**
  * The provider could not use earlier reasoning on this request (it
  * no longer verified against the conversation, or another model
  * produced it), so the reasoning of every assistant node before this
  * one is never replayed again.
  */
-reasoning_reset?: boolean, tool_calls: Array<ToolCall>, model: string, usage: Usage, } | { "type": "tool_result", call_id: string, content: Content, is_error: boolean, 
+reasoning_reset?: boolean, tool_calls: Array<ToolCall>, model: string, usage: Usage, 
+/**
+ * Request sent → first streamed text, reasoning or tool-call chunk, ms.
+ */
+ttft_ms?: number | null, 
+/**
+ * Wall time the model spent reasoning before its first text token, ms.
+ */
+reason_ms?: number | null, 
+/**
+ * Transient failures retried before this call succeeded.
+ */
+retries?: number, } | { "type": "tool_result", call_id: string, content: Content, is_error: boolean, 
 /**
  * Set when a plugin (e.g. a `code` script) made the call through
  * `Cx::invoke`: never projected to the model; the UI nests it under

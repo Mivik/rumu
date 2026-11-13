@@ -561,7 +561,7 @@ mod tests {
             NodeBody::Assistant {
                 content: Content::text("ok"),
                 reasoning: vec![],
-                reason_ms: None,
+                stats: Default::default(),
                 reasoning_reset: false,
                 tool_calls: (0..calls)
                     .map(|k| rumu_core::ToolCall::new(format!("{id}{k}"), "bash", json!({})))

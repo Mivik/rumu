@@ -333,9 +333,9 @@ pub enum NodeBody {
         /// without reasoning.
         #[serde(default, skip_serializing_if = "Vec::is_empty")]
         reasoning: Vec<ReasoningBlock>,
-        /// Wall time the model spent reasoning before its first text token, ms.
-        #[serde(default, skip_serializing_if = "Option::is_none")]
-        reason_ms: Option<u64>,
+        #[serde(flatten)]
+        #[ts(flatten)]
+        stats: CallStats,
         /// The provider could not use earlier reasoning on this request (it
         /// no longer verified against the conversation, or another model
         /// produced it), so the reasoning of every assistant node before this
@@ -548,6 +548,25 @@ impl ToolCall {
     }
 }
 
+/// How the model call behind an Assistant node went, beside its tokens.
+#[derive(Debug, Clone, Default, PartialEq, Serialize, Deserialize, ts_rs::TS)]
+#[ts(export)]
+pub struct CallStats {
+    /// Request sent → first streamed text, reasoning or tool-call chunk, ms.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub ttft_ms: Option<u64>,
+    /// Wall time the model spent reasoning before its first text token, ms.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub reason_ms: Option<u64>,
+    /// Transient failures retried before this call succeeded.
+    #[serde(default, skip_serializing_if = "is_zero")]
+    pub retries: u32,
+}
+
+fn is_zero(n: &u32) -> bool {
+    *n == 0
+}
+
 #[derive(Debug, Clone, Default, PartialEq, Serialize, Deserialize, ts_rs::TS)]
 #[ts(export)]
 pub struct Usage {
@@ -695,6 +714,35 @@ pub struct PathState {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use serde_json::json;
+
+    #[test]
+    fn call_stats_sit_flat_on_the_assistant_body() {
+        let old = json!({"type": "assistant", "content": {"text": "hi"}, "reason_ms": 40,
+            "tool_calls": [], "model": "p/m", "usage": Usage::default()});
+        let body: NodeBody = serde_json::from_value(old).unwrap();
+        let NodeBody::Assistant { stats, .. } = &body else {
+            panic!("not an assistant body")
+        };
+        assert_eq!(stats.reason_ms, Some(40));
+        assert_eq!((stats.ttft_ms, stats.retries), (None, 0));
+
+        let v = serde_json::to_value(&body).unwrap();
+        assert_eq!(v["reason_ms"], 40);
+        assert!(v.get("ttft_ms").is_none() && v.get("retries").is_none());
+
+        let stats = CallStats {
+            ttft_ms: Some(900),
+            reason_ms: None,
+            retries: 2,
+        };
+        let v = json!({"type": "assistant", "content": {"text": ""}, "ttft_ms": 900,
+            "retries": 2, "tool_calls": [], "model": "p/m", "usage": Usage::default()});
+        let NodeBody::Assistant { stats: read, .. } = serde_json::from_value(v).unwrap() else {
+            panic!("not an assistant body")
+        };
+        assert_eq!(read, stats);
+    }
 
     fn image(name: &str) -> Attachment {
         Attachment {

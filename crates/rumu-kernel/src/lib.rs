@@ -1573,7 +1573,7 @@ mod tests {
                 NodeBody::Assistant {
                     content: Content::text(""),
                     reasoning: vec![],
-                    reason_ms: None,
+                    stats: Default::default(),
                     reasoning_reset: false,
                     tool_calls: vec![
                         ToolCall::new("c1", "one", json!({})),
@@ -1631,7 +1631,7 @@ mod tests {
                 NodeBody::Assistant {
                     content: Content::text(""),
                     reasoning: vec![],
-                    reason_ms: None,
+                    stats: Default::default(),
                     reasoning_reset: false,
                     tool_calls: vec![ToolCall::new("c3", "three", json!({}))],
                     model: "m".into(),
@@ -1696,7 +1696,7 @@ mod tests {
                 NodeBody::Assistant {
                     content: Content::text(""),
                     reasoning: vec![],
-                    reason_ms: None,
+                    stats: Default::default(),
                     reasoning_reset: false,
                     tool_calls: vec![
                         ToolCall::new("c1", "one", json!({})),

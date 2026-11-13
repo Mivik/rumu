@@ -1239,6 +1239,10 @@ async fn transient_failure_is_retried_to_success() {
         body_kinds(&nodes),
         vec!["marker[root]", "user", "assistant"]
     );
+    let NodeBody::Assistant { stats, .. } = &nodes[2].body else {
+        unreachable!()
+    };
+    assert_eq!(stats.retries, 1, "the reply records its replay");
 }
 
 /// A transient failure that never clears exhausts the budget, and the turn is

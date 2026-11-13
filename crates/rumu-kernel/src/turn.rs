@@ -7,10 +7,10 @@ use std::time::{Duration, Instant};
 use crate::{Error, Result};
 use rumu_core::kind;
 use rumu_core::{
-    Branch, BranchId, BranchKind, BranchStatus, CODE_DENIED_TOOLS, Call, CompactReason, Content,
-    Cx, FILE_PATCH_TAG, Inherit, InheritContext, InnerCall, Invoke, NodeBody, NodeId, Plugin,
-    RUMU_WORKSPACE, SYSTEM_SOURCE, SessionId, ToolCall, ToolError, ToolOutput, ToolResultExt,
-    TurnError, WorkspaceSet, WorkspaceUse, parse_args, truncate_output,
+    Branch, BranchId, BranchKind, BranchStatus, CODE_DENIED_TOOLS, Call, CallStats, CompactReason,
+    Content, Cx, FILE_PATCH_TAG, Inherit, InheritContext, InnerCall, Invoke, NodeBody, NodeId,
+    Plugin, RUMU_WORKSPACE, SYSTEM_SOURCE, SessionId, ToolCall, ToolError, ToolOutput,
+    ToolResultExt, TurnError, WorkspaceSet, WorkspaceUse, parse_args, truncate_output,
 };
 use schemars::JsonSchema;
 use serde::Deserialize;
@@ -496,7 +496,10 @@ impl Kernel {
                 NodeBody::Assistant {
                     content: Content::text(resp.text.clone()),
                     reasoning: resp.reasoning.clone(),
-                    reason_ms: resp.reason_ms,
+                    stats: CallStats {
+                        retries,
+                        ..resp.stats.clone()
+                    },
                     reasoning_reset: resp.reasoning_reset,
                     tool_calls: resp.tool_calls.clone(),
                     model: resp.model.clone(),

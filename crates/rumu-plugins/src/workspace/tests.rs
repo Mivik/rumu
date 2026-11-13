@@ -1626,7 +1626,7 @@ fn staged_session() -> (rumu_core::SessionInfo, Vec<Node>, Vec<rumu_core::Branch
             NodeBody::Assistant {
                 content: rumu_core::Content::text("checking"),
                 reasoning: vec![],
-                reason_ms: None,
+                stats: Default::default(),
                 reasoning_reset: false,
                 tool_calls: vec![rumu_core::ToolCall::new(
                     "c1",
@@ -1694,7 +1694,7 @@ fn staged_session() -> (rumu_core::SessionInfo, Vec<Node>, Vec<rumu_core::Branch
             NodeBody::Assistant {
                 content: rumu_core::Content::text("config lives in /etc/rumu"),
                 reasoning: vec![],
-                reason_ms: None,
+                stats: Default::default(),
                 reasoning_reset: false,
                 tool_calls: vec![],
                 model: "fake".into(),
@@ -2315,7 +2315,7 @@ async fn session_render_escapes_markup() {
             NodeBody::Assistant {
                 content: rumu_core::Content::text("echo <node>"),
                 reasoning: vec![],
-                reason_ms: None,
+                stats: Default::default(),
                 reasoning_reset: false,
                 tool_calls: vec![rumu_core::ToolCall::new(
                     "c1",
@@ -2421,7 +2421,7 @@ async fn session_range_folds_nested_session_reads() {
             NodeBody::Assistant {
                 content: rumu_core::Content::text(""),
                 reasoning: vec![],
-                reason_ms: None,
+                stats: Default::default(),
                 reasoning_reset: false,
                 tool_calls: vec![
                     rumu_core::ToolCall::new(
@@ -2556,7 +2556,7 @@ async fn session_call_args_clip_only_in_ranges() {
             NodeBody::Assistant {
                 content: rumu_core::Content::text("run"),
                 reasoning: vec![],
-                reason_ms: None,
+                stats: Default::default(),
                 reasoning_reset: false,
                 tool_calls: vec![rumu_core::ToolCall::new(
                     "c1",
@@ -2636,7 +2636,7 @@ async fn session_range_truncation_keeps_call_tags_whole() {
             NodeBody::Assistant {
                 content: rumu_core::Content::text("z".repeat(2500)),
                 reasoning: vec![],
-                reason_ms: None,
+                stats: Default::default(),
                 reasoning_reset: false,
                 tool_calls: calls,
                 model: "fake".into(),
@@ -2711,7 +2711,7 @@ async fn session_prefix_resolution_and_abbreviations() {
             NodeBody::Assistant {
                 content: rumu_core::Content::text("done"),
                 reasoning: vec![],
-                reason_ms: None,
+                stats: Default::default(),
                 reasoning_reset: false,
                 tool_calls: vec![],
                 model: "fake".into(),
@@ -2908,7 +2908,7 @@ fn search_sessions() -> std::sync::Arc<FakeRuntime> {
                     NodeBody::Assistant {
                         content: rumu_core::Content::text("checking the config"),
                         reasoning: vec![],
-                        reason_ms: None,
+                        stats: Default::default(),
                         reasoning_reset: false,
                         tool_calls: vec![rumu_core::ToolCall::new(
                             "c1",
@@ -3250,7 +3250,7 @@ async fn search_downweights_tool_results_and_breaks_ties_by_time() {
                 NodeBody::Assistant {
                     content: rumu_core::Content::text(""),
                     reasoning: vec![],
-                    reason_ms: None,
+                    stats: Default::default(),
                     reasoning_reset: false,
                     tool_calls: vec![rumu_core::ToolCall::new(
                         "c0",

@@ -158,7 +158,7 @@ mod tests {
                     text: "thinking".into(),
                     signature: Some("sig".into()),
                 }],
-                reason_ms: None,
+                stats: Default::default(),
                 reasoning_reset: false,
                 tool_calls: vec![],
                 model: "m".into(),

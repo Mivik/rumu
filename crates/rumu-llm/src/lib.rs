@@ -50,9 +50,9 @@ use genai::resolver::{AuthData, Endpoint};
 use genai::{Client, ModelIden, ServiceTarget};
 use rumu_blob::Blobs;
 use rumu_core::{
-    Attachment, CUSTOM_PROVIDER, CompactSettings, Content, CustomModel, Effort, ModelConfig,
-    ModelInfo, ModelPick, Node, NodeBody, Protocol, ProviderSettings, ReasoningBlock, Role, Roles,
-    Segment, Titles, ToolCall, ToolSpec, Usage, image_label, split_model_ref,
+    Attachment, CUSTOM_PROVIDER, CallStats, CompactSettings, Content, CustomModel, Effort,
+    ModelConfig, ModelInfo, ModelPick, Node, NodeBody, Protocol, ProviderSettings, ReasoningBlock,
+    Role, Roles, Segment, Titles, ToolCall, ToolSpec, Usage, image_label, split_model_ref,
 };
 use rumu_kernel::{Budget, Delta, Llm, LlmError, LlmResponse, OnDelta};
 use serde_json::{Value, json};
@@ -424,6 +424,7 @@ impl Target {
         let dropped = Arc::new(AtomicUsize::new(0));
         let opts = self.options(dropped.clone(), session);
         let target = ModelIden::new(adapter_kind(self.protocol), self.model_id.as_str());
+        let sent = std::time::Instant::now();
         let res = self
             .client
             .exec_chat_stream(target, req, Some(&opts))
@@ -436,6 +437,7 @@ impl Target {
         // delta (or the stream's end when the model never answers in text).
         let mut reason_start: Option<std::time::Instant> = None;
         let mut reason_ms: Option<u64> = None;
+        let mut ttft_ms: Option<u64> = None;
         let mut end: Option<genai::chat::StreamEnd> = None;
         let mut stream = res.stream;
         while let Some(ev) = stream.next().await {
@@ -443,6 +445,16 @@ impl Target {
                 let streamed = !text.is_empty() || !reasoning.is_empty();
                 (LlmError::Stream(e.to_string()), streamed)
             })?;
+            if ttft_ms.is_none()
+                && matches!(
+                    ev,
+                    ChatStreamEvent::Chunk(_)
+                        | ChatStreamEvent::ReasoningChunk(_)
+                        | ChatStreamEvent::ToolCallChunk(_)
+                )
+            {
+                ttft_ms = Some(sent.elapsed().as_millis() as u64);
+            }
             match ev {
                 ChatStreamEvent::Chunk(c) => {
                     if reason_ms.is_none()
@@ -514,7 +526,11 @@ impl Target {
         Ok(LlmResponse {
             text,
             reasoning,
-            reason_ms,
+            stats: CallStats {
+                ttft_ms,
+                reason_ms,
+                retries: 0,
+            },
             reasoning_reset: dropped > 0,
             tool_calls,
             usage,
@@ -1218,7 +1234,7 @@ mod tests {
                     text: "hidden thinking".into(),
                     signature: None,
                 }],
-                reason_ms: None,
+                stats: Default::default(),
                 reasoning_reset: false,
                 tool_calls: vec![ToolCall::new("c1", "shell", json!({"command": "ls"}))],
                 model: "m".into(),
@@ -1337,7 +1353,7 @@ mod tests {
                     data: json!({"type": "redacted_thinking", "data": "enc"}),
                 },
             ],
-            reason_ms: None,
+            stats: Default::default(),
             reasoning_reset: false,
             tool_calls: vec![],
             model: "m".into(),
@@ -1388,7 +1404,7 @@ mod tests {
         let nodes = vec![node(NodeBody::Assistant {
             content: rumu_core::Content::text("hi"),
             reasoning: blocks,
-            reason_ms: None,
+            stats: Default::default(),
             reasoning_reset: false,
             tool_calls: vec![],
             model: "m".into(),
@@ -1442,7 +1458,7 @@ mod tests {
         let nodes = vec![node(NodeBody::Assistant {
             content: rumu_core::Content::text("hi"),
             reasoning: blocks,
-            reason_ms: None,
+            stats: Default::default(),
             reasoning_reset: false,
             tool_calls: vec![],
             model: "m".into(),
@@ -1480,7 +1496,7 @@ mod tests {
         let nodes = vec![node(NodeBody::Assistant {
             content: rumu_core::Content::text("hi"),
             reasoning: blocks,
-            reason_ms: None,
+            stats: Default::default(),
             reasoning_reset: false,
             tool_calls: vec![],
             model: "m".into(),
@@ -1790,7 +1806,7 @@ mod tests {
         node(NodeBody::Assistant {
             content: rumu_core::Content::text(""),
             reasoning,
-            reason_ms: None,
+            stats: Default::default(),
             reasoning_reset: reset,
             tool_calls: calls
                 .iter()
