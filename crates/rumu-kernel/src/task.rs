@@ -45,7 +45,8 @@ pub(crate) struct TaskEntry {
 /// What a task's work returned.
 pub(crate) enum TaskOutcome {
     Result(Result<ToolOutput>),
-    Cancelled,
+    /// With whatever partial result the work left (an agent's summary).
+    Cancelled(String),
 }
 
 impl Kernel {
@@ -180,7 +181,7 @@ impl Kernel {
         tokio::spawn(async move {
             let outcome = tokio::select! {
                 biased;
-                _ = token.cancelled() => TaskOutcome::Cancelled,
+                _ = token.cancelled() => TaskOutcome::Cancelled(String::new()),
                 r = plugin.call_tool(&name, args, &cx) => {
                     TaskOutcome::Result(r.map_err(Error::from))
                 }
@@ -231,7 +232,11 @@ impl Kernel {
                     kernel.set_task_child(&task_id, &child);
                     TaskOutcome::Result(Ok(ToolOutput::ok(text)))
                 }
-                Ok(AgentRun::Aborted) => TaskOutcome::Cancelled,
+                Ok(AgentRun::Interrupted { text, child }) => {
+                    kernel.set_task_child(&task_id, &child);
+                    TaskOutcome::Cancelled(text)
+                }
+                Ok(AgentRun::Aborted) => TaskOutcome::Cancelled(String::new()),
                 Ok(AgentRun::Refused(message)) => TaskOutcome::Result(Ok(ToolOutput::err(message))),
                 Err(e) => TaskOutcome::Result(Ok(ToolOutput::err(format!("agent failed: {e}")))),
             };
@@ -377,7 +382,9 @@ impl Kernel {
                 return;
             }
             let (status, content, effects, is_error) = match outcome {
-                TaskOutcome::Cancelled => (TaskStatus::Cancelled, Content::text(""), vec![], false),
+                TaskOutcome::Cancelled(text) => {
+                    (TaskStatus::Cancelled, Content::text(text), vec![], false)
+                }
                 TaskOutcome::Result(Ok(out)) => {
                     // The completion note reaches the model: the boundary cap.
                     let out = out.cap();

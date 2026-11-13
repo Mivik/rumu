@@ -4893,6 +4893,83 @@ async fn agent_runs_in_background_by_default() {
     }
 }
 
+/// Stopping a background sub-agent's own branch reports the task as
+/// cancelled (not ok), says the user interrupted it, and still wakes the
+/// parent with the partial summary.
+#[tokio::test]
+async fn user_abort_of_agent_branch_reports_cancelled() {
+    let agent = Arc::new(plugin_with(
+        "branch",
+        &["agent"],
+        vec![],
+        noop_hooks(),
+        noop_tools(),
+    ));
+    let plugin = Arc::new(background_plugin(
+        "bg",
+        &["bgwork"],
+        vec![],
+        noop_hooks(),
+        noop_tools(),
+    ));
+    let (kernel, session, branch) = setup_split(
+        vec![agent, plugin],
+        vec![
+            LlmResponse::calls(vec![ToolCall::new(
+                "e1",
+                "agent",
+                json!({ "task": "find it" }),
+            )]),
+            LlmResponse::text("parent done"),
+            LlmResponse::text("parent woke"),
+        ],
+        vec![LlmResponse {
+            text: "looking".into(),
+            ..LlmResponse::calls(vec![ToolCall::new(
+                "c1",
+                "bgwork",
+                json!({ "ms": 60_000, "background": false }),
+            )])
+        }],
+    )
+    .await;
+    kernel.set_wake_debounce(Duration::from_millis(10));
+    let mut rx = kernel.tap_pushes();
+    let (done, _) = turn_collect(&kernel, &branch, &mut rx, "go").await;
+    assert_eq!(done["method"], "turn.done");
+
+    let child = wait_push(
+        &mut rx,
+        |v| {
+            v["method"] == "node.appended"
+                && v["params"]["branch"] != branch.0
+                && v["params"]["node"]["body"]["type"] == "assistant"
+        },
+        "child assistant node",
+    )
+    .await;
+    let child = BranchId::from(child["params"]["branch"].as_str().unwrap());
+    kernel.abort(&child).unwrap();
+
+    let note = wait_push(
+        &mut rx,
+        |v| pushed_note_tag(v) == Some("kernel.task"),
+        "agent task note",
+    )
+    .await;
+    let text = pushed_note_text(&note).unwrap();
+    assert!(text.contains("finished: cancelled"), "{text}");
+    assert!(text.contains("interrupted by the user"), "{text}");
+    assert!(text.contains("looking"), "{text}");
+    assert_eq!(
+        kernel.tasks(&session).unwrap()[0].status,
+        TaskStatus::Cancelled
+    );
+    let (done2, seen2) = collect_turn(&mut rx, &branch.0).await;
+    assert_eq!(done2["method"], "turn.done");
+    assert_eq!(turn_starts(&seen2, "wake"), 1, "{seen2:?}");
+}
+
 /// A sub-agent that started a background task does not return its summary
 /// until the task finished and its loop consumed the completion note — and no
 /// separate wake turn runs on the child.

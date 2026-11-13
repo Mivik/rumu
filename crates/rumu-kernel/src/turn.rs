@@ -693,6 +693,7 @@ impl Kernel {
                                 .await
                                 {
                                     Ok(AgentRun::Summary { text, .. }) => ToolOutput::ok(text),
+                                    Ok(AgentRun::Interrupted { text, .. }) => ToolOutput::err(text),
                                     Ok(AgentRun::Aborted) => ToolOutput::err("aborted"),
                                     Ok(AgentRun::Refused(message)) => ToolOutput::err(message),
                                     Err(e) => ToolOutput::err(format!("agent failed: {e}")),
@@ -1174,23 +1175,33 @@ impl Kernel {
         self.push("branch.updated", json!({ "branch": done }));
         self.push("turn.done", json!({ "branch": child.id }));
 
-        let summary = if outcome.stopped_early {
-            let mut s = "(sub-agent stopped without a final reply)".to_owned();
-            if !outcome.last_text.is_empty() {
-                s.push('\n');
-                s.push_str(&outcome.last_text);
-            }
-            s
+        // Cancelled here but not above: the user stopped this sub-agent itself.
+        let interrupted = token.is_cancelled();
+        let header = if !interrupted {
+            outcome
+                .stopped_early
+                .then_some("(sub-agent stopped without a final reply)")
+        } else if parent_token.is_cancelled() {
+            Some("(sub-agent cancelled before it finished)")
         } else {
-            outcome.last_text
+            Some("(sub-agent interrupted by the user before it finished)")
         };
-        let first = first.unwrap_or_default();
-        Ok(AgentRun::Summary {
-            text: format!(
-                "{summary}\n\n[transcript: {RUMU_WORKSPACE}:/sessions/{}/{}..{}]",
-                parent.session, first, b.head
-            ),
-            child: child.id,
+        let summary = match header {
+            Some(header) if outcome.last_text.is_empty() => header.to_owned(),
+            Some(header) => format!("{header}\n{}", outcome.last_text),
+            None => outcome.last_text,
+        };
+        let text = format!(
+            "{summary}\n\n[transcript: {RUMU_WORKSPACE}:/sessions/{}/{}..{}]",
+            parent.session,
+            first.unwrap_or_default(),
+            b.head
+        );
+        let child = child.id;
+        Ok(if interrupted {
+            AgentRun::Interrupted { text, child }
+        } else {
+            AgentRun::Summary { text, child }
         })
     }
 
@@ -1220,6 +1231,9 @@ pub(crate) enum AgentRun {
         /// The child branch the sub-agent ran on.
         child: BranchId,
     },
+    /// The child branch was cancelled before it finished (the user stopped
+    /// it, or its parent / task was cancelled); `text` is its partial summary.
+    Interrupted { text: String, child: BranchId },
     /// The parent was aborted while waiting for a concurrency permit.
     Aborted,
     /// A limit refused the call before any child branch existed.
