@@ -16,6 +16,7 @@ use std::path::{Path, PathBuf};
 use std::sync::Arc;
 
 use async_trait::async_trait;
+use rumu_cards::Decks;
 use rumu_core::{
     Content, Cx, Decision, Event, HookOutput, HookSpec, Manifest, PathState, Plugin,
     RUMU_WORKSPACE, SkillInfo, SkillRepoInfo, SkillsInfo, Structured, ToolError, ToolOutput,
@@ -31,7 +32,8 @@ const INTRO_HOOK: &str = "skills-intro";
 /// Files listed under a skill at most.
 const FILES_LIMIT: usize = 200;
 
-/// Payload of the `skills.intro` note (v1): the once-per-path skill list.
+/// Payload of the `skills.intro` note (v1): the skill list, again whenever it
+/// changes.
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 struct SkillsIntro {
     skills: Vec<String>,
@@ -292,14 +294,15 @@ fn one_line(text: &str) -> String {
     text.split_whitespace().collect::<Vec<_>>().join(" ")
 }
 
-/// The first-call note.
+/// The skill-list note.
 pub struct SkillsPlugin {
     skills: Arc<Skills>,
+    decks: Decks,
 }
 
 impl SkillsPlugin {
-    pub fn new(skills: Arc<Skills>) -> Self {
-        Self { skills }
+    pub fn new(skills: Arc<Skills>, decks: Decks) -> Self {
+        Self { skills, decks }
     }
 }
 
@@ -328,32 +331,48 @@ impl Plugin for SkillsPlugin {
             return Ok(HookOutput::default());
         }
         let state = cx.state()?;
-        if state.skills.is_empty() || !cx.index()?.all::<SkillsIntro>().is_empty() {
+        let skills = self.skills.enabled(&rules(&self.decks, &state));
+        let names: Vec<String> = skills.iter().map(|s| s.name.clone()).collect();
+        let last = cx
+            .index()?
+            .all::<SkillsIntro>()
+            .pop()
+            .map(|e| e.value.skills);
+        if last.as_ref().unwrap_or(&Vec::new()) == &names {
             return Ok(HookOutput::default());
         }
-        let skills = self.skills.enabled(&state.skills);
-        if skills.is_empty() {
-            return Ok(HookOutput::default());
-        }
-        let mut text = format!(
-            "Skills: instructions for specific tasks, read on demand. When a task matches a \
+        let mut text = if skills.is_empty() {
+            "This session has no skills any more.".to_owned()
+        } else {
+            format!(
+                "{}Skills: instructions for specific tasks, read on demand. When a task matches a \
 skill's description, `read {RUMU_WORKSPACE}:/skills/<name>` (its {SKILL_FILE}, then a list of its \
 files) before going on. Its relative paths are under `{RUMU_WORKSPACE}:/skills/<name>/`; to run \
-one of its scripts, write the script into your workspace first."
-        );
+one of its scripts, write the script into your workspace first.",
+                if last.is_some() {
+                    "The skills changed; this replaces the earlier list.\n"
+                } else {
+                    ""
+                }
+            )
+        };
         for s in &skills {
             let _ = write!(text, "\n- `{}`: {}", s.name, one_line(&s.description));
         }
         Ok(HookOutput {
-            effects: vec![Content::note_with(
-                text,
-                &SkillsIntro {
-                    skills: skills.into_iter().map(|s| s.name).collect(),
-                },
-            )],
+            effects: vec![Content::note_with(text, &SkillsIntro { skills: names })],
             decision: Decision::Pass,
         })
     }
+}
+
+/// The skill rules of the session's assistant, from its deck as it is now: a
+/// change to the assistant reaches its running sessions.
+pub fn rules(decks: &Decks, state: &PathState) -> Vec<String> {
+    decks
+        .get(&state.assistant)
+        .map(|d| d.meta.skills)
+        .unwrap_or_default()
 }
 
 /// Whether `abs` is under `@rumu:/skills`.
@@ -364,7 +383,7 @@ pub fn is_skills_path(abs: &Utf8UnixPath) -> bool {
 /// The enabled skill `abs` is in and the path under it; `None` for the root.
 fn locate(
     skills: &Skills,
-    state: &PathState,
+    rules: &[String],
     abs: &Utf8UnixPath,
 ) -> ToolResult<Option<(Skill, PathBuf)>> {
     let rest = abs
@@ -382,7 +401,7 @@ fn locate(
         )));
     }
     let skill = skills
-        .enabled(&state.skills)
+        .enabled(rules)
         .into_iter()
         .find(|s| s.name == name)
         .ok_or_else(|| {
@@ -395,9 +414,9 @@ fn locate(
 }
 
 /// `list` under `@rumu:/skills`: the session's skills, or a skill's files.
-pub fn list(skills: &Skills, state: &PathState, abs: &Utf8UnixPath) -> ToolResult<ToolOutput> {
-    let Some((skill, path)) = locate(skills, state, abs)? else {
-        let enabled = skills.enabled(&state.skills);
+pub fn list(skills: &Skills, rules: &[String], abs: &Utf8UnixPath) -> ToolResult<ToolOutput> {
+    let Some((skill, path)) = locate(skills, rules, abs)? else {
+        let enabled = skills.enabled(rules);
         if enabled.is_empty() {
             return Ok("This session has no skills.".into());
         }
@@ -419,9 +438,9 @@ pub fn list(skills: &Skills, state: &PathState, abs: &Utf8UnixPath) -> ToolResul
 
 /// `read` under `@rumu:/skills`: a file; a skill is its `SKILL.md` and a list
 /// of its other files; a directory lists.
-pub fn read(skills: &Skills, state: &PathState, abs: &Utf8UnixPath) -> ToolResult<ToolOutput> {
-    let Some((skill, path)) = locate(skills, state, abs)? else {
-        return list(skills, state, abs);
+pub fn read(skills: &Skills, rules: &[String], abs: &Utf8UnixPath) -> ToolResult<ToolOutput> {
+    let Some((skill, path)) = locate(skills, rules, abs)? else {
+        return list(skills, rules, abs);
     };
     if path == skill.dir {
         let text = read_text(&path.join(SKILL_FILE))?;

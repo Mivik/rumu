@@ -213,6 +213,22 @@ pub(crate) fn move_card(home: &std::path::Path, deck: &str, from: &str, to: &str
         .unwrap();
 }
 
+/// The deck registry of `home`, holding the test assistant `main`.
+pub(crate) fn assistant_decks(home: &std::path::Path) -> rumu_cards::Decks {
+    main_deck(home);
+    rumu_cards::Decks::load(home).unwrap()
+}
+
+/// Set the test assistant's MCP servers and skill rules as the assistant
+/// form does.
+pub(crate) fn set_assistant(decks: &rumu_cards::Decks, mcp: rumu_core::McpUse, skills: &[&str]) {
+    let mut meta = decks.get(MAIN_DECK).unwrap().meta;
+    meta.assistant = true;
+    meta.mcp = mcp;
+    meta.skills = skills.iter().map(|s| s.to_string()).collect();
+    decks.upsert(meta).unwrap();
+}
+
 /// A card's current text in the deck.
 pub(crate) fn card_text(home: &std::path::Path, deck: &str, path: &str) -> Option<String> {
     deck_at(home, deck).read(path).unwrap()
@@ -271,6 +287,25 @@ impl FakeRuntime {
             0,
             runtime,
         )
+    }
+
+    /// Mirror the kernel's append of a hook's effects: `source`'s notes on
+    /// the staged path, so later calls see them.
+    pub fn apply_hook(&self, source: &str, out: &rumu_core::HookOutput) {
+        let mut nodes = self.nodes.lock().unwrap();
+        for effect in &out.effects {
+            nodes.push(Node {
+                id: rumu_core::NodeId::new(),
+                parent: None,
+                session: Default::default(),
+                at: 0,
+                dur_ms: None,
+                body: NodeBody::Note {
+                    source: source.into(),
+                    content: effect.clone(),
+                },
+            });
+        }
     }
 
     /// Mirror the kernel's safe point for one tool output: append its ok

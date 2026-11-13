@@ -352,8 +352,6 @@ async fn dispatch(state: &AppState, method: &str, p: &Value) -> Result<Value> {
                     assistant: deck.id().to_owned(),
                     asked_by: None,
                     mounts,
-                    mcp: deck.meta.mcp.clone(),
-                    skills: deck.meta.skills.clone(),
                 })
                 .await?;
             Ok(json!({ "session": session, "branch": branch }))

@@ -1,10 +1,10 @@
 use std::path::Path;
 use std::sync::Arc;
 
-use rumu_core::{PathState, Plugin, Utf8UnixPath};
+use rumu_core::{Plugin, Utf8UnixPath};
 
 use super::*;
-use crate::testutil::FakeRuntime;
+use crate::testutil::{FakeRuntime, assistant_decks, set_assistant};
 
 fn write(path: &Path, text: &str) {
     std::fs::create_dir_all(path.parent().unwrap()).unwrap();
@@ -40,11 +40,8 @@ fn fixture(home: &Path) -> Skills {
     Skills::with_dirs(&home.join("rumu"), vec![host], Some(home.to_owned()))
 }
 
-fn state(rules: &[&str]) -> PathState {
-    PathState {
-        skills: rules.iter().map(|r| r.to_string()).collect(),
-        ..Default::default()
-    }
+fn state(rules: &[&str]) -> Vec<String> {
+    rules.iter().map(|r| r.to_string()).collect()
 }
 
 fn path(p: &str) -> &Utf8UnixPath {
@@ -152,9 +149,10 @@ fn lists_and_reads_the_enabled_skills() {
 }
 
 #[tokio::test]
-async fn intro_note_lists_the_enabled_skills_once() {
+async fn intro_note_follows_the_assistants_skills() {
     let home = tempfile::tempdir().unwrap();
-    let plugin = SkillsPlugin::new(Arc::new(fixture(home.path())));
+    let decks = assistant_decks(home.path());
+    let plugin = SkillsPlugin::new(Arc::new(fixture(home.path())), decks.clone());
     let fake = FakeRuntime::arc();
     let event = rumu_core::Event {
         kind: "llm.pre".into(),
@@ -163,22 +161,35 @@ async fn intro_note_lists_the_enabled_skills_once() {
         fields: Default::default(),
         payload: serde_json::Value::Null,
     };
-    let none = plugin
-        .on_hook(INTRO_HOOK, &event, &fake.cx())
-        .await
-        .unwrap();
-    assert!(none.effects.is_empty());
+    let hook = || async {
+        let out = plugin
+            .on_hook(INTRO_HOOK, &event, &fake.cx())
+            .await
+            .unwrap();
+        fake.apply_hook("skills", &out);
+        out.effects.into_iter().map(|e| e.text).collect::<Vec<_>>()
+    };
+    assert!(hook().await.is_empty());
 
-    fake.state.lock().unwrap().skills = vec!["*".into()];
-    let out = plugin
-        .on_hook(INTRO_HOOK, &event, &fake.cx())
-        .await
-        .unwrap();
-    let text = &out.effects[0].text;
+    set_assistant(&decks, Default::default(), &["*"]);
+    let text = hook().await.remove(0);
+    assert!(text.starts_with("Skills: "), "{text}");
     assert!(
         text.ends_with("\n- `pdf`: Work with PDFs.\n- `notes`: Take notes: when the user asks"),
         "{text}"
     );
+    assert!(hook().await.is_empty());
+
+    // Changing the assistant mid-session reaches the session.
+    set_assistant(&decks, Default::default(), &["*", "!notes"]);
+    let text = hook().await.remove(0);
+    assert!(text.starts_with("The skills changed;"), "{text}");
+    assert!(text.ends_with("\n- `pdf`: Work with PDFs."), "{text}");
+    assert!(hook().await.is_empty());
+
+    set_assistant(&decks, Default::default(), &[]);
+    assert_eq!(hook().await, ["This session has no skills any more."]);
+    assert!(hook().await.is_empty());
 }
 
 #[tokio::test]

@@ -68,9 +68,9 @@ pub async fn load_all(
                 .with_mcp(mcp.clone())
                 .with_skills(skills.clone()),
         ),
-        Arc::new(AskPlugin::new(decks)),
-        Arc::new(McpPlugin::new(home, mcp)),
-        Arc::new(SkillsPlugin::new(skills)),
+        Arc::new(AskPlugin::new(decks.clone())),
+        Arc::new(McpPlugin::new(home, mcp, decks.clone())),
+        Arc::new(SkillsPlugin::new(skills, decks)),
     ];
     for spec in config.external_specs(home)? {
         let plugin = StdioPlugin::spawn(&spec.name, &spec.argv, &spec.cwd)

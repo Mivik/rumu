@@ -5,7 +5,7 @@ use rumu_core::{McpServerSettings, McpStatus, Plugin, Utf8UnixPath};
 use serde_json::json;
 
 use super::*;
-use crate::testutil::FakeRuntime;
+use crate::testutil::{FakeRuntime, assistant_decks, set_assistant};
 
 const SERVER: &str = include_str!("fake_server.py");
 
@@ -53,13 +53,6 @@ fn all(servers: &[&str]) -> rumu_core::McpUse {
         .collect()
 }
 
-fn state(servers: &[&str]) -> PathState {
-    PathState {
-        mcp: all(servers),
-        ..Default::default()
-    }
-}
-
 fn path(p: &str) -> &Utf8UnixPath {
     Utf8UnixPath::new(p)
 }
@@ -85,7 +78,7 @@ async fn lists_reads_and_searches_the_bound_servers() {
     let Some(hub) = hub(home.path()).await else {
         return;
     };
-    let st = state(&["fake", "broken", "gone"]);
+    let st = all(&["fake", "broken", "gone"]);
     let root = list(&hub, &st, path("/tools")).await.unwrap().content.text;
     assert!(root.contains("fake/ — 3 tools"), "{root}");
     assert!(root.contains("broken/ — unavailable"), "{root}");
@@ -121,7 +114,7 @@ async fn lists_reads_and_searches_the_bound_servers() {
     assert!(!hits.contains("fake/echo"));
 
     // A server the session does not have is neither listed nor readable.
-    let other = state(&["broken"]);
+    let other = all(&["broken"]);
     let err = read(&hub, &other, path("/tools/fake/echo"))
         .await
         .unwrap_err();
@@ -138,9 +131,10 @@ async fn call_tool_returns_text_errors_and_structured_content() {
     let Some(hub) = hub(home.path()).await else {
         return;
     };
-    let plugin = McpPlugin::new(home.path(), hub);
+    let decks = assistant_decks(home.path());
+    set_assistant(&decks, all(&["fake"]), &[]);
+    let plugin = McpPlugin::new(home.path(), hub, decks);
     let fake = FakeRuntime::arc();
-    fake.state.lock().unwrap().mcp = all(&["fake"]);
     let cx = fake.cx();
     let call = |args| plugin.call_tool("call_tool", args, &cx);
 
@@ -203,12 +197,13 @@ async fn a_dropped_call_is_not_retried_and_reconnects_once() {
 }
 
 #[tokio::test]
-async fn intro_note_lists_the_servers_once() {
+async fn intro_note_follows_the_assistants_servers() {
     let home = tempfile::tempdir().unwrap();
     let Some(hub) = hub(home.path()).await else {
         return;
     };
-    let plugin = McpPlugin::new(home.path(), hub);
+    let decks = assistant_decks(home.path());
+    let plugin = McpPlugin::new(home.path(), hub, decks.clone());
     let fake = FakeRuntime::arc();
     let event = rumu_core::Event {
         kind: "llm.pre".into(),
@@ -217,20 +212,33 @@ async fn intro_note_lists_the_servers_once() {
         fields: Default::default(),
         payload: serde_json::Value::Null,
     };
-    let none = plugin
-        .on_hook(INTRO_HOOK, &event, &fake.cx())
-        .await
-        .unwrap();
-    assert!(none.effects.is_empty());
+    let hook = || async {
+        let out = plugin
+            .on_hook(INTRO_HOOK, &event, &fake.cx())
+            .await
+            .unwrap();
+        fake.apply_hook("mcp", &out);
+        out.effects.into_iter().map(|e| e.text).collect::<Vec<_>>()
+    };
+    assert!(hook().await.is_empty());
 
-    fake.state.lock().unwrap().mcp = all(&["fake", "broken"]);
-    let out = plugin
-        .on_hook(INTRO_HOOK, &event, &fake.cx())
-        .await
-        .unwrap();
-    let text = &out.effects[0].text;
+    set_assistant(&decks, all(&["fake", "broken"]), &[]);
+    let text = hook().await.remove(0);
+    assert!(text.starts_with("MCP servers of this session."), "{text}");
     assert!(text.contains("- `fake`: 3 tools\n  Echo things."), "{text}");
     assert!(text.contains("- `broken`: unavailable ("), "{text}");
+    assert!(hook().await.is_empty());
+
+    // Changing the assistant mid-session reaches the session.
+    set_assistant(&decks, all(&["fake"]), &[]);
+    let text = hook().await.remove(0);
+    assert!(text.starts_with("The MCP servers changed;"), "{text}");
+    assert!(!text.contains("broken"), "{text}");
+    assert!(hook().await.is_empty());
+
+    set_assistant(&decks, Default::default(), &[]);
+    assert_eq!(hook().await, ["This session has no MCP servers any more."]);
+    assert!(hook().await.is_empty());
 }
 
 #[tokio::test]
@@ -239,9 +247,8 @@ async fn rules_narrow_a_servers_tools() {
     let Some(hub) = hub(home.path()).await else {
         return;
     };
-    let rules = |r: &[&str]| PathState {
-        mcp: [("fake".to_owned(), r.iter().map(|s| s.to_string()).collect())].into(),
-        ..Default::default()
+    let rules = |r: &[&str]| -> rumu_core::McpUse {
+        [("fake".to_owned(), r.iter().map(|s| s.to_string()).collect())].into()
     };
     let text = |out: ToolResult<ToolOutput>| out.unwrap().content.text;
 
@@ -264,9 +271,10 @@ async fn rules_narrow_a_servers_tools() {
         text(list(&hub, &st, path("/tools/fake")).await),
         "echo — Echo the given text back.\n"
     );
-    let plugin = McpPlugin::new(home.path(), hub);
+    let decks = assistant_decks(home.path());
+    set_assistant(&decks, st, &[]);
+    let plugin = McpPlugin::new(home.path(), hub, decks);
     let fake = FakeRuntime::arc();
-    fake.state.lock().unwrap().mcp = st.mcp.clone();
     let out = plugin
         .call_tool(
             "call_tool",

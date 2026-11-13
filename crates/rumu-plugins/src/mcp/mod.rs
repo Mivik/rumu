@@ -16,10 +16,11 @@ use std::sync::{Arc, OnceLock};
 use async_trait::async_trait;
 use base64::Engine as _;
 use rmcp::model::{JsonObject, Tool};
+use rumu_cards::Decks;
 use rumu_cards::recall::{Doc, rank_docs};
 use rumu_core::{
-    Content, Cx, Decision, Event, HookOutput, HookSpec, Manifest, McpStatus, PathState, Plugin,
-    RUMU_WORKSPACE, Structured, ToolError, ToolOutput, ToolResult, ToolResultExt, ToolSpec,
+    Content, Cx, Decision, Event, HookOutput, HookSpec, Manifest, McpStatus, McpUse, PathState,
+    Plugin, RUMU_WORKSPACE, Structured, ToolError, ToolOutput, ToolResult, ToolResultExt, ToolSpec,
     Utf8UnixPath, parse_args, rules_enable, tool_schema,
 };
 use schemars::JsonSchema;
@@ -35,7 +36,8 @@ const INSTRUCTIONS_LIMIT: usize = 2_000;
 pub const SEARCH_LIMIT: usize = 5;
 const INTRO_HOOK: &str = "mcp-intro";
 
-/// Payload of the `mcp.intro` note (v1): the once-per-path server list.
+/// Payload of the `mcp.intro` note (v1): the server list, again whenever it
+/// changes.
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 struct McpIntro {
     servers: Vec<String>,
@@ -56,17 +58,19 @@ struct CallToolArgs {
     args: Option<JsonObject>,
 }
 
-/// The `call_tool` tool and the first-call note.
+/// The `call_tool` tool and the server-list note.
 pub struct McpPlugin {
     hub: Arc<McpHub>,
+    decks: Decks,
     home: PathBuf,
     blobs: OnceLock<rumu_blob::Blobs>,
 }
 
 impl McpPlugin {
-    pub fn new(home: &std::path::Path, hub: Arc<McpHub>) -> Self {
+    pub fn new(home: &std::path::Path, hub: Arc<McpHub>, decks: Decks) -> Self {
         Self {
             hub,
+            decks,
             home: home.to_owned(),
             blobs: OnceLock::new(),
         }
@@ -118,17 +122,22 @@ input schema) or `list {RUMU_WORKSPACE}:/tools/<server>`, and read one's input s
             return Ok(HookOutput::default());
         }
         let state = cx.state()?;
-        if state.mcp.is_empty() || !cx.index()?.all::<McpIntro>().is_empty() {
+        let mcp = servers(&self.decks, &state);
+        let servers: Vec<String> = mcp.keys().cloned().collect();
+        let last = cx.index()?.all::<McpIntro>().pop().map(|e| e.value.servers);
+        if last.as_ref().unwrap_or(&Vec::new()) == &servers {
             return Ok(HookOutput::default());
         }
-        let text = intro(&self.hub, &state).await;
+        let text = match (last, servers.is_empty()) {
+            (_, true) => "This session has no MCP servers any more.".to_owned(),
+            (None, false) => intro(&self.hub, &mcp).await,
+            (Some(_), false) => format!(
+                "The MCP servers changed; this replaces the earlier list.\n{}",
+                intro(&self.hub, &mcp).await
+            ),
+        };
         Ok(HookOutput {
-            effects: vec![Content::note_with(
-                text,
-                &McpIntro {
-                    servers: state.mcp.keys().cloned().collect(),
-                },
-            )],
+            effects: vec![Content::note_with(text, &McpIntro { servers })],
             decision: Decision::Pass,
         })
     }
@@ -147,11 +156,12 @@ impl McpPlugin {
     async fn call(&self, args: &Value, cx: &Cx) -> ToolResult<ToolOutput> {
         let args: CallToolArgs = parse_args("call_tool", args)?;
         let state = cx.state()?;
+        let mcp = servers(&self.decks, &state);
         let (name, tool) = args
             .tool
             .split_once('/')
             .ok_or_else(|| ToolError::model("call_tool: `tool` is `<server>/<tool>`"))?;
-        let (server, snap) = bound(&self.hub, &state, name).await?;
+        let (server, snap) = bound(&self.hub, &mcp, name).await?;
         if !snap.tools.iter().any(|t| t.name == tool) {
             return Err(ToolError::model(format!(
                 "call_tool: `{name}` has no tool `{tool}`; its tools: {}",
@@ -229,15 +239,25 @@ impl McpPlugin {
     }
 }
 
-/// The once-per-path note: the session's servers, their status and
+/// The servers of the session's assistant and the rules enabling their tools,
+/// from its deck as it is now: a change to the assistant reaches its running
+/// sessions.
+pub fn servers(decks: &Decks, state: &PathState) -> McpUse {
+    decks
+        .get(&state.assistant)
+        .map(|d| d.meta.mcp)
+        .unwrap_or_default()
+}
+
+/// The server-list note: the session's servers, their status and
 /// instructions.
-async fn intro(hub: &McpHub, state: &PathState) -> String {
+async fn intro(hub: &McpHub, mcp: &McpUse) -> String {
     let mut text = format!(
         "MCP servers of this session. Their tools are not in your tool list: find them with \
 `search` (scope `{RUMU_WORKSPACE}:/tools`) or `list {RUMU_WORKSPACE}:/tools/<server>`, and call \
 them with `call_tool`."
     );
-    for (name, rules) in &state.mcp {
+    for (name, rules) in mcp {
         let _ = write!(text, "\n- `{name}`: ");
         match hub.server(name) {
             None => text.push_str("not configured"),
@@ -293,14 +313,14 @@ fn enabled(mut snap: Snapshot, rules: &[String]) -> Snapshot {
 }
 
 /// Server `name`, when the session has it, with the tools it enables.
-async fn bound(hub: &McpHub, state: &PathState, name: &str) -> ToolResult<(Arc<Server>, Snapshot)> {
-    let Some(rules) = state.mcp.get(name) else {
+async fn bound(hub: &McpHub, mcp: &McpUse, name: &str) -> ToolResult<(Arc<Server>, Snapshot)> {
+    let Some(rules) = mcp.get(name) else {
         return Err(ToolError::model(format!(
             "no MCP server `{name}` in this session{}",
-            if state.mcp.is_empty() {
+            if mcp.is_empty() {
                 String::new()
             } else {
-                let names: Vec<&str> = state.mcp.keys().map(String::as_str).collect();
+                let names: Vec<&str> = mcp.keys().map(String::as_str).collect();
                 format!(" (it has: {})", names.join(", "))
             }
         )));
@@ -380,14 +400,14 @@ fn bad_path(abs: &Utf8UnixPath) -> ToolError {
 }
 
 /// `list` under `@rumu:/tools`: the session's servers, or one's tools.
-pub async fn list(hub: &McpHub, state: &PathState, abs: &Utf8UnixPath) -> ToolResult<ToolOutput> {
+pub async fn list(hub: &McpHub, mcp: &McpUse, abs: &Utf8UnixPath) -> ToolResult<ToolOutput> {
     match tools_path(abs).ok_or_else(|| bad_path(abs))? {
         ToolsPath::Root => {
-            if state.mcp.is_empty() {
+            if mcp.is_empty() {
                 return Ok("This session has no MCP servers.".into());
             }
             let mut out = String::new();
-            for (name, rules) in &state.mcp {
+            for (name, rules) in mcp {
                 let status = match hub.server(name) {
                     Some(s) => status_line(&enabled(s.ready().await, rules)),
                     None => "not configured".into(),
@@ -397,33 +417,28 @@ pub async fn list(hub: &McpHub, state: &PathState, abs: &Utf8UnixPath) -> ToolRe
             Ok(out.into())
         }
         ToolsPath::Server(name) => {
-            let (_, snap) = bound(hub, state, name).await?;
+            let (_, snap) = bound(hub, mcp, name).await?;
             let mut out = String::new();
             for tool in snap.tools.iter() {
                 let _ = writeln!(out, "{} — {}", tool.name, first_line(tool));
             }
             Ok(out.into())
         }
-        ToolsPath::Tool(name, tool) => read_tool(hub, state, name, tool).await,
+        ToolsPath::Tool(name, tool) => read_tool(hub, mcp, name, tool).await,
     }
 }
 
 /// `read` under `@rumu:/tools`: one tool's description and input schema; a
 /// server or the root lists.
-pub async fn read(hub: &McpHub, state: &PathState, abs: &Utf8UnixPath) -> ToolResult<ToolOutput> {
+pub async fn read(hub: &McpHub, mcp: &McpUse, abs: &Utf8UnixPath) -> ToolResult<ToolOutput> {
     match tools_path(abs) {
-        Some(ToolsPath::Tool(name, tool)) => read_tool(hub, state, name, tool).await,
-        _ => list(hub, state, abs).await,
+        Some(ToolsPath::Tool(name, tool)) => read_tool(hub, mcp, name, tool).await,
+        _ => list(hub, mcp, abs).await,
     }
 }
 
-async fn read_tool(
-    hub: &McpHub,
-    state: &PathState,
-    name: &str,
-    tool: &str,
-) -> ToolResult<ToolOutput> {
-    let (_, snap) = bound(hub, state, name).await?;
+async fn read_tool(hub: &McpHub, mcp: &McpUse, name: &str, tool: &str) -> ToolResult<ToolOutput> {
+    let (_, snap) = bound(hub, mcp, name).await?;
     let tool = snap.tools.iter().find(|t| t.name == tool).ok_or_else(|| {
         ToolError::model(format!(
             "`{name}` has no tool `{tool}`; its tools: {}",
@@ -439,13 +454,13 @@ async fn read_tool(
 /// names, titles and descriptions; each hit prints like `read`.
 pub async fn search(
     hub: &McpHub,
-    state: &PathState,
+    mcp: &McpUse,
     abs: &Utf8UnixPath,
     query: &str,
     limit: usize,
 ) -> ToolResult<ToolOutput> {
     let servers: Vec<&str> = match tools_path(abs) {
-        Some(ToolsPath::Root) => state.mcp.keys().map(String::as_str).collect(),
+        Some(ToolsPath::Root) => mcp.keys().map(String::as_str).collect(),
         Some(ToolsPath::Server(name)) => vec![name],
         _ => {
             return Err(ToolError::model(format!(
@@ -459,7 +474,7 @@ pub async fn search(
     let mut tools: Vec<(String, Tool)> = Vec::new();
     for name in servers {
         // A server that is down is skipped; scoping to it says why.
-        match bound(hub, state, name).await {
+        match bound(hub, mcp, name).await {
             Ok((_, snap)) => tools.extend(snap.tools.iter().map(|t| (name.to_owned(), t.clone()))),
             Err(e) if tools_path(abs).is_some_and(|p| matches!(p, ToolsPath::Server(_))) => {
                 return Err(e);

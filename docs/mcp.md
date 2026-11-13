@@ -66,9 +66,9 @@ harnesses' own docs.
   `!tool`, so tools the server adds later are in; checking from none adds
   the tool's name, so they are out.
 
-- A session records its assistant's servers on its root, so changing the
-  assistant affects new sessions only. Forks and sub-agents inherit them; an
-  `ask` session gets the asked assistant's.
+- A session uses its assistant's servers as `deck.yaml` has them now, so
+  changing the assistant reaches its running sessions at their next model
+  call. An `ask` session uses the asked assistant's.
 - A name that is not (or no longer) in Settings stays in `deck.yaml` and
   shows as unavailable, on the assistant page and to the model.
 - Calls need no approval. Like a `deck.yaml` mount, binding a server is the
@@ -76,9 +76,10 @@ harnesses' own docs.
 
 ## The model's view
 
-- The first model call of a path whose session has servers gets a one-time
-  note listing them: name, status, tool count, and the server's own
-  `instructions` (capped).
+- The first model call of a path whose session has servers gets a note
+  listing them: name, status, tool count, and the server's own
+  `instructions` (capped). When the assistant's set of servers changes, the
+  next model call gets the list again, or a note that none is left.
 - `@rumu:/tools` holds the session's servers:
   - `list @rumu:/tools`: each server with its status and tool count.
   - `list @rumu:/tools/<server>`: one line per tool, its name and the first

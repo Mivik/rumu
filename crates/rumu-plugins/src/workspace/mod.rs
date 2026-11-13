@@ -115,6 +115,16 @@ impl WorkspacePlugin {
             .unwrap_or_else(|| crate::McpHub::new(&self.home))
     }
 
+    /// The branch assistant's MCP servers, as its deck has them now.
+    fn servers(&self, cx: &Cx) -> rumu_core::Result<rumu_core::McpUse> {
+        Ok(crate::mcp::servers(&self.decks, &*cx.state()?))
+    }
+
+    /// The branch assistant's skill rules, as its deck has them now.
+    fn skill_rules(&self, cx: &Cx) -> rumu_core::Result<Vec<String>> {
+        Ok(crate::skills::rules(&self.decks, &*cx.state()?))
+    }
+
     /// The deck registry behind `/cards`.
     pub fn decks(&self) -> &Decks {
         &self.decks

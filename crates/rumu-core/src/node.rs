@@ -507,14 +507,6 @@ pub struct SessionRoot {
     /// starts in at [`crate::PROJECT_MOUNT`].
     #[serde(default, skip_serializing_if = "Vec::is_empty")]
     pub mounts: Vec<CardMount>,
-    /// The deck's MCP servers and the rules enabling their tools, seeded at
-    /// session start.
-    #[serde(default, skip_serializing_if = "std::collections::BTreeMap::is_empty")]
-    pub mcp: crate::McpUse,
-    /// The rules enabling the deck's skills ([`crate::rules_enable`]), seeded
-    /// at session start.
-    #[serde(default, skip_serializing_if = "Vec::is_empty")]
-    pub skills: Vec<String>,
 }
 
 impl Structured for SessionRoot {
@@ -698,12 +690,6 @@ pub struct PathState {
     /// The last `model.use` marker: unset runs on the default role.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub model: Option<crate::ModelUse>,
-    /// The MCP servers from the session's root.
-    #[serde(default)]
-    pub mcp: crate::McpUse,
-    /// The skill rules from the session's root.
-    #[serde(default)]
-    pub skills: Vec<String>,
 }
 
 #[cfg(test)]

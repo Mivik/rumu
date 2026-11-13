@@ -59,17 +59,18 @@ Read from the Agent Skills specification and its guide for clients.
   The rules work like a provider's model rules ([MCP](mcp.md) tools use
   them too): `*` matches any run of characters, `!` excludes, and a rule
   naming a skill wins over a pattern. None enables nothing.
-- A session records the rules on its root, so changing the assistant
-  affects new sessions only; the skills themselves are read live. Forks and
-  sub-agents inherit them; an `ask` session gets the asked assistant's.
+- A session uses its assistant's rules as `deck.yaml` has them now, and
+  the skills are read live, so changing either reaches its running sessions
+  at their next model call. An `ask` session uses the asked assistant's.
 - A rule naming a skill that is no longer found stays in `deck.yaml` and
   shows as unavailable on the assistant page.
 
 ## The model's view
 
 - The first model call of a path whose session enables any usable skill
-  gets a one-time note: how to use skills, then each one's name and
-  description.
+  gets a note: how to use skills, then each one's name and description.
+  When the set of enabled skills changes, the next model call gets the list
+  again, or a note that none is left.
 - `@rumu:/skills` holds the session's skills:
   - `list @rumu:/skills`: each with its description.
   - `read @rumu:/skills/<name>`: its `SKILL.md`, then a list of its other

@@ -50,12 +50,4 @@ mounts: Array<CardMount>,
 /**
  * The last `model.use` marker: unset runs on the default role.
  */
-model?: ModelUse | null, 
-/**
- * The MCP servers from the session's root.
- */
-mcp: { [key in string]: Array<string> }, 
-/**
- * The skill rules from the session's root.
- */
-skills: Array<string>, };
+model?: ModelUse | null, };

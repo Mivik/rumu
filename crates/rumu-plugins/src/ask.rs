@@ -287,8 +287,6 @@ impl AskPlugin {
                 assistant: to.id().to_owned(),
                 asked_by: from.clone(),
                 mounts,
-                mcp: to.meta.mcp.clone(),
-                skills: to.meta.skills.clone(),
                 prompt: Content::text(prompt),
             })
             .await

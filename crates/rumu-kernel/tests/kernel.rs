@@ -698,8 +698,6 @@ async fn setup_in_project(
             assistant: "assistant".into(),
             asked_by: None,
             mounts: vec![project_mount(deck)],
-            mcp: Default::default(),
-            skills: Vec::new(),
         })
         .await
         .unwrap();
@@ -2665,8 +2663,6 @@ async fn move_project_refuses_an_asked_session() {
             assistant: "assistant".into(),
             asked_by: Some("asker".into()),
             mounts: Vec::new(),
-            mcp: Default::default(),
-            skills: Vec::new(),
         })
         .await
         .unwrap();

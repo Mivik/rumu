@@ -1159,13 +1159,13 @@ impl WorkspacePlugin {
             return self.task_read(abs, offset, limit, cx).await;
         }
         if crate::mcp::is_tools_path(abs) {
-            let out = crate::mcp::read(&self.mcp(), &*cx.state()?, abs).await?;
+            let out = crate::mcp::read(&self.mcp(), &self.servers(cx)?, abs).await?;
             return slice_lines(out.content.text, offset, limit)
                 .map(ToolOutput::ok)
                 .map_err(ToolError::model);
         }
         if crate::skills::is_skills_path(abs) {
-            let out = crate::skills::read(&self.skills(), &*cx.state()?, abs)?;
+            let out = crate::skills::read(&self.skills(), &self.skill_rules(cx)?, abs)?;
             return slice_lines(out.content.text, offset, limit)
                 .map(ToolOutput::ok)
                 .map_err(ToolError::model);
@@ -1211,10 +1211,10 @@ impl WorkspacePlugin {
             _ if abs.starts_with("/sessions") => self.session_list(abs, cx).await,
             _ if abs.starts_with("/tasks") => self.task_read(abs, None, None, cx).await,
             _ if crate::mcp::is_tools_path(abs) => {
-                crate::mcp::list(&self.mcp(), &*cx.state()?, abs).await
+                crate::mcp::list(&self.mcp(), &self.servers(cx)?, abs).await
             }
             _ if crate::skills::is_skills_path(abs) => {
-                crate::skills::list(&self.skills(), &*cx.state()?, abs)
+                crate::skills::list(&self.skills(), &self.skill_rules(cx)?, abs)
             }
             _ => Err(unknown_rumu_path(abs)),
         }
@@ -1247,7 +1247,14 @@ impl WorkspacePlugin {
         };
         if crate::mcp::is_tools_path(&abs) {
             let limit = limit.unwrap_or(crate::mcp::SEARCH_LIMIT);
-            return crate::mcp::search(&self.mcp(), state, &abs, &args.query, limit).await;
+            return crate::mcp::search(
+                &self.mcp(),
+                &crate::mcp::servers(&self.decks, state),
+                &abs,
+                &args.query,
+                limit,
+            )
+            .await;
         }
         let limit = limit.unwrap_or(10);
         if abs.starts_with("/sessions") {
