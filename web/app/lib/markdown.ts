@@ -188,9 +188,16 @@ const EXTERNAL_SCHEMES = new Set([
 const RUMU_PREFIX = `${INTERNAL_WORKSPACE}:`
 const SCRATCH_PREFIX = `${SCRATCH_WORKSPACE}:`
 
+/** Where an address ends rather than continues: brackets and sentence
+ * punctuation of both widths. Chinese prose puts `，` straight after a path
+ * (`见 @scratch:a.md，2026-11-13）`), with no space to end the token, so these
+ * have to stop it mid-line. `.` is not here — `a.md` needs it. */
+const ADDRESS_END = '\\s<>()[\\]`"\'，、。；：！？（）【】「」『』《》〈〉…“”‘’,;:!?'
+
 /** A whole workspace address (`@rumu:`, `@scratch:`), as bare text or alone
- * in inline code. Trailing sentence punctuation is not part of it. */
-const ADDRESS = /^@(?:rumu|scratch):[^\s<>()[\]`"']*[^\s<>()[\]`"'.,;:!?]/
+ * in inline code: the text up to the next end mark, without a trailing `.`
+ * (which only ever ends the sentence). */
+const ADDRESS = new RegExp(`^@(?:rumu|scratch):[^${ADDRESS_END}]*[^${ADDRESS_END}.]`)
 /** Where the first workspace address starts (the tokenizer's `start`). */
 const ADDRESS_START = /@(?:rumu|scratch):/
 
