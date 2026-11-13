@@ -1,9 +1,10 @@
 <script setup lang="ts">
 // Center column, the one paper sheet on the canvas: the shell around the
-// open session's view. The shell owns the header (title, diagnostics, view
-// tabs, and beside them who the session runs as and the project it works in)
-// and the composer card at the foot; the view between them is the
-// conversation (ConversationView) or the raw trajectory (TraceView). The
+// open session's view. The shell owns the header (title, view tabs, and
+// beside them who the session runs as and the project it works in) and the
+// composer card at the foot; the view between them is the conversation
+// (ConversationView), the raw trajectory (TraceView) or its usage
+// statistics (StatsView). The
 // content column is capped at --col-max (main.css), centered. On phones and
 // in portrait the sheet drops its card edges and becomes the page (main.css).
 //
@@ -21,9 +22,9 @@ import Composer from './Composer.vue'
 import ConversationView from './ConversationView.vue'
 import TasksPanel from './TasksPanel.vue'
 import TraceView from './TraceView.vue'
+import StatsView from './StatsView.vue'
 import ViewTabs from './ViewTabs.vue'
 import Welcome from './Welcome.vue'
-import SessionBar from './SessionBar.vue'
 import SessionPickers from './SessionPickers.vue'
 import RumuCat from '../brand/RumuCat.vue'
 import RumuMark from '../brand/RumuMark.vue'
@@ -101,7 +102,6 @@ function composerRoot(): HTMLElement | null {
               <span class="hidden sm:inline">{{ t('chat.header.running') }}</span>
             </span>
           </Transition>
-          <SessionBar v-if="state.sessionId" />
         </span>
       </div>
       <div v-if="state.sessionId" class="flex gap-4">
@@ -168,7 +168,8 @@ function composerRoot(): HTMLElement | null {
           enter-from-class="translate-y-1.5 opacity-0"
         >
           <ConversationView v-if="state.view === 'chat'" :composer-of="composerRoot" />
-          <TraceView v-else />
+          <TraceView v-else-if="state.view === 'trace'" />
+          <StatsView v-else />
         </Transition>
 
         <!-- min-h-0: a tall decision panel shrinks into the room left above the

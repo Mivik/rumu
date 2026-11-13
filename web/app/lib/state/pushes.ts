@@ -3,7 +3,13 @@
 // modules rather than mutating anything itself (beyond its own slices).
 
 import { rumu } from '../api'
-import { commitRoute, pageFromLocation, sessionIdFromLocation, viewFromLocation } from '../router'
+import {
+  commitRoute,
+  pageFromLocation,
+  rangeFromLocation,
+  sessionIdFromLocation,
+  viewFromLocation,
+} from '../router'
 import type {
   BranchUpdatedPush,
   PendingDecision,
@@ -280,6 +286,7 @@ export function startApp(): void {
   // while the boot requests are in flight.
   state.booting = sessionIdFromLocation() !== null
   state.view = viewFromLocation()
+  state.statsRange = rangeFromLocation()
   state.page = pageFromLocation()
 
   rumu.onPush('node.appended', (p) => onNodeAppended(p as unknown as NodeAppendedPush))
@@ -334,6 +341,7 @@ export function startApp(): void {
     if (state.page) return
     const id = sessionIdFromLocation()
     state.view = viewFromLocation()
+    state.statsRange = rangeFromLocation()
     if (id === state.sessionId) return
     if (id) void openSession(id, { history: 'none' })
     else closeSession()

@@ -116,7 +116,8 @@
   "view": {
     "label": "视图",
     "chat": "对话",
-    "trace": "轨迹"
+    "trace": "轨迹",
+    "stats": "统计"
   },
   "trace": {
     "empty": "还没有节点",

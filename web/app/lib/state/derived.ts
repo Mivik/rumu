@@ -5,7 +5,7 @@ import { rumu } from '../api'
 import type { Branch, BranchId, Node, NodeId, SessionInfo, TaskInfo } from '../types'
 import type { TurnError } from '../generated/TurnError'
 import { TURN_ERROR_TAG } from '../types'
-import type { DeltaBuffer, TurnCache } from './state'
+import type { DeltaBuffer } from './state'
 import { state } from './state'
 
 export const connected = rumu.connected
@@ -103,42 +103,6 @@ export const branchTasks = computed<TaskInfo[]>(() => {
 
 /** Still-running tasks of the active branch. */
 export const runningTasks = computed(() => branchTasks.value.filter((t) => t.status === 'running'))
-
-/** Per-turn cache numbers for assistant nodes on the active path. */
-export const cacheTurns = computed<TurnCache[]>(() => {
-  let i = 0
-  return pathNodes.value
-    .filter((n) => n.body.type === 'assistant')
-    .map((n) => {
-      const b = n.body as Extract<Node['body'], { type: 'assistant' }>
-      return {
-        nodeId: n.id,
-        index: ++i,
-        prompt: b.usage.prompt_tokens,
-        cached: b.usage.cached_tokens,
-        creation: b.usage.cache_creation_tokens,
-        completion: b.usage.completion_tokens,
-      }
-    })
-})
-
-/** Session-total cache numbers across ALL branches (whole tree). */
-export const cacheTotal = computed(() => {
-  let prompt = 0
-  let cached = 0
-  let creation = 0
-  let completion = 0
-  let turns = 0
-  for (const n of Object.values(state.nodes)) {
-    if (n.body.type !== 'assistant') continue
-    turns += 1
-    prompt += n.body.usage.prompt_tokens
-    cached += n.body.usage.cached_tokens
-    creation += n.body.usage.cache_creation_tokens
-    completion += n.body.usage.completion_tokens
-  }
-  return { prompt, cached, creation, completion, turns }
-})
 
 export interface SiblingAlternative {
   /** Branch to activate when it is picked. */

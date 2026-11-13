@@ -10,7 +10,6 @@ import enAssistants from './en/assistants.json'
 import enChat from './en/chat.json'
 import enCommon from './en/common.json'
 import enErrors from './en/errors.json'
-import enPanels from './en/panels.json'
 import enTools from './en/tools.json'
 import enUsage from './en/usage.json'
 import enSettings from './en/settings.json'
@@ -23,7 +22,6 @@ import zhAssistants from './zh-CN/assistants.json'
 import zhChat from './zh-CN/chat.json'
 import zhCommon from './zh-CN/common.json'
 import zhErrors from './zh-CN/errors.json'
-import zhPanels from './zh-CN/panels.json'
 import zhTools from './zh-CN/tools.json'
 import zhUsage from './zh-CN/usage.json'
 import zhSettings from './zh-CN/settings.json'
@@ -37,7 +35,6 @@ const en = {
   tools: enTools,
   cards: enCards,
   library: enLibrary,
-  panels: enPanels,
   usage: enUsage,
   workspaces: enWorkspaces,
   projects: enProjects,
@@ -52,7 +49,6 @@ const zhCN = {
   tools: zhTools,
   cards: zhCards,
   library: zhLibrary,
-  panels: zhPanels,
   usage: zhUsage,
   workspaces: zhWorkspaces,
   projects: zhProjects,

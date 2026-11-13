@@ -1,6 +1,6 @@
 <script setup lang="ts">
-// The open session's views as tabs along the header's foot: the conversation
-// and its raw trajectory. The pick lives in the address (`?view=`), so Back
+// The open session's views as tabs along the header's foot: the conversation,
+// its raw trajectory and its usage statistics. The pick lives in the address (`?view=`), so Back
 // and a refresh keep it.
 import { t } from '../../i18n'
 import type { SessionView } from '../../lib/router'
@@ -10,6 +10,7 @@ import Icon from '../ui/Icon.vue'
 const views: { id: SessionView; icon: string }[] = [
   { id: 'chat', icon: 'chat' },
   { id: 'trace', icon: 'trace' },
+  { id: 'stats', icon: 'stats' },
 ]
 </script>
 

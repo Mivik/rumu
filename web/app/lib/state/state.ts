@@ -2,7 +2,7 @@
 // every mutation has an owner in one of the sibling modules.
 
 import { reactive } from 'vue'
-import type { PageRoute, SessionView } from '../router'
+import type { PageRoute, SessionView, StatsRange } from '../router'
 import type {
   Artifact,
   Decision,
@@ -95,15 +95,6 @@ export interface DeltaBuffer {
   early?: LlmDeltaPush[]
 }
 
-export interface TurnCache {
-  nodeId: NodeId
-  index: number
-  prompt: number
-  cached: number
-  creation: number
-  completion: number
-}
-
 /** An automatic retry of a model call in flight (`turn.retrying` push). */
 export interface RetryState {
   attempt: number
@@ -156,6 +147,8 @@ const initial = {
   booting: false,
   /** How the open session is shown (mirrored in the address). */
   view: 'chat' as SessionView,
+  /** The replies the stats view narrows to; null for the whole path. */
+  statsRange: null as StatsRange | null,
   /** The management page over the session, if any (mirrored in the
    *  address); the session stays loaded beneath it. */
   page: null as PageRoute | null,

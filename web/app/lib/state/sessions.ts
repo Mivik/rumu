@@ -4,7 +4,7 @@ import { watch } from 'vue'
 import { rumu } from '../api'
 import { t } from '../../i18n'
 import { commitRoute } from '../router'
-import type { SessionView } from '../router'
+import type { SessionView, StatsRange } from '../router'
 import type {
   Branch,
   BranchId,
@@ -184,8 +184,16 @@ export function goHome(): void {
 
 /** Show the open session another way; Back returns to the previous view. */
 export function showView(view: SessionView): void {
-  if (state.view === view) return
+  if (state.view === view && !state.statsRange) return
   state.view = view
+  state.statsRange = null
+  commitRoute('push')
+}
+
+/** The stats view, narrowed to `range` (the whole path when null). */
+export function showStats(range: StatsRange | null): void {
+  state.view = 'stats'
+  state.statsRange = range
   commitRoute('push')
 }
 
@@ -194,6 +202,7 @@ export function closeSession(): void {
   openSeq++ // drop any in-flight open
   state.booting = false // and any boot into a session URL still pending
   state.view = 'chat'
+  state.statsRange = null
   state.sessionId = null
   state.session = null
   state.nodes = {}

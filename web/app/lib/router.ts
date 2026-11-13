@@ -16,9 +16,16 @@ import { state } from './state/state'
 
 const SESSION_PATH = /^\/s\/([^/]+)\/?$/
 
-/** The ways to look at an open session: the conversation, or the raw
- *  trajectory of its nodes. */
-export type SessionView = 'chat' | 'trace'
+/** The ways to look at an open session: the conversation, the raw
+ *  trajectory of its nodes, or its usage statistics. */
+export type SessionView = 'chat' | 'trace' | 'stats'
+
+/** Replies the stats view narrows to, by their first model call's node id
+ *  (`?from=&to=`); `to` may equal `from`. */
+export interface StatsRange {
+  from: string
+  to: string
+}
 
 export const PAGES = ['decks', 'workspaces', 'assistants', 'projects', 'settings'] as const
 export type Page = (typeof PAGES)[number]
@@ -49,7 +56,15 @@ export function sessionIdFromLocation(): string | null {
 
 /** The view named by the current address (the conversation when none is). */
 export function viewFromLocation(): SessionView {
-  return new URLSearchParams(window.location.search).get('view') === 'trace' ? 'trace' : 'chat'
+  const v = new URLSearchParams(window.location.search).get('view')
+  return v === 'trace' || v === 'stats' ? v : 'chat'
+}
+
+/** The stats range named by the current address, if any. */
+export function rangeFromLocation(): StatsRange | null {
+  const q = new URLSearchParams(window.location.search)
+  const from = q.get('from')
+  return q.get('view') === 'stats' && from ? { from, to: q.get('to') ?? from } : null
 }
 
 /** The page named by the current address, if any. */
@@ -70,7 +85,14 @@ function currentUrl(): string {
   }
   const id = state.sessionId
   if (!id) return '/'
-  return `/s/${encodeURIComponent(id)}${state.view === 'chat' ? '' : `?view=${state.view}`}`
+  if (state.view === 'chat') return `/s/${encodeURIComponent(id)}`
+  const q = new URLSearchParams({ view: state.view })
+  const range = state.view === 'stats' ? state.statsRange : null
+  if (range) {
+    q.set('from', range.from)
+    if (range.to !== range.from) q.set('to', range.to)
+  }
+  return `/s/${encodeURIComponent(id)}?${q}`
 }
 
 /** Write the state into the address bar (no-op when it already matches).

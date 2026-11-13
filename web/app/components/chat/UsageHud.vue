@@ -1,8 +1,9 @@
 <script setup lang="ts">
-// Per-reply usage line: a quiet "N tok · X tok/s" under an assistant turn.
-// Hover, focus or tap opens a record card for the latest request (model, time,
-// tokens, cache, latency, speed, and the turn's totals); the model opens its
-// provider in settings.
+// Per-reply usage line under an assistant turn: "time · N calls · output".
+// Hover or focus opens a card for the whole reply — its totals, where the
+// time went, and every model call as a column (CallBars); a click opens the
+// stats view at this reply. In a sub-agent's panel, which the stats view does
+// not cover, a click pins the card instead.
 //
 // Hovering waits OPEN_DELAY before opening, so sweeping the pointer across the
 // timeline does not flash the card; focus and tap open immediately.
@@ -16,16 +17,16 @@ import type { CSSProperties, Ref } from 'vue'
 import { autoUpdate, flip, offset, shift, useFloating } from '@floating-ui/vue'
 import { showModel } from '../../lib/layout'
 import { modelByRef } from '../../lib/state/models'
-import { useBranchView } from '../../lib/store'
+import { repliesOf, showStats, summarize, useBranchView } from '../../lib/store'
 import type { TimelineGroup } from '../../lib/store'
-import type { Node as RumuNode } from '../../lib/types'
 import { fmtDuration, fmtTokens } from '../../lib/util'
+import CallBars from '../stats/CallBars.vue'
+import TimeSplit from '../stats/TimeSplit.vue'
+import TokenChips from '../stats/TokenChips.vue'
 import Icon from '../ui/Icon.vue'
 
 const props = defineProps<{ group: TimelineGroup }>()
-const pathNodes = useBranchView().nodes
-
-type AsstBody = Extract<RumuNode['body'], { type: 'assistant' }>
+const view = useBranchView()
 
 const TIP_ID = `usage-hud-${useId()}`
 
@@ -61,7 +62,7 @@ function enter(): void {
   }, OPEN_DELAY)
 }
 
-/** Focus and tap: no dwell, since there is no accidental sweep to guard against. */
+/** Focus: no dwell, since there is no accidental sweep to guard against. */
 function enterNow(): void {
   cancelOpen()
   if (closeTimer !== null) {
@@ -80,10 +81,10 @@ function leave(): void {
   }, 140)
 }
 
-/** Tap toggles the pinned card; drop any pending dwell so it cannot reopen later. */
-function togglePin(): void {
+function close(): void {
   cancelOpen()
-  pinned.value = !pinned.value
+  hover.value = false
+  pinned.value = false
 }
 
 function onDocPointer(e: PointerEvent): void {
@@ -101,158 +102,79 @@ onBeforeUnmount(() => {
   document.removeEventListener('pointerdown', onDocPointer, true)
 })
 
-// ---- the latest request of this reply ----
+// ---- the reply ----
 
-const stats = computed(() => {
-  const assistants = props.group.assistants
-  const node = assistants[assistants.length - 1]
-  if (!node) return null
-  const body = node.body as AsstBody
-  const usage = body.usage
-
-  // The prompt that opened this turn: end-to-end runs prompt → this reply.
-  // A branch without a prompt of its own (a sub-agent child) has no turn start.
-  const nodes = pathNodes.value
-  let at = -1
-  for (let i = nodes.length - 1; i >= 0; i--) {
-    if (nodes[i].id === node.id) {
-      at = i
-      break
-    }
-  }
-  let start = -1
-  if (at >= 0) {
-    for (let i = at; i >= 0; i--) {
-      if (nodes[i].body.type === 'user') {
-        start = i
-        break
-      }
-    }
-  }
-  const endToEnd = start >= 0 ? Math.max(0, node.at - nodes[start].at) : null
-
-  // Totals of every step in the turn.
-  let prompt = 0
-  let completion = 0
-  let genMs = 0
-  let haveGen = false
-  for (const n of assistants) {
-    const b = n.body as AsstBody
-    prompt += b.usage.prompt_tokens
-    completion += b.usage.completion_tokens
-    if (n.dur_ms != null) {
-      genMs += n.dur_ms
-      haveGen = true
-    }
-  }
-
-  const dur = node.dur_ms
-  const rate =
-    dur != null && dur > 0 && usage.completion_tokens > 0 ? (usage.completion_tokens * 1000) / dur : null
-  const cachePct =
-    usage.prompt_tokens > 0 ? Math.round((usage.cached_tokens * 100) / usage.prompt_tokens) : null
-
-  return {
-    node,
-    body,
-    usage,
-    dur: dur ?? null,
-    rate,
-    cachePct,
-    endToEnd,
-    generation: haveGen ? genMs : null,
-    calls: assistants.length,
-    turn: { prompt, completion },
-  }
+const reply = computed(() => {
+  const first = props.group.assistants[0]
+  if (!first) return null
+  return repliesOf(view.nodes.value).find((r) => r.id === first.id) ?? null
 })
+const sum = computed(() => (reply.value ? summarize([reply.value]) : null))
 
 /** No usage on the path (a fresh branch): drop any open/pinned state. */
-watch(stats, (s) => {
-  if (!s) {
-    cancelOpen()
-    hover.value = false
-    pinned.value = false
-  }
+watch(reply, (r) => {
+  if (!r) close()
 })
 
-/** The model's catalog name; the id when it is no longer enabled. */
-const modelName = computed(() => {
-  const ref = stats.value?.body.model ?? ''
-  return modelByRef(ref)?.name ?? ref.slice(ref.indexOf('/') + 1)
+function onClick(): void {
+  if (view.sub) {
+    cancelOpen()
+    pinned.value = !pinned.value
+    return
+  }
+  const r = reply.value
+  if (!r) return
+  close()
+  showStats({ from: r.id, to: r.id })
+}
+
+/** The reply's most used model, by catalog name (the id when no longer enabled). */
+const model = computed(() => {
+  const ref = sum.value?.models[0]?.ref ?? ''
+  const info = modelByRef(ref)
+  return { ref, name: info?.name ?? ref.slice(ref.indexOf('/') + 1), context: info?.context ?? null }
 })
 
 function openModel(): void {
-  if (!stats.value) return
-  cancelOpen()
-  hover.value = false
-  pinned.value = false
-  showModel(stats.value.body.model)
+  close()
+  showModel(model.value.ref)
 }
 
 const whenText = computed(() => {
-  const s = stats.value
-  if (!s) return ''
-  return new Date(s.node.at).toLocaleString(undefined, {
-    year: 'numeric',
+  const last = reply.value?.calls.at(-1)
+  if (!last) return ''
+  return new Date(last.node.at).toLocaleString(undefined, {
     month: 'short',
     day: 'numeric',
     hour: '2-digit',
     minute: '2-digit',
-    second: '2-digit',
   })
 })
 
-function num(n: number): string {
-  return n.toLocaleString()
-}
-
-function fmtRate(rate: number): string {
-  return rate >= 10 ? String(Math.round(rate)) : rate.toFixed(1)
-}
-
-const rateText = computed(() => {
-  const s = stats.value
-  if (!s || s.rate === null) return '—'
-  return t('usage.tokPerSecond', { rate: fmtRate(s.rate) })
-})
-
-const headline = computed(() => {
-  const s = stats.value
+const tiles = computed(() => {
+  const s = sum.value
   if (!s) return []
   return [
-    { label: t('usage.input'), value: num(s.usage.prompt_tokens), unit: t('usage.unitTokens') },
-    { label: t('usage.output'), value: num(s.usage.completion_tokens), unit: t('usage.unitTokens') },
+    { label: t('usage.time'), value: fmtDuration(s.activeMs), unit: '' },
+    { label: t('usage.output'), value: fmtTokens(s.output), unit: t('usage.unitTokens') },
+    { label: t('usage.ttft'), value: s.avgTtftMs === null ? '—' : fmtDuration(s.avgTtftMs), unit: '' },
     {
-      label: t('usage.speed'),
-      value: s.rate === null ? '—' : fmtRate(s.rate),
-      unit: s.rate === null ? '' : t('usage.unitRate'),
+      label: t('usage.hitRate'),
+      value: s.hitRate === null ? '—' : `${Math.round(s.hitRate * 100)}%`,
+      unit: '',
     },
   ]
 })
 
-const details = computed(() => {
-  const s = stats.value
+/** What went wrong on the way, if anything. */
+const troubles = computed(() => {
+  const s = sum.value
   if (!s) return []
-  return [
-    {
-      label: t('usage.cacheRead'),
-      value: s.cachePct === null ? '—' : `${num(s.usage.cached_tokens)} (${s.cachePct}%)`,
-    },
-    {
-      label: t('usage.cacheWrite'),
-      value: `${num(s.usage.cache_creation_tokens)} ${t('usage.unitTokens')}`,
-    },
-    { label: t('usage.latency'), value: s.dur === null ? '—' : fmtDuration(s.dur) },
-    { label: t('usage.endToEnd'), value: s.endToEnd === null ? '—' : fmtDuration(s.endToEnd) },
-    { label: t('usage.generation'), value: s.generation === null ? '—' : fmtDuration(s.generation) },
-    { label: t('usage.modelCalls'), value: String(s.calls) },
-  ]
-})
-
-const turnTokens = computed(() => {
-  const s = stats.value
-  if (!s) return ''
-  return t('usage.inOut', { input: num(s.turn.prompt), output: num(s.turn.completion) })
+  const out: string[] = []
+  if (s.retries) out.push(`${t('usage.retries')} ${s.retries}`)
+  if (s.failures) out.push(t('usage.failures', { n: s.failures }))
+  if (s.resets) out.push(t('usage.resets', { n: s.resets, count: s.resets }))
+  return out
 })
 
 // ---- placement ----
@@ -287,14 +209,14 @@ const tipStyle = computed<CSSProperties>(() => ({
 
 <template>
   <div
-    v-if="stats"
+    v-if="reply && sum"
     ref="pill"
     class="relative inline-flex"
     @mouseenter="enter"
     @mouseleave="leave"
     @focusin="enterNow"
     @focusout="leave"
-    @keydown.escape="pinned = false"
+    @keydown.escape="close"
   >
     <button
       type="button"
@@ -302,13 +224,16 @@ const tipStyle = computed<CSSProperties>(() => ({
       :aria-label="t('usage.aria')"
       :aria-expanded="open"
       :aria-describedby="open ? TIP_ID : undefined"
-      @click="togglePin"
+      @click="onClick"
     >
-      <span class="font-bold text-ink-2">{{
-        t('usage.tokens', { n: fmtTokens(stats.usage.completion_tokens) })
-      }}</span>
+      <span class="font-bold text-ink-2">{{ fmtDuration(sum.activeMs) }}</span>
+      <template v-if="sum.calls > 1">
+        <span aria-hidden="true" class="h-3 w-px bg-line" />
+        <span>{{ t('usage.calls', { n: sum.calls, count: sum.calls }) }}</span>
+      </template>
       <span aria-hidden="true" class="h-3 w-px bg-line" />
-      <span>{{ rateText }}</span>
+      <span>{{ t('usage.tokens', { n: fmtTokens(sum.output) }) }}</span>
+      <span v-if="troubles.length" class="size-1.5 rounded-full bg-warn" aria-hidden="true" />
     </button>
 
     <Teleport to="body">
@@ -324,12 +249,12 @@ const tipStyle = computed<CSSProperties>(() => ({
           ref="tip"
           role="tooltip"
           :style="tipStyle"
-          class="z-30 w-[22rem] max-w-[calc(100vw-2rem)] rounded-card border border-line-soft bg-surface p-3 shadow-pop"
+          class="z-30 w-[25rem] max-w-[calc(100vw-2rem)] rounded-card border border-line-soft bg-surface p-3 shadow-pop"
           @mouseenter="enter"
           @mouseleave="leave"
         >
-          <!-- record header: the request's model, to its settings -->
-          <div class="flex">
+          <!-- the model, to its settings; when the reply ended -->
+          <div class="flex items-start gap-2">
             <button
               type="button"
               class="group flex min-w-0 flex-col items-start rounded-control px-1 py-0.5 text-left transition-colors hover:bg-surface-2"
@@ -337,42 +262,63 @@ const tipStyle = computed<CSSProperties>(() => ({
               @click="openModel"
             >
               <span class="flex max-w-full items-center gap-1 text-meta font-semibold text-ink">
-                <span class="truncate">{{ modelName }}</span>
+                <span class="truncate">{{ model.name }}</span>
+                <span v-if="sum.models.length > 1" class="flex-none text-ink-3"
+                  >+{{ sum.models.length - 1 }}</span
+                >
                 <Icon
                   name="chevron"
                   :size="12"
                   class="flex-none text-ink-3 opacity-0 transition-opacity group-hover:opacity-100"
                 />
               </span>
-              <span class="max-w-full truncate font-mono text-micro text-ink-3">{{ stats.body.model }}</span>
+              <span class="max-w-full truncate font-mono text-micro text-ink-3">{{ model.ref }}</span>
             </button>
+            <span class="ml-auto flex-none pt-0.5 text-micro tabular-nums text-ink-3">{{ whenText }}</span>
           </div>
 
-          <!-- the three numbers worth reading at a glance -->
-          <div class="mt-2.5 grid grid-cols-3 gap-1.5">
-            <div v-for="f in headline" :key="f.label" class="rounded-control bg-surface-2 px-2.5 py-2">
-              <div class="text-micro text-ink-3">{{ f.label }}</div>
-              <div class="mt-0.5 flex items-baseline gap-1">
+          <div class="mt-2.5 grid grid-cols-4 gap-1.5">
+            <div v-for="f in tiles" :key="f.label" class="min-w-0 rounded-control bg-surface-2 px-2.5 py-2">
+              <div class="truncate text-micro text-ink-3">{{ f.label }}</div>
+              <div class="mt-0.5 flex items-baseline gap-0.5 whitespace-nowrap">
                 <span class="text-message leading-none font-black tabular-nums text-ink">{{ f.value }}</span>
                 <span v-if="f.unit" class="text-micro font-semibold text-ink-3">{{ f.unit }}</span>
               </div>
             </div>
           </div>
 
-          <dl class="mt-3 grid grid-cols-2 gap-x-3 gap-y-2.5 px-1">
-            <div v-for="d in details" :key="d.label">
-              <dt class="text-micro text-ink-3">{{ d.label }}</dt>
-              <dd class="mt-0.5 text-meta font-semibold tabular-nums text-ink">{{ d.value }}</dd>
-            </div>
-            <!-- Single-step turns repeat the headline numbers; only sum when there is more. -->
-            <div v-if="stats.calls > 1" class="col-span-2">
-              <dt class="text-micro text-ink-3">{{ t('usage.turn') }} · {{ t('usage.tokensLabel') }}</dt>
-              <dd class="mt-0.5 text-meta font-semibold tabular-nums text-ink">{{ turnTokens }}</dd>
-            </div>
-          </dl>
+          <TimeSplit :summary="sum" class="mt-3 px-1" />
 
-          <div class="mt-3 border-t border-line-soft px-1 pt-2 text-micro tabular-nums text-ink-3">
-            {{ whenText }}
+          <CallBars :calls="reply.calls" class="mt-3 px-1">
+            <template #idle>
+              <div class="text-meta text-ink">
+                <span class="font-semibold">{{ t('usage.input') }}</span>
+                {{ ' ' }}<span class="tabular-nums">{{ sum.input.toLocaleString() }}</span>
+                <span class="text-ink-3">
+                  · {{ t('usage.context') }} {{ fmtTokens(sum.lastInput)
+                  }}<template v-if="model.context"> / {{ fmtTokens(model.context) }}</template>
+                </span>
+              </div>
+              <TokenChips
+                :cached="sum.cached"
+                :written="sum.written"
+                :uncached="Math.max(0, sum.input - sum.cached - sum.written)"
+                :output="sum.output"
+              />
+            </template>
+          </CallBars>
+
+          <div v-if="troubles.length || !view.sub" class="mt-1 flex items-center gap-2 px-1">
+            <span v-if="troubles.length" class="text-micro text-warn">{{ troubles.join(' · ') }}</span>
+            <button
+              v-if="!view.sub"
+              type="button"
+              class="-mr-1 ml-auto inline-flex items-center gap-0.5 rounded-control px-1.5 py-0.5 text-micro font-semibold text-ink-2 transition-colors hover:bg-surface-2 hover:text-ink"
+              @click="onClick"
+            >
+              {{ t('usage.open') }}
+              <Icon name="chevron" :size="12" />
+            </button>
           </div>
         </div>
       </Transition>

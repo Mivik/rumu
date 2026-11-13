@@ -10,14 +10,12 @@
 //   pushes.ts   WebSocket pushes + boot
 
 export { state } from './state/state'
-export type { DeltaBuffer, HookTraceEntry, RetryState, Toast, TurnCache } from './state/state'
+export type { DeltaBuffer, HookTraceEntry, RetryState, Toast } from './state/state'
 export type { CardWindow } from './state/state'
 
 export {
   activeDelta,
   branchTasks,
-  cacheTotal,
-  cacheTurns,
   callsOf,
   callsOnPath,
   connected,
@@ -35,6 +33,8 @@ export {
 export type { OwedReply, SiblingAlternative } from './state/derived'
 
 export { buildTimeline, compactionOf, timeline } from './state/timeline'
+export { callRate, repliesOf, summarize } from './state/stats'
+export type { CallStat, ReplyStat, Summary } from './state/stats'
 export { openAgentView, provideBranchView, useBranchView } from './state/branchView'
 export type { BranchView } from './state/branchView'
 export { trace } from './state/trace'
@@ -101,6 +101,7 @@ export {
   forkSession,
   forgetSession,
   goHome,
+  showStats,
   showView,
   killTask,
   newSession,
