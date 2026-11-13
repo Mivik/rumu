@@ -1,11 +1,12 @@
 // Following links in rendered markdown (lib/markdown.ts makes the anchors):
 // `@rumu:` addresses open what they name, links inside a card body open cards
-// of the same deck, and a workspace address rumu cannot open (`@scratch:`,
-// `proj:`) is copied instead.
+// of the same deck, a workspace file shown on this path opens its artifact,
+// and an address nothing here shows is copied instead.
 
 import { t } from '../i18n'
+import { artifactsOnPath, showArtifact } from './artifacts'
 import { cardById, mountedRef } from './cards'
-import { closePage } from './router'
+import { closePage, openPage } from './router'
 import {
   closeDrawer,
   openCard,
@@ -18,6 +19,7 @@ import {
   state,
 } from './store'
 import { toast } from './state/ui'
+import type { Page } from './router'
 import type { LibraryRef } from './types'
 import { copyText } from './util'
 
@@ -81,7 +83,16 @@ function openAddress(abs: string): boolean {
       )
     case 'sessions': {
       const sid = segs[0]
-      if (!sid || sid === 'by-assistant') return false
+      // `/sessions/by-assistant/<deck>`: the assistant.
+      if (sid === 'by-assistant') {
+        const id = segs[1]
+        return go(
+          'assistants',
+          id ?? null,
+          state.assistants.some((a) => a.id === id),
+        )
+      }
+      if (!sid) return false
       closeDrawer()
       // A failed open reports itself; a page gives way once it loads.
       void openSession(sid)
@@ -95,8 +106,45 @@ function openAddress(abs: string): boolean {
       if (state.taskDetail !== id) openTaskDetail(id)
       return true
     }
+    case 'workspaces':
+      return go(
+        'workspaces',
+        segs[0] ?? null,
+        state.workspaces.some((w) => w.name === segs[0]),
+      )
+    // `/project/workspaces`: the session's project, workspaces and all.
+    case 'project': {
+      const id = state.pathState?.project
+      return go('projects', id ?? null, !!id)
+    }
+    case 'skills':
+      return go('settings', 'skills')
+    case 'tools':
+      return go('settings', 'mcp')
   }
   return false
+}
+
+/** Open a page at `item` when it names one, else the page's list. */
+function go(page: Page, item: string | null, known = true): true {
+  closeDrawer()
+  if (item && known) openPage(page, item)
+  else openPage(page === 'workspaces' ? 'projects' : page)
+  return true
+}
+
+/** `ws:path`: the latest snapshot of it shown on this path; `ws:` alone: the
+ *  registered workspace. False when neither. */
+function openWorkspaceAddress(address: string): boolean {
+  const versions = artifactsOnPath.value.get(address.replace(/:\.\//, ':'))
+  if (versions?.length) {
+    closeDrawer()
+    closePage()
+    showArtifact(versions.at(-1)!.node.id)
+    return true
+  }
+  const m = /^([^:]+):\/?$/.exec(address)
+  return !!m && state.workspaces.some((w) => w.name === m[1]) && go('workspaces', m[1]!)
 }
 
 async function copyAddress(address: string): Promise<void> {
@@ -110,7 +158,8 @@ export function followLink(link: HTMLAnchorElement): boolean {
   if (cardDeck && cardPath) openDeckCard({ deck: cardDeck, path: cardPath })
   else if (abs !== undefined) {
     if (!openAddress(abs)) void copyAddress(`@rumu:${abs}`)
-  } else if (wsRef !== undefined) void copyAddress(wsRef)
-  else return false
+  } else if (wsRef !== undefined) {
+    if (!openWorkspaceAddress(wsRef)) void copyAddress(wsRef)
+  } else return false
   return true
 }
