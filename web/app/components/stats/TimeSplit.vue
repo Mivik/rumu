@@ -1,7 +1,8 @@
 <script setup lang="ts">
 // Where the time of a reply (or a range of them) went: one bar split into the
-// model, the tools and everything between, labeled below, with the
-// generation speed at the end of the legend.
+// model's wait for its first token, its generation, the tools and everything
+// between, labeled below, with the generation speed at the end of the legend.
+// The two model parts share the coral, the wait as its tint.
 import { computed } from 'vue'
 import { t } from '../../i18n'
 import type { Summary } from '../../lib/store'
@@ -11,7 +12,8 @@ const props = defineProps<{ summary: Summary }>()
 
 const parts = computed(() =>
   [
-    { key: 'model', label: t('usage.model'), ms: props.summary.modelMs, cls: 'bg-brand' },
+    { key: 'wait', label: t('usage.wait'), ms: props.summary.waitMs, cls: 'bg-brand/40' },
+    { key: 'gen', label: t('usage.gen'), ms: props.summary.genMs, cls: 'bg-brand' },
     { key: 'tool', label: t('usage.tool'), ms: props.summary.toolMs, cls: 'bg-tool' },
     { key: 'other', label: t('usage.other'), ms: props.summary.otherMs, cls: 'bg-line' },
   ].filter((p) => p.ms > 0),

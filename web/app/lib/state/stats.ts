@@ -51,9 +51,13 @@ export interface ReplyStat {
 export interface Summary {
   replies: number
   calls: number
-  /** model + tool + other. */
+  /** wait + gen + tool + other. */
   activeMs: number
-  modelMs: number
+  /** Model calls before their first token (queue, prefill, network). Calls
+   *  recorded without a first-token time count wholly as generation. */
+  waitMs: number
+  /** Model calls from their first token on (reasoning and output). */
+  genMs: number
   toolMs: number
   otherMs: number
   input: number
@@ -171,7 +175,8 @@ export function summarize(replies: ReplyStat[]): Summary {
     replies: replies.length,
     calls: 0,
     activeMs: 0,
-    modelMs: 0,
+    waitMs: 0,
+    genMs: 0,
     toolMs: 0,
     otherMs: 0,
     input: 0,
@@ -194,8 +199,9 @@ export function summarize(replies: ReplyStat[]): Summary {
   // Generation time: after the first token where it is known, else the call.
   let genOut = 0
   let genMs = 0
+  let modelMs = 0
   for (const r of replies) {
-    s.modelMs += r.modelMs
+    modelMs += r.modelMs
     s.toolMs += r.toolMs
     s.otherMs += r.otherMs
     s.failures += r.failures
@@ -214,7 +220,9 @@ export function summarize(replies: ReplyStat[]): Summary {
         s.maxTtftMs = Math.max(s.maxTtftMs ?? 0, c.ttftMs)
       }
       if (c.durMs !== null) {
-        const ms = c.durMs - (c.ttftMs ?? 0)
+        const wait = Math.min(c.ttftMs ?? 0, c.durMs)
+        s.waitMs += wait
+        const ms = c.durMs - wait
         if (ms > 0) {
           genOut += c.output
           genMs += ms
@@ -223,7 +231,8 @@ export function summarize(replies: ReplyStat[]): Summary {
       s.lastInput = c.input
     }
   }
-  s.activeMs = s.modelMs + s.toolMs + s.otherMs
+  s.genMs = Math.max(0, modelMs - s.waitMs)
+  s.activeMs = modelMs + s.toolMs + s.otherMs
   s.hitRate = s.input > 0 ? s.cached / s.input : null
   s.avgTtftMs = ttftN > 0 ? ttftSum / ttftN : null
   s.rate = genMs > 0 && genOut > 0 ? (genOut * 1000) / genMs : null
