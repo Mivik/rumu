@@ -221,7 +221,7 @@ const tipStyle = computed<CSSProperties>(() => ({
   >
     <button
       type="button"
-      class="-mx-1 inline-flex h-5 items-center gap-1.5 rounded-control px-1 text-micro tabular-nums text-ink-3 transition-colors hover:bg-surface-2 hover:text-ink-2"
+      class="-mx-1 inline-flex h-5 items-center gap-1.5 rounded-control px-1 text-micro whitespace-nowrap tabular-nums text-ink-3 transition-colors hover:bg-surface-2 hover:text-ink-2"
       :aria-label="t('usage.aria')"
       :aria-expanded="open"
       :aria-describedby="open ? TIP_ID : undefined"

@@ -247,10 +247,10 @@ const bare = computed(() => !items.value.length && !props.group.assistants.lengt
     <div v-if="hasBody" class="-mt-0.5 flex min-h-6 items-center gap-2">
       <!-- usage only for a finished turn; the live one is still changing -->
       <UsageHud v-if="!live" :group="group" />
-      <span v-if="!live && changed" class="text-micro text-ink-3 tabular-nums">
-        {{ t('chat.assistant.changed', { count: changed.count }) }}
-        <span class="font-medium text-pine">+{{ changed.added }}</span>
-        <span v-if="changed.removed" class="font-medium text-danger">−{{ changed.removed }}</span>
+      <span v-if="!live && changed" class="flex min-w-0 gap-1 text-micro whitespace-nowrap text-ink-3 tabular-nums">
+        <span class="truncate">{{ t('chat.assistant.changed', { count: changed.count }) }}</span>
+        <span class="flex-none font-medium text-pine">+{{ changed.added }}</span>
+        <span v-if="changed.removed" class="flex-none font-medium text-danger">−{{ changed.removed }}</span>
       </span>
       <span class="flex-1" />
       <span
