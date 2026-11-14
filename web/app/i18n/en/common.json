@@ -27,8 +27,8 @@
   "copiedAddress": "Copied address",
   "time": {
     "justNow": "just now",
-    "minutesAgo": "{n}m ago",
-    "hoursAgo": "{n}h ago",
-    "daysAgo": "{n}d ago"
+    "minutesAgo": "{n}m",
+    "hoursAgo": "{n}h",
+    "daysAgo": "{n}d"
   }
 }

@@ -1,9 +1,9 @@
 import { SCRATCH_WORKSPACE, type Content } from './types'
-import { t } from '../i18n'
+import { locale, t } from '../i18n'
 
 /** Compact relative time: "just now", "5m", "3h", "2d", or a date. */
-export function relTime(ms: number): string {
-  const diff = Date.now() - ms
+export function relTime(ms: number, now = Date.now()): string {
+  const diff = now - ms
   if (diff < 45_000) return t('common.time.justNow')
   const m = Math.round(diff / 60_000)
   if (m < 60) return t('common.time.minutesAgo', { n: m })
@@ -11,7 +11,12 @@ export function relTime(ms: number): string {
   if (h < 24) return t('common.time.hoursAgo', { n: h })
   const d = Math.round(h / 24)
   if (d < 14) return t('common.time.daysAgo', { n: d })
-  return new Date(ms).toLocaleDateString()
+  const at = new Date(ms)
+  return at.toLocaleDateString(locale.value, {
+    month: 'short',
+    day: 'numeric',
+    year: at.getFullYear() === new Date(now).getFullYear() ? undefined : 'numeric',
+  })
 }
 
 /** The frozen text of a content payload (the model-facing projection). */

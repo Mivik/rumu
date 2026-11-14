@@ -2,17 +2,18 @@
 // Left column: the wordmark with the language key beside it, the landing,
 // library, assistants and projects entries, and the sessions grouped by
 // project (a two-level tree). Each project group carries its sessions, newest
-// first; the last group holds the sessions without a project. A drag between
-// groups moves the session. At the foot, the connection status.
+// first, the newest few until "show more"; the last group holds the sessions
+// without a project. A drag between groups moves the session. At the foot,
+// the connection status.
 //
 // Alignment: the column pads 8px; session rows add 12px more, so every line
 // of text starts 20px in from the card's edge on both sides.
 // The wordmark (RumuMark) breathes while a turn runs, goes hollow when the
 // connection drops, and doubles as the way home: clicking it returns to the
 // landing page, as does the new-session button. The open session is a
-// bordered sheet of paper on this one; the rest are plain lines with their
-// last activity time.
-import { computed, ref } from 'vue'
+// bordered sheet of paper on this one; the rest are plain lines. Each row ends
+// in its last activity time, which turns into the row's menu on hover.
+import { computed, onUnmounted, ref } from 'vue'
 import { LOCALE_LABELS, SUPPORTED_LOCALES, locale, setLocale, t } from '../i18n'
 import type { Locale } from '../i18n'
 import {
@@ -36,6 +37,7 @@ import { openPage, sheetOf, type Page } from '../lib/router'
 import { models } from '../lib/state/models'
 import { prefs } from '../lib/state/prefs'
 import { requestComposerFocus } from '../lib/state/ui'
+import { relTime } from '../lib/util'
 import ProjectSeal from './brand/ProjectSeal.vue'
 import RumuCat from './brand/RumuCat.vue'
 import RumuMark from './brand/RumuMark.vue'
@@ -103,6 +105,9 @@ function openGroupSettings(group: Group): void {
 
 interface SessionRow {
   s: SessionInfo
+  /** Compact relative time, shown at the row's end. */
+  ago: string
+  /** The full time, in the row's menu. */
   last: string
 }
 
@@ -174,7 +179,7 @@ const groups = computed<Group[]>(() => {
       }
       map.set(key, group)
     }
-    group.sessions.push({ s, last: lastActive(s) })
+    group.sessions.push({ s, ago: relTime(s.updated_at, now.value), last: lastActive(s) })
     group.activity = Math.max(group.activity, s.updated_at)
   }
   // The landing composer is a new session not created yet: its row sits in
@@ -203,6 +208,32 @@ function collapsed(group: Group): boolean {
 function toggleGroup(group: Group): void {
   prefs.collapsedProjects[group.key] = !collapsed(group)
 }
+
+/** Rows a group shows before "show more": a long project must not push the
+ *  others out of reach. */
+const PEEK = 5
+
+/** Groups unfolded past PEEK, for this page's life. */
+const unfolded = ref(new Set<string>())
+
+/** The newest PEEK rows, plus any older one that is open or waiting on the
+ *  user (hiding those would hide where the user is, or what needs them). */
+function shown(group: Group): SessionRow[] {
+  if (unfolded.value.has(group.key)) return group.sessions
+  return group.sessions.filter(
+    (row, i) => i < PEEK || row.s.id === state.sessionId || waiting.value.has(row.s.id),
+  )
+}
+
+function toggleMore(group: Group): void {
+  const set = unfolded.value
+  if (!set.delete(group.key)) set.add(group.key)
+}
+
+/** Ticks the rows' relative times. */
+const now = ref(Date.now())
+const clock = setInterval(() => (now.value = Date.now()), 30_000)
+onUnmounted(() => clearInterval(clock))
 
 /** The default assistant's sessions carry no assistant label. */
 const defaultAssistant = computed(() => state.assistants.find((a) => a.default)?.id ?? '')
@@ -460,10 +491,10 @@ const otherLocale = computed<Locale>(
           enter-from-class="-translate-y-1 opacity-0"
         >
           <div
-            v-for="row in group.sessions"
+            v-for="row in shown(group)"
             :key="row.s.id"
             draggable="true"
-            class="group flex w-full min-w-0 items-center rounded-control border text-left text-secondary transition-[background-color,border-color,color,box-shadow] duration-200 has-[[aria-expanded=true]]:bg-surface-2/60 has-[:focus-visible]:ring-2 has-[:focus-visible]:ring-brand/25"
+            class="group relative flex w-full min-w-0 items-center rounded-control border text-left text-secondary transition-[background-color,border-color,color,box-shadow] duration-200 has-[[aria-expanded=true]]:bg-surface-2/60 has-[:focus-visible]:ring-2 has-[:focus-visible]:ring-brand/25"
             :class="
               row.s.id === state.sessionId && !state.page
                 ? 'border-line bg-surface-2 font-bold text-ink shadow-soft'
@@ -473,7 +504,7 @@ const otherLocale = computed<Locale>(
             @dragend="endDrag"
           >
             <button
-              class="flex min-w-0 flex-1 items-center gap-2 py-2 pr-1 pl-3 text-left outline-none"
+              class="flex min-w-0 flex-1 items-center gap-2 py-2 pr-2.5 pl-3 text-left outline-none pointer-coarse:pr-10"
               :aria-current="row.s.id === state.sessionId && !state.page ? 'page' : undefined"
               @click="pickSession(row.s.id)"
             >
@@ -498,78 +529,96 @@ const otherLocale = computed<Locale>(
                 class="size-1.5 flex-none rounded-full bg-brand"
                 :title="t('chat.sidebar.unseen')"
               />
+              <!-- the menu takes this place on hover -->
+              <span
+                class="flex-none text-micro font-normal text-ink-3 tabular-nums transition-opacity duration-150 pointer-fine:group-hover:opacity-0 pointer-fine:group-has-[:focus-visible]:opacity-0 pointer-fine:group-has-[[aria-expanded=true]]:opacity-0"
+                >{{ row.ago }}</span
+              >
             </button>
-            <Popover
-              class="mr-1.5 flex-none"
-              :label="pendingDelete === row.s.id ? t('chat.sidebar.delete') : t('chat.sidebar.actions')"
-              placement="bottom-end"
-              menu
-              :role="pendingDelete === row.s.id ? 'dialog' : 'menu'"
-            >
-              <template #trigger="{ open, toggle }">
-                <button
-                  class="icon-btn relative size-6 flex-none opacity-60 transition-opacity duration-150 before:absolute before:-inset-1.5 hover:bg-line-soft/70 hover:text-ink group-hover:opacity-100 focus-visible:opacity-100 aria-expanded:opacity-100"
-                  :aria-label="t('chat.sidebar.actions')"
-                  :title="t('chat.sidebar.actions')"
-                  aria-haspopup="menu"
-                  :aria-expanded="open"
-                  @click.stop="toggleMenu(toggle)"
-                >
-                  <Icon name="more" :size="14" />
-                </button>
-              </template>
-              <template #default="{ close }">
-                <!-- stage one: last activity + the action list -->
-                <template v-if="pendingDelete !== row.s.id">
-                  <p class="px-2.5 pt-1.5 pb-1 text-micro text-ink-3">
-                    {{ t('chat.sidebar.lastActive', { at: row.last }) }}
-                  </p>
-                  <div class="mx-1 mb-1 h-px bg-line-soft/70" />
+            <span class="absolute inset-y-0 right-1.5 flex items-center">
+              <Popover
+                :label="pendingDelete === row.s.id ? t('chat.sidebar.delete') : t('chat.sidebar.actions')"
+                placement="bottom-end"
+                menu
+                :role="pendingDelete === row.s.id ? 'dialog' : 'menu'"
+              >
+                <template #trigger="{ open, toggle }">
                   <button
-                    v-if="titledByModel"
-                    type="button"
-                    role="menuitem"
-                    class="flex w-full items-center gap-2 rounded-control px-2.5 py-1.5 text-left text-secondary text-ink-2 transition-colors duration-150 hover:bg-surface-2 hover:text-ink focus-visible:bg-surface-2 focus-visible:text-ink"
-                    @click="(close(), retitleSession(row.s.id))"
+                    class="icon-btn relative size-6 flex-none transition-opacity duration-150 before:absolute before:-inset-1.5 hover:bg-line-soft/70 hover:text-ink pointer-fine:opacity-0 pointer-fine:group-hover:opacity-100 pointer-fine:group-has-[:focus-visible]:opacity-100 pointer-fine:aria-expanded:opacity-100"
+                    :aria-label="t('chat.sidebar.actions')"
+                    :title="t('chat.sidebar.actions')"
+                    aria-haspopup="menu"
+                    :aria-expanded="open"
+                    @click.stop="toggleMenu(toggle)"
                   >
-                    <Icon name="regenerate" :size="14" />
-                    {{ t('chat.sidebar.retitle') }}
-                  </button>
-                  <button
-                    type="button"
-                    role="menuitem"
-                    class="flex w-full items-center gap-2 rounded-control px-2.5 py-1.5 text-left text-secondary text-ink-2 transition-colors duration-150 hover:bg-danger-soft hover:text-danger focus-visible:bg-danger-soft focus-visible:text-danger"
-                    @click="askDelete(row.s.id)"
-                  >
-                    <Icon name="trash" :size="14" />
-                    {{ t('chat.sidebar.delete') }}
+                    <Icon name="more" :size="14" />
                   </button>
                 </template>
-                <!-- stage two: confirmation, in place -->
-                <div v-else class="px-2.5 py-2">
-                  <p class="text-secondary text-ink-2">{{ t('chat.sidebar.deletePrompt') }}</p>
-                  <p class="mt-1 text-micro text-ink-3">{{ t('chat.sidebar.deleteWarning') }}</p>
-                  <div class="mt-2 flex items-center justify-end gap-3">
+                <template #default="{ close }">
+                  <!-- stage one: last activity + the action list -->
+                  <template v-if="pendingDelete !== row.s.id">
+                    <p class="px-2.5 pt-1.5 pb-1 text-micro text-ink-3">
+                      {{ t('chat.sidebar.lastActive', { at: row.last }) }}
+                    </p>
+                    <div class="mx-1 mb-1 h-px bg-line-soft/70" />
                     <button
+                      v-if="titledByModel"
                       type="button"
-                      class="text-micro font-semibold text-ink-2 transition-colors hover:text-ink"
-                      @click="cancelDelete"
+                      role="menuitem"
+                      class="flex w-full items-center gap-2 rounded-control px-2.5 py-1.5 text-left text-secondary text-ink-2 transition-colors duration-150 hover:bg-surface-2 hover:text-ink focus-visible:bg-surface-2 focus-visible:text-ink"
+                      @click="(close(), retitleSession(row.s.id))"
                     >
-                      {{ t('common.cancel') }}
+                      <Icon name="regenerate" :size="14" />
+                      {{ t('chat.sidebar.retitle') }}
                     </button>
                     <button
                       type="button"
-                      class="text-micro font-semibold text-danger transition-colors hover:underline"
-                      @click="confirmRemove(row.s.id, close)"
+                      role="menuitem"
+                      class="flex w-full items-center gap-2 rounded-control px-2.5 py-1.5 text-left text-secondary text-ink-2 transition-colors duration-150 hover:bg-danger-soft hover:text-danger focus-visible:bg-danger-soft focus-visible:text-danger"
+                      @click="askDelete(row.s.id)"
                     >
-                      {{ t('chat.sidebar.deleteConfirm') }}
+                      <Icon name="trash" :size="14" />
+                      {{ t('chat.sidebar.delete') }}
                     </button>
+                  </template>
+                  <!-- stage two: confirmation, in place -->
+                  <div v-else class="px-2.5 py-2">
+                    <p class="text-secondary text-ink-2">{{ t('chat.sidebar.deletePrompt') }}</p>
+                    <p class="mt-1 text-micro text-ink-3">{{ t('chat.sidebar.deleteWarning') }}</p>
+                    <div class="mt-2 flex items-center justify-end gap-3">
+                      <button
+                        type="button"
+                        class="text-micro font-semibold text-ink-2 transition-colors hover:text-ink"
+                        @click="cancelDelete"
+                      >
+                        {{ t('common.cancel') }}
+                      </button>
+                      <button
+                        type="button"
+                        class="text-micro font-semibold text-danger transition-colors hover:underline"
+                        @click="confirmRemove(row.s.id, close)"
+                      >
+                        {{ t('chat.sidebar.deleteConfirm') }}
+                      </button>
+                    </div>
                   </div>
-                </div>
-              </template>
-            </Popover>
+                </template>
+              </Popover>
+            </span>
           </div>
         </TransitionGroup>
+        <button
+          v-if="!collapsed(group) && group.sessions.length > PEEK"
+          type="button"
+          class="-mt-1 mb-1 self-start rounded-control py-1 pl-3 pr-2 text-micro text-ink-3 transition-colors duration-150 hover:text-ink-2"
+          @click="toggleMore(group)"
+        >
+          {{
+            unfolded.has(group.key)
+              ? t('chat.sidebar.showLess')
+              : t('chat.sidebar.showMore', { n: group.sessions.length - shown(group).length })
+          }}
+        </button>
       </section>
     </div>
 

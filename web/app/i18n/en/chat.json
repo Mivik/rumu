@@ -12,6 +12,8 @@
     "lastActive": "Last active {at}",
     "actions": "Session actions",
     "noProject": "No project",
+    "showMore": "Show {n} more",
+    "showLess": "Show less",
     "newSession": "New session",
     "projectSettings": "Project settings"
   },

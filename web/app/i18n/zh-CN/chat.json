@@ -12,6 +12,8 @@
     "lastActive": "上次活跃 {at}",
     "actions": "会话操作",
     "noProject": "无项目",
+    "showMore": "再显示 {n} 个",
+    "showLess": "收起",
     "newSession": "新会话",
     "projectSettings": "项目设置"
   },
