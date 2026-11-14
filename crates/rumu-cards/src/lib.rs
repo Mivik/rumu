@@ -41,7 +41,7 @@ pub mod yaml;
 
 pub use card::{Card, CardInfo, valid_card_path};
 pub use cards::Cards;
-pub use deck::{Author, Deck, DeckIcon, DeckMeta, DeckMount, Decks, open_deck};
+pub use deck::{Author, Deck, DeckCat, DeckIcon, DeckMeta, DeckMount, Decks, open_deck};
 pub use error::{CardViewError, Error, Result};
 
 /// Run a card search over the mounted card space: hits are BM25F-ranked like
@@ -207,6 +207,7 @@ mod tests {
                 mcp: Default::default(),
                 skills: Vec::new(),
                 icon: None,
+                cat: None,
             })
             .unwrap();
         for (path, text) in [

@@ -11,6 +11,7 @@ import {
   landingProject,
   state,
 } from '../../lib/store'
+import { assistantCat } from '../../lib/assistantFace'
 import RumuCat from '../brand/RumuCat.vue'
 import ProjectSeal from '../brand/ProjectSeal.vue'
 import Icon from '../ui/Icon.vue'
@@ -45,7 +46,7 @@ function pickProject(id: string | null, close: () => void): void {
         :aria-expanded="open"
         @click="toggle"
       >
-        <RumuCat v-if="assistant" :size="14" :paper="false" />
+        <RumuCat v-if="assistant" :size="14" :paper="false" :cat="assistantCat(assistant)" />
         <span class="truncate">{{ assistant?.name ?? t('chat.newSession.pickAssistant') }}</span>
         <Icon name="down" :size="12" class="text-ink-3" />
       </button>
@@ -66,7 +67,7 @@ function pickProject(id: string | null, close: () => void): void {
           class="flex-none text-brand"
           :class="a.id === landingAssistant ? '' : 'invisible'"
         />
-        <RumuCat :size="16" :paper="false" />
+        <RumuCat :size="16" :paper="false" :cat="assistantCat(a)" />
         <span
           class="min-w-0 truncate text-secondary"
           :class="a.id === landingAssistant ? 'font-semibold text-ink' : 'text-ink-2'"

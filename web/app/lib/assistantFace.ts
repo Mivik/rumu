@@ -1,10 +1,48 @@
-// An assistant's look, drawn from its id: a tone, and the mascot's own
+// An assistant's look, drawn from its id: a tone, the mascot's own
 // expression (how its ears sit, its lean, its glance, its eyes and mouth),
-// laid over whatever state the cat is in. Stable for an id, so an assistant
-// is recognised by its face rather than its uuid.
+// laid over whatever state the cat is in, and the cat itself (its build and
+// what it wears) until `deck.yaml cat` sets one. Stable for an id, so an
+// assistant is recognised by its face rather than its uuid.
 
 import type { CatPose } from './cat'
+import { CAT_ITEMS, itemSlot } from './catItems'
 import { PROJECT_TONES, hash, random, toneColor } from './projectIcon'
+import type { DeckCat } from './types'
+
+/** How far `wide` and `ears` go either way (`CAT_SHAPE_MAX` in rumu-cards). */
+export const CAT_SHAPE_MAX = 2
+
+/** A cat rolled from `seed`: at most one of the face items, maybe something
+ * on top, now and then a bell, so it never gets crowded. */
+export function randomCat(seed: string): DeckCat {
+  const rnd = random(`cat:${seed}`)
+  const pick = <T>(xs: readonly T[]): T => xs[Math.floor(rnd() * xs.length)]!
+  const face = CAT_ITEMS.filter((i) => !itemSlot(i))
+  const top = CAT_ITEMS.filter((i) => itemSlot(i) === 'top')
+  const items = [
+    ...(rnd() < 0.55 ? [pick(face)] : []),
+    ...(rnd() < 0.6 ? [pick(top)] : []),
+    ...(rnd() < 0.2 ? CAT_ITEMS.filter((i) => itemSlot(i) === 'neck') : []),
+  ]
+  const shape = (): number => Math.round(rnd() * 2 * CAT_SHAPE_MAX - CAT_SHAPE_MAX)
+  return { items, tone: pick(PROJECT_TONES.slice(0, -1)), wide: shape(), ears: shape() }
+}
+
+/** The cat an assistant shows: its own, else one from its id in its tone. */
+export function assistantCat(a: { id: string; cat?: DeckCat }): DeckCat {
+  return a.cat ?? { ...randomCat(a.id), tone: PROJECT_TONES[hash(a.id) % (PROJECT_TONES.length - 1)] }
+}
+
+/** The cat of the assistant `id` among `assistants` (one from the id when
+ * the roster has not loaded it). */
+export function catOf(assistants: readonly { id: string; cat?: DeckCat }[], id: string): DeckCat {
+  return assistantCat(assistants.find((a) => a.id === id) ?? { id })
+}
+
+/** The pose a cat's build adds. */
+export function catBuild(cat: DeckCat): Partial<CatPose> {
+  return { wide: cat.wide / CAT_SHAPE_MAX, ears: cat.ears / CAT_SHAPE_MAX }
+}
 
 /** The CSS color an assistant is tinted with: one of the tones (never the
  * neutral ink), its hue turned a little by the id so two of a tone still

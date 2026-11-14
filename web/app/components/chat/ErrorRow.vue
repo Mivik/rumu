@@ -6,10 +6,11 @@
 // reply is still owed (`owedReply`), so it survives a reload; answered
 // failures and hook-refused prompts stay quiet. Retry runs the turn again in
 // place.
-import { ref } from 'vue'
+import { computed, ref } from 'vue'
 import { t } from '../../i18n'
+import { catOf } from '../../lib/assistantFace'
 import type { OwedReply } from '../../lib/store'
-import { retryBranch } from '../../lib/store'
+import { retryBranch, state } from '../../lib/store'
 import { vEnter } from '../../lib/motion'
 import RumuCat from '../brand/RumuCat.vue'
 
@@ -19,6 +20,7 @@ defineProps<{ owed: OwedReply }>()
  * mouth. Everything else stays at rest, so the head is the one every other
  * turn shows — only the face carries the failure. */
 const sadPose = { squint: 1, mouthGrey: 0.5 }
+const cat = computed(() => (state.session ? catOf(state.assistants, state.session.assistant) : undefined))
 
 const retrying = ref(false)
 async function onRetry(): Promise<void> {
@@ -36,7 +38,7 @@ async function onRetry(): Promise<void> {
   <div class="flex min-w-0 flex-col gap-2">
     <!-- the turn's head, as on any assistant turn -->
     <div class="tl-head">
-      <RumuCat :pose="sadPose" :size="52" :paper="false" class="-ml-[6px]" />
+      <RumuCat :pose="sadPose" :cat="cat" :size="52" :paper="false" class="-ml-[6px]" />
     </div>
 
     <div

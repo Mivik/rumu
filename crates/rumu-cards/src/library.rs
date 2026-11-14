@@ -172,6 +172,7 @@ pub fn deck_create(decks: &Decks, name: &str) -> Result<LibraryDeck> {
         mcp: Default::default(),
         skills: Vec::new(),
         icon: None,
+        cat: None,
     })?;
     library_deck(&deck)
 }

@@ -113,6 +113,57 @@ impl DeckIcon {
     }
 }
 
+/// How far `wide` and `ears` of a [`DeckCat`] go either way.
+pub const CAT_SHAPE_MAX: i8 = 2;
+
+/// An assistant's mascot (`deck.yaml cat`). Left out, the web draws one
+/// from the deck id.
+#[derive(Debug, Clone, Default, PartialEq, Eq, Serialize, Deserialize, ts_rs::TS)]
+#[ts(export)]
+pub struct DeckCat {
+    /// The accessories it wears, by the web's names.
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub items: Vec<String>,
+    /// Their color: one of [`ICON_TONES`].
+    #[ts(optional)]
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub tone: Option<String>,
+    /// Head width, -[`CAT_SHAPE_MAX`] narrow … [`CAT_SHAPE_MAX`] wide.
+    #[serde(default)]
+    pub wide: i8,
+    /// Ear size, the same range.
+    #[serde(default)]
+    pub ears: i8,
+}
+
+impl DeckCat {
+    fn check(&self) -> std::result::Result<(), String> {
+        if self.items.len() > 8
+            || self.items.iter().any(|i| {
+                i.is_empty()
+                    || i.len() > 24
+                    || !i.bytes().all(|b| b.is_ascii_lowercase() || b == b'-')
+            })
+        {
+            return Err(format!("invalid cat items {:?}", self.items));
+        }
+        if let Some(t) = &self.tone
+            && !ICON_TONES.contains(&t.as_str())
+        {
+            return Err(format!(
+                "invalid cat tone `{t}` (one of {})",
+                ICON_TONES.join(", ")
+            ));
+        }
+        if self.wide.abs() > CAT_SHAPE_MAX || self.ears.abs() > CAT_SHAPE_MAX {
+            return Err(format!(
+                "cat wide / ears out of -{CAT_SHAPE_MAX}..={CAT_SHAPE_MAX}"
+            ));
+        }
+        Ok(())
+    }
+}
+
 /// What one deck may do to another without asking the user, once a grant
 /// covers it.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, PartialOrd, Ord, Serialize, Deserialize)]
@@ -180,6 +231,9 @@ pub struct DeckMeta {
     /// A project's seal.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub icon: Option<DeckIcon>,
+    /// An assistant's mascot.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub cat: Option<DeckCat>,
 }
 
 /// One loaded deck.
@@ -758,6 +812,9 @@ impl Decks {
         if let Some(icon) = &meta.icon {
             icon.check().map_err(config_err)?;
         }
+        if let Some(cat) = &meta.cat {
+            cat.check().map_err(config_err)?;
+        }
         let mut checked: Vec<CardMount> = Vec::new();
         for m in &meta.mounts {
             let at = self.check_mount(m, &checked).map_err(config_err)?;
@@ -1134,6 +1191,7 @@ fn empty_meta(id: String, name: String) -> DeckMeta {
         mcp: Default::default(),
         skills: Vec::new(),
         icon: None,
+        cat: None,
     }
 }
 

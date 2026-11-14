@@ -579,6 +579,8 @@ async fn dispatch(state: &AppState, method: &str, p: &Value) -> Result<Value> {
                 mcp: rumu_core::McpUse,
                 #[serde(default)]
                 skills: Vec<String>,
+                #[serde(default)]
+                cat: Option<rumu_cards::DeckCat>,
             }
             let req: Upsert = serde_json::from_value(p.clone())
                 .map_err(|e| ServerError::InvalidParams(e.to_string()))?;
@@ -616,6 +618,7 @@ async fn dispatch(state: &AppState, method: &str, p: &Value) -> Result<Value> {
                 mcp: req.mcp,
                 skills: req.skills,
                 icon: existing.as_ref().and_then(|d| d.meta.icon.clone()),
+                cat: req.cat,
             };
             let deck = state.decks.upsert(meta)?;
             let cards = Cards::library(&state.decks);

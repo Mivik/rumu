@@ -18,6 +18,7 @@ import { t } from '../../i18n'
 import type { Node } from '../../lib/types'
 import type { TimelineGroup } from '../../lib/store'
 import { forkSession, regenerateFrom, state, useBranchView } from '../../lib/store'
+import { catOf } from '../../lib/assistantFace'
 import type { CatState } from '../../lib/cat'
 import { renderMarkdown } from '../../lib/markdown'
 import { fileEditsOf } from '../../lib/toolrows'
@@ -50,6 +51,9 @@ const streamText = computed(() => (props.live ? (activeDelta.value?.text ?? '') 
 
 /** Before the first token there is no body yet: the cat plus "working…". */
 const hasBody = computed(() => props.group.items.length > 0 || props.group.assistants.length > 0)
+
+/** The session's assistant's own cat. */
+const cat = computed(() => (state.session ? catOf(state.assistants, state.session.assistant) : undefined))
 
 /** Live: waiting on the model (nothing streamed yet), thinking (reasoning
  * streams) or working (answer text streams). */
@@ -184,7 +188,7 @@ const bare = computed(() => !items.value.length && !props.group.assistants.lengt
   <div class="group/agroup flex min-w-0 flex-col gap-2">
     <!-- the turn's head: the mascot on its own line -->
     <div class="tl-head">
-      <RumuCat :state="catState" :size="52" :paper="false" class="-ml-[6px]" />
+      <RumuCat :state="catState" :cat="cat" :size="52" :paper="false" class="-ml-[6px]" />
       <span
         v-if="retrying"
         v-enter="'enter-fade'"
@@ -247,7 +251,10 @@ const bare = computed(() => !items.value.length && !props.group.assistants.lengt
     <div v-if="hasBody" class="-mt-0.5 flex min-h-6 items-center gap-2">
       <!-- usage only for a finished turn; the live one is still changing -->
       <UsageHud v-if="!live" :group="group" />
-      <span v-if="!live && changed" class="flex min-w-0 gap-1 text-micro whitespace-nowrap text-ink-3 tabular-nums">
+      <span
+        v-if="!live && changed"
+        class="flex min-w-0 gap-1 text-micro whitespace-nowrap text-ink-3 tabular-nums"
+      >
         <span class="truncate">{{ t('chat.assistant.changed', { count: changed.count }) }}</span>
         <span class="flex-none font-medium text-pine">+{{ changed.added }}</span>
         <span v-if="changed.removed" class="flex-none font-medium text-danger">−{{ changed.removed }}</span>

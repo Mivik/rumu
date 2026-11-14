@@ -56,6 +56,7 @@ The first-call note states these rules.
   allow_ask: [<deck-id>]     # these assistants may ask it without a prompt
   mcp: { github: ["*"] }     # MCP servers in settings.yaml, with the tools enabled
   skills: ["*"]              # the skills enabled (docs/skills.md)
+  cat: { items: [bow, blush], tone: pine, wide: 1, ears: -2 }  # its mascot; left out, drawn from the id
   ```
 
 - **Private decks.** A deck with `private: true` is visible to an agent only

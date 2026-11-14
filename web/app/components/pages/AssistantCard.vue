@@ -62,7 +62,7 @@ function start(): void {
     <div class="band">
       <span v-if="assistant.default" class="badge">{{ t('assistants.defaultBadge') }}</span>
     </div>
-    <AssistantAvatar :id="assistant.id" :size="52" :near="near" class="on-band" />
+    <AssistantAvatar :id="assistant.id" :cat="assistant.cat" :size="52" :near="near" class="on-band" />
     <div class="pointer-events-none relative flex min-w-0 flex-1 flex-col gap-1 px-4 pt-2 pb-3">
       <span class="truncate font-card text-message font-semibold text-ink">{{ assistant.name }}</span>
       <p class="brief">{{ assistant.instructions }}</p>

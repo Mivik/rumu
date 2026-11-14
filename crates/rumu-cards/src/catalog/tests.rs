@@ -22,6 +22,7 @@ fn deck_with(home: &Path, paths: &[String]) -> (Decks, Deck) {
             mcp: Default::default(),
             skills: Vec::new(),
             icon: None,
+            cat: None,
         })
         .unwrap();
     for path in paths {

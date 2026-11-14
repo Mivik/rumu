@@ -72,6 +72,7 @@ fn card_home() -> (tempfile::TempDir, std::path::PathBuf) {
             mcp: Default::default(),
             skills: Vec::new(),
             icon: None,
+            cat: None,
         })
         .unwrap();
     deck.write_file(

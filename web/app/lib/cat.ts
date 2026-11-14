@@ -31,6 +31,10 @@ export interface CatPose {
   mouthGrey: number
   /** 0…1: the hook's rubber stamp. */
   stamp: number
+  /** The build, kept across states: -1 a narrow head, 1 a wide one; -1
+   * small round ears, 1 tall pointed ones. */
+  wide: number
+  ears: number
 }
 
 const REST: CatPose = {
@@ -48,6 +52,8 @@ const REST: CatPose = {
   mouthLift: 0.8,
   mouthGrey: 0,
   stamp: 0,
+  wide: 0,
+  ears: 0,
 }
 
 export const POSES: Record<CatState, CatPose> = {
@@ -166,7 +172,7 @@ export function poseAt(state: CatState, t: number): CatPose {
 
 // ——— geometry (viewBox 10 14 80 64)
 
-type Pt = [number, number]
+export type Pt = [number, number]
 type Seg = [Pt, Pt, Pt, Pt]
 
 const CX = 50
@@ -211,6 +217,19 @@ function ear(v: number): { T: Pt; B: Pt; splay: number } {
   return { T: mixPt(a.T, b.T, t), B: mixPt(a.B, b.B, t), splay: mix(a.splay, b.splay, t) }
 }
 
+/** How much a full `wide` adds to each half of the head, moves the ear
+ * feet out and spreads the eyes; how much a full `ears` grows them. */
+const WIDE = 2.5
+const WIDE_EAR = 1.75
+const WIDE_EYES = 0.12
+const EAR_GROW = 0.3
+
+const halfWidth = (p: CatPose): number => HALF + WIDE * p.wide
+/** How far apart a wider face spreads what is on it, 1 at rest. */
+export const faceSpread = (p: CatPose): number => 1 + WIDE_EYES * p.wide
+/** Each eye's distance from the middle of the face. */
+export const eyeDx = (p: CatPose): number => EYE_DX * faceSpread(p)
+
 const dist = (a: Pt, b: Pt): number => Math.hypot(b[0] - a[0], b[1] - a[1])
 
 function unit(x: number, y: number): Pt {
@@ -249,8 +268,8 @@ function split([a, b, c, d]: Seg): [Seg, Seg] {
 /** One half of the line, drawn as the left half: from the paw up the side,
  * over the ear tip T to its inner foot B, then the head arcs over to the
  * crown C, where it runs flat. */
-function half(T: Pt, B: Pt, splay: number, C: Pt): Seg[] {
-  const P: Pt = [CX - HALF, YB]
+function half(T: Pt, B: Pt, splay: number, C: Pt, hw: number): Seg[] {
+  const P: Pt = [CX - hw, YB]
   const sp = (splay * Math.PI) / 180
   const dT: Pt = [Math.cos(sp), -Math.sin(sp)]
   const slope = (2 * (B[1] - C[1])) / (C[0] - B[0])
@@ -275,12 +294,16 @@ const flip = (p: Pt): Pt => [2 * CX - p[0], p[1]]
 function head(p: CatPose): Seg[] {
   const side = (v: number, look: number, tilt: number, sway: number): Seg[] => {
     const e = ear(v)
+    // a wider head moves the ear in its foot; bigger ears grow from the foot
+    const B: Pt = [e.B[0] - WIDE_EAR * p.wide, e.B[1]]
+    const grow = 1 + EAR_GROW * p.ears
+    const T: Pt = [B[0] + (e.T[0] - WIDE_EAR * p.wide - B[0]) * grow, B[1] + (e.T[1] - B[1]) * grow]
     /** The tip takes the full sway, the foot only `EAR_SWAY_ROOT` of it, and
      * the tip turns with it: the ear swings from its base instead of sliding. */
     const shift = (q: Pt, k: number): Pt => lean([q[0] + look * EAR_SHIFT + sway * EAR_SWAY * k, q[1]], tilt)
     const crown = lean([CX + look * CROWN_SHIFT, Y_TOP], tilt)
     const splay = e.splay - tilt - sway * EAR_SWAY_TILT
-    return half(shift(e.T, 1), shift(e.B, EAR_SWAY_ROOT), splay, crown)
+    return half(shift(T, 1), shift(B, EAR_SWAY_ROOT), splay, crown, halfWidth(p))
   }
   const left = side(p.earL, p.look, p.tilt, p.earSway)
   const right = side(p.earR, -p.look, -p.tilt, -p.earSway)
@@ -289,8 +312,8 @@ function head(p: CatPose): Seg[] {
 
 /** The ink line: paw, head, paw. */
 export function lineD(p: CatPose): string {
-  const l = CX - HALF
-  const r = CX + HALF
+  const l = CX - halfWidth(p)
+  const r = CX + halfWidth(p)
   return (
     `M${f(l - 2 * BR)} ${f(YB)} A${BR} ${BR} 0 0 0 ${f(l)} ${f(YB)} ` +
     head(p).map(cmd).join(' ') +
@@ -300,8 +323,8 @@ export function lineD(p: CatPose): string {
 
 /** The paper face inside the line (dark mode only): the head, closed by a soft chin. */
 export function faceD(p: CatPose): string {
-  const l = CX - HALF
-  const r = CX + HALF
+  const l = CX - halfWidth(p)
+  const r = CX + halfWidth(p)
   const y = YB + CHIN
   return (
     `M${f(l)} ${f(YB)} ${head(p).map(cmd).join(' ')} ` +
@@ -326,7 +349,7 @@ export function eyesD(p: CatPose): string {
   const s = (pt: Pt): string => `${f(pt[0])} ${f(pt[1])}`
   return [-1, 1]
     .map((side) => {
-      const x = x0 + side * EYE_DX
+      const x = x0 + side * eyeDx(p)
       const dir = -side // which way the > < points: toward the nose
       const w = Math.max(EYE_W * (1 - p.open), 0.01)
       const h = p.arc * w
@@ -380,4 +403,58 @@ export function mouthD(p: CatPose): string {
     `M${f(lx)} ${f(ty)} C${f(lx)} ${f(ty + k)} ${f(cx)} ${f(MOUTH_Y + k)} ${f(cx)} ${f(MOUTH_Y)} ` +
     `C${f(cx)} ${f(MOUTH_Y + k)} ${f(rx)} ${f(ty + k)} ${f(rx)} ${f(ty)}`
   )
+}
+
+/** Where things sit on the cat, for what it wears (lib/catItems). The line's
+ * points already lean with the head; the face's do not (they go in the
+ * features group). */
+export interface CatAnchors {
+  crown: Pt
+  earTipL: Pt
+  earTipR: Pt
+  earFootL: Pt
+  earFootR: Pt
+  /** On each side of the head, a little above the paws. */
+  sideL: Pt
+  sideR: Pt
+  /** The face's middle after the glance. */
+  faceX: number
+  /** The eye line, at rest and as the eyes are now. */
+  eyeY: number
+  eyeYNow: number
+  mouthY: number
+  /** Where the line ends above each paw. */
+  pawL: number
+  pawR: number
+  pawY: number
+}
+
+function at([a, b, c, d]: Seg, t: number): Pt {
+  const u = 1 - t
+  const w = [u * u * u, 3 * u * u * t, 3 * u * t * t, t * t * t] as const
+  return [
+    w[0] * a[0] + w[1] * b[0] + w[2] * c[0] + w[3] * d[0],
+    w[0] * a[1] + w[1] * b[1] + w[2] * c[1] + w[3] * d[1],
+  ]
+}
+
+export function anchors(p: CatPose): CatAnchors {
+  // left: paw → mid, mid → tip, tip → foot, foot → crown; the right mirrors it
+  const s = head(p)
+  return {
+    crown: s[3]![3],
+    earTipL: s[1]![3],
+    earFootL: s[2]![3],
+    earFootR: s[4]![3],
+    earTipR: s[5]![3],
+    sideL: at(s[0]!, 0.75),
+    sideR: at(s[7]!, 0.25),
+    faceX: CX + p.look * FACE_SHIFT,
+    eyeY: EYE_Y,
+    eyeYNow: EYE_Y + p.eyeY,
+    mouthY: MOUTH_Y,
+    pawL: CX - halfWidth(p),
+    pawR: CX + halfWidth(p),
+    pawY: YB,
+  }
 }

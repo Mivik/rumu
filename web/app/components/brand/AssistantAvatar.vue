@@ -3,13 +3,17 @@
 // its tone. Without an id (one not yet created) the tile is plain and the cat
 // at rest. `near` turns the cat to face whoever points at it.
 import { computed } from 'vue'
-import { assistantFace, assistantTone, attentive } from '../../lib/assistantFace'
+import { assistantCat, assistantFace, assistantTone, attentive } from '../../lib/assistantFace'
+import type { DeckCat } from '../../lib/types'
 import RumuCat from './RumuCat.vue'
 
-const props = withDefaults(defineProps<{ id?: string; size?: number; near?: boolean }>(), { size: 48 })
+const props = withDefaults(defineProps<{ id?: string; cat?: DeckCat; size?: number; near?: boolean }>(), {
+  size: 48,
+})
 
 const face = computed(() => (props.id ? assistantFace(props.id) : {}))
 const pose = computed(() => (props.near ? attentive(face.value) : face.value))
+const shown = computed(() => props.cat ?? (props.id ? assistantCat({ id: props.id }) : undefined))
 </script>
 
 <template>
@@ -23,7 +27,7 @@ const pose = computed(() => (props.near ? attentive(face.value) : face.value))
     }"
     aria-hidden="true"
   >
-    <RumuCat :size="Math.round(size * 0.88)" :paper="false" :pose="pose" />
+    <RumuCat :size="Math.round(size * 0.88)" :paper="false" :pose="pose" :cat="shown" />
   </span>
 </template>
 

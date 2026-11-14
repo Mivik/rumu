@@ -8,7 +8,9 @@
 import { computed, onBeforeUnmount, onMounted, reactive, ref, watch } from 'vue'
 import { t } from '../../i18n'
 import { rumu } from '../../lib/api'
-import { assistantTone } from '../../lib/assistantFace'
+import { CAT_SHAPE_MAX, assistantCat, assistantTone, randomCat } from '../../lib/assistantFace'
+import { CAT_ITEMS, itemSlot } from '../../lib/catItems'
+import { PROJECT_TONES, toneColor, type ProjectTone } from '../../lib/projectIcon'
 import { openPage, replacePage } from '../../lib/router'
 import { models, refreshSettings, rulesEnable } from '../../lib/state/models'
 import {
@@ -19,7 +21,7 @@ import {
   state,
   viewAssistant,
 } from '../../lib/store'
-import type { Assistant, AssistantOptions, DeckMount } from '../../lib/types'
+import type { Assistant, AssistantOptions, DeckCat, DeckMount } from '../../lib/types'
 import { copyText } from '../../lib/util'
 import AssistantAvatar from '../brand/AssistantAvatar.vue'
 import Icon from '../ui/Icon.vue'
@@ -36,6 +38,8 @@ interface Form {
   /** The rules enabling skills. */
   skills: string[]
   allow_ask: string[]
+  /** Its own cat; null draws one from the id. */
+  cat: DeckCat | null
 }
 
 function blank(): Form {
@@ -47,6 +51,7 @@ function blank(): Form {
     mcp: {},
     skills: [],
     allow_ask: [],
+    cat: null,
   }
 }
 
@@ -71,6 +76,30 @@ const editing = computed(() => current.value?.id ?? '')
 /** Its tone; a new one is plain until it has an id. */
 const tone = computed(() => (form.id ? assistantTone(form.id) : 'var(--ink-3)'))
 const near = ref(false)
+
+/** The cat on show: its own, the one from its id, or a plain one for a new
+ * assistant. The first change makes it its own. */
+const cat = computed<DeckCat>(
+  () =>
+    form.cat ?? (form.id ? assistantCat({ id: form.id }) : { items: [], tone: 'brand', wide: 0, ears: 0 }),
+)
+const catTone = computed(() => toneColor((cat.value.tone ?? 'brand') as ProjectTone))
+function editCat(change: Partial<DeckCat>): void {
+  form.cat = { ...cat.value, items: [...(cat.value.items ?? [])], ...change }
+}
+/** Items of one slot replace each other. */
+function toggleItem(name: string): void {
+  const items = cat.value.items ?? []
+  const slot = itemSlot(name)
+  editCat({
+    items: items.includes(name)
+      ? items.filter((i) => i !== name)
+      : [...items.filter((i) => !slot || itemSlot(i) !== slot), name],
+  })
+}
+function shuffleCat(): void {
+  form.cat = randomCat(Math.random().toString(36))
+}
 
 const copied = ref(false)
 async function copyId(): Promise<void> {
@@ -266,6 +295,7 @@ function fromAssistant(assistant: Assistant): Form {
     mcp: Object.fromEntries(Object.entries(assistant.mcp).map(([k, v]) => [k, [...v]])),
     skills: [...assistant.skills],
     allow_ask: [...assistant.allow_ask],
+    cat: assistant.cat ? { ...assistant.cat, items: [...(assistant.cat.items ?? [])] } : null,
   }
 }
 
@@ -305,6 +335,7 @@ async function save(): Promise<void> {
       mcp: form.mcp,
       skills: form.skills,
       allow_ask: form.allow_ask.filter((asker) => asker !== form.id),
+      cat: form.cat ?? undefined,
     })
     await load()
     if (isNew.value) replacePage(res.deck.id)
@@ -374,7 +405,7 @@ onBeforeUnmount(() => window.removeEventListener('keydown', onKey, true))
       <header class="hero" :style="{ '--tone': tone }">
         <div class="band" />
         <div class="relative mx-auto w-full max-w-3xl px-4 sm:px-6">
-          <AssistantAvatar :id="form.id || undefined" :size="80" :near="near" class="on-band" />
+          <AssistantAvatar :id="form.id || undefined" :cat="cat" :size="80" :near="near" class="on-band" />
           <div class="flex items-center gap-2 pt-3">
             <input
               v-model="form.name"
@@ -420,6 +451,73 @@ onBeforeUnmount(() => window.removeEventListener('keydown', onKey, true))
         </p>
 
         <div v-else class="flex flex-col gap-7">
+          <div class="flex flex-col gap-2" :style="{ '--tone': catTone }">
+            <div class="flex items-center gap-2">
+              <span class="field-label">{{ t('assistants.look') }}</span>
+              <button
+                type="button"
+                class="-my-1 ml-auto flex items-center gap-1 rounded-control px-1.5 py-0.5 text-meta font-semibold text-ink-3 transition-colors duration-150 hover:bg-surface-2 hover:text-ink"
+                @click="shuffleCat"
+              >
+                <Icon name="dice" :size="13" />
+                {{ t('assistants.lookShuffle') }}
+              </button>
+            </div>
+            <div class="flex flex-wrap gap-1.5">
+              <button
+                v-for="item in CAT_ITEMS"
+                :key="item"
+                type="button"
+                class="chip"
+                :class="{ 'tone-neutral': !cat.items?.includes(item) }"
+                :aria-pressed="!!cat.items?.includes(item)"
+                @click="toggleItem(item)"
+              >
+                <Icon :name="cat.items?.includes(item) ? 'ok' : 'plus'" :size="12" />
+                {{ t(`assistants.catItems.${item}`) }}
+              </button>
+            </div>
+            <div class="flex flex-wrap items-center gap-x-6 gap-y-2 text-meta text-ink-3">
+              <div class="flex items-center gap-1.5" role="radiogroup" :aria-label="t('assistants.lookTone')">
+                <button
+                  v-for="tone in PROJECT_TONES"
+                  :key="tone"
+                  type="button"
+                  role="radio"
+                  class="swatch"
+                  :style="{ '--swatch': toneColor(tone) }"
+                  :aria-checked="(cat.tone ?? 'brand') === tone"
+                  :aria-label="tone"
+                  @click="editCat({ tone })"
+                />
+              </div>
+              <label class="flex items-center gap-2">
+                {{ t('assistants.lookWide') }}
+                <input
+                  type="range"
+                  class="shape"
+                  :min="-CAT_SHAPE_MAX"
+                  :max="CAT_SHAPE_MAX"
+                  step="1"
+                  :value="cat.wide"
+                  @input="editCat({ wide: +($event.target as HTMLInputElement).value })"
+                />
+              </label>
+              <label class="flex items-center gap-2">
+                {{ t('assistants.lookEars') }}
+                <input
+                  type="range"
+                  class="shape"
+                  :min="-CAT_SHAPE_MAX"
+                  :max="CAT_SHAPE_MAX"
+                  step="1"
+                  :value="cat.ears"
+                  @input="editCat({ ears: +($event.target as HTMLInputElement).value })"
+                />
+              </label>
+            </div>
+          </div>
+
           <label class="flex flex-col gap-1.5">
             <span class="field-label">{{ t('assistants.instructions') }}</span>
             <textarea v-model="form.instructions" rows="8" class="instructions w-full resize-y" />
@@ -846,5 +944,28 @@ onBeforeUnmount(() => window.removeEventListener('keydown', onKey, true))
   .hero {
     --k: 0.9;
   }
+}
+
+/* The look's color picks: a dot of each tone, ringed when chosen. */
+.swatch {
+  width: 16px;
+  height: 16px;
+  border-radius: 999px;
+  background: var(--swatch);
+  box-shadow:
+    0 0 0 2px var(--surface),
+    0 0 0 3px transparent;
+  transition: box-shadow 0.15s;
+}
+
+.swatch[aria-checked='true'] {
+  box-shadow:
+    0 0 0 2px var(--surface),
+    0 0 0 3.5px var(--swatch);
+}
+
+.shape {
+  width: 88px;
+  accent-color: var(--tone);
 }
 </style>

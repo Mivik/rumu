@@ -263,6 +263,7 @@ pub fn create_project(
         mcp: Default::default(),
         skills: Vec::new(),
         icon,
+        cat: None,
     })?;
     set_project_workspaces(home, registry, deck.id(), workspaces)?;
     Ok(deck)

@@ -15,12 +15,14 @@
 // send key off the sheet's bottom edge.
 import { computed, onBeforeUnmount, onMounted, shallowRef, watch } from 'vue'
 import { t } from '../../i18n'
+import { catOf } from '../../lib/assistantFace'
 import { answerDecision, state } from '../../lib/store'
 import type { DecisionScope, PendingDecision } from '../../lib/types'
 import RumuCat from '../brand/RumuCat.vue'
 import QuestionsForm from './QuestionsForm.vue'
 
 const pending = computed(() => state.decisions.filter((d) => d.session === state.sessionId))
+const cat = computed(() => (state.session ? catOf(state.assistants, state.session.assistant) : undefined))
 const current = computed(() => pending.value[0] ?? null)
 
 /** What the panel shows: the current request, or the last one while the
@@ -146,7 +148,7 @@ onBeforeUnmount(() => window.removeEventListener('keydown', onKey, true))
           :aria-label="view.title"
         >
           <div class="flex flex-none items-center gap-2">
-            <RumuCat state="waiting" :size="34" :paper="false" class="-my-1" />
+            <RumuCat state="waiting" :cat="cat" :size="34" :paper="false" class="-my-1" />
             <p class="min-w-0 text-message font-semibold text-ink">{{ view.title }}</p>
             <span v-if="pending.length > 1" class="ml-auto text-micro text-ink-3 tabular-nums">
               1 / {{ pending.length }}

@@ -170,6 +170,7 @@ pub(crate) fn create_deck(
                 mcp: Default::default(),
                 skills: Vec::new(),
                 icon: None,
+                cat: None,
             })
             .unwrap(),
     };

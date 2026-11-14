@@ -6,8 +6,9 @@ export type { CatPose, CatState } from '../../lib/cat'
 // The mascot, driven parametrically (lib/cat.ts): each state is a pose, and a
 // state change morphs from whatever is on screen to the new pose. Waiting,
 // thinking and working are the loops (see poseAt), and they stop when the
-// turn does.
-import { onBeforeUnmount, onMounted, shallowRef, watch } from 'vue'
+// turn does. `cat` gives it a build and things to wear (lib/catItems).
+import { computed, onBeforeUnmount, onMounted, shallowRef, watch } from 'vue'
+import { catBuild } from '../../lib/assistantFace'
 import {
   eyesD,
   eyeWidth,
@@ -21,7 +22,10 @@ import {
   type CatPose,
   type CatState,
 } from '../../lib/cat'
+import { drawItems, type CatPrim } from '../../lib/catItems'
 import { prefersReduced } from '../../lib/motion'
+import { toneColor, type ProjectTone } from '../../lib/projectIcon'
+import type { DeckCat } from '../../lib/types'
 
 const props = withDefaults(
   defineProps<{
@@ -32,6 +36,8 @@ const props = withDefaults(
     size?: number
     /** The paper face is for large sizes; line-only below ~64px. */
     paper?: boolean
+    /** Its build and what it wears; changes morph too. */
+    cat?: DeckCat
   }>(),
   { state: 'idle', size: 96, paper: true },
 )
@@ -40,7 +46,11 @@ const props = withDefaults(
 const MORPH = 380
 const easeSoft = (t: number): number => 1 - (1 - t) ** 4
 
-const target = (t: number): CatPose => ({ ...poseAt(props.state, t), ...props.pose })
+const target = (t: number): CatPose => ({
+  ...poseAt(props.state, t),
+  ...(props.cat && catBuild(props.cat)),
+  ...props.pose,
+})
 
 const shown = shallowRef<CatPose>(target(0))
 
@@ -80,10 +90,10 @@ watch(
   () => props.state,
   () => morph(true),
 )
-watch(
-  () => props.pose,
-  () => morph(false),
-  { deep: true },
+watch([() => props.pose, () => props.cat?.wide, () => props.cat?.ears], () => morph(false), { deep: true })
+
+const items = computed(() =>
+  drawItems(shown.value, props.cat?.items ?? [], toneColor((props.cat?.tone ?? 'brand') as ProjectTone)),
 )
 
 let mq: MediaQueryList | null = null
@@ -108,6 +118,16 @@ onBeforeUnmount(() => {
 })
 
 const ROUND = { fill: 'none', 'stroke-linecap': 'round', 'stroke-linejoin': 'round' } as const
+
+const prim = (s: CatPrim) => ({
+  ...ROUND,
+  d: s.d,
+  fill: s.fill ?? 'none',
+  stroke: s.stroke,
+  'stroke-width': s.width,
+  transform: s.transform,
+  class: s.class,
+})
 </script>
 
 <template>
@@ -118,12 +138,14 @@ const ROUND = { fill: 'none', 'stroke-linecap': 'round', 'stroke-linejoin': 'rou
     aria-hidden="true"
     class="block overflow-visible"
   >
+    <path v-for="(s, i) in items.body" :key="`b${i}`" v-bind="prim(s)" />
     <path v-if="paper" class="cat-face" :d="faceD(shown)" fill="var(--surface)" />
 
     <path v-bind="ROUND" :d="lineD(shown)" stroke="var(--ink)" stroke-width="5.5" />
 
     <g :transform="featuresTransform(shown)">
       <path v-bind="ROUND" :d="eyesD(shown)" stroke="var(--ink)" :stroke-width="eyeWidth(shown)" />
+      <path v-for="(s, i) in items.face" :key="`f${i}`" v-bind="prim(s)" />
       <path
         v-bind="ROUND"
         :d="mouthD(shown)"
@@ -133,6 +155,8 @@ const ROUND = { fill: 'none', 'stroke-linecap': 'round', 'stroke-linejoin': 'rou
         stroke-width="2.5"
       />
     </g>
+
+    <path v-for="(s, i) in items.head" :key="`h${i}`" v-bind="prim(s)" />
 
     <!-- the stamp lands: it shrinks onto the paper as it inks in -->
     <g
@@ -161,7 +185,16 @@ const ROUND = { fill: 'none', 'stroke-linecap': 'round', 'stroke-linejoin': 'rou
   display: none;
 }
 
+.cat-blush {
+  opacity: 0.32;
+}
+
 @media (prefers-color-scheme: dark) {
+  .cat-blush {
+    fill: color-mix(in oklab, var(--brand) 55%, white);
+    opacity: 0.4;
+  }
+
   .cat-face {
     display: inline;
     filter: drop-shadow(0 2px 3px rgb(0 0 0 / 40%));

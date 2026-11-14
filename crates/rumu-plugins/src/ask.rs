@@ -37,6 +37,10 @@ pub struct Assistant {
     pub skills: Vec<String>,
     /// The one sessions run as when none is named.
     pub default: bool,
+    /// Its mascot; left out, the web draws one from the id.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    #[ts(optional)]
+    pub cat: Option<rumu_cards::DeckCat>,
 }
 
 /// Build the wire form of one assistant deck.
@@ -56,6 +60,7 @@ pub fn assistant_of(decks: &Decks, deck: &Deck) -> Assistant {
         mcp: deck.meta.mcp.clone(),
         skills: deck.meta.skills.clone(),
         default: decks.default_assistant() == deck.meta.id,
+        cat: deck.meta.cat.clone(),
     }
 }
 

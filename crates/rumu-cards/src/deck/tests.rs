@@ -18,6 +18,7 @@ fn create_deck(home: &std::path::Path, name: &str, cards: &[(&str, &str)]) -> De
             mcp: Default::default(),
             skills: Vec::new(),
             icon: None,
+            cat: None,
         })
         .unwrap();
     for (path, text) in cards {
@@ -235,6 +236,7 @@ fn deck_upsert_rename_and_delete_refresh_the_registry() {
             mcp: Default::default(),
             skills: Vec::new(),
             icon: None,
+            cat: None,
         })
         .unwrap();
     let id = deck.id().to_owned();
@@ -689,6 +691,55 @@ fn a_project_icon_drops_blank_parts_and_rejects_bad_ones() {
     for (glyph, tone, err) in [("ab cd", "pine", "glyph"), ("A", "teal", "tone")] {
         let mut meta = project.meta.clone();
         meta.icon = icon(glyph, tone);
+        let got = decks.upsert(meta).unwrap_err().to_string();
+        assert!(got.contains(err), "{got}");
+    }
+}
+
+#[test]
+fn an_assistant_cat_roundtrips_and_rejects_bad_ones() {
+    let (_dir, decks, _main) = deck_home();
+    let cat = DeckCat {
+        items: vec!["bow".into(), "blush".into()],
+        tone: Some("pine".into()),
+        wide: -1,
+        ears: 2,
+    };
+    let deck = decks
+        .upsert(DeckMeta {
+            assistant: true,
+            cat: Some(cat.clone()),
+            ..empty_meta(String::new(), "kit".into())
+        })
+        .unwrap();
+    let reloaded = Decks::load(&decks.home).unwrap();
+    assert_eq!(reloaded.get(deck.id()).unwrap().meta.cat, Some(cat.clone()));
+
+    for (bad, err) in [
+        (
+            DeckCat {
+                tone: Some("teal".into()),
+                ..cat.clone()
+            },
+            "tone",
+        ),
+        (
+            DeckCat {
+                wide: 3,
+                ..cat.clone()
+            },
+            "wide",
+        ),
+        (
+            DeckCat {
+                items: vec!["Bow!".into()],
+                ..cat.clone()
+            },
+            "items",
+        ),
+    ] {
+        let mut meta = deck.meta.clone();
+        meta.cat = Some(bad);
         let got = decks.upsert(meta).unwrap_err().to_string();
         assert!(got.contains(err), "{got}");
     }

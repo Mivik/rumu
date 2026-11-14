@@ -14,6 +14,7 @@
 // composer are centered together.
 import { computed, ref } from 'vue'
 import { t } from '../../i18n'
+import { assistantCat } from '../../lib/assistantFace'
 import { connected, isBusy, queuedPrompts, state } from '../../lib/store'
 import { layout, toggleSidebar } from '../../lib/layout'
 import { openPage } from '../../lib/router'
@@ -42,6 +43,7 @@ const scope = computed(() => {
   return {
     assistant: s.assistant,
     assistantName: assistant?.name ?? s.assistant.slice(0, 8),
+    cat: assistantCat(assistant ?? { id: s.assistant }),
     project: s.project ?? null,
     projectName: project?.name ?? s.project ?? null,
     projectInfo: project ?? null,
@@ -113,7 +115,7 @@ function composerRoot(): HTMLElement | null {
             :title="t('chat.newSession.assistant')"
             @click="openPage('assistants', scope.assistant)"
           >
-            <RumuCat :size="13" :paper="false" class="flex-none" />
+            <RumuCat :size="13" :paper="false" :cat="scope.cat" class="flex-none" />
             <span class="truncate">{{ scope.assistantName }}</span>
           </button>
           <button

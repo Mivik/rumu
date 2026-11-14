@@ -23,6 +23,7 @@ import {
   mdiCogOutline,
   mdiCommentQuestionOutline,
   mdiCreationOutline,
+  mdiDice5Outline,
   mdiCompassOutline,
   mdiConsole,
   mdiContentCopy,
@@ -117,6 +118,7 @@ const paths: Record<string, string> = {
   artifact: mdiApplicationOutline,
   code: mdiCodeTags,
   download: mdiDownload,
+  dice: mdiDice5Outline,
 }
 </script>
 
