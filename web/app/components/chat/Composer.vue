@@ -22,8 +22,9 @@
 // or removed. The writing stays plain text: like the Claude and ChatGPT web
 // apps, the sent message leads with its images (`withLeadingAnchors`).
 //
-// On a phone the sheet folds to one line while you are elsewhere — a touch
-// on the transcript or the sidebar — and unfolds when touched again. It stays
+// On a phone the sheet folds to one line while you are elsewhere — a tap
+// on the transcript or the sidebar, not a scroll — and unfolds when touched
+// again. It stays
 // open while it holds images or a decision.
 import { computed, nextTick, onBeforeUnmount, onMounted, reactive, ref, watch } from 'vue'
 import { t } from '../../i18n'
@@ -170,9 +171,11 @@ const idle = computed(
     !state.decisions.some((d) => d.session === state.sessionId),
 )
 
-/** A press elsewhere in the app folds the sheet; floating panels (pickers,
- *  the lightbox) are teleported out of the app root and don't count. */
-function onPressAnywhere(e: PointerEvent): void {
+/** A tap elsewhere in the app folds the sheet; floating panels (pickers,
+ *  the lightbox) are teleported out of the app root and don't count. It
+ *  listens for click, not pointerdown: a touch that turns into a scroll of
+ *  the transcript is cancelled before it clicks, so reading keeps it open. */
+function onTapAnywhere(e: MouseEvent): void {
   const root = rootEl.value
   const target = e.target as Node
   if (root && !root.contains(target) && root.closest('#__nuxt')?.contains(target)) engaged.value = false
@@ -196,10 +199,10 @@ function onClickCapture(e: MouseEvent): void {
   textareaEl.value?.focus()
 }
 
-onMounted(() => document.addEventListener('pointerdown', onPressAnywhere, true))
+onMounted(() => document.addEventListener('click', onTapAnywhere, true))
 
 onBeforeUnmount(() => {
-  document.removeEventListener('pointerdown', onPressAnywhere, true)
+  document.removeEventListener('click', onTapAnywhere, true)
   for (const item of attachments.value) {
     item.ctrl.abort()
     URL.revokeObjectURL(item.url)
