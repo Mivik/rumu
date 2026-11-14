@@ -1103,6 +1103,27 @@
     background: none;
   }
 
+  /* ---- math (KaTeX). Wide display formulas scroll instead of spilling. ---- */
+
+  .md .katex {
+    overflow-wrap: normal;
+  }
+
+  .md .katex-display {
+    margin: 0.85em 0;
+    padding: 2px 0;
+    overflow-x: auto;
+    overflow-y: hidden;
+  }
+
+  .md .md-math {
+    margin: 0.85em 0;
+  }
+
+  .md .md-math > .katex-display {
+    margin: 0;
+  }
+
   /* ---- fence wrapper + copy affordance. The wrapper owns the block margin
    * so the button can sit in the top-right corner of the code surface. ---- */
 

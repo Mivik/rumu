@@ -171,6 +171,85 @@ function renderCode(text: string, info: string | undefined): string {
 marked.setOptions({ gfm: true })
 marked.use({ renderer: { code: ({ text, lang }) => renderCode(text, lang) } })
 
+// ---- math: KaTeX, code-split like the grammars. Until it lands a formula
+// renders as its escaped source, then re-renders (`katexVersion`).
+
+type Katex = typeof import('katex').default
+let katex: Katex | null = null
+let katexLoading = false
+const katexVersion = shallowRef(0)
+
+function loadKatex(): void {
+  if (katex || katexLoading) return
+  katexLoading = true
+  Promise.all([import('katex'), import('katex/dist/katex.min.css')])
+    .then(([mod]) => {
+      katex = mod.default
+      katexVersion.value++
+    })
+    .catch(() => {})
+    .finally(() => (katexLoading = false))
+}
+
+interface MathToken {
+  type: 'math' | 'inlineMath'
+  raw: string
+  text: string
+  display: boolean
+}
+
+function renderMath({ raw, text, display }: MathToken): string {
+  void katexVersion.value // tracked: re-render when KaTeX lands
+  if (!katex) {
+    loadKatex()
+    return escapeHtml(raw)
+  }
+  return katex.renderToString(text, { displayMode: display, throwOnError: false })
+}
+
+/** Inline delimiters, display ones first. A single `$` follows pandoc's
+ * rule so prices don't open formulas: no space just inside either `$`, no
+ * digit right after the closing one, no blank line in between. */
+const INLINE_MATH: [RegExp, boolean][] = [
+  [/^\$\$([\s\S]+?)\$\$/, true],
+  [/^\\\[([\s\S]+?)\\\]/, true],
+  [/^\\\(([\s\S]+?)\\\)/, false],
+  [/^\$(?![\s$])((?:\\[\s\S]|[^\\$\n]|\n(?!\s*\n))+?)(?<!\s)\$(?!\d)/, false],
+]
+/** A display formula on lines of its own. */
+const BLOCK_MATH = /^ {0,3}(?:\$\$([\s\S]+?)\$\$|\\\[([\s\S]+?)\\\])[ \t]*(?:\n+|$)/
+
+marked.use({
+  extensions: [
+    {
+      name: 'math',
+      level: 'block',
+      tokenizer(src): MathToken | undefined {
+        const m = BLOCK_MATH.exec(src)
+        if (!m) return undefined
+        return { type: 'math', raw: m[0], text: (m[1] ?? m[2])!, display: true }
+      },
+      renderer: (token) => `<div class="md-math">${renderMath(token as MathToken)}</div>`,
+    },
+    {
+      name: 'inlineMath',
+      level: 'inline',
+      start: (src) => {
+        const i = src.search(/\$|\\[([]/)
+        return i < 0 ? undefined : i
+      },
+      tokenizer(src): MathToken | undefined {
+        for (const [re, display] of INLINE_MATH) {
+          const m = re.exec(src)
+          if (m) return { type: 'inlineMath', raw: m[0], text: m[1]!, display }
+        }
+        return undefined
+      },
+      renderer: (token) => renderMath(token as MathToken),
+    },
+  ],
+})
+
 /** URI schemes that are real links, never workspace addresses. */
 const EXTERNAL_SCHEMES = new Set([
   'http',
