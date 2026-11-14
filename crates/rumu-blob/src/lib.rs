@@ -118,6 +118,19 @@ impl Blobs {
         self.path(hash).is_ok_and(|p| p.is_file())
     }
 
+    /// The bytes of `hash` as a file at `dest` (parents created), unless one
+    /// is already there.
+    pub fn copy_to(&self, hash: &str, dest: &Path) -> Result<()> {
+        if dest.exists() {
+            return Ok(());
+        }
+        if let Some(dir) = dest.parent() {
+            fs::create_dir_all(dir).map_err(IoError::at("creating directory", dir))?;
+        }
+        fs::copy(self.path(hash)?, dest).map_err(IoError::at("copying blob", dest))?;
+        Ok(())
+    }
+
     /// The [`Attachment`] for a stored image, rebuilt from the blob itself
     /// (format, size and dimensions), so a reference from the wire is
     /// trusted for its hash and display name only.

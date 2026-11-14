@@ -120,6 +120,22 @@ fn hashes_are_validated() {
 }
 
 #[test]
+fn copy_to_creates_parents_and_keeps_an_existing_file() {
+    let dir = temp_dir("copy");
+    let blobs = Blobs::open(&dir.join("blobs")).unwrap();
+    let hash = blobs.put(b"bytes").unwrap();
+    let dest = dir.join("scratch/attachments/x.png");
+    blobs.copy_to(&hash, &dest).unwrap();
+    assert_eq!(fs::read(&dest).unwrap(), b"bytes");
+
+    // A file already there (maybe edited by a tool) is left alone.
+    fs::write(&dest, b"edited").unwrap();
+    blobs.copy_to(&hash, &dest).unwrap();
+    assert_eq!(fs::read(&dest).unwrap(), b"edited");
+    fs::remove_dir_all(&dir).ok();
+}
+
+#[test]
 fn gc_keeps_live_and_recent_blobs() {
     let dir = temp_dir("gc");
     let blobs = Blobs::open(&dir).unwrap();

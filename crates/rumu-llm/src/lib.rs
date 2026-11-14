@@ -951,7 +951,7 @@ fn project_from(
                     messages.push(ChatMessage::user(content.text.clone()));
                     continue;
                 }
-                let parts: Vec<ContentPart> = pieces(content, &load)
+                let parts: Vec<ContentPart> = pieces(content, &load, true)
                     .into_iter()
                     .map(|piece| match piece {
                         Piece::Text(t) => ContentPart::Text(t),
@@ -1051,7 +1051,7 @@ fn project_from(
                     ))
                 } else if to.protocol != Protocol::Anthropic {
                     let mut text: Vec<String> = Vec::new();
-                    for piece in pieces(content, &load) {
+                    for piece in pieces(content, &load, false) {
                         match piece {
                             Piece::Text(t) => text.push(t),
                             // An image always follows its `Image n:` label.
@@ -1066,7 +1066,7 @@ fn project_from(
                     }
                     ContentPart::ToolResponse(ToolResponse::new(call_id.clone(), text.join("\n")))
                 } else {
-                    let blocks: Vec<Value> = pieces(content, &load)
+                    let blocks: Vec<Value> = pieces(content, &load, false)
                         .into_iter()
                         .map(|piece| match piece {
                             Piece::Text(t) => json!({ "type": "text", "text": t }),
@@ -1162,10 +1162,15 @@ enum Piece {
 }
 
 /// Text and images of `content`, in reading order: empty text segments
-/// dropped, each image preceded by its `Image n:` label. A blob that cannot
-/// be read becomes `Image n: [image: name W×H] (image unavailable)` — a
-/// missing image must never fail the request.
-fn pieces(content: &Content, load: &dyn Fn(&Attachment) -> Option<Vec<u8>>) -> Vec<Piece> {
+/// dropped, each image preceded by its `Image n:` label — naming its
+/// `@scratch` copy when `files` (a prompt's images, copied there on send). A
+/// blob that cannot be read becomes `Image n: [image: name W×H] (image
+/// unavailable)` — a missing image must never fail the request.
+fn pieces(
+    content: &Content,
+    load: &dyn Fn(&Attachment) -> Option<Vec<u8>>,
+    files: bool,
+) -> Vec<Piece> {
     let mut out = Vec::new();
     for segment in content.segments() {
         match segment {
@@ -1173,7 +1178,8 @@ fn pieces(content: &Content, load: &dyn Fn(&Attachment) -> Option<Vec<u8>>) -> V
             Segment::Text(_) => {}
             Segment::Image { n, attachment, .. } => match load(attachment) {
                 Some(bytes) => {
-                    out.push(Piece::Text(image_label(n)));
+                    let file = files.then(|| attachment.scratch_path());
+                    out.push(Piece::Text(image_label(n, file.as_deref())));
                     out.push(Piece::Image {
                         mime: attachment.mime.clone(),
                         data: base64::engine::general_purpose::STANDARD.encode(bytes),
@@ -1182,7 +1188,7 @@ fn pieces(content: &Content, load: &dyn Fn(&Attachment) -> Option<Vec<u8>>) -> V
                 }
                 None => out.push(Piece::Text(format!(
                     "{} {} (image unavailable)",
-                    image_label(n),
+                    image_label(n, None),
                     attachment.placeholder()
                 ))),
             },
@@ -1569,6 +1575,14 @@ mod tests {
     fn user_images_project_at_their_anchors_with_labels() {
         let (_dir, blobs, atts) = blobs_with(&[b"aa", b"bb"]);
         let b64 = |b: &[u8]| base64::engine::general_purpose::STANDARD.encode(b);
+        // A prompt's image is labelled with its `@scratch` copy.
+        let label = |n: usize| {
+            format!(
+                "text:\"Image {n} (@scratch:attachments/{}.png):\"",
+                &atts[n - 1].hash[..12]
+            )
+        };
+        let (l1, l2) = (label(1), label(2));
 
         // Anchors place images inline, each behind its label, in segments()
         // order; unanchored images follow the text.
@@ -1587,10 +1601,10 @@ mod tests {
             shape(&parts(&user("before [Image #2] and [Image #1] after"))),
             [
                 "text:\"before \"",
-                "text:\"Image 2:\"",
+                &l2,
                 &format!("img:{}", b64(b"bb")),
                 "text:\" and \"",
-                "text:\"Image 1:\"",
+                &l1,
                 &format!("img:{}", b64(b"aa")),
                 "text:\" after\"",
             ]
@@ -1599,9 +1613,9 @@ mod tests {
             shape(&parts(&user("look"))),
             [
                 "text:\"look\"",
-                "text:\"Image 1:\"",
+                &l1,
                 &format!("img:{}", b64(b"aa")),
-                "text:\"Image 2:\"",
+                &l2,
                 &format!("img:{}", b64(b"bb")),
             ]
         );
@@ -1609,9 +1623,9 @@ mod tests {
         assert_eq!(
             shape(&parts(&user("[Image #1][Image #2]"))),
             [
-                "text:\"Image 1:\"",
+                l1.as_str(),
                 &format!("img:{}", b64(b"aa")),
-                "text:\"Image 2:\"",
+                &l2,
                 &format!("img:{}", b64(b"bb")),
             ]
         );

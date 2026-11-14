@@ -569,7 +569,7 @@ impl Kernel {
         merge_workspaces(derive_state(nodes), &self.workspaces, &session)
     }
 
-    pub(crate) fn session_of(&self, branch: &BranchId) -> Result<SessionId> {
+    pub fn session_of(&self, branch: &BranchId) -> Result<SessionId> {
         Ok(self
             .store
             .get_branch(branch)?

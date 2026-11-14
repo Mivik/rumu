@@ -829,6 +829,18 @@ async fn dispatch(state: &AppState, method: &str, p: &Value) -> Result<Value> {
             if text.is_empty() && attachments.is_empty() {
                 return Err(ServerError::MissingParam("text".into()));
             }
+            // Each image also becomes a file in the session's `@scratch`, the
+            // path its projected label names, so tools can work on it.
+            if !attachments.is_empty() {
+                let session = kernel.session_of(&branch)?;
+                let root = state.workspaces.scratch(&session).root;
+                let scratch = std::path::Path::new(root.as_str());
+                for a in &attachments {
+                    state
+                        .blobs
+                        .copy_to(&a.hash, &scratch.join(a.scratch_path()))?;
+                }
+            }
             let content = Content::text(text).with_attachments(attachments);
             // `model` (optional): the composer's pick, recorded where it
             // changes the branch.

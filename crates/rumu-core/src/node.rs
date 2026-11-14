@@ -2,7 +2,7 @@ use serde::de::DeserializeOwned;
 use serde::{Deserialize, Serialize};
 use serde_json::Value;
 
-use crate::{BranchId, NodeId, SessionId, Timestamp, Workspace};
+use crate::{BranchId, NodeId, SCRATCH_WORKSPACE, SessionId, Timestamp, Workspace};
 
 /// A persisted event. All nodes of a session form a tree via `parent`.
 #[derive(Debug, Clone, Serialize, Deserialize, ts_rs::TS)]
@@ -127,6 +127,18 @@ impl Attachment {
             AttachmentKind::Audio => format!("[audio: {at}]"),
         }
     }
+
+    /// Where a prompt's attachment is copied inside the session's `@scratch`
+    /// so tools can work on it: `attachments/<hash prefix>.<ext>`.
+    pub fn scratch_path(&self) -> String {
+        let ext = match self.mime.split_once('/') {
+            Some((_, "jpeg")) => "jpg",
+            Some((_, sub)) => sub,
+            None => "bin",
+        };
+        let stem = self.hash.get(..12).unwrap_or(&self.hash);
+        format!("attachments/{stem}.{ext}")
+    }
 }
 
 /// The in-text anchor of the `n`-th (1-based) attachment: `[Image #n]`.
@@ -135,9 +147,13 @@ pub fn image_anchor(n: usize) -> String {
 }
 
 /// The label projected ahead of the `n`-th image, so the model can refer to
-/// it by name: `Image n:`.
-pub fn image_label(n: usize) -> String {
-    format!("Image {n}:")
+/// it by name: `Image n:`, or `Image n (@scratch:<path>):` when the image
+/// is also a file there.
+pub fn image_label(n: usize, file: Option<&str>) -> String {
+    match file {
+        Some(path) => format!("Image {n} ({SCRATCH_WORKSPACE}:{path}):"),
+        None => format!("Image {n}:"),
+    }
 }
 
 /// One piece of a [`Content`], in reading order.
