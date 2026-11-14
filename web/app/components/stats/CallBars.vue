@@ -4,7 +4,8 @@
 // context climbs and a cache miss stands out dark; below, its output. A
 // warn dot over a column marks a call that ran without the reasoning before
 // it. Calls of different replies sit a little apart. Columns keep a minimum
-// width; past what fits, the chart scrolls sideways.
+// width; past what fits, the chart scrolls sideways. A few calls sit centred
+// (auto margins on the ends, which fall to zero once the row overflows).
 //
 // Hovering a column shows that call in the line under the chart; otherwise
 // the line shows the `idle` slot. The line keeps three rows' height, so
@@ -75,8 +76,8 @@ const timing = computed(() => {
       <div
         v-for="(col, i) in cols"
         :key="col.c.node.id"
-        class="group relative flex min-w-1 flex-1 flex-col rounded-xs transition-colors hover:bg-surface-2"
-        :class="[size === 'lg' ? 'max-w-7' : 'max-w-4', { 'ml-1.5': col.apart }]"
+        class="group relative flex min-w-1 flex-1 flex-col rounded-xs transition-colors first:ml-auto last:mr-auto hover:bg-surface-2"
+        :class="[size === 'lg' ? 'max-w-10' : 'max-w-6', { 'ml-1.5': col.apart }]"
         @mouseenter="hovered = i"
       >
         <div class="relative flex flex-col justify-end" :style="{ height: `${UP}px` }">
