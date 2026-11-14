@@ -92,10 +92,25 @@ function scrollToEnd(smooth = false): void {
   if (!el) return
   quietUntil = performance.now() + (smooth ? 600 : 150)
   if (smooth && !prefersReduced()) {
-    el.scrollTo({ top: el.scrollHeight, behavior: 'smooth' })
+    el.scrollTo({ top: endTop(el), behavior: 'smooth' })
     return
   }
-  el.scrollTop = el.scrollHeight
+  el.scrollTop = endTop(el)
+}
+
+/**
+ * The scroll offset that shows the end of the page as laid out. Not
+ * scrollHeight: that also counts entries still rising into place (their
+ * entrance transforms reach below the page), and the moment they land that
+ * overflow is gone and the view drops by as much — the whole column jumps.
+ * The spacer is the scroller's last child and never moves on its own.
+ */
+function endTop(el: HTMLElement): number {
+  const spacer = spacerEl.value
+  if (!spacer) return el.scrollHeight
+  const pad = parseFloat(getComputedStyle(el).paddingBottom) || 0
+  const bottom = spacer.getBoundingClientRect().bottom - el.getBoundingClientRect().top - el.clientTop
+  return Math.max(0, Math.floor(el.scrollTop + bottom + pad - el.clientHeight))
 }
 
 onBeforeUnmount(() => clearTimeout(scrollTimer))
@@ -120,18 +135,18 @@ function settleEnd(seq: number): void {
   const el = scrollEl.value
   if (!el) return // the scrollEl watcher below asks again once it mounts
   // Two frames: the first layout pass (and the sheet's entrance) finish before
-  // scrollHeight is trustworthy.
+  // the end is trustworthy.
   requestAnimationFrame(() => {
     if (seq !== endSeq) return
     const node = scrollEl.value
     if (!node) return
     quietUntil = performance.now() + 150
-    node.scrollTop = node.scrollHeight
+    node.scrollTop = endTop(node)
     nearBottom.value = true
     requestAnimationFrame(() => {
       if (seq !== endSeq || scrollEl.value !== node) return
       quietUntil = performance.now() + 150
-      node.scrollTop = node.scrollHeight
+      node.scrollTop = endTop(node)
       nearBottom.value = true
     })
   })
