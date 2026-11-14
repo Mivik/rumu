@@ -16,19 +16,35 @@ export function prefersReduced(): boolean {
   return typeof matchMedia !== 'undefined' && matchMedia('(prefers-reduced-motion: reduce)').matches
 }
 
+/** Entrances whose animation just ended, settled together in the next frame:
+ * getAnimations() forces style and layout, and a cold boot ends hundreds of
+ * entrances at once — one forced pass each, interleaved with the class
+ * removals, cost over a second on a long conversation. */
+const ended = new Map<HTMLElement, () => void>()
+let settleFrame = 0
+
+function settleEntrances(): void {
+  settleFrame = 0
+  const finished = [...ended].filter(([el]) => !el.getAnimations().some((a) => a.playState === 'running' || a.pending))
+  ended.clear()
+  for (const [, finish] of finished) finish()
+}
+
 /** `v-enter="false"` opts an element out (e.g. rows revealed together by a
  * disclosure, which animates as one instead). */
 export const vEnter: Directive<HTMLElement, string | false | undefined> = {
   mounted(el, binding) {
     if (!timelineLive.value || binding.value === false) return
     const cls = binding.value || 'enter-rise'
-    const done = (e: AnimationEvent): void => {
-      if (e.target !== el) return
-      const running = el.getAnimations().some((a) => a.playState === 'running' || a.pending)
-      if (running) return
+    const finish = (): void => {
       el.classList.remove(cls)
       el.removeEventListener('animationend', done)
       el.removeEventListener('animationcancel', done)
+    }
+    const done = (e: AnimationEvent): void => {
+      if (e.target !== el) return
+      ended.set(el, finish)
+      settleFrame ||= requestAnimationFrame(settleEntrances)
     }
     el.addEventListener('animationend', done)
     el.addEventListener('animationcancel', done)
