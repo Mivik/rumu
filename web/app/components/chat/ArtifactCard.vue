@@ -21,7 +21,17 @@ const where = computed(() => {
   return i < 0 ? path : `${workspaceLabel(path.slice(0, i))} · ${path.slice(i + 1)}`
 })
 
-const ICONS = { html: 'artifact', markdown: 'note', svg: 'image', code: 'file' } as const
+const ICONS = {
+  html: 'artifact',
+  markdown: 'note',
+  svg: 'image',
+  code: 'file',
+  image: 'image',
+  audio: 'audio',
+  video: 'video',
+  pdf: 'document',
+  file: 'download',
+} as const
 </script>
 
 <template>

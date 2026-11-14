@@ -9,7 +9,7 @@ use axum::body::Bytes;
 use axum::extract::ws::{Message, WebSocket, WebSocketUpgrade};
 use axum::extract::{DefaultBodyLimit, Path, Query, State};
 use axum::http::header::{CONTENT_SECURITY_POLICY, CONTENT_TYPE, X_CONTENT_TYPE_OPTIONS};
-use axum::http::{StatusCode, Uri};
+use axum::http::{HeaderValue, StatusCode, Uri};
 use axum::response::{IntoResponse, Response};
 use axum::routing::{get, post};
 use futures_util::{SinkExt, StreamExt};
@@ -184,11 +184,21 @@ async fn blob_upload(
     }
 }
 
-/// `GET /blobs/{hash}`: the stored bytes, never publicly cached. An image is served as
-/// itself; any other blob (an artifact snapshot) only ever as sandboxed plain
-/// text, so model-written HTML never runs on rumu's origin — the web renders
-/// it in a sandboxed frame instead.
-async fn blob_get(State(state): State<AppState>, Path(hash): Path<String>) -> Response {
+/// `GET /blobs/{hash}`: the stored bytes, never publicly cached. With a
+/// `type` that [`rumu_core::is_media_type`] accepts (an artifact's image,
+/// audio, video or PDF) it is served as that type, with range requests so
+/// players can seek. Otherwise an image is served as itself; any other blob
+/// only ever as sandboxed plain text, so model-written HTML never runs on
+/// rumu's origin — the web renders it in a sandboxed frame instead.
+async fn blob_get(
+    State(state): State<AppState>,
+    Path(hash): Path<String>,
+    Query(params): Query<HashMap<String, String>>,
+    req: axum::extract::Request,
+) -> Response {
+    if let Some(mime) = params.get("type").filter(|t| rumu_core::is_media_type(t)) {
+        return blob_media(&state.blobs, &hash, mime, req).await;
+    }
     let bytes = match state.blobs.get(&hash) {
         Ok(bytes) => bytes,
         Err(e) => return blob_error(&e),
@@ -212,6 +222,45 @@ async fn blob_get(State(state): State<AppState>, Path(hash): Path<String>) -> Re
         bytes,
     )
         .into_response()
+}
+
+/// A blob served as the media type `mime` (one [`rumu_core::is_media_type`]
+/// accepts, none of which runs script on rumu's origin). Sandboxed like any
+/// blob, except a PDF: browsers refuse to open their viewer in a sandbox, and
+/// the viewer keeps a document's own script away from the page.
+async fn blob_media(
+    blobs: &Blobs,
+    hash: &str,
+    mime: &str,
+    req: axum::extract::Request,
+) -> Response {
+    let path = match blobs.path(hash) {
+        Ok(path) => path,
+        Err(e) => return blob_error(&e),
+    };
+    let mut res = match tower_http::services::ServeFile::new(path)
+        .try_call(req)
+        .await
+    {
+        Ok(res) => res.map(axum::body::Body::new),
+        Err(e) => {
+            return (
+                StatusCode::INTERNAL_SERVER_ERROR,
+                Json(json!({ "error": format!("reading blob: {e}") })),
+            )
+                .into_response();
+        }
+    };
+    let headers = res.headers_mut();
+    headers.insert(
+        CONTENT_TYPE,
+        HeaderValue::from_str(mime).expect("a known media type"),
+    );
+    headers.insert(X_CONTENT_TYPE_OPTIONS, HeaderValue::from_static("nosniff"));
+    if mime != "application/pdf" {
+        headers.insert(CONTENT_SECURITY_POLICY, HeaderValue::from_static("sandbox"));
+    }
+    res
 }
 
 /// The error response of a blob route: `{"error": message}` with the status

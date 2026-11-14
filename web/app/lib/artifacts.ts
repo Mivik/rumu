@@ -6,7 +6,7 @@
 // current path, or a file a link snapshotted (`fs.snapshot`), on no node.
 
 import { computed } from 'vue'
-import type { Artifact, Content, Node } from './types'
+import type { Artifact, ArtifactKind, Content, Node } from './types'
 import { pathNodes } from './state/derived'
 import { state } from './state/state'
 import { blobUrl } from './attachments'
@@ -61,6 +61,17 @@ export function showArtifact(open: string | Artifact | null): void {
     state.agentView = null
     state.taskDetail = null
   }
+}
+
+/** Kinds whose blob is text the panel fetches and renders itself. */
+export function isTextKind(kind: ArtifactKind): boolean {
+  return kind === 'html' || kind === 'markdown' || kind === 'svg' || kind === 'code'
+}
+
+/** The blob, served as the artifact's media type when it has one, so the
+ *  browser displays or plays it. */
+export function artifactUrl(a: Artifact): string {
+  return a.mime ? `${blobUrl(a.hash)}?type=${encodeURIComponent(a.mime)}` : blobUrl(a.hash)
 }
 
 /** Blob text by hash: a snapshot never changes, so one fetch serves all. */

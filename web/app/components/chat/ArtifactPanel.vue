@@ -4,10 +4,19 @@
 // and flips between the rendered file and its source. A page runs in an
 // opaque-origin frame with scripts and no network, so it can reach neither
 // rumu's origin nor anything else; an SVG renders as an image, which runs no
-// script at all.
+// script at all. Images, audio, video and PDFs load straight from their blob;
+// any other file only offers a download.
 import { computed, ref, watch } from 'vue'
 import { t } from '../../i18n'
-import { artifactsOnPath, artifactText, openArtifact, sandboxedPage, showArtifact } from '../../lib/artifacts'
+import {
+  artifactsOnPath,
+  artifactText,
+  artifactUrl,
+  isTextKind,
+  openArtifact,
+  sandboxedPage,
+  showArtifact,
+} from '../../lib/artifacts'
 import { renderMarkdown } from '../../lib/markdown'
 import { toast } from '../../lib/state/ui'
 import { copyText, workspaceLabel } from '../../lib/util'
@@ -31,7 +40,9 @@ function step(by: number): void {
   if (v) showArtifact(v.node.id)
 }
 
-// The snapshot's text, fetched once per blob.
+// The snapshot's text, fetched once per blob; other kinds load from `url`.
+const isText = computed(() => !!artifact.value && isTextKind(artifact.value.kind))
+const url = computed(() => (artifact.value ? artifactUrl(artifact.value) : ''))
 const text = ref<string | null>(null)
 const failed = ref(false)
 watch(
@@ -39,7 +50,7 @@ watch(
   (hash) => {
     text.value = null
     failed.value = false
-    if (!hash) return
+    if (!hash || !isText.value) return
     artifactText(hash).then(
       (body) => {
         if (artifact.value?.hash === hash) text.value = body
@@ -53,7 +64,7 @@ watch(
 )
 
 /** Code has nothing to render: it always shows as source. */
-const renders = computed(() => !!artifact.value && artifact.value.kind !== 'code')
+const renders = computed(() => isText.value && artifact.value?.kind !== 'code')
 const source = ref(false)
 const asSource = computed(() => source.value || !renders.value)
 
@@ -63,6 +74,16 @@ const svg = computed(() =>
 )
 const markdown = computed(() => renderMarkdown(text.value ?? '', { breaks: false }))
 
+const size = computed(() => {
+  const n = artifact.value?.size ?? 0
+  if (n < 1024) return `${n} B`
+  const units = ['KB', 'MB', 'GB']
+  let v = n / 1024
+  let i = 0
+  for (; v >= 1024 && i < units.length - 1; i++) v /= 1024
+  return `${v < 10 ? v.toFixed(1) : Math.round(v)} ${units[i]}`
+})
+
 async function onCopy(): Promise<void> {
   if (text.value === null || !artifact.value) return
   const ok = await copyText(text.value)
@@ -71,17 +92,19 @@ async function onCopy(): Promise<void> {
 
 function onDownload(): void {
   const a = artifact.value
-  if (text.value === null || !a) return
-  const url = URL.createObjectURL(new Blob([text.value], { type: 'text/plain;charset=utf-8' }))
+  if (!a || (isText.value && text.value === null)) return
+  const href = isText.value
+    ? URL.createObjectURL(new Blob([text.value!], { type: 'text/plain;charset=utf-8' }))
+    : url.value
   const link = document.createElement('a')
-  link.href = url
+  link.href = href
   link.download =
     a.path
       .slice(a.path.lastIndexOf(':') + 1)
       .split('/')
       .at(-1) || a.title
   link.click()
-  URL.revokeObjectURL(url)
+  if (isText.value) URL.revokeObjectURL(href)
 }
 </script>
 
@@ -121,6 +144,7 @@ function onDownload(): void {
           <Icon name="code" :size="15" />
         </button>
         <button
+          v-if="isText"
           class="icon-btn size-7"
           :title="t('chat.artifact.copy')"
           :aria-label="t('chat.artifact.copy')"
@@ -165,6 +189,49 @@ function onDownload(): void {
         </div>
         <div v-else class="md mx-auto max-w-[72ch] px-6 py-5" v-html="markdown" />
       </template>
+      <div v-else-if="artifact.kind === 'image'" class="flex min-h-full items-center justify-center p-6">
+        <img
+          :key="artifact.hash"
+          :src="url"
+          :alt="artifact.title"
+          class="max-h-full max-w-full"
+          @error="failed = true"
+        />
+      </div>
+      <div v-else-if="artifact.kind === 'audio'" class="flex min-h-full items-center justify-center p-6">
+        <audio :key="artifact.hash" :src="url" controls class="w-full max-w-[480px]" @error="failed = true" />
+      </div>
+      <div v-else-if="artifact.kind === 'video'" class="absolute inset-0 flex items-center justify-center">
+        <video
+          :key="artifact.hash"
+          :src="url"
+          controls
+          playsinline
+          class="max-h-full max-w-full"
+          @error="failed = true"
+        />
+      </div>
+      <iframe
+        v-else-if="artifact.kind === 'pdf'"
+        :key="artifact.hash"
+        class="absolute inset-0 size-full"
+        :src="url"
+        :title="artifact.title"
+      />
+      <div
+        v-else-if="artifact.kind === 'file'"
+        class="flex min-h-full flex-col items-center justify-center gap-3 p-6"
+      >
+        <Icon name="file" :size="40" class="text-ink-3" />
+        <span class="flex max-w-full flex-col items-center">
+          <span class="max-w-full truncate font-semibold">{{ artifact.title }}</span>
+          <span class="font-mono text-micro text-ink-3">{{ size }}</span>
+        </span>
+        <button class="btn btn-primary" @click="onDownload">
+          <Icon name="download" :size="15" />
+          {{ t('chat.artifact.download') }}
+        </button>
+      </div>
     </div>
   </section>
 </template>

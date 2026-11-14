@@ -401,7 +401,8 @@ pub struct Invoke {
     pub blocked: Option<String>,
 }
 
-/// How an artifact renders, picked from its file extension.
+/// How an artifact renders, picked from its file extension (and, for the
+/// text kinds, its bytes being UTF-8).
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize, ts_rs::TS)]
 #[serde(rename_all = "snake_case")]
 #[ts(export)]
@@ -412,11 +413,69 @@ pub enum ArtifactKind {
     Svg,
     /// Any other text, highlighted by its extension.
     Code,
+    Image,
+    Audio,
+    Video,
+    Pdf,
+    /// Anything else: offered for download only.
+    File,
+}
+
+/// Extensions a browser displays or plays as themselves, with the media
+/// type to serve them as. None of these types runs script on the page.
+const MEDIA_TYPES: &[(&str, &str)] = &[
+    ("png", "image/png"),
+    ("jpg", "image/jpeg"),
+    ("jpeg", "image/jpeg"),
+    ("gif", "image/gif"),
+    ("webp", "image/webp"),
+    ("avif", "image/avif"),
+    ("bmp", "image/bmp"),
+    ("ico", "image/x-icon"),
+    ("mp3", "audio/mpeg"),
+    ("wav", "audio/wav"),
+    ("flac", "audio/flac"),
+    ("ogg", "audio/ogg"),
+    ("oga", "audio/ogg"),
+    ("opus", "audio/ogg"),
+    ("m4a", "audio/mp4"),
+    ("aac", "audio/aac"),
+    ("mp4", "video/mp4"),
+    ("m4v", "video/mp4"),
+    ("mov", "video/quicktime"),
+    ("webm", "video/webm"),
+    ("ogv", "video/ogg"),
+    ("pdf", "application/pdf"),
+];
+
+/// The media type a file named `name` displays or plays as, if it is one.
+pub fn media_type(name: &str) -> Option<&'static str> {
+    let ext = name.rsplit_once('.')?.1.to_ascii_lowercase();
+    MEDIA_TYPES
+        .iter()
+        .find(|(e, _)| *e == ext)
+        .map(|(_, mime)| *mime)
+}
+
+/// Whether `mime` is one [`media_type`] gives: safe to serve as itself.
+pub fn is_media_type(mime: &str) -> bool {
+    MEDIA_TYPES.iter().any(|(_, m)| *m == mime)
 }
 
 impl ArtifactKind {
-    /// The kind of a file named `name`.
-    pub fn of(name: &str) -> Self {
+    /// The kind of a file named `name`; `text` when its bytes are UTF-8.
+    pub fn of(name: &str, text: bool) -> Self {
+        if let Some(mime) = media_type(name) {
+            return match mime.split_once('/').map_or("", |(top, _)| top) {
+                "image" => Self::Image,
+                "audio" => Self::Audio,
+                "video" => Self::Video,
+                _ => Self::Pdf,
+            };
+        }
+        if !text {
+            return Self::File;
+        }
         let ext = name.rsplit_once('.').map(|(_, e)| e.to_ascii_lowercase());
         match ext.as_deref() {
             Some("html" | "htm") => Self::Html,
@@ -438,9 +497,14 @@ pub struct Artifact {
     pub path: String,
     pub title: String,
     pub kind: ArtifactKind,
-    /// Lowercase hex SHA-256 of the UTF-8 bytes in the blob store.
+    /// Lowercase hex SHA-256 of the bytes in the blob store.
     pub hash: String,
     pub size: u64,
+    /// The media type to serve the blob as ([`media_type`]), for the image,
+    /// audio, video and PDF kinds.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    #[ts(optional)]
+    pub mime: Option<String>,
 }
 
 impl Structured for Artifact {

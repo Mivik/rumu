@@ -13,6 +13,11 @@ export type Artifact = {
  */
 path: string, title: string, kind: ArtifactKind, 
 /**
- * Lowercase hex SHA-256 of the UTF-8 bytes in the blob store.
+ * Lowercase hex SHA-256 of the bytes in the blob store.
  */
-hash: string, size: number, };
+hash: string, size: number, 
+/**
+ * The media type to serve the blob as ([`media_type`]), for the image,
+ * audio, video and PDF kinds.
+ */
+mime?: string, };

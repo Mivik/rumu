@@ -29,6 +29,7 @@ import {
   mdiDotsHorizontal,
   mdiDownload,
   mdiEyeOutline,
+  mdiFileDocumentOutline,
   mdiFileOutline,
   mdiFilePlusOutline,
   mdiFolderOutline,
@@ -42,6 +43,7 @@ import {
   mdiMagnify,
   mdiMenu,
   mdiMessageTextOutline,
+  mdiMusicNoteOutline,
   mdiNoteTextOutline,
   mdiPencilOutline,
   mdiPinOutline,
@@ -53,6 +55,7 @@ import {
   mdiSwapHorizontal,
   mdiTimelineTextOutline,
   mdiTrashCanOutline,
+  mdiVideoOutline,
   mdiWrenchOutline,
 } from '@mdi/js'
 
@@ -102,6 +105,9 @@ const paths: Record<string, string> = {
   forward: mdiArrowRight,
   home: mdiHomeOutline,
   image: mdiImageOutline,
+  audio: mdiMusicNoteOutline,
+  video: mdiVideoOutline,
+  document: mdiFileDocumentOutline,
   stop: mdiStop,
   brain: mdiLightbulbOutline,
   model: mdiCreationOutline,

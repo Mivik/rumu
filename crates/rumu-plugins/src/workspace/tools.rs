@@ -90,8 +90,10 @@ impl From<BashOutcome> for ToolOutput {
 const BASH_TIMEOUT_DEFAULT: u64 = 60;
 const BASH_TIMEOUT_MAX: u64 = 600;
 pub(super) const LIST_LIMIT: usize = 100;
-/// The largest file `show` snapshots.
+/// The largest text file `show` snapshots (it renders in the page).
 const ARTIFACT_MAX_BYTES: usize = 5 * 1024 * 1024;
+/// The largest other file `show` snapshots (media, downloads).
+const ARTIFACT_MAX_BINARY_BYTES: usize = 64 * 1024 * 1024;
 
 const INSTRUCTIONS: &str = "Files live in workspaces. A workspace is a name for a root \
 directory on this machine or an ssh host; the name is not a folder and never appears inside a \
@@ -110,7 +112,8 @@ workspaces refuse writes and bash.\n\n\
 `@scratch` is this session's throwaway workspace on this machine, shared with its branches and \
 sub-agents and deleted with the session. Use it for scripts, downloads, clones and generated \
 files; what should outlive the session belongs in a card or a project workspace.\n\n\
-To give the user a page, document, diagram or code to look at, write it to a file (usually in \
+To give the user a page, document, diagram, code, image, audio or video to look at, or any file \
+to download, write it to a file (usually in \
 `@scratch`) and `show` it; `show` it again after a change for a new version. HTML runs sandboxed \
 with no network: inline its scripts, styles and images.\n\n\
 `@rumu` holds rumu's own data (no bash):\n\
@@ -302,10 +305,11 @@ stdout+stderr (truncated to ~20k chars) and the exit code. Default timeout 60s (
             },
             ToolSpec {
                 name: "show".into(),
-                description: "Show a text file to the user as an artifact: a snapshot rendered \
-beside the chat by its extension (`.html` runs sandboxed with no network; `.md`, `.svg`; \
-anything else as highlighted code). Same `path` addressing as `read`; not on `@rumu`. Showing \
-the same path again adds a version."
+                description: "Show a file to the user as an artifact: a snapshot rendered \
+beside the chat by its extension (`.html` runs sandboxed with no network; `.md`, `.svg`; images, \
+audio, video and PDF display or play; other text as highlighted code; anything else as a \
+download). Same `path` addressing as `read`; not on `@rumu`. Showing the same path again adds a \
+version."
                     .into(),
                 schema: tool_schema::<ShowArgs>(),
                 background: false,
@@ -462,21 +466,26 @@ async fn snapshot(
 ) -> std::result::Result<Artifact, String> {
     let at = display(ws, abs);
     let bytes = backend.read_bytes(abs).await.map_err(|e| e.to_string())?;
-    if bytes.len() > ARTIFACT_MAX_BYTES {
+    let name = abs.file_name().unwrap_or(at.as_str()).to_owned();
+    let kind = ArtifactKind::of(&name, std::str::from_utf8(&bytes).is_ok());
+    let limit = match kind {
+        ArtifactKind::Html | ArtifactKind::Markdown | ArtifactKind::Svg | ArtifactKind::Code => {
+            ARTIFACT_MAX_BYTES
+        }
+        _ => ARTIFACT_MAX_BINARY_BYTES,
+    };
+    if bytes.len() > limit {
         return Err(format!(
-            "{} bytes is over the {ARTIFACT_MAX_BYTES}-byte limit",
+            "{} bytes is over the {limit}-byte limit",
             bytes.len()
         ));
-    }
-    if std::str::from_utf8(&bytes).is_err() {
-        return Err("not a UTF-8 text file (images: `read` them)".into());
     }
     let hash = blobs
         .and_then(|blobs| blobs.put(&bytes))
         .map_err(|e| e.to_string())?;
-    let name = abs.file_name().unwrap_or(at.as_str()).to_owned();
     Ok(Artifact {
-        kind: ArtifactKind::of(&name),
+        kind,
+        mime: rumu_core::media_type(&name).map(str::to_owned),
         path: at,
         title: name,
         hash,
@@ -725,7 +734,7 @@ impl WorkspacePlugin {
         .with_attachments([attachment]))
     }
 
-    /// `show`: snapshot a text file into the blob store and record it as an
+    /// `show`: snapshot a file into the blob store and record it as an
     /// [`Artifact`] on the result.
     async fn tool_show(&self, state: &PathState, args: &Value) -> ToolResult<ToolOutput> {
         let args: ShowArgs = parse_args("show", args)?;

@@ -1054,6 +1054,7 @@ mod tests {
                                 kind: rumu_core::ArtifactKind::Html,
                                 hash: "ff".into(),
                                 size: 1,
+                                mime: None,
                             }),
                         is_error: false,
                         invoke: None,

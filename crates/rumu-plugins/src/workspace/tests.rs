@@ -620,15 +620,56 @@ async fn show_snapshots_a_file_as_an_artifact() {
         ("notes.MD", rumu_core::ArtifactKind::Markdown)
     );
 
-    // Missing files, binary files and `@rumu` are refused.
+    // Media display or play as themselves, other bytes download; non-UTF-8
+    // text extensions are just files.
+    for (name, bytes, kind, mime) in [
+        (
+            "shot.PNG",
+            &b"\x89PNG"[..],
+            rumu_core::ArtifactKind::Image,
+            Some("image/png"),
+        ),
+        (
+            "clip.mp4",
+            b"\0\0\0\x18ftyp",
+            rumu_core::ArtifactKind::Video,
+            Some("video/mp4"),
+        ),
+        (
+            "song.mp3",
+            b"ID3",
+            rumu_core::ArtifactKind::Audio,
+            Some("audio/mpeg"),
+        ),
+        (
+            "paper.pdf",
+            b"%PDF-1.7",
+            rumu_core::ArtifactKind::Pdf,
+            Some("application/pdf"),
+        ),
+        (
+            "bin.dat",
+            &[0xff, 0xfe, 0x00],
+            rumu_core::ArtifactKind::File,
+            None,
+        ),
+        ("odd.md", &[0xff], rumu_core::ArtifactKind::File, None),
+    ] {
+        std::fs::write(dir.path().join(name), bytes).unwrap();
+        let out = plugin
+            .call_tool("show", json!({ "path": name }), &cx)
+            .await
+            .unwrap();
+        assert!(!out.is_error, "{name}: {}", out.content.text);
+        let a: rumu_core::Artifact = out.content.data.as_ref().unwrap().decode().unwrap();
+        assert_eq!((a.kind, a.mime.as_deref()), (kind, mime), "{name}");
+    }
+
+    // Missing files and `@rumu` are refused.
     for (path, needle) in [
         ("gone.txt", "show proj:gone.txt: "),
-        ("bin.dat", "not a UTF-8 text file"),
         ("@rumu:/cards/self/x", "takes a workspace file"),
     ] {
-        if path == "bin.dat" {
-            std::fs::write(dir.path().join(path), [0xff, 0xfe, 0x00]).unwrap();
-        }
         let out = plugin
             .call_tool("show", json!({ "path": path }), &cx)
             .await
