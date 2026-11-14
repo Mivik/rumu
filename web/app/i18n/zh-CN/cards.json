@@ -6,8 +6,8 @@
   },
   "pills": {
     "imported": "回忆",
-    "recalled": "回忆了 {count} 张卡片",
-    "recalledList": "回忆了 {count} 张卡片：",
+    "recalled": "回忆 {count} 张卡片",
+    "recalledList": "回忆 {count} 张卡片：",
     "moreCards": "{names}（{count} 张）",
     "catalogTitles": {
       "deck": "{at} 的卡片"
@@ -25,14 +25,14 @@
     "label": "知识卡片",
     "close": "关闭 (Esc)",
     "closeAria": "关闭",
-    "deleted": "这张卡片已被删除。",
-    "deletedSeen": "这张卡片已被删除，下面是当时看到的版本。",
+    "deleted": "卡片已删除",
+    "deletedSeen": "卡片已删除，以下为当时看到的版本",
     "asSeen": "当时看到的版本",
     "current": "最新版本",
     "details": "详细信息",
     "scope": "适用范围",
     "path": "路径",
     "revision": "内容版本",
-    "olderSeen": "当时看到的不是最新版本。"
+    "olderSeen": "当时看到的并非最新版本"
   }
 }

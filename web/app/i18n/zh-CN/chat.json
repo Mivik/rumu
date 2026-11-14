@@ -7,7 +7,7 @@
     "retitle": "重新生成标题",
     "unseen": "有新动态",
     "deleteConfirm": "删除",
-    "deletePrompt": "删除这个会话？",
+    "deletePrompt": "删除此会话？",
     "deleteWarning": "此操作无法撤销。",
     "lastActive": "上次活跃 {at}",
     "actions": "会话操作",
@@ -33,7 +33,7 @@
     "attach": "添加图片",
     "removeImage": "移除图片",
     "retryUpload": "重试上传",
-    "tooManyImages": "图片太多（最多 {max} 张）",
+    "tooManyImages": "最多 {max} 张图片",
     "notAnImage": "只能附加图片文件",
     "uploadFailed": "上传图片失败"
   },
@@ -60,7 +60,7 @@
   },
   "assistant": {
     "working": "工作中…",
-    "changed": "改了 {count} 个文件",
+    "changed": "{count} 个文件",
     "retrying": "重试 {attempt}/{max} · {seconds} 秒",
     "copy": "复制回复",
     "regenerate": "重新生成回复",
@@ -72,7 +72,7 @@
     "compacting": "正在压缩上下文…"
   },
   "error": {
-    "interrupted": "回复被中断了",
+    "interrupted": "回复已中断",
     "retry": "重试"
   },
   "alternatives": {
@@ -102,10 +102,10 @@
     "linkTitle": "{from} 想链接 {to} 里的一张卡片",
     "linkHint": "{path} 会把 {target} 展示给所有挂载它所在卡组的会话。",
     "deny": "不允许",
-    "once": "允许这一次",
+    "once": "仅允许本次",
     "session": "本会话内允许",
     "always": "始终允许",
-    "waiting": "等你确认",
+    "waiting": "待确认",
     "questionsTitle": "{from} 想问你",
     "questionN": "问题 {n}",
     "multiple": "可多选",
@@ -122,7 +122,7 @@
     "stats": "统计"
   },
   "trace": {
-    "empty": "还没有节点",
+    "empty": "暂无节点",
     "nodes": "{count} 个节点",
     "hooks": "{count} 次钩子",
     "show": "显示",
@@ -140,7 +140,7 @@
     "copy": "复制",
     "copied": "已复制 {title}",
     "download": "下载",
-    "loadFailed": "无法加载这个版本",
+    "loadFailed": "无法加载此版本",
     "openFailed": "无法打开 {path}"
   },
   "agentView": {

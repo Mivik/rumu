@@ -35,10 +35,10 @@
   "noTools": "全不选",
   "skills": "Skill",
   "skillGone": "未找到，点击移除",
-  "namePlaceholder": "给助手起个名字",
+  "namePlaceholder": "助手名字",
   "copyId": "复制 ID",
   "newSession": "新会话",
-  "carriesDecks": "挂载了 {n} 个卡组",
+  "carriesDecks": "{n} 个卡组",
   "carriesMcp": "{n} 个 MCP 服务器",
   "carriesSkills": "{n} 个 Skill",
   "carriesAllSkills": "全部 Skill"

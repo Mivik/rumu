@@ -1,7 +1,7 @@
 {
   "phrase": {
-    "catalog": "查阅了卡片目录",
-    "thoughtFor": "思考了 {duration}",
+    "catalog": "查阅卡片目录",
+    "thoughtFor": "思考 {duration}",
     "thinking": "思考中"
   },
   "verb": {
@@ -16,7 +16,7 @@
     "workspaceUse": "切换到",
     "workspaceList": "列出",
     "other": "调用",
-    "show": "展示了"
+    "show": "展示"
   },
   "count": {
     "entries": "{count} 个条目",
@@ -41,7 +41,7 @@
   "thought": {
     "thinking": "思考中",
     "thought": "已思考",
-    "thoughtFor": "思考了 {duration}"
+    "thoughtFor": "思考 {duration}"
   },
   "row": {
     "task": "任务 {id} · {status}",
@@ -64,8 +64,8 @@
     "hookTrace": "工具调用记录 · {count}"
   },
   "diff": {
-    "moreLines": "还有 {count} 行",
-    "showAll": "展开全部 · 还有 {count} 行",
+    "moreLines": "其余 {count} 行",
+    "showAll": "展开其余 {count} 行",
     "otherHunks": "其余改动：",
     "unavailable": "差异不可用 — 文件过大或非文本"
   },
