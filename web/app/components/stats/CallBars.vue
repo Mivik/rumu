@@ -38,7 +38,8 @@ const cols = computed(() =>
       cached: c.cached * k,
       written: c.written * k,
       uncached: Math.max(0, c.input - c.cached - c.written) * k,
-      out: c.output > 0 ? Math.max(1, (DOWN.value * c.output) / maxOut.value) : 0,
+      // Under the axis's `pt-px`.
+      out: c.output > 0 ? Math.max(1, ((DOWN.value - 1) * c.output) / maxOut.value) : 0,
       top: UP.value - c.input * k,
       apart: i > 0 && props.calls[i - 1]!.reply !== c.reply,
     }
