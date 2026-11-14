@@ -3,7 +3,8 @@
 // how it met the cache (read, written, neither) on one scale, so a growing
 // context climbs and a cache miss stands out dark; below, its output. A
 // warn dot over a column marks a call that ran without the reasoning before
-// it. Calls of different replies sit a little apart.
+// it. Calls of different replies sit a little apart. Columns keep a minimum
+// width; past what fits, the chart scrolls sideways.
 //
 // Hovering a column shows that call in the line under the chart; otherwise
 // the line shows the `idle` slot. The line keeps three rows' height, so
@@ -26,8 +27,8 @@ const DOWN = computed(() => (props.size === 'lg' ? 40 : 22))
 const maxIn = computed(() => Math.max(1, ...props.calls.map((c) => c.input)))
 const maxOut = computed(() => Math.max(1, ...props.calls.map((c) => c.output)))
 
-/** Thinner gaps as the columns crowd, so hundreds of calls still fit. */
-const gap = computed(() => (props.calls.length > 160 ? 0 : props.calls.length > 60 ? 1 : 2))
+/** Thinner gaps as the columns crowd; past their minimum width they scroll. */
+const gap = computed(() => (props.calls.length > 60 ? 1 : 2))
 
 const cols = computed(() =>
   props.calls.map((c, i) => {
@@ -69,12 +70,12 @@ const timing = computed(() => {
 
 <template>
   <div>
-    <div class="flex items-stretch" :style="{ gap: `${gap}px` }" @mouseleave="hovered = null">
+    <div class="flex items-stretch overflow-x-auto" :style="{ gap: `${gap}px` }" @mouseleave="hovered = null">
       <div
         v-for="(col, i) in cols"
         :key="col.c.node.id"
-        class="group relative flex min-w-px flex-1 flex-col rounded-xs transition-colors hover:bg-surface-2"
-        :class="[size === 'lg' ? 'max-w-7' : 'max-w-4', { 'ml-1.5': col.apart && gap > 0 }]"
+        class="group relative flex min-w-1 flex-1 flex-col rounded-xs transition-colors hover:bg-surface-2"
+        :class="[size === 'lg' ? 'max-w-7' : 'max-w-4', { 'ml-1.5': col.apart }]"
         @mouseenter="hovered = i"
       >
         <div class="relative flex flex-col justify-end" :style="{ height: `${UP}px` }">
