@@ -13,6 +13,11 @@
 //! {"t":"meta","title":"refactor","updated_at":3}
 //! ```
 //!
+//! When the user last looked at each session (`SessionInfo::seen_at`) is
+//! this machine's view state, not part of the journal: it lives in one
+//! `seen.json` map (`{session id: timestamp}`) beside the sessions
+//! directory, rewritten whole on every change.
+//!
 //! Loading a file folds the records into memory: `session` is the header
 //! (the initial [`SessionInfo`]), `meta` patches it (title /
 //! active_branch / project / updated_at — whatever the mutating call changed),
@@ -41,7 +46,7 @@
 mod error;
 pub use error::{Error, Result};
 
-use std::collections::{HashMap, HashSet};
+use std::collections::{BTreeMap, HashMap, HashSet};
 use std::io::Write;
 use std::path::{Path, PathBuf};
 use std::sync::Mutex;
@@ -57,6 +62,8 @@ use tracing::warn;
 pub struct Store {
     /// Directory of `<session-id>.jsonl` files; `None` for in-memory stores.
     root: Option<PathBuf>,
+    /// The `seen.json` file; `None` for in-memory stores.
+    seen_path: Option<PathBuf>,
     state: Mutex<StoreState>,
 }
 
@@ -91,8 +98,6 @@ enum Record {
         project: Option<Option<String>>,
         #[serde(default, skip_serializing_if = "Option::is_none")]
         updated_at: Option<Timestamp>,
-        #[serde(default, skip_serializing_if = "Option::is_none")]
-        seen_at: Option<Timestamp>,
     },
     Branch(Branch),
     BranchUpdate {
@@ -125,6 +130,8 @@ struct StoreState {
     /// are built during the open scan and kept current on inserts.
     node_owner: HashMap<NodeId, SessionId>,
     branch_owner: HashMap<BranchId, SessionId>,
+    /// When the user last looked at each session (`seen.json`).
+    seen: BTreeMap<SessionId, Timestamp>,
 }
 
 enum Entry {
@@ -141,9 +148,10 @@ struct SessionState {
 }
 
 impl Store {
-    /// Open (creating if needed) the directory of per-session `.jsonl` files.
-    /// Every file is scanned and folded into memory once, up front.
-    pub fn open(root: &Path) -> Result<Self> {
+    /// Open (creating if needed) the directory of per-session `.jsonl` files
+    /// and the `seen` map file. Every file is scanned and folded into memory
+    /// once, up front.
+    pub fn open(root: &Path, seen: &Path) -> Result<Self> {
         std::fs::create_dir_all(root).map_err(IoError::at("creating sessions dir", root))?;
         let mut paths: Vec<PathBuf> = std::fs::read_dir(root)
             .map_err(IoError::at("reading sessions dir", root))?
@@ -155,8 +163,17 @@ impl Store {
         for path in &paths {
             state.load_file(path)?;
         }
+        state.seen = match std::fs::read(seen) {
+            Ok(bytes) => serde_json::from_slice(&bytes).unwrap_or_else(|e| {
+                warn!("{}: {e}; starting with every session seen", seen.display());
+                BTreeMap::new()
+            }),
+            Err(e) if e.kind() == std::io::ErrorKind::NotFound => BTreeMap::new(),
+            Err(e) => return Err(IoError::at("reading", seen)(e).into()),
+        };
         Ok(Self {
             root: Some(root.to_path_buf()),
+            seen_path: Some(seen.to_path_buf()),
             state: Mutex::new(state),
         })
     }
@@ -165,6 +182,7 @@ impl Store {
     pub fn in_memory() -> Self {
         Self {
             root: None,
+            seen_path: None,
             state: Mutex::new(StoreState::default()),
         }
     }
@@ -191,6 +209,18 @@ impl Store {
         Ok(())
     }
 
+    /// Rewrite `seen.json` from `seen` (a temp file renamed over it).
+    fn save_seen(&self, seen: &BTreeMap<SessionId, Timestamp>) -> Result<()> {
+        let Some(path) = &self.seen_path else {
+            return Ok(());
+        };
+        let bytes = serde_json::to_vec(seen).expect("a map of strings to numbers serializes");
+        let tmp = path.with_extension("json.tmp");
+        std::fs::write(&tmp, bytes).map_err(IoError::at("writing", &tmp))?;
+        std::fs::rename(&tmp, path).map_err(IoError::at("renaming", &tmp))?;
+        Ok(())
+    }
+
     // ---- sessions ----
 
     pub fn insert_session(&self, s: &SessionInfo) -> Result<()> {
@@ -198,19 +228,23 @@ impl Store {
         if st.sessions.contains_key(&s.id) {
             return Err(Error::SessionExists { id: s.id.clone() });
         }
-        let rec = Record::Session(s.clone());
-        self.append(&s.id, &rec)?;
-        st.sessions.insert(
-            s.id.clone(),
-            Entry::Loaded(Box::new(SessionState::new(s.clone()))),
-        );
+        let info = SessionInfo {
+            seen_at: None,
+            ..s.clone()
+        };
+        self.append(&s.id, &Record::Session(info.clone()))?;
+        st.sessions.insert(s.id.clone(), Entry::Loaded(Box::new(SessionState::new(info))));
+        if let Some(at) = s.seen_at {
+            st.seen.insert(s.id.clone(), at);
+            self.save_seen(&st.seen)?;
+        }
         Ok(())
     }
 
     pub fn get_session(&self, id: &SessionId) -> Result<Option<SessionInfo>> {
         let st = self.state.lock().unwrap();
         Ok(match st.sessions.get(id) {
-            Some(Entry::Loaded(s)) => Some(s.info.clone()),
+            Some(Entry::Loaded(s)) => Some(st.info(s)),
             Some(Entry::Corrupt(msg)) => return Err(unreadable(id, msg)),
             None => None,
         })
@@ -224,7 +258,7 @@ impl Store {
             .sessions
             .values()
             .filter_map(|e| match e {
-                Entry::Loaded(s) => Some(s.info.clone()),
+                Entry::Loaded(s) => Some(st.info(s)),
                 Entry::Corrupt(_) => None,
             })
             .collect();
@@ -246,7 +280,6 @@ impl Store {
             active_branch: Some(s.active_branch.clone()),
             project: Some(s.project.clone()),
             updated_at: Some(s.updated_at),
-            seen_at: None,
         };
         self.append(&s.id, &rec)?;
         st.apply(&s.id, rec);
@@ -260,16 +293,8 @@ impl Store {
         if st.loaded(id)?.is_none() {
             return Ok(());
         }
-        let rec = Record::Meta {
-            title: None,
-            active_branch: None,
-            project: None,
-            updated_at: None,
-            seen_at: Some(at),
-        };
-        self.append(id, &rec)?;
-        st.apply(id, rec);
-        Ok(())
+        st.seen.insert(id.clone(), at);
+        self.save_seen(&st.seen)
     }
 
     /// Delete a session: its journal file and every in-memory record and
@@ -298,6 +323,9 @@ impl Store {
             for node in s.nodes.keys() {
                 st.node_owner.remove(node);
             }
+        }
+        if st.seen.remove(id).is_some() {
+            self.save_seen(&st.seen)?;
         }
         Ok(())
     }
@@ -452,6 +480,14 @@ impl Store {
 impl StoreState {
     /// The folded state of `sid`, if it loaded cleanly. `Ok(None)` when no
     /// such session exists.
+    /// A session's info, with when it was last seen.
+    fn info(&self, s: &SessionState) -> SessionInfo {
+        SessionInfo {
+            seen_at: self.seen.get(&s.info.id).copied(),
+            ..s.info.clone()
+        }
+    }
+
     fn loaded<'a>(&'a mut self, sid: &SessionId) -> Result<Option<&'a mut SessionState>> {
         match self.sessions.get_mut(sid) {
             Some(Entry::Loaded(s)) => Ok(Some(s)),
@@ -610,7 +646,6 @@ impl SessionState {
                 active_branch,
                 project,
                 updated_at,
-                seen_at,
             } => {
                 if let Some(v) = title {
                     self.info.title = v;
@@ -623,9 +658,6 @@ impl SessionState {
                 }
                 if let Some(v) = updated_at {
                     self.info.updated_at = self.info.updated_at.max(v);
-                }
-                if seen_at.is_some() {
-                    self.info.seen_at = seen_at;
                 }
             }
             Record::Branch(b) => {
@@ -793,7 +825,7 @@ mod tests {
     #[test]
     fn seen_at_survives_a_reload() {
         let dir = temp_dir("seen");
-        let store = Store::open(&dir).unwrap();
+        let store = Store::open(&dir, &dir.join("seen.json")).unwrap();
         let (session, branch, root) = mk_session(&store);
         store.mark_seen(&session.id, 7).unwrap();
         let child = Node {
@@ -808,7 +840,7 @@ mod tests {
         };
         store.append_node(&branch.id, &child).unwrap();
         drop(store);
-        let info = Store::open(&dir)
+        let info = Store::open(&dir, &dir.join("seen.json"))
             .unwrap()
             .get_session(&session.id)
             .unwrap()
@@ -816,6 +848,9 @@ mod tests {
         // `updated_at` follows the newest node.
         assert_eq!(info.updated_at, root.at + 9);
         assert_eq!(info.seen_at, Some(7));
+        // The journal holds no view state.
+        let journal = std::fs::read_to_string(dir.join(format!("{}.jsonl", session.id))).unwrap();
+        assert!(!journal.contains("seen_at"));
         std::fs::remove_dir_all(dir).unwrap();
     }
 
@@ -851,10 +886,10 @@ mod tests {
         // The same data survives reopening a file-backed store.
         let dir = temp_dir("roundtrip");
         {
-            let store = Store::open(&dir).unwrap();
+            let store = Store::open(&dir, &dir.join("seen.json")).unwrap();
             mk_session(&store);
         }
-        let store = Store::open(&dir).unwrap();
+        let store = Store::open(&dir, &dir.join("seen.json")).unwrap();
         assert_eq!(store.list_sessions().unwrap().len(), 1);
         std::fs::remove_dir_all(&dir).ok();
     }
@@ -863,7 +898,7 @@ mod tests {
     fn delete_removes_the_journal_and_indexes() {
         let dir = temp_dir("delete");
         {
-            let store = Store::open(&dir).unwrap();
+            let store = Store::open(&dir, &dir.join("seen.json")).unwrap();
             let (session, branch, root) = mk_session(&store);
             let path = dir.join(format!("{}.jsonl", session.id));
             assert!(path.exists());
@@ -894,7 +929,7 @@ mod tests {
             assert!(!path.exists());
         }
         // Reopening the directory finds nothing left behind.
-        let store = Store::open(&dir).unwrap();
+        let store = Store::open(&dir, &dir.join("seen.json")).unwrap();
         assert!(store.list_sessions().unwrap().is_empty());
         std::fs::remove_dir_all(&dir).ok();
     }
@@ -924,7 +959,7 @@ mod tests {
         .concat();
         std::fs::write(dir.join(format!("{sid}.jsonl")), content).unwrap();
 
-        let store = Store::open(&dir).unwrap();
+        let store = Store::open(&dir, &dir.join("seen.json")).unwrap();
         let session = store
             .get_session(&SessionId::from(sid))
             .unwrap()
@@ -944,7 +979,7 @@ mod tests {
         let dir = temp_dir("ghost");
         let sid;
         {
-            let store = Store::open(&dir).unwrap();
+            let store = Store::open(&dir, &dir.join("seen.json")).unwrap();
             let (session, _, _) = mk_session(&store);
             sid = session.id.0.clone();
         }
@@ -958,7 +993,7 @@ mod tests {
         file.write_all(format!("{ghost}\n").as_bytes()).unwrap();
         drop(file);
 
-        let store = Store::open(&dir).unwrap();
+        let store = Store::open(&dir, &dir.join("seen.json")).unwrap();
         let sid = SessionId(sid);
         let err = store.get_node(&NodeId("ghost".into())).unwrap_err();
         assert!(
@@ -986,7 +1021,7 @@ mod tests {
         let dir = temp_dir("retired-code-call");
         let sid;
         {
-            let store = Store::open(&dir).unwrap();
+            let store = Store::open(&dir, &dir.join("seen.json")).unwrap();
             let (session, _, _) = mk_session(&store);
             sid = session.id.0.clone();
             let mut file = std::fs::OpenOptions::new()
@@ -999,7 +1034,7 @@ mod tests {
             )
             .unwrap();
         }
-        let store = Store::open(&dir).unwrap();
+        let store = Store::open(&dir, &dir.join("seen.json")).unwrap();
         let session = store
             .get_session(&SessionId::from(sid.as_str()))
             .unwrap()
@@ -1026,7 +1061,7 @@ mod tests {
     fn referenced_blobs_covers_every_body_variant() {
         let dir = temp_dir("blobs");
         let sid = {
-            let store = Store::open(&dir).unwrap();
+            let store = Store::open(&dir, &dir.join("seen.json")).unwrap();
             let (session, _, root) = mk_session(&store);
             let node = |session: &SessionId, parent: &NodeId, body| Node {
                 id: NodeId::new(),
@@ -1107,7 +1142,7 @@ mod tests {
         };
 
         // The same set comes back from a reopened (re-scanned) store.
-        let store = Store::open(&dir).unwrap();
+        let store = Store::open(&dir, &dir.join("seen.json")).unwrap();
         assert_eq!(store.referenced_blobs().unwrap().len(), 6);
         assert!(store.get_session(&sid).unwrap().is_some());
         std::fs::remove_dir_all(&dir).ok();
@@ -1119,7 +1154,7 @@ mod tests {
     fn torn_last_line_is_tolerated_and_truncated() {
         let dir = temp_dir("torn");
         let (sid, root_id) = {
-            let store = Store::open(&dir).unwrap();
+            let store = Store::open(&dir, &dir.join("seen.json")).unwrap();
             let (session, _, root) = mk_session(&store);
             (session.id, root.id)
         };
@@ -1132,7 +1167,7 @@ mod tests {
         file.write_all(br#"{"t":"node","id":"01TORN"#).unwrap(); // cut mid-line
         drop(file);
 
-        let store = Store::open(&dir).unwrap();
+        let store = Store::open(&dir, &dir.join("seen.json")).unwrap();
         assert_eq!(store.list_sessions().unwrap().len(), 1);
         assert_eq!(store.nodes_of_session(&sid).unwrap().len(), 1); // just the root
         assert_eq!(std::fs::metadata(&path).unwrap().len(), clean_len);
@@ -1160,7 +1195,7 @@ mod tests {
         };
         store.insert_node(&child).unwrap();
         drop(store);
-        let store = Store::open(&dir).unwrap();
+        let store = Store::open(&dir, &dir.join("seen.json")).unwrap();
         assert_eq!(store.nodes_of_session(&sid).unwrap().len(), 2);
         assert!(store.get_node(&child.id).unwrap().is_some());
         std::fs::remove_dir_all(&dir).ok();
@@ -1173,7 +1208,7 @@ mod tests {
     fn broken_complete_line_is_corruption_not_torn() {
         let dir = temp_dir("broken");
         let sid = {
-            let store = Store::open(&dir).unwrap();
+            let store = Store::open(&dir, &dir.join("seen.json")).unwrap();
             let (session, _, _) = mk_session(&store);
             session.id
         };
@@ -1186,7 +1221,7 @@ mod tests {
         drop(file);
         let len_before = std::fs::metadata(&path).unwrap().len();
 
-        let store = Store::open(&dir).unwrap();
+        let store = Store::open(&dir, &dir.join("seen.json")).unwrap();
         assert!(store.get_session(&sid).is_err());
         assert!(store.nodes_of_session(&sid).is_err());
         assert!(store.list_sessions().unwrap().is_empty());
@@ -1200,7 +1235,7 @@ mod tests {
     fn mutations_survive_reopen() {
         let dir = temp_dir("mutations");
         let (sid, branch_id, child_id) = {
-            let store = Store::open(&dir).unwrap();
+            let store = Store::open(&dir, &dir.join("seen.json")).unwrap();
             let (session, branch, root) = mk_session(&store);
             let child = Node {
                 id: NodeId::new(),
@@ -1226,7 +1261,7 @@ mod tests {
             (session.id, branch.id, child.id)
         };
 
-        let store = Store::open(&dir).unwrap();
+        let store = Store::open(&dir, &dir.join("seen.json")).unwrap();
         let b = store.get_branch(&branch_id).unwrap().unwrap();
         assert_eq!(b.head, child_id);
         assert_eq!(b.status, BranchStatus::Done);

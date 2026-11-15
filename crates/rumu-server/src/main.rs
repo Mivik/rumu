@@ -44,7 +44,7 @@ async fn main() -> Result<()> {
         .and_then(|h| h.parse().ok())
         .unwrap_or(IpAddr::V4(Ipv4Addr::LOCALHOST));
 
-    let store = Arc::new(Store::open(&home.join("sessions"))?);
+    let store = Arc::new(Store::open(&home.join("sessions"), &home.join("seen.json"))?);
     let blobs = Blobs::in_home(&home)?;
     let config = rumu_plugins::load_config(&home)?;
     // A home without a registry starts with the current directory as its
