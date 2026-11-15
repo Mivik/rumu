@@ -142,6 +142,12 @@ export async function openSession(id: SessionId, opts: { history?: OpenHistory }
   try {
     const tree = await rumu.request<SessionTreeResult>('session.tree', { session: id })
     if (seq !== openSeq) return false
+    if (state.sessionId !== tree.session.id) {
+      // Panels beside the chat belong to the session that opened them.
+      state.artifact = null
+      state.agentView = null
+      state.taskDetail = null
+    }
     state.sessionId = tree.session.id
     viewAssistant(tree.session.assistant)
     replaceTree(tree)
@@ -218,6 +224,7 @@ export function closeSession(): void {
   state.taskOutput = {}
   state.taskDetail = null
   state.agentView = null
+  state.artifact = null
 }
 
 /** Resync the session's runtime task table (`task.list`). */
