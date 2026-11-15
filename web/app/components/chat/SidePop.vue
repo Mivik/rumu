@@ -13,7 +13,7 @@ import { pathOf, state } from '../../lib/store'
 import type { BranchId, Node, Quote } from '../../lib/types'
 import { renderMarkdown } from '../../lib/markdown'
 import { pathNodes } from '../../lib/state/derived'
-import { askSide, closeSide, openSide, quotes, side, sideBranches } from '../../lib/state/side'
+import { addQuote, askSide, closeSide, openSide, side, sideBranches } from '../../lib/state/side'
 import { requestComposerFocus } from '../../lib/state/ui'
 import Icon from '../ui/Icon.vue'
 
@@ -72,7 +72,7 @@ function onKeydown(e: KeyboardEvent): void {
 /** Quote a reply into the composer: what a side question turned up joins
  *  the main line only this way. */
 function bringBack(n: Node): void {
-  quotes.value.push({ node: n.id, text: textOf(n) })
+  addQuote({ node: n.id, text: textOf(n) })
   requestComposerFocus()
 }
 
@@ -171,37 +171,48 @@ onBeforeUnmount(() => {
 
 <template>
   <Transition
-    enter-active-class="transition duration-200 ease-soft"
-    enter-from-class="-translate-y-1.5 scale-[.97] opacity-0"
-    leave-active-class="transition duration-150"
-    leave-to-class="-translate-y-1 opacity-0"
+    enter-active-class="transition duration-300 ease-soft"
+    enter-from-class="-translate-y-2 scale-95 opacity-0"
+    leave-active-class="transition duration-150 ease-soft"
+    leave-to-class="-translate-y-1 scale-[.97] opacity-0"
   >
     <section
       v-if="side.open"
-      class="absolute top-2 right-2 left-2 z-20 flex max-h-[min(64%,560px)] origin-top-right flex-col overflow-hidden rounded-card border border-line bg-surface shadow-pop sm:right-4 sm:left-auto"
-      :class="side.folded ? 'sm:max-w-[320px]' : 'sm:w-[400px]'"
+      class="absolute top-2 right-2 left-2 z-20 flex max-h-[min(64%,560px)] origin-top-right flex-col overflow-hidden rounded-card border border-line bg-surface shadow-pop transition-[width] duration-300 ease-soft [interpolate-size:allow-keywords] sm:right-4 sm:left-auto"
+      :class="side.folded ? 'sm:w-fit' : 'sm:w-[400px]'"
       @keydown.esc="closeSide()"
     >
+      <!-- what folding adds to the title row (the question) and takes from
+           it (the way back to the list) slides in and out with it, so the
+           card's width moves from where it was -->
       <header
         class="flex min-h-11 flex-none cursor-pointer items-center gap-1 pr-1.5 pl-2"
-        :class="{ 'border-b border-line-soft': !side.folded }"
         @click="side.folded = !side.folded"
       >
-        <button
-          v-if="(side.branch || side.quote) && sideBranches.length && !side.folded"
-          class="icon-btn size-7 flex-none"
-          :title="t('chat.side.all')"
-          :aria-label="t('chat.side.all')"
-          @click.stop="openSide(null)"
+        <span
+          v-if="(side.branch || side.quote) && sideBranches.length"
+          class="flex flex-none overflow-hidden transition-[max-width,opacity,margin] duration-300 ease-soft"
+          :class="side.folded ? '-mr-1 max-w-0 opacity-0' : 'max-w-7'"
         >
-          <Icon name="back" :size="14" />
-        </button>
+          <button
+            class="icon-btn size-7 flex-none"
+            :title="t('chat.side.all')"
+            :aria-label="t('chat.side.all')"
+            :tabindex="side.folded ? -1 : 0"
+            @click.stop="openSide(null)"
+          >
+            <Icon name="back" :size="14" />
+          </button>
+        </span>
         <span class="flex min-w-0 flex-1 items-center gap-1.5 pl-1.5 text-secondary">
           <Icon name="side" :size="15" class="flex-none text-agent" />
           <span class="flex-none font-bold text-agent">{{ t('chat.side.title') }}</span>
-          <span v-if="side.folded && side.branch" class="truncate text-ink-2">{{
-            question(side.branch)
-          }}</span>
+          <span
+            v-if="side.branch"
+            class="truncate text-ink-2 transition-[max-width,opacity,margin] duration-300 ease-soft"
+            :class="side.folded ? 'max-w-[180px]' : '-ml-1.5 max-w-0 opacity-0'"
+            >{{ question(side.branch) }}</span
+          >
           <span v-if="busy" class="dot-live size-1.5 flex-none rounded-full bg-brand" />
         </span>
         <button
@@ -214,74 +225,87 @@ onBeforeUnmount(() => {
         </button>
       </header>
 
-      <template v-if="!side.folded">
-        <div v-if="hasBody" ref="scrollEl" class="min-h-0 flex-1 overflow-y-auto px-4 py-3">
-          <div v-if="listing" class="-mx-2 flex flex-col">
-            <button
-              v-for="b in sideBranches"
-              :key="b.id"
-              class="flex min-w-0 flex-col rounded-control px-2 py-1.5 text-left transition-colors hover:bg-surface-2"
-              @click="openSide(b.id)"
-            >
-              <span class="flex min-w-0 items-center gap-1.5 text-secondary">
-                <span class="truncate">{{ question(b.id) }}</span>
-                <span v-if="state.busy[b.id]" class="dot-live size-1.5 flex-none rounded-full bg-brand" />
-              </span>
-              <span v-if="quoteOf(b.id)" class="truncate text-meta text-ink-3"
-                >“{{ quoteOf(b.id)!.text }}”</span
+      <!-- folding closes the body's row, as the ask panel's does; its
+           contents keep out of the card's width (inline-size containment),
+           so the folded card hugs its title row -->
+      <div
+        class="grid min-h-0 transition-[grid-template-rows] duration-300 ease-soft [contain:inline-size]"
+        :class="side.folded ? 'grid-rows-[0fr]' : 'grid-rows-[1fr]'"
+        :inert="side.folded"
+      >
+        <div class="flex min-h-0 flex-col overflow-hidden border-t border-line-soft">
+          <div v-if="hasBody" ref="scrollEl" class="min-h-0 flex-1 overflow-y-auto px-4 py-3">
+            <div v-if="listing" class="-mx-2 flex flex-col">
+              <button
+                v-for="b in sideBranches"
+                :key="b.id"
+                class="flex min-w-0 flex-col rounded-control px-2 py-1.5 text-left transition-colors hover:bg-surface-2"
+                @click="openSide(b.id)"
               >
+                <span class="flex min-w-0 items-center gap-1.5 text-secondary">
+                  <span class="truncate">{{ question(b.id) }}</span>
+                  <span v-if="state.busy[b.id]" class="dot-live size-1.5 flex-none rounded-full bg-brand" />
+                </span>
+                <span v-if="quoteOf(b.id)" class="truncate text-meta text-ink-3"
+                  >“{{ quoteOf(b.id)!.text }}”</span
+                >
+              </button>
+            </div>
+            <template v-else>
+              <button
+                v-if="quote"
+                class="mb-3 line-clamp-3 w-full border-l-2 border-agent pl-2.5 text-left text-meta text-ink-2"
+                @click="locate(quote)"
+              >
+                {{ quote.text }}
+              </button>
+              <div class="flex flex-col gap-3">
+                <template v-for="n in turns" :key="n.id">
+                  <p
+                    v-if="n.body.type === 'user'"
+                    class="ml-auto max-w-[85%] rounded-card bg-agent-soft px-3 py-1.5 text-secondary whitespace-pre-wrap"
+                  >
+                    {{ textOf(n) }}
+                  </p>
+                  <div v-else class="flex flex-col items-start gap-0.5">
+                    <div class="md text-secondary" v-html="renderMarkdown(textOf(n))" />
+                    <button
+                      class="-ml-1.5 inline-flex items-center gap-1 rounded-control px-1.5 py-0.5 text-meta text-ink-3 transition-colors hover:bg-surface-2 hover:text-ink"
+                      @click="bringBack(n)"
+                    >
+                      <Icon name="unside" :size="13" />{{ t('chat.side.bringBack') }}
+                    </button>
+                  </div>
+                </template>
+                <div
+                  v-if="busy"
+                  class="md streaming-caret text-secondary"
+                  v-html="renderMarkdown(streaming)"
+                />
+              </div>
+            </template>
+          </div>
+          <div class="flex flex-none items-end gap-1.5 p-2" :class="{ 'border-t border-line-soft': hasBody }">
+            <textarea
+              ref="inputEl"
+              v-model="draft"
+              rows="1"
+              class="max-h-[120px] min-h-0 flex-1 resize-none border-0 bg-transparent px-2 py-1 text-secondary [field-sizing:content] focus:shadow-none"
+              :placeholder="side.branch ? t('chat.side.followUp') : t('chat.side.placeholder')"
+              @keydown="onKeydown"
+            />
+            <button
+              class="composer-send is-side size-7"
+              :disabled="!draft.trim() || sending"
+              :title="t('chat.composer.send')"
+              :aria-label="t('chat.composer.send')"
+              @click="send"
+            >
+              <Icon name="send" :size="14" />
             </button>
           </div>
-          <template v-else>
-            <button
-              v-if="quote"
-              class="mb-3 line-clamp-3 w-full border-l-2 border-agent pl-2.5 text-left text-meta text-ink-2"
-              @click="locate(quote)"
-            >
-              {{ quote.text }}
-            </button>
-            <div class="flex flex-col gap-3">
-              <template v-for="n in turns" :key="n.id">
-                <p
-                  v-if="n.body.type === 'user'"
-                  class="ml-auto max-w-[85%] rounded-card bg-agent-soft px-3 py-1.5 text-secondary whitespace-pre-wrap"
-                >
-                  {{ textOf(n) }}
-                </p>
-                <div v-else class="flex flex-col items-start gap-0.5">
-                  <div class="md text-secondary" v-html="renderMarkdown(textOf(n))" />
-                  <button
-                    class="-ml-1.5 inline-flex items-center gap-1 rounded-control px-1.5 py-0.5 text-meta text-ink-3 transition-colors hover:bg-surface-2 hover:text-ink"
-                    @click="bringBack(n)"
-                  >
-                    <Icon name="unside" :size="13" />{{ t('chat.side.bringBack') }}
-                  </button>
-                </div>
-              </template>
-              <div v-if="busy" class="md streaming-caret text-secondary" v-html="renderMarkdown(streaming)" />
-            </div>
-          </template>
         </div>
-        <div class="flex flex-none items-end gap-1.5 border-t border-line-soft p-2">
-          <textarea
-            ref="inputEl"
-            v-model="draft"
-            rows="1"
-            class="max-h-[120px] min-h-0 flex-1 resize-none border-0 bg-transparent px-2 py-1 text-secondary [field-sizing:content] focus:shadow-none"
-            :placeholder="side.branch ? t('chat.side.followUp') : t('chat.side.placeholder')"
-            @keydown="onKeydown"
-          />
-          <button
-            class="composer-send is-side size-7"
-            :disabled="!draft.trim() || sending"
-            :title="t('chat.composer.send')"
-            :aria-label="t('chat.composer.send')"
-            @click="send"
-          >
-            <Icon name="send" :size="14" />
-          </button>
-        </div>
-      </template>
+      </div>
     </section>
   </Transition>
 </template>

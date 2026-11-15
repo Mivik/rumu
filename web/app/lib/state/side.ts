@@ -88,6 +88,11 @@ export async function askSide(text: string): Promise<boolean> {
   }
 }
 
+/** Quote a passage into the composer (once). */
+export function addQuote(q: Quote): void {
+  if (!quotes.value.some((x) => x.node === q.node && x.text === q.text)) quotes.value.push(q)
+}
+
 /** A passage as the markdown quote it is sent as. */
 export function quoteBlock(q: Quote): string {
   return q.text

@@ -7,7 +7,7 @@
 import { onBeforeUnmount, onMounted } from 'vue'
 import { t } from '../../i18n'
 import type { Quote } from '../../lib/types'
-import { openSide, quotes, selection } from '../../lib/state/side'
+import { addQuote, openSide, quotes, selection } from '../../lib/state/side'
 import Icon from '../ui/Icon.vue'
 
 const emit = defineEmits<{ quoted: [] }>()
@@ -54,7 +54,7 @@ function take(use: (q: Quote) => void): void {
 }
 
 function quote(q: Quote): void {
-  quotes.value.push(q)
+  addQuote(q)
   emit('quoted')
 }
 
@@ -66,49 +66,80 @@ onBeforeUnmount(() => {
 </script>
 
 <template>
-  <div v-if="quotes.length || selection" class="flex flex-col gap-1.5 px-3 pt-2.5">
-    <div v-for="(q, i) in quotes" :key="i" class="flex min-w-0 items-start gap-2 pl-1">
-      <p class="line-clamp-2 min-w-0 flex-1 border-l-2 border-brand pl-2.5 text-meta text-ink-2">
-        {{ q.text }}
-      </p>
-      <button
-        class="icon-btn size-6 flex-none"
-        :title="t('chat.side.unquote')"
-        :aria-label="t('chat.side.unquote')"
-        @click="quotes.splice(i, 1)"
-      >
-        <Icon name="close" :size="13" />
-      </button>
+  <!-- each row opens and closes its own height, so the sheet grows and
+       shrinks around it instead of jumping -->
+  <TransitionGroup tag="div" name="tray" class="flex flex-col px-3">
+    <div v-for="(q, i) in quotes" :key="`${q.node}:${q.text}`" class="tray-row">
+      <div>
+        <div class="flex min-w-0 items-start gap-2 pt-2 pl-1">
+          <p class="line-clamp-2 min-w-0 flex-1 border-l-2 border-brand pl-2.5 text-meta text-ink-2">
+            {{ q.text }}
+          </p>
+          <button
+            class="icon-btn size-6 flex-none"
+            :title="t('chat.side.unquote')"
+            :aria-label="t('chat.side.unquote')"
+            @click="quotes.splice(i, 1)"
+          >
+            <Icon name="close" :size="13" />
+          </button>
+        </div>
+      </div>
     </div>
-    <div
-      v-if="selection"
-      v-enter="'enter-fade'"
-      class="flex min-w-0 items-center gap-1.5 rounded-card border border-dashed border-line bg-surface-2 py-1 pr-1 pl-3"
-    >
-      <span class="min-w-0 flex-1 truncate text-meta text-ink-2"
-        >“{{ selection.text.replace(/\s+/g, ' ') }}”</span
-      >
-      <!-- pointerdown: kept from the sheet's unfold, and from collapsing the
-           selection on a mouse -->
-      <button
-        class="quote-key bg-brand text-on-brand"
-        @pointerdown.stop.prevent="freeze"
-        @click="take(quote)"
-      >
-        <Icon name="quote" :size="14" />{{ t('chat.side.quote') }}
-      </button>
-      <button
-        class="quote-key bg-agent text-surface"
-        @pointerdown.stop.prevent="freeze"
-        @click="take((q) => openSide(null, q))"
-      >
-        <Icon name="side" :size="14" />{{ t('chat.side.title') }}
-      </button>
+    <div v-if="selection" key="selection" class="tray-row">
+      <div>
+        <div
+          class="mt-2 flex min-w-0 items-center gap-1.5 rounded-card border border-dashed border-line bg-surface-2 py-1 pr-1 pl-3"
+        >
+          <span class="min-w-0 flex-1 truncate text-meta text-ink-2"
+            >“{{ selection.text.replace(/\s+/g, ' ') }}”</span
+          >
+          <!-- pointerdown: kept from the sheet's unfold, and from collapsing the
+               selection on a mouse -->
+          <button
+            class="quote-key bg-brand text-on-brand"
+            @pointerdown.stop.prevent="freeze"
+            @click="take(quote)"
+          >
+            <Icon name="quote" :size="14" />{{ t('chat.side.quote') }}
+          </button>
+          <button
+            class="quote-key bg-agent text-surface"
+            @pointerdown.stop.prevent="freeze"
+            @click="take((q) => openSide(null, q))"
+          >
+            <Icon name="side" :size="14" />{{ t('chat.side.title') }}
+          </button>
+        </div>
+      </div>
     </div>
-  </div>
+  </TransitionGroup>
 </template>
 
 <style scoped>
+.tray-row {
+  display: grid;
+  grid-template-rows: 1fr;
+}
+
+.tray-row > div {
+  min-height: 0;
+  overflow: hidden;
+}
+
+.tray-enter-active,
+.tray-leave-active {
+  transition:
+    grid-template-rows 0.28s var(--ease-soft),
+    opacity 0.2s;
+}
+
+.tray-enter-from,
+.tray-leave-to {
+  grid-template-rows: 0fr;
+  opacity: 0;
+}
+
 .quote-key {
   display: inline-flex;
   flex: none;
