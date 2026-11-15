@@ -38,7 +38,11 @@ const output = computed(() => {
         :class="task.kind.type === 'agent' ? 'text-agent' : 'text-tool'"
       />
       <span class="flex min-w-0 flex-col">
-        <span v-if="task.kind.type === 'tool'" class="truncate font-mono text-meta" :title="task.kind.args_summary">
+        <span
+          v-if="task.kind.type === 'tool'"
+          class="truncate font-mono text-meta"
+          :title="task.kind.args_summary"
+        >
           <span class="font-semibold text-tool">{{ task.kind.name }}</span>
           <span class="ml-1.5 text-ink">{{ task.kind.args_summary }}</span>
         </span>
@@ -82,8 +86,7 @@ const output = computed(() => {
       :key="task.id"
       v-follow="running"
       class="view-in min-h-0 flex-1 overflow-auto px-5 py-4 font-mono text-micro leading-[1.6] break-words whitespace-pre-wrap"
-      >{{ output.body }}</pre
-    >
+      >{{ output.body }}</pre>
     <p v-else class="flex-1 px-5 py-4 text-meta text-ink-3">{{ t('common.noOutput') }}</p>
 
     <footer

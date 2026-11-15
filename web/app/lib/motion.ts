@@ -25,7 +25,9 @@ let settleFrame = 0
 
 function settleEntrances(): void {
   settleFrame = 0
-  const finished = [...ended].filter(([el]) => !el.getAnimations().some((a) => a.playState === 'running' || a.pending))
+  const finished = [...ended].filter(
+    ([el]) => !el.getAnimations().some((a) => a.playState === 'running' || a.pending),
+  )
   ended.clear()
   for (const [, finish] of finished) finish()
 }

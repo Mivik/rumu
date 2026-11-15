@@ -74,7 +74,9 @@ function isOpen(tk: TaskInfo): boolean {
                           :size="14"
                           :class="tk.kind.type === 'agent' ? 'text-agent' : 'text-tool'"
                         />
-                        <span v-if="tk.kind.type === 'agent'" class="truncate text-ink">{{ tk.summary }}</span>
+                        <span v-if="tk.kind.type === 'agent'" class="truncate text-ink">{{
+                          tk.summary
+                        }}</span>
                         <span v-else class="truncate font-mono text-micro">
                           <span class="font-semibold text-tool">{{ tk.kind.name }}</span>
                           <span class="ml-1.5 text-ink-2">{{ tk.kind.args_summary }}</span>

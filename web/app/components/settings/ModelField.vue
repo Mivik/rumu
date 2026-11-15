@@ -54,7 +54,12 @@ function choose(ref: string, close: () => void): void {
       >
         {{ placeholder }}
       </button>
-      <ModelMenu :selected="model || null" :aliases="aliases" @pick="choose($event.ref, close)" @add="close" />
+      <ModelMenu
+        :selected="model || null"
+        :aliases="aliases"
+        @pick="choose($event.ref, close)"
+        @add="close"
+      />
     </template>
   </Popover>
 </template>

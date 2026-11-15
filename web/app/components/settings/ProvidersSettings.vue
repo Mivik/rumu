@@ -88,7 +88,16 @@ const aliasesShown = computed(() => editing.value === ALIAS_PROVIDER)
 const formShown = computed(() => editing.value !== null && !picking.value && !aliasesShown.value)
 
 function blank(): Form {
-  return { id: '', name: '', preset: null, endpoints: {}, api_key: '', models: [], protocols: {}, sticky: false }
+  return {
+    id: '',
+    name: '',
+    preset: null,
+    endpoints: {},
+    api_key: '',
+    models: [],
+    protocols: {},
+    sticky: false,
+  }
 }
 
 function fill(p: ProviderInfo | null): void {

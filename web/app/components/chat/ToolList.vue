@@ -115,15 +115,19 @@ function liveTaskOutput(id: string | null): string {
           :size="12"
           :class="statusClass(v)"
         />
-        <span class="max-w-[40%] flex-none truncate font-mono text-meta font-medium" :class="statusClass(v)">{{
-          nameLabel(v)
-        }}</span>
+        <span
+          class="max-w-[40%] flex-none truncate font-mono text-meta font-medium"
+          :class="statusClass(v)"
+          >{{ nameLabel(v) }}</span
+        >
         <span
           v-if="isShellOpen(v)"
           class="shell max-h-40 min-w-0 flex-1 overflow-y-auto font-mono text-meta break-words whitespace-pre-wrap text-ink"
           v-html="highlightLine(callArg(v, 'command'), 'bash')"
         ></span>
-        <span v-else-if="v.description" class="min-w-0 truncate text-meta text-ink-2">{{ v.description }}</span>
+        <span v-else-if="v.description" class="min-w-0 truncate text-meta text-ink-2">{{
+          v.description
+        }}</span>
         <span v-else-if="v.callText" class="min-w-0 truncate font-mono text-meta text-ink-2">{{
           v.callText
         }}</span>
