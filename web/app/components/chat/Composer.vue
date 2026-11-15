@@ -236,10 +236,25 @@ async function submit(): Promise<void> {
 }
 
 function onKeydown(e: KeyboardEvent): void {
-  if (e.key === 'Enter' && !e.shiftKey && !e.isComposing) {
+  if (e.key !== 'Enter' || e.isComposing) return
+  // Only a bare Enter sends; Shift and Alt break the line instead.
+  if (!e.shiftKey && !e.altKey) {
     e.preventDefault()
     submit()
+  } else if (e.altKey) {
+    e.preventDefault()
+    breakLine()
   }
+}
+
+/** Browsers give Shift+Enter a newline by themselves, Alt+Enter none: it is
+ *  written here at the caret. */
+function breakLine(): void {
+  const el = textareaEl.value
+  if (!el) return
+  const { selectionStart: at, selectionEnd: to } = el
+  draft.value = `${draft.value.slice(0, at)}\n${draft.value.slice(to)}`
+  void nextTick(() => el.setSelectionRange(at + 1, at + 1))
 }
 
 /** Opening the landing page or a session puts the caret in the composer, the
