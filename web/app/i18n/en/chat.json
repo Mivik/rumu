@@ -152,15 +152,15 @@
     "empty": "Starting…"
   },
   "side": {
-    "title": "By the way",
+    "title": "Aside",
     "quote": "Quote",
     "unquote": "Remove quote",
-    "all": "All side questions",
+    "all": "All asides",
     "close": "Close",
-    "placeholder": "Ask on the side…",
+    "placeholder": "Ask…",
     "followUp": "Follow up…",
     "bringBack": "Quote in chat",
-    "failed": "Side question failed"
+    "failed": "Aside failed to send"
   },
   "compaction": {
     "line": "Context compacted · {before} → {after} tok",

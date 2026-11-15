@@ -152,15 +152,15 @@
     "empty": "启动中…"
   },
   "side": {
-    "title": "顺便问",
+    "title": "题外话",
     "quote": "引用",
     "unquote": "移除引用",
-    "all": "全部顺便问",
+    "all": "全部题外话",
     "close": "关闭",
-    "placeholder": "顺便问…",
+    "placeholder": "提问…",
     "followUp": "追问…",
-    "bringBack": "带回正文",
-    "failed": "顺便问失败"
+    "bringBack": "引用到正文",
+    "failed": "题外话发送失败"
   },
   "compaction": {
     "line": "上下文已压缩 · {before} → {after} tok",
