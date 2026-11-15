@@ -9,8 +9,8 @@
 //! runs on its native protocol when its provider has an endpoint for it,
 //! else the first of [`Protocol::FALLBACK`] it has, unless the settings hold
 //! it to one. The key is never logged. Which model a call runs on is
-//! resolved per call from a [`ModelPick`] through the roles and custom
-//! models of the [`ModelConfig`].
+//! resolved per call from a [`ModelPick`] through the roles and aliases
+//! of the [`ModelConfig`].
 //!
 //! On Anthropic, reasoning is always requested explicitly (adaptive thinking
 //! at the resolved effort). Replayed thinking blocks whose prefix no longer
@@ -50,7 +50,7 @@ use genai::resolver::{AuthData, Endpoint};
 use genai::{Client, ModelIden, ServiceTarget};
 use rumu_blob::Blobs;
 use rumu_core::{
-    Attachment, CUSTOM_PROVIDER, CallStats, CompactSettings, Content, CustomModel, Effort,
+    Attachment, ALIAS_PROVIDER, CallStats, CompactSettings, Content, ModelAlias, Effort,
     ModelConfig, ModelInfo, ModelPick, Node, NodeBody, Protocol, ProviderSettings, ReasoningBlock,
     Role, Roles, Segment, Titles, ToolCall, ToolSpec, Usage, image_label, split_model_ref,
 };
@@ -67,7 +67,7 @@ pub use probe::{Probe, probe};
 /// passed through anyway (`thinking_mismatch_allowed`, which is not a reset).
 const THINKING_BINDING_BETA: &str = "thinking-binding-controls-2026-08-01";
 
-/// The genai adapter. Its providers, custom models and roles come from the
+/// The genai adapter. Its providers, aliases and roles come from the
 /// settings and can be replaced while running: a request uses the
 /// configuration it started with.
 #[derive(Default)]
@@ -81,7 +81,7 @@ pub struct GenaiLlm {
 #[derive(Default)]
 struct Resolved {
     providers: BTreeMap<String, Provider>,
-    custom: BTreeMap<String, CustomModel>,
+    aliases: BTreeMap<String, ModelAlias>,
     roles: Roles,
     titles: Titles,
     compact: CompactSettings,
@@ -120,8 +120,8 @@ impl GenaiLlm {
     }
 
     /// Use `config` from the next request on. Refused (nothing changes)
-    /// when a custom model routes to a provider that is not configured (or
-    /// to a custom model), a role
+    /// when an alias stands for a model of a provider that is not configured
+    /// (or for an alias), a role
     /// names a model of neither, or a model is held to a protocol its
     /// provider has no endpoint for.
     pub fn configure(&self, config: &ModelConfig, catalog: Arc<Catalog>) -> Result<(), LlmError> {
@@ -142,11 +142,11 @@ impl GenaiLlm {
             };
             providers.insert(id.clone(), provider);
         }
-        for (name, c) in &config.custom {
+        for (name, c) in &config.aliases {
             let known = split_model_ref(&c.model).is_some_and(|(p, _)| providers.contains_key(p));
             if !known {
                 return Err(LlmError::UnknownModel(format!(
-                    "{} (custom model `{name}`)",
+                    "{} (alias `{name}`)",
                     c.model
                 )));
             }
@@ -154,7 +154,7 @@ impl GenaiLlm {
         for role in [Role::Default, Role::Title, Role::Compact] {
             if let Some(r) = config.roles.get(role) {
                 let known = split_model_ref(r).is_some_and(|(p, m)| match p {
-                    CUSTOM_PROVIDER => config.custom.contains_key(m),
+                    ALIAS_PROVIDER => config.aliases.contains_key(m),
                     _ => providers.contains_key(p),
                 });
                 if !known {
@@ -164,7 +164,7 @@ impl GenaiLlm {
         }
         *self.config.write().expect("llm config lock") = Arc::new(Resolved {
             providers,
-            custom: config.custom.clone(),
+            aliases: config.aliases.clone(),
             roles: config.roles.clone(),
             titles: config.titles,
             compact: config.compact,
@@ -248,7 +248,7 @@ pub fn model_info(
         image_input: known.is_none_or(|m| m.image_input),
         cost: known.and_then(|m| m.cost),
         known: known.is_some(),
-        route: None,
+        target: None,
     }
 }
 
@@ -305,13 +305,13 @@ impl Resolved {
         }
     }
 
-    /// `model_ref` at `effort`; a custom one is the model it routes to, at
+    /// `model_ref` at `effort`; an alias is the model it stands for, at
     /// `effort` over its own.
     fn model(&self, model_ref: &str, effort: Option<Effort>) -> Result<Target, LlmError> {
         match split_model_ref(model_ref) {
-            Some((CUSTOM_PROVIDER, name)) => {
+            Some((ALIAS_PROVIDER, name)) => {
                 let c = self
-                    .custom
+                    .aliases
                     .get(name)
                     .ok_or_else(|| LlmError::UnknownModel(model_ref.to_owned()))?;
                 self.provider_model(&c.model, effort.or(c.effort))
@@ -2092,9 +2092,9 @@ mod tests {
                 ..Default::default()
             },
         );
-        c.custom.insert(
+        c.aliases.insert(
             "cheap".into(),
-            CustomModel {
+            ModelAlias {
                 model: "a/m".into(),
                 effort: Some(Effort::Minimal),
             },
@@ -2103,7 +2103,7 @@ mod tests {
     }
 
     #[test]
-    fn resolves_roles_custom_and_provider_models() {
+    fn resolves_roles_aliases_and_provider_models() {
         let llm = GenaiLlm::default();
         let mut c = config();
         llm.configure(&c, Arc::default()).unwrap();
@@ -2116,7 +2116,7 @@ mod tests {
         assert!(r.resolve(ModelPick::Role(Role::Title)).unwrap().is_none());
         assert_eq!(llm.titles(), Titles::First);
 
-        // A custom model runs on the model it routes to, at its effort moved
+        // An alias runs on the model it stands for, at its effort moved
         // to the nearest the model takes; a marker's override wins.
         let pick = rumu_core::ModelUse {
             model: "rumu/cheap".into(),
@@ -2142,7 +2142,7 @@ mod tests {
             Err(LlmError::UnknownModel(_))
         ));
 
-        // A role names a custom model or a provider's.
+        // A role names an alias or a provider's model.
         // Titles come from a model only while one is bound to the role.
         c.titles = Titles::Model;
         llm.configure(&c, Arc::default()).unwrap();
@@ -2164,13 +2164,13 @@ mod tests {
             assert!(llm.configure(&c, Arc::default()).is_err());
         }
         c.roles.default = None;
-        c.custom.get_mut("cheap").unwrap().model = "b/m".into();
+        c.aliases.get_mut("cheap").unwrap().model = "b/m".into();
         assert!(matches!(
             llm.configure(&c, Arc::default()),
             Err(LlmError::UnknownModel(_))
         ));
-        // A custom model never routes to another.
-        c.custom.get_mut("cheap").unwrap().model = "rumu/cheap".into();
+        // An alias never stands for another.
+        c.aliases.get_mut("cheap").unwrap().model = "rumu/cheap".into();
         assert!(llm.configure(&c, Arc::default()).is_err());
         assert_eq!(llm.titles(), Titles::Model);
     }

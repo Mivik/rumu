@@ -1,6 +1,6 @@
 <script setup lang="ts">
-// A field-shaped model select over the composer's ModelMenu, by ref: custom
-// models too unless left out. A clearable one offers its placeholder as the
+// A field-shaped model select over the composer's ModelMenu, by ref:
+// aliases too unless left out. A clearable one offers its placeholder as the
 // first choice, which empties it.
 import { computed } from 'vue'
 import { t } from '../../i18n'
@@ -9,8 +9,8 @@ import Icon from '../ui/Icon.vue'
 import Popover from '../ui/Popover.vue'
 import ModelMenu from '../chat/ModelMenu.vue'
 
-withDefaults(defineProps<{ placeholder?: string; custom?: boolean; clearable?: boolean }>(), {
-  custom: true,
+withDefaults(defineProps<{ placeholder?: string; aliases?: boolean; clearable?: boolean }>(), {
+  aliases: true,
 })
 const model = defineModel<string>({ required: true })
 const current = computed(() => (model.value ? (modelByRef(model.value)?.name ?? model.value) : null))
@@ -54,7 +54,7 @@ function choose(ref: string, close: () => void): void {
       >
         {{ placeholder }}
       </button>
-      <ModelMenu :selected="model || null" :custom="custom" @pick="choose($event.ref, close)" @add="close" />
+      <ModelMenu :selected="model || null" :aliases="aliases" @pick="choose($event.ref, close)" @add="close" />
     </template>
   </Popover>
 </template>

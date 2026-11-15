@@ -1,4 +1,4 @@
-//! Model settings: providers, the custom models over them, the roles bound
+//! Model settings: providers, the aliases over them, the roles bound
 //! to models, and the `model.use` marker a path picks its model with.
 
 use std::collections::BTreeMap;
@@ -192,18 +192,19 @@ pub fn enabled_models(rules: &[String], listed: &[String]) -> Vec<String> {
     out
 }
 
-/// The built-in provider whose models are the [`CustomModel`]s:
+/// The built-in provider whose models are the [`ModelAlias`]es:
 /// `rumu/<name>`. No configured provider may take its id.
-pub const CUSTOM_PROVIDER: &str = "rumu";
+pub const ALIAS_PROVIDER: &str = "rumu";
 
-/// A model of the built-in provider: another provider's model at an effort.
-/// Sessions and roles name it, so pointing it at a newer model moves all of
-/// them.
+/// An alias: a model of the built-in provider, standing for another
+/// provider's model at an effort. Sessions, roles and assistants name it, so
+/// pointing it at a newer model moves all of them; it is also all a model may
+/// pick for a sub-agent.
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, ts_rs::TS)]
 #[serde(deny_unknown_fields)]
 #[ts(export)]
-pub struct CustomModel {
-    /// The model it routes to: `provider/model-id`, never a custom one.
+pub struct ModelAlias {
+    /// The model it stands for: `provider/model-id`, never an alias.
     pub model: String,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     #[ts(optional)]
@@ -269,7 +270,7 @@ pub enum Titles {
 pub struct ModelConfig {
     pub providers: BTreeMap<String, ProviderSettings>,
     /// The built-in provider's models, by name.
-    pub custom: BTreeMap<String, CustomModel>,
+    pub aliases: BTreeMap<String, ModelAlias>,
     pub roles: Roles,
     #[serde(skip_serializing_if = "is_default")]
     pub titles: Titles,
@@ -317,9 +318,9 @@ pub fn split_model_ref(r: &str) -> Option<(&str, &str)> {
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, ts_rs::TS)]
 #[ts(export)]
 pub struct ModelUse {
-    /// A model ref (`provider/model-id`); a custom one follows its edits.
+    /// A model ref (`provider/model-id`); an alias follows its edits.
     pub model: String,
-    /// Overrides the custom model's effort (or sets the model's).
+    /// Overrides the alias's effort (or sets the model's).
     #[serde(default, skip_serializing_if = "Option::is_none")]
     #[ts(optional)]
     pub effort: Option<Effort>,
@@ -397,9 +398,9 @@ pub struct ModelInfo {
     pub cost: Option<ModelCost>,
     /// Whether the catalog lists it (otherwise the protocol's defaults).
     pub known: bool,
-    /// A custom model's route; what is known is of the model it routes to.
+    /// What an alias stands for; what is known is of that model.
     #[ts(optional)]
-    pub route: Option<CustomModel>,
+    pub target: Option<ModelAlias>,
 }
 
 #[derive(Debug, Clone, Copy, Serialize, ts_rs::TS)]
@@ -425,7 +426,7 @@ pub struct PresetInfo {
 pub struct SettingsInfo {
     pub providers: Vec<ProviderInfo>,
     /// The built-in provider's models.
-    pub custom: Vec<ModelInfo>,
+    pub aliases: Vec<ModelInfo>,
     pub roles: Roles,
     pub titles: Titles,
     pub presets: Vec<PresetInfo>,

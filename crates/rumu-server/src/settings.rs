@@ -14,10 +14,10 @@
 //!     models: [claude-*, gpt-5]
 //!     pinned: [gpt-5]
 //!     protocols: { gpt-5: openai }
-//! custom:                       # the built-in provider's models: rumu/<name>
+//! aliases:                      # the built-in provider's models: rumu/<name>
 //!   main: { model: gateway/claude-opus-5-5, effort: high }
 //!   cheap: { model: deepseek/deepseek-chat, effort: low }
-//! roles:                        # model refs, custom or not
+//! roles:                        # model refs, aliases or not
 //!   default: rumu/main
 //!   title: rumu/cheap
 //!   compact: rumu/cheap         # compaction summaries (unset: the path's model)
@@ -41,7 +41,7 @@ use std::sync::{Arc, Mutex, RwLock};
 use std::time::{Duration, SystemTime};
 
 use rumu_core::{
-    CUSTOM_PROVIDER, CustomModel, Effort, IoError, McpServerSettings, ModelConfig, ModelInfo,
+    ALIAS_PROVIDER, ModelAlias, Effort, IoError, McpServerSettings, ModelConfig, ModelInfo,
     PresetInfo, Protocol, ProviderInfo, ProviderSettings, Roles, SettingsInfo, Titles,
     enabled_models, split_model_ref, valid_mcp_name,
 };
@@ -164,11 +164,11 @@ struct Listing {
     error: Option<String>,
 }
 
-/// A `settings.set_custom` request; `rename` replaces the custom model of
+/// A `settings.set_alias` request; `rename` replaces the alias of
 /// that name, and roles bound to it follow.
 #[derive(Debug, Deserialize)]
 #[serde(deny_unknown_fields)]
-pub struct CustomEdit {
+pub struct AliasEdit {
     name: String,
     #[serde(default)]
     rename: Option<String>,
@@ -307,10 +307,10 @@ impl Settings {
                         .clone()
                 })
                 .collect(),
-            custom: m
-                .custom
+            aliases: m
+                .aliases
                 .iter()
-                .map(|(name, c)| custom_info(&catalog, m, name, c))
+                .map(|(name, c)| alias_info(&catalog, m, name, c))
                 .collect(),
             roles: m.roles.clone(),
             titles: m.titles,
@@ -327,7 +327,7 @@ impl Settings {
                 "provider id `{id}` must be non-empty and without `/`"
             )));
         }
-        if id == CUSTOM_PROVIDER {
+        if id == ALIAS_PROVIDER {
             return Err(SettingsError::Invalid(format!(
                 "provider id `{id}` is the built-in provider's"
             )));
@@ -403,12 +403,12 @@ impl Settings {
             .ok_or_else(|| SettingsError::Invalid(format!("not a model ref: `{model_ref}`")))?;
         let file = self.lock();
         let m = &file.model;
-        if provider == CUSTOM_PROVIDER {
+        if provider == ALIAS_PROVIDER {
             let c = m
-                .custom
+                .aliases
                 .get(model)
-                .ok_or_else(|| SettingsError::Invalid(format!("unknown custom model `{model}`")))?;
-            return Ok(custom_info(&self.catalog(), m, model, c));
+                .ok_or_else(|| SettingsError::Invalid(format!("unknown alias `{model}`")))?;
+            return Ok(alias_info(&self.catalog(), m, model, c));
         }
         let p = m
             .providers
@@ -443,9 +443,9 @@ impl Settings {
     pub fn remove_provider(&self, id: &str) -> Result<SettingsInfo> {
         let of = |r: &str| split_model_ref(r).is_some_and(|(p, _)| p == id);
         self.edit(|file| {
-            if let Some((name, _)) = file.custom.iter().find(|(_, c)| of(&c.model)) {
+            if let Some((name, _)) = file.aliases.iter().find(|(_, c)| of(&c.model)) {
                 return Err(SettingsError::Invalid(format!(
-                    "custom model `{name}` uses provider `{id}`"
+                    "alias `{name}` uses provider `{id}`"
                 )));
             }
             if let Some(r) = [&file.roles.default, &file.roles.title, &file.roles.compact]
@@ -464,20 +464,20 @@ impl Settings {
         })
     }
 
-    pub fn set_custom(&self, edit: CustomEdit) -> Result<SettingsInfo> {
+    pub fn set_alias(&self, edit: AliasEdit) -> Result<SettingsInfo> {
         let name = edit.name.trim().to_owned();
         if name.is_empty() {
-            return Err(SettingsError::Invalid("a custom model needs a name".into()));
+            return Err(SettingsError::Invalid("an alias needs a name".into()));
         }
         self.edit(|file| {
             if let Some(old) = edit.rename.as_deref().filter(|o| *o != name) {
-                if file.custom.contains_key(&name) {
+                if file.aliases.contains_key(&name) {
                     return Err(SettingsError::Invalid(format!(
-                        "custom model `{name}` already exists"
+                        "alias `{name}` already exists"
                     )));
                 }
-                file.custom.remove(old);
-                let (old, new) = (custom_ref(old), custom_ref(&name));
+                file.aliases.remove(old);
+                let (old, new) = (alias_ref(old), alias_ref(&name));
                 for slot in [
                     &mut file.roles.default,
                     &mut file.roles.title,
@@ -488,9 +488,9 @@ impl Settings {
                     }
                 }
             }
-            file.custom.insert(
+            file.aliases.insert(
                 name,
-                CustomModel {
+                ModelAlias {
                     model: edit.model.trim().to_owned(),
                     effort: edit.effort,
                 },
@@ -499,10 +499,10 @@ impl Settings {
         })
     }
 
-    pub fn remove_custom(&self, name: &str) -> Result<SettingsInfo> {
+    pub fn remove_alias(&self, name: &str) -> Result<SettingsInfo> {
         self.edit(|file| {
-            file.custom.remove(name);
-            let gone = custom_ref(name);
+            file.aliases.remove(name);
+            let gone = alias_ref(name);
             for slot in [
                 &mut file.roles.default,
                 &mut file.roles.title,
@@ -761,26 +761,26 @@ fn provider_info(
     }
 }
 
-fn custom_ref(name: &str) -> String {
-    format!("{CUSTOM_PROVIDER}/{name}")
+fn alias_ref(name: &str) -> String {
+    format!("{ALIAS_PROVIDER}/{name}")
 }
 
-/// Custom model `name`: what is known of the model it routes to, under its
-/// own ref and name.
-fn custom_info(catalog: &Catalog, m: &ModelConfig, name: &str, c: &CustomModel) -> ModelInfo {
+/// Alias `name`: what is known of the model it stands for, under its own
+/// ref and name.
+fn alias_info(catalog: &Catalog, m: &ModelConfig, name: &str, c: &ModelAlias) -> ModelInfo {
     let target = split_model_ref(&c.model).and_then(|(provider, id)| {
         let p = m.providers.get(provider)?;
         Some(model_info(catalog, provider, p, &endpoints(p), id))
     });
     let mut info = target.unwrap_or_else(|| {
         let none = ProviderSettings::default();
-        model_info(catalog, CUSTOM_PROVIDER, &none, &BTreeMap::new(), name)
+        model_info(catalog, ALIAS_PROVIDER, &none, &BTreeMap::new(), name)
     });
-    info.model_ref = custom_ref(name);
+    info.model_ref = alias_ref(name);
     info.id = name.to_owned();
     info.name = name.to_owned();
     info.pinned = false;
-    info.route = Some(c.clone());
+    info.target = Some(c.clone());
     info
 }
 
@@ -927,8 +927,8 @@ mod tests {
         }
     }
 
-    fn custom(name: &str, model: &str) -> CustomEdit {
-        CustomEdit {
+    fn alias(name: &str, model: &str) -> AliasEdit {
+        AliasEdit {
             name: name.into(),
             rename: None,
             model: model.into(),
@@ -979,21 +979,21 @@ mod tests {
         assert!(s.set_provider(bad).is_err());
 
         // The built-in provider's id is taken.
-        assert!(s.set_provider(provider(CUSTOM_PROVIDER, None)).is_err());
+        assert!(s.set_provider(provider(ALIAS_PROVIDER, None)).is_err());
 
-        // A custom model on an unknown provider, or a role on an unknown
+        // An alias on an unknown provider, or a role on an unknown
         // model, is refused.
         assert!(matches!(
-            s.set_custom(custom("main", "b/m")),
+            s.set_alias(alias("main", "b/m")),
             Err(SettingsError::Llm(LlmError::UnknownModel(_)))
         ));
-        let info = s.set_custom(custom("main", "a/m")).unwrap();
-        let main = &info.custom[0];
+        let info = s.set_alias(alias("main", "a/m")).unwrap();
+        let main = &info.aliases[0];
         assert_eq!(
             (main.model_ref.as_str(), main.name.as_str()),
             ("rumu/main", "main")
         );
-        assert_eq!(main.route.as_ref().unwrap().model, "a/m");
+        assert_eq!(main.target.as_ref().unwrap().model, "a/m");
         assert_eq!(s.model("rumu/main").unwrap().efforts, main.efforts);
         assert!(
             s.set_roles(Roles {
@@ -1010,20 +1010,20 @@ mod tests {
         .unwrap();
 
         // Renaming moves the roles along; a provider in use stays.
-        let mut edit = custom("primary", "a/n");
+        let mut edit = alias("primary", "a/n");
         edit.rename = Some("main".into());
-        let info = s.set_custom(edit).unwrap();
+        let info = s.set_alias(edit).unwrap();
         assert_eq!(info.roles.default.as_deref(), Some("rumu/primary"));
         assert!(s.remove_provider("a").is_err());
 
         let again = Settings::load(home.path(), llm, McpHub::new(home.path())).unwrap();
         let file = again.lock().model.clone();
         assert_eq!(file.providers["a"].api_key, "k");
-        assert_eq!(file.custom["primary"].model, "a/n");
+        assert_eq!(file.aliases["primary"].model, "a/n");
         assert_eq!(file.roles.title.as_deref(), Some("rumu/primary"));
         assert_eq!(file.roles.compact.as_deref(), Some("rumu/primary"));
 
-        s.remove_custom("primary").unwrap();
+        s.remove_alias("primary").unwrap();
         assert_eq!(s.info().roles, Roles::default());
         // A provider a role names directly stays too.
         s.set_roles(Roles {

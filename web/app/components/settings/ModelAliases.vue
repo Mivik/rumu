@@ -1,32 +1,32 @@
 <script setup lang="ts">
-// The built-in provider's models: each a name routed to another provider's
-// model at an effort. Sessions and roles name the custom model, so pointing
-// it at a newer model moves all of them. Every change saves at once.
+// The built-in provider's models: aliases, each a name standing for another
+// provider's model at an effort. Sessions and roles name the alias, so
+// pointing it at a newer model moves all of them. Every change saves at once.
 import { computed, reactive } from 'vue'
 import { t } from '../../i18n'
-import { CUSTOM_PROVIDER, editSettings, models, nearestEffort } from '../../lib/state/models'
+import { ALIAS_PROVIDER, editSettings, models, nearestEffort } from '../../lib/state/models'
 import type { Effort } from '../../lib/generated/Effort'
 import type { ModelInfo } from '../../lib/generated/ModelInfo'
 import Icon from '../ui/Icon.vue'
 import NoProviders from './NoProviders.vue'
 import ModelField from './ModelField.vue'
 
-const custom = computed(() => models.settings?.custom ?? [])
+const aliases = computed(() => models.settings?.aliases ?? [])
 
 /** Names being edited, by the saved name. */
 const names = reactive<Record<string, string>>({})
 const draft = reactive({ name: '', model: '' })
 
 function shownEffort(m: ModelInfo): Effort | null {
-  return m.efforts.length ? nearestEffort(m.route?.effort ?? 'high', m.efforts) : null
+  return m.efforts.length ? nearestEffort(m.target?.effort ?? 'high', m.efforts) : null
 }
 
 function save(m: ModelInfo, patch: { model?: string; effort?: Effort; rename?: string }): Promise<boolean> {
-  return editSettings('settings.set_custom', {
+  return editSettings('settings.set_alias', {
     name: patch.rename ?? m.name,
     rename: patch.rename ? m.name : undefined,
-    model: patch.model ?? m.route?.model,
-    effort: patch.effort ?? m.route?.effort,
+    model: patch.model ?? m.target?.model,
+    effort: patch.effort ?? m.target?.effort,
   })
 }
 
@@ -37,21 +37,21 @@ async function rename(m: ModelInfo): Promise<void> {
 }
 
 function remove(m: ModelInfo): void {
-  void editSettings('settings.remove_custom', { name: m.name })
+  void editSettings('settings.remove_alias', { name: m.name })
 }
 
 const canAdd = computed(
-  () => !!draft.name.trim() && !!draft.model && !custom.value.some((m) => m.name === draft.name.trim()),
+  () => !!draft.name.trim() && !!draft.model && !aliases.value.some((m) => m.name === draft.name.trim()),
 )
 
 async function add(): Promise<void> {
   if (!canAdd.value) return
   const name = draft.name.trim()
-  if (!(await editSettings('settings.set_custom', { name, model: draft.model }))) return
+  if (!(await editSettings('settings.set_alias', { name, model: draft.model }))) return
   // The first model there is to run on becomes the default.
   const s = models.settings
   if (s && !s.roles.default)
-    await editSettings('settings.set_roles', { ...s.roles, default: `${CUSTOM_PROVIDER}/${name}` })
+    await editSettings('settings.set_roles', { ...s.roles, default: `${ALIAS_PROVIDER}/${name}` })
   draft.name = ''
   draft.model = ''
 }
@@ -61,7 +61,7 @@ async function add(): Promise<void> {
   <NoProviders v-if="models.settings && !models.settings.providers.length" />
   <section v-else class="flex flex-col gap-2">
     <div
-      v-for="m in custom"
+      v-for="m in aliases"
       :key="m.ref"
       class="flex flex-wrap items-center gap-2 rounded-card border border-line-soft bg-surface px-3 py-2.5 md:flex-nowrap"
     >
@@ -69,7 +69,7 @@ async function add(): Promise<void> {
         :value="names[m.name] ?? m.name"
         type="text"
         class="w-28 flex-none font-semibold"
-        :aria-label="t('settings.customName')"
+        :aria-label="t('settings.aliasName')"
         autocomplete="off"
         spellcheck="false"
         @input="names[m.name] = ($event.target as HTMLInputElement).value"
@@ -78,8 +78,8 @@ async function add(): Promise<void> {
       />
       <div class="min-w-40 flex-1 md:min-w-0">
         <ModelField
-          :model-value="m.route?.model ?? ''"
-          :custom="false"
+          :model-value="m.target?.model ?? ''"
+          :aliases="false"
           @update:model-value="save(m, { model: $event })"
         />
       </div>
@@ -105,8 +105,8 @@ async function add(): Promise<void> {
       <button
         type="button"
         class="icon-btn size-7 flex-none"
-        :title="t('settings.removeCustom')"
-        :aria-label="t('settings.removeCustom')"
+        :title="t('settings.removeAlias')"
+        :aria-label="t('settings.removeAlias')"
         @click="remove(m)"
       >
         <Icon name="trash" :size="13" />
@@ -118,16 +118,16 @@ async function add(): Promise<void> {
         v-model="draft.name"
         type="text"
         class="w-28 flex-none"
-        :placeholder="t('settings.customName')"
+        :placeholder="t('settings.aliasName')"
         autocomplete="off"
         spellcheck="false"
       />
       <div class="min-w-48 flex-1">
-        <ModelField v-model="draft.model" :custom="false" :placeholder="t('settings.pickModel')" />
+        <ModelField v-model="draft.model" :aliases="false" :placeholder="t('settings.pickModel')" />
       </div>
       <button type="submit" class="btn flex-none" :disabled="!canAdd">
         <Icon name="plus" :size="13" />
-        {{ t('settings.addCustom') }}
+        {{ t('settings.addAlias') }}
       </button>
     </form>
   </section>

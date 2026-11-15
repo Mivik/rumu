@@ -1,6 +1,6 @@
 <script setup lang="ts">
 // The models to pick from, as the composer's chip lists them: a search,
-// the custom models (unless left out), pinned ones, then each provider's
+// the aliases (unless left out), pinned ones, then each provider's
 // models (folded, but for the selected model's provider). Pins toggle in
 // place.
 import { computed, ref } from 'vue'
@@ -10,7 +10,7 @@ import type { ModelInfo } from '../../lib/generated/ModelInfo'
 import Icon from '../ui/Icon.vue'
 import NoProviders from '../settings/NoProviders.vue'
 
-const props = withDefaults(defineProps<{ selected: string | null; custom?: boolean }>(), { custom: true })
+const props = withDefaults(defineProps<{ selected: string | null; aliases?: boolean }>(), { aliases: true })
 const emit = defineEmits<{ pick: [model: ModelInfo]; add: [] }>()
 
 const query = ref('')
@@ -19,15 +19,15 @@ const settings = computed(() => models.settings)
 const q = computed(() => query.value.trim().toLowerCase())
 const matches = (s: string): boolean => !q.value || s.toLowerCase().includes(q.value)
 
-const customModels = computed(() =>
-  props.custom
-    ? (settings.value?.custom ?? []).filter((m) => matches(m.name) || matches(m.route?.model ?? ''))
+const aliases = computed(() =>
+  props.aliases
+    ? (settings.value?.aliases ?? []).filter((m) => matches(m.name) || matches(m.target?.model ?? ''))
     : [],
 )
 
 /** Nothing to pick from yet: only the way to add a provider. */
 const empty = computed(
-  () => !settings.value?.providers.length && !(props.custom && settings.value?.custom.length),
+  () => !settings.value?.providers.length && !(props.aliases && settings.value?.aliases.length),
 )
 
 /** Pinned models first, then each provider's unpinned ones. */
@@ -81,10 +81,10 @@ async function togglePin(m: ModelInfo): Promise<void> {
     </div>
 
     <div class="flex flex-col gap-0.5">
-      <template v-if="customModels.length">
-        <div class="panel-head">{{ t('settings.custom') }}</div>
+      <template v-if="aliases.length">
+        <div class="panel-head">{{ t('settings.aliases') }}</div>
         <button
-          v-for="m in customModels"
+          v-for="m in aliases"
           :key="m.ref"
           type="button"
           class="flex items-center gap-2 rounded-control px-2.5 py-1.5 text-left transition-colors duration-150 hover:bg-surface-2"
@@ -102,8 +102,8 @@ async function togglePin(m: ModelInfo): Promise<void> {
             :class="selected === m.ref ? 'font-semibold text-ink' : 'text-ink-2'"
             >{{ m.name }}</span
           >
-          <span class="min-w-0 truncate text-micro text-ink-3" :title="m.route?.model">{{
-            modelByRef(m.route?.model ?? '')?.name ?? m.route?.model
+          <span class="min-w-0 truncate text-micro text-ink-3" :title="m.target?.model">{{
+            modelByRef(m.target?.model ?? '')?.name ?? m.target?.model
           }}</span>
           <span
             v-if="settings?.roles.default === m.ref"

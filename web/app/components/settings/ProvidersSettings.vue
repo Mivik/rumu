@@ -1,5 +1,5 @@
 <script setup lang="ts">
-// Providers: the built-in one (its custom models), then the configured
+// Providers: the built-in one (its aliases), then the configured
 // ones: a preset (its endpoints filled in) or a custom address whose
 // endpoints are detected; its key; which of its listed models are enabled
 // (one by one, or every match of a search, new ones included); and the
@@ -10,7 +10,7 @@ import { rumu } from '../../lib/api'
 import { layout } from '../../lib/layout'
 import { SWAP } from '../../lib/motion'
 import {
-  CUSTOM_PROVIDER,
+  ALIAS_PROVIDER,
   PROTOCOL_LABELS,
   PROTOCOLS,
   editSettings,
@@ -25,7 +25,7 @@ import type { Protocol } from '../../lib/generated/Protocol'
 import type { ProviderInfo } from '../../lib/generated/ProviderInfo'
 import Icon from '../ui/Icon.vue'
 import Modal from '../ui/Modal.vue'
-import CustomModels from './CustomModels.vue'
+import ModelAliases from './ModelAliases.vue'
 import ModelSettings from './ModelSettings.vue'
 
 interface Form {
@@ -54,7 +54,7 @@ const providers = computed(() => models.settings?.providers ?? [])
 const presets = computed(() => models.settings?.presets ?? [])
 
 /** The open provider's id; `''` adds one. The built-in one opens its
- *  custom models. */
+ *  aliases. */
 const editing = ref<string | null>(null)
 /** Adding: pick a preset or a custom endpoint first. */
 const picking = ref(false)
@@ -84,8 +84,8 @@ const pendingDelete = ref(false)
 watchEffect(() => (layout.settingsBusy = busy.value))
 onBeforeUnmount(() => (layout.settingsBusy = false))
 
-const customShown = computed(() => editing.value === CUSTOM_PROVIDER)
-const formShown = computed(() => editing.value !== null && !picking.value && !customShown.value)
+const aliasesShown = computed(() => editing.value === ALIAS_PROVIDER)
+const formShown = computed(() => editing.value !== null && !picking.value && !aliasesShown.value)
 
 function blank(): Form {
   return { id: '', name: '', preset: null, endpoints: {}, api_key: '', models: [], protocols: {}, sticky: false }
@@ -121,10 +121,10 @@ function open(p: ProviderInfo): void {
   fill(p)
 }
 
-function openCustom(): void {
+function openAliases(): void {
   pendingDelete.value = false
   picking.value = false
-  editing.value = CUSTOM_PROVIDER
+  editing.value = ALIAS_PROVIDER
 }
 
 function startAdd(): void {
@@ -146,8 +146,8 @@ watchEffect(() => {
   layout.settingsTrail =
     editing.value === null
       ? []
-      : customShown.value
-        ? [root, { label: t('settings.custom') }]
+      : aliasesShown.value
+        ? [root, { label: t('settings.aliases') }]
         : picking.value
           ? [root, { label: adding.label }]
           : isNew.value
@@ -442,7 +442,7 @@ watch(
     if (!ref) return
     layout.showingModel = null
     const slash = ref.indexOf('/')
-    if (ref.slice(0, slash) === CUSTOM_PROVIDER) return openCustom()
+    if (ref.slice(0, slash) === ALIAS_PROVIDER) return openAliases()
     const p = providers.value.find((x) => x.id === ref.slice(0, slash))
     if (!p) return
     open(p)
@@ -468,11 +468,11 @@ async function refreshModels(): Promise<void> {
           <button
             type="button"
             class="flex items-center gap-3 rounded-card border border-line-soft bg-surface px-3 py-2.5 text-left transition-colors hover:bg-surface-2"
-            @click="openCustom"
+            @click="openAliases"
           >
-            <span class="font-semibold text-ink">{{ t('settings.custom') }}</span>
+            <span class="font-semibold text-ink">{{ t('settings.aliases') }}</span>
             <span class="ml-auto text-meta text-ink-3">{{
-              t('settings.modelCount', { n: models.settings?.custom.length ?? 0 })
+              t('settings.modelCount', { n: models.settings?.aliases.length ?? 0 })
             }}</span>
             <Icon name="chevron" :size="12" class="text-ink-3" />
           </button>
@@ -565,7 +565,7 @@ async function refreshModels(): Promise<void> {
           </button>
         </div>
 
-        <CustomModels v-else-if="customShown" />
+        <ModelAliases v-else-if="aliasesShown" />
 
         <!-- the provider's form -->
         <form v-else-if="formShown" class="flex flex-col gap-5" @submit.prevent="save">

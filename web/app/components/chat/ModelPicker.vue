@@ -13,14 +13,14 @@ import ModelMenu from './ModelMenu.vue'
 const use = computed(() => currentPick())
 const resolved = computed(() => resolvePick(use.value))
 const settings = computed(() => models.settings)
-const empty = computed(() => !settings.value?.custom.length && !settings.value?.providers.length)
+const empty = computed(() => !settings.value?.aliases.length && !settings.value?.providers.length)
 
 /** The selected model's ref; with no pick, the default model's. */
 const selected = computed(() => use.value?.model ?? settings.value?.roles.default ?? null)
 
 function choose(m: ModelInfo, close: () => void): void {
-  // Moving to a custom model takes its effort; another keeps the shown one.
-  const effort = m.route ? undefined : (resolved.value?.effort ?? undefined)
+  // Moving to an alias takes its effort; another keeps the shown one.
+  const effort = m.target ? undefined : (resolved.value?.effort ?? undefined)
   pick(effort ? { model: m.ref, effort } : { model: m.ref })
   close()
 }

@@ -14,4 +14,4 @@ export type SettingsInfo = { providers: Array<ProviderInfo>,
 /**
  * The built-in provider's models.
  */
-custom: Array<ModelInfo>, roles: Roles, titles: Titles, presets: Array<PresetInfo>, mcp: Array<McpServerInfo>, skills: SkillsInfo, };
+aliases: Array<ModelInfo>, roles: Roles, titles: Titles, presets: Array<PresetInfo>, mcp: Array<McpServerInfo>, skills: SkillsInfo, };

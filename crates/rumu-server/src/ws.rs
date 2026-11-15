@@ -686,13 +686,13 @@ async fn dispatch(state: &AppState, method: &str, p: &Value) -> Result<Value> {
             let id = str_param(p, "id")?;
             settings_edit(state, |s| s.remove_provider(id))
         }
-        "settings.set_custom" => {
+        "settings.set_alias" => {
             let edit = parse_params(p)?;
-            settings_edit(state, |s| s.set_custom(edit))
+            settings_edit(state, |s| s.set_alias(edit))
         }
-        "settings.remove_custom" => {
+        "settings.remove_alias" => {
             let name = str_param(p, "name")?;
-            settings_edit(state, |s| s.remove_custom(name))
+            settings_edit(state, |s| s.remove_alias(name))
         }
         "settings.set_titles" => {
             let titles = parse_params(&p["titles"])?;

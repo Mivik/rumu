@@ -7,10 +7,10 @@ import type { Effort } from "./Effort";
  */
 export type ModelUse = { 
 /**
- * A model ref (`provider/model-id`); a custom one follows its edits.
+ * A model ref (`provider/model-id`); an alias follows its edits.
  */
 model: string, 
 /**
- * Overrides the custom model's effort (or sets the model's).
+ * Overrides the alias's effort (or sets the model's).
  */
 effort?: Effort, };

@@ -22,8 +22,8 @@ export const PROTOCOLS: Protocol[] = ['anthropic', 'openai', 'openai_responses',
 /** Tried after a model's native protocol, in order. */
 const FALLBACK: Protocol[] = ['openai', 'anthropic', 'openai_responses', 'gemini']
 
-/** The built-in provider, whose models are the custom ones: `rumu/<name>`. */
-export const CUSTOM_PROVIDER = 'rumu'
+/** The built-in provider, whose models are the aliases: `rumu/<name>`. */
+export const ALIAS_PROVIDER = 'rumu'
 
 export const PROTOCOL_LABELS: Record<Protocol, string> = {
   anthropic: 'Anthropic',
@@ -97,10 +97,10 @@ export function onSettingsUpdated(p: { settings: SettingsInfo }): void {
   models.settings = p.settings
 }
 
-/** Every custom or enabled model, by ref. */
+/** Every alias or enabled model, by ref. */
 export function modelByRef(ref: string): ModelInfo | null {
   const s = models.settings
-  for (const list of [s?.custom ?? [], ...(s?.providers ?? []).map((p) => p.models)]) {
+  for (const list of [s?.aliases ?? [], ...(s?.providers ?? []).map((p) => p.models)]) {
     const m = list.find((x) => x.ref === ref)
     if (m) return m
   }
@@ -147,7 +147,7 @@ export function resolvePick(use: ModelUse | null): Resolved | null {
   if (!s) return null
   const ref = use?.model ?? s.roles.default ?? null
   const model = ref ? modelByRef(ref) : null
-  const effort = use?.effort ?? model?.route?.effort ?? 'high'
+  const effort = use?.effort ?? model?.target?.effort ?? 'high'
   const efforts = model?.efforts ?? []
   return {
     label: model?.name ?? ref ?? t('settings.noModel'),
