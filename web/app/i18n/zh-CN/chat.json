@@ -23,7 +23,7 @@
     "noProject": "无项目",
     "pickAssistant": "选择助手"
   },
-  "welcome": "想做点什么？",
+  "welcome": "今天要和 {assistant} 做些什么？",
   "composer": {
     "steerPlaceholder": "引导 {name}…",
     "placeholder": "发给 {name}…",

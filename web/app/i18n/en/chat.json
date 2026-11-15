@@ -23,7 +23,7 @@
     "noProject": "No project",
     "pickAssistant": "Pick an assistant"
   },
-  "welcome": "What are we working on?",
+  "welcome": "What will you and {assistant} work on today?",
   "composer": {
     "steerPlaceholder": "Steer {name}…",
     "placeholder": "Message {name}…",

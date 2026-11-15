@@ -1,32 +1,14 @@
 <script setup lang="ts">
-// The landing composer's two picks: the assistant a new session runs as and
-// the project it works in. Both are single choice; "No project" is a choice.
-import { computed, ref } from 'vue'
+// The landing composer's pick of the project a new session works in (the
+// assistant is picked in the hero above, Welcome). "No project" is a choice.
+import { computed } from 'vue'
 import { t } from '../../i18n'
-import {
-  chooseLandingAssistant,
-  chooseLandingProject,
-  landingAssistant,
-  landingProject,
-  state,
-} from '../../lib/store'
-import { assistantCat } from '../../lib/assistantFace'
-import AssistantAvatar from '../brand/AssistantAvatar.vue'
+import { chooseLandingProject, landingProject, state } from '../../lib/store'
 import ProjectSeal from '../brand/ProjectSeal.vue'
 import Icon from '../ui/Icon.vue'
 import Popover from '../ui/Popover.vue'
-import AssistantMenu from './AssistantMenu.vue'
 
-const assistant = computed(() => state.assistants.find((a) => a.id === landingAssistant.value) ?? null)
 const project = computed(() => state.projects.find((p) => p.id === landingProject.value) ?? null)
-/** The pointer is on the assistant's pick: its cat turns to face it. */
-const near = ref(false)
-
-function pickAssistant(id: string, close: () => void): void {
-  chooseLandingAssistant(id)
-  close()
-}
-
 function pickProject(id: string | null, close: () => void): void {
   chooseLandingProject(id)
   close()
@@ -34,34 +16,6 @@ function pickProject(id: string | null, close: () => void): void {
 </script>
 
 <template>
-  <Popover :label="t('chat.newSession.assistant')" placement="top-start">
-    <template #trigger="{ open, toggle }">
-      <button
-        type="button"
-        class="inline-flex min-w-0 items-center gap-2 rounded-[11px] bg-surface-2 p-[3px] pr-2.5 text-secondary font-semibold text-ink-2 transition-colors hover:text-ink"
-        :class="{ 'text-ink': open }"
-        :aria-expanded="open"
-        @click="toggle"
-        @pointerenter="near = true"
-        @pointerleave="near = false"
-      >
-        <AssistantAvatar
-          v-if="assistant"
-          :key="assistant.id"
-          :id="assistant.id"
-          :cat="assistantCat(assistant)"
-          :size="24"
-          :near="near || open"
-        />
-        <span class="truncate">{{ assistant?.name ?? t('chat.newSession.pickAssistant') }}</span>
-        <Icon name="down" :size="12" class="text-ink-3" />
-      </button>
-    </template>
-    <template #default="{ close }">
-      <AssistantMenu :current="landingAssistant" @pick="pickAssistant($event, close)" @close="close" />
-    </template>
-  </Popover>
-
   <Popover :label="t('chat.newSession.project')" placement="top-start">
     <template #trigger="{ open, toggle }">
       <button
