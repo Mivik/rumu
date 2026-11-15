@@ -25,8 +25,8 @@
   },
   "welcome": "想做点什么？",
   "composer": {
-    "steerPlaceholder": "引导 rumu…",
-    "placeholder": "发送消息…",
+    "steerPlaceholder": "引导 {name}…",
+    "placeholder": "发给 {name}…",
     "stop": "停止",
     "steer": "引导",
     "send": "发送",

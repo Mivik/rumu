@@ -1,7 +1,7 @@
 <script setup lang="ts">
 // Center column, the one paper sheet on the canvas: the shell around the
-// open session's view. The shell owns the header (title, view tabs, and
-// beside them who the session runs as and the project it works in) and the
+// open session's view. The shell owns the header (who the session runs as,
+// its title, view tabs, and beside them the project it works in) and the
 // composer card at the foot; the view between them is the conversation
 // (ConversationView), the raw trajectory (TraceView) or its usage
 // statistics (StatsView). The
@@ -27,7 +27,7 @@ import StatsView from './StatsView.vue'
 import ViewTabs from './ViewTabs.vue'
 import Welcome from './Welcome.vue'
 import SessionPickers from './SessionPickers.vue'
-import RumuCat from '../brand/RumuCat.vue'
+import AssistantAvatar from '../brand/AssistantAvatar.vue'
 import RumuMark from '../brand/RumuMark.vue'
 import ProjectSeal from '../brand/ProjectSeal.vue'
 import Icon from '../ui/Icon.vue'
@@ -81,6 +81,25 @@ function composerRoot(): HTMLElement | null {
           leave-active-class="transition duration-150"
           leave-to-class="opacity-0"
         >
+          <button
+            v-if="scope"
+            :key="scope.assistant"
+            type="button"
+            class="-my-1 flex flex-none items-center rounded-[9px] transition-transform duration-200 ease-soft hover:-translate-y-px"
+            :title="scope.assistantName"
+            :aria-label="scope.assistantName"
+            @click="openPage('assistants', scope.assistant)"
+          >
+            <AssistantAvatar :id="scope.assistant" :cat="scope.cat" :size="30" />
+          </button>
+        </Transition>
+        <Transition
+          mode="out-in"
+          enter-active-class="transition duration-300 ease-soft"
+          enter-from-class="translate-y-1 opacity-0"
+          leave-active-class="transition duration-150"
+          leave-to-class="opacity-0"
+        >
           <span
             :key="state.sessionId ?? ''"
             class="min-w-0 truncate text-title font-bold"
@@ -108,18 +127,8 @@ function composerRoot(): HTMLElement | null {
       </div>
       <div v-if="state.sessionId" class="flex gap-4">
         <ViewTabs class="flex-none" />
-        <span v-if="scope" class="ml-auto flex min-w-0 items-center gap-1 pb-1.5">
+        <span v-if="scope?.project" class="ml-auto flex min-w-0 items-center gap-1 pb-1.5">
           <button
-            type="button"
-            class="scope-tag"
-            :title="t('chat.newSession.assistant')"
-            @click="openPage('assistants', scope.assistant)"
-          >
-            <RumuCat :size="13" :paper="false" :cat="scope.cat" class="flex-none" />
-            <span class="truncate">{{ scope.assistantName }}</span>
-          </button>
-          <button
-            v-if="scope.project"
             type="button"
             class="scope-tag"
             :title="t('chat.sidebar.projectSettings')"

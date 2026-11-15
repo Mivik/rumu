@@ -1,9 +1,8 @@
 <script setup lang="ts">
 // The landing composer's two picks: the assistant a new session runs as and
 // the project it works in. Both are single choice; "No project" is a choice.
-import { computed } from 'vue'
+import { computed, ref } from 'vue'
 import { t } from '../../i18n'
-import { openPage } from '../../lib/router'
 import {
   chooseLandingAssistant,
   chooseLandingProject,
@@ -12,18 +11,16 @@ import {
   state,
 } from '../../lib/store'
 import { assistantCat } from '../../lib/assistantFace'
-import RumuCat from '../brand/RumuCat.vue'
+import AssistantAvatar from '../brand/AssistantAvatar.vue'
 import ProjectSeal from '../brand/ProjectSeal.vue'
 import Icon from '../ui/Icon.vue'
 import Popover from '../ui/Popover.vue'
+import AssistantMenu from './AssistantMenu.vue'
 
 const assistant = computed(() => state.assistants.find((a) => a.id === landingAssistant.value) ?? null)
 const project = computed(() => state.projects.find((p) => p.id === landingProject.value) ?? null)
-
-function manage(close: () => void): void {
-  close()
-  openPage('assistants', landingAssistant.value)
-}
+/** The pointer is on the assistant's pick: its cat turns to face it. */
+const near = ref(false)
 
 function pickAssistant(id: string, close: () => void): void {
   chooseLandingAssistant(id)
@@ -41,53 +38,27 @@ function pickProject(id: string | null, close: () => void): void {
     <template #trigger="{ open, toggle }">
       <button
         type="button"
-        class="inline-flex min-w-0 items-center gap-1.5 rounded-full bg-surface-2 py-1 pr-2 pl-2.5 text-meta font-semibold text-ink-2 transition-colors hover:text-ink"
+        class="inline-flex min-w-0 items-center gap-2 rounded-[11px] bg-surface-2 p-[3px] pr-2.5 text-secondary font-semibold text-ink-2 transition-colors hover:text-ink"
         :class="{ 'text-ink': open }"
         :aria-expanded="open"
         @click="toggle"
+        @pointerenter="near = true"
+        @pointerleave="near = false"
       >
-        <RumuCat v-if="assistant" :size="14" :paper="false" :cat="assistantCat(assistant)" />
+        <AssistantAvatar
+          v-if="assistant"
+          :key="assistant.id"
+          :id="assistant.id"
+          :cat="assistantCat(assistant)"
+          :size="24"
+          :near="near || open"
+        />
         <span class="truncate">{{ assistant?.name ?? t('chat.newSession.pickAssistant') }}</span>
         <Icon name="down" :size="12" class="text-ink-3" />
       </button>
     </template>
     <template #default="{ close }">
-      <div class="panel-head">{{ t('chat.newSession.assistant') }}</div>
-      <button
-        v-for="a in state.assistants"
-        :key="a.id"
-        type="button"
-        class="flex w-full items-center gap-2 rounded-control px-2.5 py-1.5 text-left transition-colors duration-150 hover:bg-surface-2"
-        :aria-pressed="a.id === landingAssistant"
-        @click="pickAssistant(a.id, close)"
-      >
-        <Icon
-          name="ok"
-          :size="13"
-          class="flex-none text-brand"
-          :class="a.id === landingAssistant ? '' : 'invisible'"
-        />
-        <RumuCat :size="16" :paper="false" :cat="assistantCat(a)" />
-        <span
-          class="min-w-0 truncate text-secondary"
-          :class="a.id === landingAssistant ? 'font-semibold text-ink' : 'text-ink-2'"
-          >{{ a.name }}</span
-        >
-        <span
-          v-if="a.default"
-          class="ml-auto flex-none rounded-xs border border-line px-1 text-micro text-ink-3"
-          >{{ t('assistants.defaultBadge') }}</span
-        >
-      </button>
-      <div class="mx-2 my-1 border-t border-line-soft" />
-      <button
-        type="button"
-        class="flex w-full items-center gap-2 rounded-control px-2.5 py-1.5 text-left text-meta text-ink-3 transition-colors hover:bg-surface-2 hover:text-ink"
-        @click="manage(close)"
-      >
-        <Icon name="settings" :size="13" />
-        {{ t('assistants.manage') }}
-      </button>
+      <AssistantMenu :current="landingAssistant" @pick="pickAssistant($event, close)" @close="close" />
     </template>
   </Popover>
 

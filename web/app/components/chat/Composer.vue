@@ -28,7 +28,7 @@
 // open while it holds images or a decision.
 import { computed, nextTick, onBeforeUnmount, onMounted, reactive, ref, watch } from 'vue'
 import { t } from '../../i18n'
-import { compactBranch, isBusy, sendPrompt, state, stopTurn } from '../../lib/store'
+import { compactBranch, isBusy, landingAssistant, sendPrompt, state, stopTurn } from '../../lib/store'
 import type { PromptAttachment } from '../../lib/store'
 import type { Attachment } from '../../lib/types'
 import { uploadBlob, withLeadingAnchors } from '../../lib/attachments'
@@ -280,8 +280,18 @@ watch(
 // session change when it is already open, so their request focuses it here.
 watch(composerFocus, () => void nextTick(focusComposer))
 
+/** Whom the message goes to: the session's assistant, or the one picked on
+ * the landing page. */
+const recipient = computed(() => {
+  const id = state.session?.assistant ?? landingAssistant.value
+  return state.assistants.find((a) => a.id === id)?.name ?? 'rumu'
+})
+
 const placeholder = computed(() => {
-  return isBusy.value ? t('chat.composer.steerPlaceholder') : t('chat.composer.placeholder')
+  const name = recipient.value
+  return isBusy.value
+    ? t('chat.composer.steerPlaceholder', { name })
+    : t('chat.composer.placeholder', { name })
 })
 </script>
 

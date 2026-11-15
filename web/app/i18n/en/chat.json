@@ -25,8 +25,8 @@
   },
   "welcome": "What are we working on?",
   "composer": {
-    "steerPlaceholder": "Steer rumu…",
-    "placeholder": "Send a message…",
+    "steerPlaceholder": "Steer {name}…",
+    "placeholder": "Message {name}…",
     "stop": "Stop",
     "steer": "Steer",
     "send": "Send",
