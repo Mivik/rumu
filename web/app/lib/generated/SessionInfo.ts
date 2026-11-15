@@ -4,6 +4,12 @@ import type { SessionId } from "./SessionId";
 
 export type SessionInfo = { id: SessionId, title: string, active_branch: BranchId, created_at: number, updated_at: number, 
 /**
+ * When the user last moved the session on: created it, sent on its main
+ * line, or moved it to another project. Session lists order by it, so
+ * the model's own activity does not reshuffle them. Derived by the store.
+ */
+touched_at: number, 
+/**
  * When the user last looked at the session: it has unseen updates while
  * `updated_at` is later. `None` (never recorded) counts as seen.
  */

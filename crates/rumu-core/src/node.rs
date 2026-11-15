@@ -759,6 +759,11 @@ pub struct SessionInfo {
     pub active_branch: BranchId,
     pub created_at: Timestamp,
     pub updated_at: Timestamp,
+    /// When the user last moved the session on: created it, sent on its main
+    /// line, or moved it to another project. Session lists order by it, so
+    /// the model's own activity does not reshuffle them. Derived by the store.
+    #[serde(default)]
+    pub touched_at: Timestamp,
     /// When the user last looked at the session: it has unseen updates while
     /// `updated_at` is later. `None` (never recorded) counts as seen.
     #[serde(default, skip_serializing_if = "Option::is_none")]

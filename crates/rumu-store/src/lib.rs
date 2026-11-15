@@ -23,7 +23,9 @@
 //! active_branch / project / updated_at — whatever the mutating call changed),
 //! `branch` adds a branch and `branch_update` moves its head/status, and
 //! `node` adds a node — with `branch`, it is also that branch's new head.
-//! A session's `updated_at` is never older than its newest node. Optional fields are `#[serde(default)]` and
+//! A session's `updated_at` is never older than its newest node; its
+//! `touched_at` follows the user's prompts on main lines and project moves.
+//! Optional fields are `#[serde(default)]` and
 //! skipped when unset, so the format can grow without migrations; records
 //! with an unknown tag (e.g. a retired record type) are ignored.
 //!
@@ -52,8 +54,8 @@ use std::path::{Path, PathBuf};
 use std::sync::Mutex;
 
 use rumu_core::{
-    Artifact, Branch, BranchId, BranchStatus, IoError, Node, NodeBody, NodeId, SessionId,
-    SessionInfo, Timestamp,
+    Artifact, Branch, BranchId, BranchKind, BranchStatus, IoError, Node, NodeBody, NodeId,
+    SessionId, SessionInfo, Timestamp,
 };
 use serde::{Deserialize, Serialize};
 use serde_json::Value;
@@ -630,7 +632,9 @@ impl StoreState {
 }
 
 impl SessionState {
-    fn new(info: SessionInfo) -> Self {
+    fn new(mut info: SessionInfo) -> Self {
+        // A header written before `touched_at` existed carries none.
+        info.touched_at = info.touched_at.max(info.created_at);
         Self {
             info,
             branches: HashMap::new(),
@@ -653,11 +657,14 @@ impl SessionState {
                 if let Some(v) = active_branch {
                     self.info.active_branch = v;
                 }
-                if let Some(v) = project {
-                    self.info.project = v;
-                }
                 if let Some(v) = updated_at {
                     self.info.updated_at = self.info.updated_at.max(v);
+                }
+                if let Some(v) = project
+                    && v != self.info.project
+                {
+                    self.info.project = v;
+                    self.info.touched_at = self.info.touched_at.max(self.info.updated_at);
                 }
             }
             Record::Branch(b) => {
@@ -676,6 +683,11 @@ impl SessionState {
             Record::Node { branch, node } => {
                 if let Some(b) = branch.and_then(|id| self.branches.get_mut(&id)) {
                     b.head = node.id.clone();
+                    if matches!(b.kind, BranchKind::Main)
+                        && matches!(node.body, NodeBody::User { .. })
+                    {
+                        self.info.touched_at = self.info.touched_at.max(node.at);
+                    }
                 }
                 self.info.updated_at = self.info.updated_at.max(node.at);
                 self.nodes.insert(node.id.clone(), *node);
@@ -806,6 +818,7 @@ mod tests {
             active_branch: branch.id.clone(),
             created_at: root.at,
             updated_at: root.at,
+            touched_at: root.at,
             seen_at: None,
             assistant: "assistant".into(),
             project: None,
@@ -851,6 +864,59 @@ mod tests {
         // The journal holds no view state.
         let journal = std::fs::read_to_string(dir.join(format!("{}.jsonl", session.id))).unwrap();
         assert!(!journal.contains("seen_at"));
+        std::fs::remove_dir_all(dir).unwrap();
+    }
+
+    #[test]
+    fn touched_at_follows_prompts_and_moves_only() {
+        let dir = temp_dir("touched");
+        let store = Store::open(&dir, &dir.join("seen.json")).unwrap();
+        let (session, branch, root) = mk_session(&store);
+        let side = Branch {
+            id: BranchId::new(),
+            kind: BranchKind::Side {
+                parent_branch: branch.id.clone(),
+                quote: None,
+            },
+            ..branch.clone()
+        };
+        store.insert_branch(&side).unwrap();
+        let prompt = |on: &Branch, at| {
+            let node = Node {
+                id: NodeId::new(),
+                parent: Some(root.id.clone()),
+                session: session.id.clone(),
+                at: root.at + at,
+                dur_ms: None,
+                body: NodeBody::User {
+                    content: rumu_core::Content::text("hi"),
+                },
+            };
+            store.append_node(&on.id, &node).unwrap();
+        };
+        prompt(&branch, 5);
+        prompt(&side, 7);
+        let mut info = store.get_session(&session.id).unwrap().unwrap();
+        assert_eq!(
+            (info.updated_at, info.touched_at),
+            (root.at + 7, root.at + 5)
+        );
+        // A title is not a move; a new project is.
+        info.title = "t".into();
+        info.updated_at = root.at + 8;
+        store.update_session(&info).unwrap();
+        let touched = store.get_session(&session.id).unwrap().unwrap().touched_at;
+        assert_eq!(touched, root.at + 5);
+        info.project = Some("p".into());
+        info.updated_at = root.at + 9;
+        store.update_session(&info).unwrap();
+        drop(store);
+        let info = Store::open(&dir, &dir.join("seen.json"))
+            .unwrap()
+            .get_session(&session.id)
+            .unwrap()
+            .unwrap();
+        assert_eq!(info.touched_at, root.at + 9);
         std::fs::remove_dir_all(dir).unwrap();
     }
 

@@ -704,6 +704,7 @@ impl Kernel {
             active_branch: branch.id.clone(),
             created_at: at,
             updated_at: at,
+            touched_at: at,
             seen_at: Some(at),
             assistant,
             project: root_data
@@ -963,11 +964,12 @@ impl Kernel {
                 session.title = title;
                 session.updated_at = at;
                 self.store.update_session(&session)?;
-                self.push("session.updated", json!({ "session": session.clone() }));
                 if first && titles == Titles::Model {
-                    self.spawn_title(session, content.text.clone());
+                    self.spawn_title(session.clone(), content.text.clone());
                 }
             }
+            // A prompt moves the session up the lists (`touched_at`).
+            self.push("session.updated", json!({ "session": session }));
         }
 
         self.push("branch.updated", json!({ "branch": b }));
@@ -1453,6 +1455,7 @@ impl Kernel {
             active_branch: branch.id.clone(),
             created_at: at,
             updated_at: at,
+            touched_at: at,
             seen_at: Some(at),
             assistant: src.assistant.clone(),
             project: derive_state(&path).project,

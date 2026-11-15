@@ -179,8 +179,8 @@ const groups = computed<Group[]>(() => {
       }
       map.set(key, group)
     }
-    group.sessions.push({ s, ago: relTime(s.updated_at, now.value), last: lastActive(s) })
-    group.activity = Math.max(group.activity, s.updated_at)
+    group.sessions.push({ s, ago: relTime(s.touched_at, now.value), last: lastActive(s) })
+    group.activity = Math.max(group.activity, s.touched_at)
   }
   // The landing composer is a new session not created yet: its row sits in
   // the group it would be born into, unless a boot is still resolving.

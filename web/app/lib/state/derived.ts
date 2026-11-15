@@ -10,7 +10,7 @@ import { state } from './state'
 
 export const connected = rumu.connected
 
-export const sortedSessions = computed(() => [...state.sessions].sort((a, b) => b.updated_at - a.updated_at))
+export const sortedSessions = computed(() => [...state.sessions].sort((a, b) => b.touched_at - a.touched_at))
 
 /** Did the session change since the user last looked at it? */
 export function isUnseen(s: SessionInfo): boolean {
