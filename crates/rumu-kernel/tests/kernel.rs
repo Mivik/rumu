@@ -698,6 +698,7 @@ async fn setup_in_project(
             assistant: "assistant".into(),
             asked_by: None,
             mounts: vec![project_mount(deck)],
+            ..Default::default()
         })
         .await
         .unwrap();
@@ -2666,7 +2667,7 @@ async fn move_project_refuses_an_asked_session() {
         .create_rooted_session(SessionRoot {
             assistant: "assistant".into(),
             asked_by: Some("asker".into()),
-            mounts: Vec::new(),
+            ..Default::default()
         })
         .await
         .unwrap();

@@ -91,6 +91,7 @@ fn fold_node(st: &mut PathState, body: &NodeBody) {
     } else if let Some(root) = content.decode::<SessionRoot>() {
         st.assistant = root.assistant.clone();
         st.asked_by = root.asked_by;
+        st.model = root.model;
         // The session's own deck is always at `/cards/self`.
         st.mounts = vec![CardMount {
             deck: root.assistant,
@@ -207,6 +208,7 @@ mod tests {
             assistant: "x".into(),
             asked_by: None,
             mounts,
+            model: None,
         })
     }
 
@@ -336,5 +338,24 @@ mod tests {
         };
         assert_eq!(project_change(&marker(&other).body), None);
         assert_eq!(project_change(&use_("a").body), None);
+    }
+
+    #[test]
+    fn the_root_model_holds_until_a_marker_picks_another() {
+        let start = ModelUse {
+            model: "rumu/fast".into(),
+            effort: None,
+        };
+        let seeded = marker(&SessionRoot {
+            assistant: "x".into(),
+            model: Some(start.clone()),
+            ..Default::default()
+        });
+        assert_eq!(derive_state(std::slice::from_ref(&seeded)).model, Some(start));
+        let picked = ModelUse {
+            model: "a/m".into(),
+            effort: Some(rumu_core::Effort::Low),
+        };
+        assert_eq!(derive_state(&[seeded, marker(&picked)]).model, Some(picked));
     }
 }

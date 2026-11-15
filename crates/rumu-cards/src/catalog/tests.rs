@@ -19,6 +19,7 @@ fn deck_with(home: &Path, paths: &[String]) -> (Decks, Deck) {
             private: false,
             mounts: Vec::new(),
             allow_ask: Vec::new(),
+            model: None,
             mcp: Default::default(),
             skills: Vec::new(),
             icon: None,

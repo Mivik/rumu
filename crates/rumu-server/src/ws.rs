@@ -401,6 +401,7 @@ async fn dispatch(state: &AppState, method: &str, p: &Value) -> Result<Value> {
                     assistant: deck.id().to_owned(),
                     asked_by: None,
                     mounts,
+                    model: deck.meta.model.clone(),
                 })
                 .await?;
             Ok(json!({ "session": session, "branch": branch }))
@@ -581,6 +582,8 @@ async fn dispatch(state: &AppState, method: &str, p: &Value) -> Result<Value> {
                 skills: Vec<String>,
                 #[serde(default)]
                 cat: Option<rumu_cards::DeckCat>,
+                #[serde(default)]
+                model: Option<rumu_core::ModelUse>,
             }
             let req: Upsert = serde_json::from_value(p.clone())
                 .map_err(|e| ServerError::InvalidParams(e.to_string()))?;
@@ -615,6 +618,7 @@ async fn dispatch(state: &AppState, method: &str, p: &Value) -> Result<Value> {
                 private: existing.as_ref().is_some_and(|d| d.private()),
                 mounts,
                 allow_ask: req.allow_ask,
+                model: req.model,
                 mcp: req.mcp,
                 skills: req.skills,
                 icon: existing.as_ref().and_then(|d| d.meta.icon.clone()),

@@ -220,6 +220,9 @@ pub struct DeckMeta {
     /// Assistant deck ids that may ask it without a prompt.
     #[serde(default, skip_serializing_if = "Vec::is_empty")]
     pub allow_ask: Vec<String>,
+    /// The model an assistant's sessions start on; unset, the default role's.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub model: Option<rumu_core::ModelUse>,
     /// The MCP servers (names in `settings.yaml`) its sessions use, each with
     /// the rules enabling its tools.
     #[serde(default, skip_serializing_if = "std::collections::BTreeMap::is_empty")]
@@ -1188,6 +1191,7 @@ fn empty_meta(id: String, name: String) -> DeckMeta {
         private: false,
         mounts: Vec::new(),
         allow_ask: Vec::new(),
+        model: None,
         mcp: Default::default(),
         skills: Vec::new(),
         icon: None,

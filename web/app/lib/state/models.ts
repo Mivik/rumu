@@ -1,8 +1,9 @@
 // Model settings (`settings.*`) and the composer's model pick. A branch runs
-// on its last `model.use` marker, or the default model. A pick made in a
-// session stays pending until the next prompt or regeneration carries it;
-// the server records it only when it changes the branch's model. Every pick
-// is also remembered (prefs) as the one a new session starts on.
+// on its last `model.use` marker, else its assistant's model (on the root),
+// else the default model. A pick made in a session stays pending until the
+// next prompt or regeneration carries it; the server records it only when it
+// changes the branch's model. Every pick is also remembered (prefs) as the one
+// a new session starts on, unless its assistant has a model of its own.
 
 import { reactive } from 'vue'
 import { t } from '../../i18n'
@@ -13,6 +14,7 @@ import type { ModelUse } from '../generated/ModelUse'
 import type { Protocol } from '../generated/Protocol'
 import type { SettingsInfo } from '../generated/SettingsInfo'
 import { prefs } from './prefs'
+import { landingAssistant } from './projects'
 import { state } from './state'
 import { toast } from './ui'
 
@@ -36,6 +38,8 @@ export const models = reactive({
   settings: null as SettingsInfo | null,
   /** Unsent picks by session id. */
   pending: {} as Record<string, ModelUse>,
+  /** The landing page's pick, for the assistant it was made with. */
+  landing: null as { assistant: string; use: ModelUse } | null,
 })
 
 /** Does a model id rule (a `*` wildcard) match an id? */
@@ -108,11 +112,16 @@ export function modelByRef(ref: string): ModelInfo | null {
 }
 
 /** What the next prompt runs on: the session's unsent pick or its branch's
- *  marker; on the landing page the remembered pick, while it still exists.
- *  `null` is the default profile. */
+ *  model; on the landing page the pick made there, else the assistant's
+ *  model, else the remembered pick, while it still exists. `null` is the
+ *  default profile. */
 export function currentPick(): ModelUse | null {
   const session = state.sessionId
   if (session) return models.pending[session] ?? state.pathState?.model ?? null
+  const assistant = landingAssistant.value
+  if (models.landing?.assistant === assistant) return models.landing.use
+  const own = state.assistants.find((a) => a.id === assistant)?.model
+  if (own && exists(own)) return own
   return prefs.model && exists(prefs.model) ? prefs.model : null
 }
 
@@ -123,7 +132,10 @@ function exists(use: ModelUse): boolean {
 export function pick(use: ModelUse): void {
   prefs.model = use
   const session = state.sessionId
-  if (!session) return
+  if (!session) {
+    models.landing = { assistant: landingAssistant.value, use }
+    return
+  }
   const recorded = state.pathState?.model
   if (recorded && sameUse(recorded, use)) delete models.pending[session]
   else models.pending[session] = use

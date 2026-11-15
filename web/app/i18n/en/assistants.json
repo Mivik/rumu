@@ -5,6 +5,8 @@
   "name": "Name",
   "mounts": "Mounted decks",
   "instructions": "Instructions",
+  "model": "Model",
+  "modelDefault": "Default model",
   "look": "Look",
   "lookShuffle": "Shuffle",
   "lookTone": "Color",

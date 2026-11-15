@@ -31,6 +31,10 @@ pub struct Assistant {
     pub allow_ask: Vec<String>,
     /// Its `deck.yaml` default mounts.
     pub mounts: Vec<DeckMount>,
+    /// The model its sessions start on.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    #[ts(optional)]
+    pub model: Option<rumu_core::ModelUse>,
     /// The MCP servers its sessions use.
     pub mcp: rumu_core::McpUse,
     /// The rules enabling the skills its sessions see.
@@ -59,6 +63,7 @@ pub fn assistant_of(decks: &Decks, deck: &Deck) -> Assistant {
         mounts: deck.meta.mounts.clone(),
         mcp: deck.meta.mcp.clone(),
         skills: deck.meta.skills.clone(),
+        model: deck.meta.model.clone(),
         default: decks.default_assistant() == deck.meta.id,
         cat: deck.meta.cat.clone(),
     }

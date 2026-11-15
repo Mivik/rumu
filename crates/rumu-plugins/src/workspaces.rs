@@ -260,6 +260,7 @@ pub fn create_project(
         private,
         mounts: Vec::new(),
         allow_ask: Vec::new(),
+        model: None,
         mcp: Default::default(),
         skills: Vec::new(),
         icon,

@@ -1,8 +1,8 @@
 <script setup lang="ts">
 // One assistant on the assistants page (`/assistants/<id>`, `?new` for a new
 // one). Each assistant is a deck (`decks/<id>/deck.yaml`) with a pinned
-// `instructions.md`; the form edits its name, instructions, MCP servers,
-// skills, who may ask it and, last, the decks it mounts. Saves go through
+// `instructions.md`; the form edits its name, instructions, model, MCP
+// servers, skills, who may ask it and, last, the decks it mounts. Saves go through
 // `assistant.upsert` / `assistant.delete`; `assistant.set_default` picks the
 // one sessions run as by default.
 import { computed, onBeforeUnmount, onMounted, reactive, ref, watch } from 'vue'
@@ -12,7 +12,7 @@ import { CAT_SHAPE_MAX, assistantCat, assistantTone, randomCat } from '../../lib
 import { CAT_ITEMS, itemSlot } from '../../lib/catItems'
 import { PROJECT_TONES, toneColor, type ProjectTone } from '../../lib/projectIcon'
 import { openPage, replacePage } from '../../lib/router'
-import { models, refreshSettings, rulesEnable } from '../../lib/state/models'
+import { modelByRef, models, nearestEffort, refreshSettings, rulesEnable } from '../../lib/state/models'
 import {
   connected,
   defaultAssistant,
@@ -21,9 +21,11 @@ import {
   state,
   viewAssistant,
 } from '../../lib/store'
-import type { Assistant, AssistantOptions, DeckCat, DeckMount } from '../../lib/types'
+import type { Assistant, AssistantOptions, DeckCat, DeckMount, ModelUse } from '../../lib/types'
+import type { Effort } from '../../lib/generated/Effort'
 import { copyText } from '../../lib/util'
 import AssistantAvatar from '../brand/AssistantAvatar.vue'
+import ModelField from '../settings/ModelField.vue'
 import Icon from '../ui/Icon.vue'
 import Select from '../ui/Select.vue'
 import type { SelectOption } from '../ui/Select.vue'
@@ -33,6 +35,8 @@ interface Form {
   name: string
   mounts: DeckMount[]
   instructions: string
+  /** The model its sessions start on; null is the default model. */
+  model: ModelUse | null
   /** Each bound server with the rules enabling its tools. */
   mcp: Record<string, string[]>
   /** The rules enabling skills. */
@@ -48,6 +52,7 @@ function blank(): Form {
     name: '',
     mounts: [],
     instructions: '',
+    model: null,
     mcp: {},
     skills: [],
     allow_ask: [],
@@ -252,6 +257,18 @@ function toggleTool(server: string, tool: string): void {
   form.mcp[server] = flip(form.mcp[server]!, tool)
 }
 
+const modelRef = computed({
+  get: () => form.model?.model ?? '',
+  // Another model starts at its own effort.
+  set: (ref: string) => (form.model = ref ? { model: ref } : null),
+})
+const modelInfo = computed(() => (form.model ? modelByRef(form.model.model) : null))
+const shownEffort = computed<Effort | null>(() => {
+  const m = modelInfo.value
+  if (!m?.efforts.length) return null
+  return nearestEffort(form.model?.effort ?? m.target?.effort ?? 'high', m.efforts)
+})
+
 /** The usable skills, then names the rules keep that none is. */
 const skillOptions = computed(() => {
   const found = [
@@ -292,6 +309,7 @@ function fromAssistant(assistant: Assistant): Form {
     name: assistant.name,
     mounts: assistant.mounts.map((m) => ({ ...m })),
     instructions: assistant.instructions ?? '',
+    model: assistant.model ? { ...assistant.model } : null,
     mcp: Object.fromEntries(Object.entries(assistant.mcp).map(([k, v]) => [k, [...v]])),
     skills: [...assistant.skills],
     allow_ask: [...assistant.allow_ask],
@@ -332,6 +350,7 @@ async function save(): Promise<void> {
       name,
       mounts: form.mounts,
       instructions: form.instructions.trim() || undefined,
+      model: form.model ?? undefined,
       mcp: form.mcp,
       skills: form.skills,
       allow_ask: form.allow_ask.filter((asker) => asker !== form.id),
@@ -522,6 +541,34 @@ onBeforeUnmount(() => window.removeEventListener('keydown', onKey, true))
             <span class="field-label">{{ t('assistants.instructions') }}</span>
             <textarea v-model="form.instructions" rows="8" class="instructions w-full resize-y" />
           </label>
+
+          <div class="flex flex-col gap-1.5">
+            <span class="field-label">{{ t('assistants.model') }}</span>
+            <div class="flex flex-wrap items-center gap-2">
+              <div class="min-w-48 flex-1">
+                <ModelField v-model="modelRef" clearable :placeholder="t('assistants.modelDefault')" />
+              </div>
+              <div
+                v-if="form.model && modelInfo && modelInfo.efforts.length > 1"
+                class="flex flex-none rounded-control bg-surface-2 p-0.5"
+                role="radiogroup"
+                :aria-label="t('settings.effort')"
+              >
+                <button
+                  v-for="e in modelInfo.efforts"
+                  :key="e"
+                  type="button"
+                  role="radio"
+                  :aria-checked="shownEffort === e"
+                  class="rounded-xs px-2 py-0.5 text-meta font-semibold transition-colors duration-150"
+                  :class="shownEffort === e ? 'bg-surface text-ink shadow-soft' : 'text-ink-3 hover:text-ink'"
+                  @click="form.model = { model: form.model.model, effort: e }"
+                >
+                  {{ e }}
+                </button>
+              </div>
+            </div>
+          </div>
 
           <div class="flex flex-col gap-1.5">
             <span class="field-label">{{ t('assistants.mcp') }}</span>

@@ -659,6 +659,7 @@ impl Kernel {
             assistant,
             asked_by: None,
             mounts: Vec::new(),
+            model: None,
         })
         .await
     }
