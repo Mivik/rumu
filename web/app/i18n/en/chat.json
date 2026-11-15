@@ -151,6 +151,17 @@
     "close": "Close",
     "empty": "Starting…"
   },
+  "side": {
+    "title": "By the way",
+    "quote": "Quote",
+    "unquote": "Remove quote",
+    "all": "All side questions",
+    "close": "Close",
+    "placeholder": "Ask on the side…",
+    "followUp": "Follow up…",
+    "bringBack": "Quote in chat",
+    "failed": "Side question failed"
+  },
   "compaction": {
     "line": "Context compacted · {before} → {after} tok",
     "show": "Show summary",

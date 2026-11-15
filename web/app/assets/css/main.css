@@ -1300,6 +1300,14 @@
     text-decoration-color: currentColor;
   }
 
+  /* a passage a side question was asked about (SidePop); a click on it
+   * opens the question */
+  ::highlight(side-quote) {
+    background-color: color-mix(in srgb, var(--agent) 12%, transparent);
+    text-decoration: underline dotted var(--agent);
+    text-underline-offset: 3px;
+  }
+
   /* ---- live states ---- */
 
   /* the streaming caret is the coral dot, breathing at the end of the text */
@@ -1522,6 +1530,18 @@
   /* an image dragged over the sheet: the edge reaches for it */
   .composer.is-drag {
     border-color: var(--brand);
+  }
+
+  /* `/btw`: the draft goes to the side, in the side's teal */
+  .composer.is-btw {
+    border-color: color-mix(in srgb, var(--agent) 55%, var(--line));
+  }
+
+  .composer.is-btw .composer-send:not(:disabled),
+  .composer-send.is-side:not(:disabled) {
+    background: var(--agent);
+    color: var(--surface);
+    box-shadow: none;
   }
 
   /* attach: a quiet picture key beside send */

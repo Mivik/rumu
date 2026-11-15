@@ -151,6 +151,17 @@
     "close": "关闭",
     "empty": "启动中…"
   },
+  "side": {
+    "title": "顺便问",
+    "quote": "引用",
+    "unquote": "移除引用",
+    "all": "全部顺便问",
+    "close": "关闭",
+    "placeholder": "顺便问…",
+    "followUp": "追问…",
+    "bringBack": "带回正文",
+    "failed": "顺便问失败"
+  },
   "compaction": {
     "line": "上下文已压缩 · {before} → {after} tok",
     "show": "查看摘要",

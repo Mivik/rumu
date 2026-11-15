@@ -115,10 +115,11 @@ export interface SiblingAlternative {
  * (each head walks up to the root once) so the per-message switcher is a
  * lookup, not another walk of every branch. */
 const siblingIndex = computed<Map<NodeId, SiblingAlternative[]>>(() => {
-  // Which child of each ancestor a non-agent branch's head descends through.
+  // Which child of each ancestor a main line's head descends through
+  // (sub-agents and side questions hang off a line, they are not variants).
   const byChild = new Map<NodeId, Map<NodeId, Branch[]>>()
   for (const b of Object.values(state.branches)) {
-    if (b.kind.type === 'agent') continue
+    if (b.kind.type !== 'main') continue
     let cur: NodeId | null | undefined = b.head
     let guard = 0
     while (cur && state.nodes[cur] && guard++ < 10_000) {
@@ -171,8 +172,8 @@ const siblingIndex = computed<Map<NodeId, SiblingAlternative[]>>(() => {
 
 /**
  * The alternatives at a message: one per child subtree of `parentId` that
- * holds a non-agent branch head. Subtrees that only lead to agent branches
- * (an `inherit: full` fork at an assistant node) do not.
+ * holds a main line's head. Subtrees that only lead to sub-agent branches
+ * (an `inherit: full` fork at an assistant node) or side questions do not.
  */
 export function siblingAlternatives(parentId: NodeId | null): SiblingAlternative[] {
   if (!parentId) return []

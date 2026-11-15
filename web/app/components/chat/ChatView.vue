@@ -25,6 +25,7 @@ import TasksPanel from './TasksPanel.vue'
 import TraceView from './TraceView.vue'
 import StatsView from './StatsView.vue'
 import ViewTabs from './ViewTabs.vue'
+import SidePop from './SidePop.vue'
 import Welcome from './Welcome.vue'
 import SessionPickers from './SessionPickers.vue'
 import AssistantAvatar from '../brand/AssistantAvatar.vue'
@@ -182,6 +183,7 @@ function composerRoot(): HTMLElement | null {
           <TraceView v-else-if="state.view === 'trace'" />
           <StatsView v-else />
         </Transition>
+        <SidePop v-if="state.view === 'chat'" />
 
         <!-- min-h-0: a tall decision panel shrinks into the room left above the
              sheet's foot instead of pushing the send row past its edge -->

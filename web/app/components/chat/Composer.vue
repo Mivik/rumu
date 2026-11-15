@@ -26,6 +26,10 @@
 // on the transcript or the sidebar, not a scroll — and unfolds when touched
 // again. It stays
 // open while it holds images or a decision.
+//
+// Text selected in a reply offers itself above the writing (QuoteTray): as a
+// quote leading the message, or as a side question. `/btw` asks on the side
+// too (SidePop); the sheet's edge turns the side's teal while it would.
 import { computed, nextTick, onBeforeUnmount, onMounted, reactive, ref, watch } from 'vue'
 import { t } from '../../i18n'
 import { compactBranch, isBusy, landingAssistant, sendPrompt, state, stopTurn } from '../../lib/store'
@@ -33,10 +37,12 @@ import type { PromptAttachment } from '../../lib/store'
 import type { Attachment } from '../../lib/types'
 import { uploadBlob, withLeadingAnchors } from '../../lib/attachments'
 import { composerFocus, openLightbox, toast } from '../../lib/state/ui'
+import { askSide, openSide, quoteBlock, quotes } from '../../lib/state/side'
 import Icon from '../ui/Icon.vue'
 import DecisionPanel from './DecisionPanel.vue'
 import EffortPicker from './EffortPicker.vue'
 import ModelPicker from './ModelPicker.vue'
+import QuoteTray from './QuoteTray.vue'
 
 /** One image being attached: the file, its local preview, and where its
  * upload stands. */
@@ -61,8 +67,14 @@ const fileEl = ref<HTMLInputElement>()
 
 const uploading = computed(() => attachments.value.some((a) => a.status === 'uploading'))
 const canSend = computed(
-  () => !uploading.value && (draft.value.trim() !== '' || attachments.value.some((a) => a.status === 'done')),
+  () =>
+    !uploading.value &&
+    (draft.value.trim() !== '' ||
+      quotes.value.length > 0 ||
+      attachments.value.some((a) => a.status === 'done')),
 )
+/** The draft asks on the side (`/btw`), not in the conversation. */
+const btw = computed(() => !!state.sessionId && /^\/btw(\s|$)/.test(draft.value))
 
 let attachSeq = 0
 
@@ -224,11 +236,27 @@ async function submit(): Promise<void> {
     if (!(await compactBranch(compact[1]?.trim() ?? ''))) draft.value = text
     return
   }
+  // `/btw [question]` asks on the side instead, about the first quoted
+  // passage if there is one; bare, it opens the side questions.
+  const aside = /^\/btw(?:\s+([\s\S]*))?$/.exec(text)
+  if (aside && !items.length && state.sessionId) {
+    const question = aside[1]?.trim() ?? ''
+    const quote = quotes.value.shift() ?? null
+    draft.value = ''
+    openSide(null, quote)
+    if (question && !(await askSide(question))) draft.value = text
+    return
+  }
+  // Quoted passages lead the message, as markdown quotes.
+  const quoted = quotes.value
+  const body = [...quoted.map(quoteBlock), text].filter(Boolean).join('\n\n')
   draft.value = ''
+  quotes.value = []
   attachments.value = []
   // Put everything back if creating/sending failed so nothing is lost.
-  if (!(await sendPrompt(withLeadingAnchors(text, sent.length), sent))) {
+  if (!(await sendPrompt(withLeadingAnchors(body, sent.length), sent))) {
     draft.value = text
+    quotes.value = quoted
     attachments.value = items
   } else {
     for (const item of items) URL.revokeObjectURL(item.url)
@@ -300,7 +328,7 @@ const placeholder = computed(() => {
   <div
     ref="rootEl"
     class="composer relative mx-auto flex w-full max-w-[var(--col-max)] min-h-0 flex-col rounded-sheet"
-    :class="{ 'is-drag': dragDepth > 0 }"
+    :class="{ 'is-drag': dragDepth > 0, 'is-btw': btw }"
     @pointerdown="onPress"
     @click.capture="onClickCapture"
     @focusin="engaged = true"
@@ -357,6 +385,7 @@ const placeholder = computed(() => {
         </button>
       </div>
     </div>
+    <QuoteTray @quoted="textareaEl?.focus()" />
     <textarea
       ref="textareaEl"
       v-model="draft"
