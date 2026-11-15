@@ -450,27 +450,37 @@ pub trait Runtime: History {
     async fn decide(&self, _branch: &BranchId, _call_id: &str, _request: Value) -> Result<Value> {
         Err(Error::msg("this host cannot ask the user"))
     }
-    /// Run `consult` as a one-turn session of its own (see [`Cx::consult`]).
-    async fn consult(&self, _branch: &BranchId, _consult: Consult) -> Result<ConsultReply> {
+    /// Run `delegation` as a session of its own (see [`Cx::delegate`]).
+    async fn delegate(&self, _branch: &BranchId, _delegation: Delegation) -> Result<DelegationReply> {
         Err(Error::msg("this host cannot start sessions"))
     }
 }
 
-/// A one-turn session run on behalf of a tool call (`Cx::consult`).
+/// The plugin tool an `agent` call naming another `assistant` runs as. The
+/// kernel routes to it and never lists it to the model.
+pub const DELEGATE_TOOL: &str = "delegate";
+
+/// Another assistant's session run on behalf of a tool call (`Cx::delegate`):
+/// an `agent` handed to it.
 #[derive(Debug, Clone)]
-pub struct Consult {
+pub struct Delegation {
     /// The assistant deck the session runs as.
     pub assistant: String,
-    /// The asking assistant deck, recorded on the session's root.
-    pub asked_by: String,
-    /// The deck's default mounts (an `ask` session forces them to read).
+    /// The assistant deck that hands the task over, recorded on the root.
+    pub delegated_by: String,
+    /// Its mounts: the deck's defaults and the project.
     pub mounts: Vec<crate::CardMount>,
+    /// The model alias asked for, and the effort.
+    pub model: Option<String>,
+    pub effort: Option<crate::Effort>,
+    /// What it runs on when neither is given: the assistant's own model.
+    pub base: Option<crate::ModelUse>,
     pub prompt: Content,
 }
 
-/// What a consulted session answered.
+/// What a delegated session answered.
 #[derive(Debug, Clone)]
-pub struct ConsultReply {
+pub struct DelegationReply {
     pub session: SessionId,
     /// The final reply; `None` when the turn ended without one (abort).
     pub text: Option<String>,
@@ -629,10 +639,10 @@ impl Cx {
         self.runtime.decide(&self.branch, &call.id, request).await
     }
 
-    /// Run a one-turn session of its own (another assistant answering a question)
-    /// and wait for its reply. Aborting this turn aborts that one.
-    pub async fn consult(&self, consult: Consult) -> Result<ConsultReply> {
-        self.runtime.consult(&self.branch, consult).await
+    /// Run a session of its own (another assistant doing a task) and wait for
+    /// its final reply. Aborting this call aborts that session's turn.
+    pub async fn delegate(&self, delegation: Delegation) -> Result<DelegationReply> {
+        self.runtime.delegate(&self.branch, delegation).await
     }
 
     /// Push a progress update for this tool call. A no-op outside a tool call.

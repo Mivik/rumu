@@ -399,7 +399,7 @@ async fn dispatch(state: &AppState, method: &str, p: &Value) -> Result<Value> {
             let (session, branch) = kernel
                 .create_rooted_session(SessionRoot {
                     assistant: deck.id().to_owned(),
-                    asked_by: None,
+                    delegated_by: None,
                     mounts,
                     model: deck.meta.model.clone(),
                 })

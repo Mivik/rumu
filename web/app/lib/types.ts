@@ -208,17 +208,17 @@ export interface QuestionAnswer {
   custom?: string
 }
 
-/** `ask`: `from` asks `to` the question. */
+/** `agent` naming another assistant: `from` hands `to` the task. */
 export interface AskRequest {
   kind: 'ask'
   from: string
   from_id: string
   to: string
   to_id: string
-  question: string
+  task: string
 }
 
-/** `ask` with `to: "user"`: questions from `from` for the user. */
+/** `ask`: questions from `from` for the user. */
 export interface QuestionsRequest {
   kind: 'questions'
   from: string

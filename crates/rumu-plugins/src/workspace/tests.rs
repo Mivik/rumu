@@ -5084,22 +5084,6 @@ async fn card_mount_moves_between_projects_and_creates_one() {
     assert_eq!(mount.deck, fresh.id());
     let use_: WorkspaceUse = out.effects[1].decode().unwrap();
     assert_eq!(use_.name, SCRATCH_WORKSPACE);
-
-    // An `ask` session cannot move.
-    host.state.lock().unwrap().asked_by = Some(main.into());
-    let out = plugin
-        .call_tool(
-            "card_mount",
-            json!({ "deck": PROJECT_ID, "at": "project" }),
-            &cx,
-        )
-        .await
-        .unwrap();
-    assert!(
-        out.is_error && out.content.text.contains("answering a question"),
-        "{}",
-        out.content.text
-    );
 }
 
 #[tokio::test]

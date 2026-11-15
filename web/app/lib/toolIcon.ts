@@ -13,6 +13,7 @@ const ICONS: Record<string, string> = {
   search: 'search',
   code: 'code',
   agent: 'agent',
+  delegate: 'agent',
   ask: 'ask',
   task_kill: 'stop',
   card_mount: 'deck',

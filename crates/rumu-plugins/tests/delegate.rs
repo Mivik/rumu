@@ -1,6 +1,7 @@
-//! `ask` end to end: the real kernel and plugins, an LLM that answers by the
-//! assistant it runs as. scout asks ledger; the user approves through a decision,
-//! and ledger answers from its own library in a session of its own.
+//! `agent` handed to another assistant, end to end: the real kernel and
+//! plugins, an LLM that answers by the assistant it runs as. scout hands ledger
+//! a task; the user approves through a decision, and ledger does it in a
+//! session of its own, from its own library, keeping a card of its own.
 
 use std::sync::Arc;
 
@@ -13,7 +14,7 @@ use serde_json::{Value, json};
 use tokio::sync::mpsc;
 
 /// Plays both assistants. Whichever runs is read off the first user message: the
-/// answering session's prompt starts with "The assistant `scout` asks you".
+/// delegated session's prompt starts with "The assistant `scout` hands you".
 struct AssistantsLlm;
 
 fn first_user(nodes: &[Node]) -> String {
@@ -44,51 +45,25 @@ impl Llm for AssistantsLlm {
         _on_delta: Option<OnDelta>,
     ) -> std::result::Result<LlmResponse, rumu_kernel::LlmError> {
         let prompt = first_user(nodes);
-        let write = |path: &str| {
-            LlmResponse::calls([ToolCall::new(
-                "w1",
-                "write",
-                json!({ "path": path, "content": "x" }),
-            )])
-        };
-        if prompt.contains("You are now a sub-agent") {
-            // A clean-context sub-agent of ledger tries the write itself.
+        if prompt.starts_with("The assistant `scout` hands you") {
+            // ledger: keep a card of its own, then answer from the card
+            // recall gave it.
             return Ok(match last_result(nodes) {
-                None => write("@rumu:/cards/leak-sub"),
-                Some(refusal) => LlmResponse::text(format!("sub-agent write: {refusal}")),
-            });
-        }
-        if prompt.starts_with("The assistant `scout` asks you") {
-            // ledger: try to write a card (refused while answering), have a
-            // sub-agent try, then answer from the card recall gave it.
-            let results = nodes
-                .iter()
-                .filter(|n| matches!(n.body, NodeBody::ToolResult { .. }))
-                .count();
-            return Ok(match results {
-                0 => write("@rumu:/cards/leak"),
-                1 => LlmResponse::calls([ToolCall::new(
-                    "s1",
-                    "agent",
-                    json!({ "background": false, "task": "save a card", "inherit": { "context": "none" } }),
+                None => LlmResponse::calls([ToolCall::new(
+                    "w1",
+                    "write",
+                    json!({ "path": "@rumu:/cards/self/noted", "content": "asked about the budget" }),
                 )]),
-                _ => {
-                    let refusal = last_result(nodes).unwrap_or_default();
+                Some(write) => {
                     let recalled = nodes.iter().any(|n| matches!(&n.body,
                         NodeBody::Note { content, .. } if content.text.contains("monthly budget is 300")));
-                    LlmResponse::text(format!(
-                        "budget 300 (recalled: {recalled}; write: {refusal})"
-                    ))
+                    LlmResponse::text(format!("budget 300 (recalled: {recalled}; write: {write})"))
                 }
             });
         }
-        // scout: ask once, then report what came back.
+        // scout: hand the task over once, then report what came back.
         Ok(match last_result(nodes) {
-            None => LlmResponse::calls([ToolCall::new(
-                "a1",
-                "ask",
-                json!({ "to": LEDGER, "questions": [{ "question": "what is the monthly budget?" }] }),
-            )]),
+            None => LlmResponse::calls([ToolCall::new("a1", "agent", task())]),
             Some(result) => LlmResponse::text(format!("scout heard: {result}")),
         })
     }
@@ -106,8 +81,13 @@ fn deck_id(home: &std::path::Path, name: &str) -> String {
         .to_owned()
 }
 
-/// The `ledger` deck id written by [`home`]; `ask` names decks by id.
+/// The `ledger` deck id written by [`home`]; `agent` names decks by id.
 const LEDGER: &str = "0193a2f1-0000-7000-8000-000000000003";
+
+/// scout's `agent` call for ledger.
+fn task() -> Value {
+    json!({ "background": false, "assistant": LEDGER, "task": "find the monthly budget" })
+}
 
 fn home() -> tempfile::TempDir {
     let home = tempfile::tempdir().unwrap();
@@ -245,38 +225,23 @@ async fn scout_turn(
 }
 
 #[tokio::test]
-async fn approved_ask_is_answered_by_the_other_assistant() {
+async fn an_approved_task_is_done_by_the_other_assistant() {
     let home = home();
     let kernel = kernel(home.path()).await;
 
     let (reply, asked) = scout_turn(&kernel, home.path(), json!({ "allow": true })).await;
     assert_eq!(asked, 1);
-    assert!(reply.contains("`ledger` answers"), "{reply}");
+    assert!(reply.contains("`ledger` reports"), "{reply}");
     assert!(reply.contains("budget 300"), "{reply}");
-    // ledger answered from its own library…
+    assert!(reply.contains("[transcript: @rumu:/sessions/"), "{reply}");
+    // ledger worked from its own library…
     assert!(reply.contains("recalled: true"), "{reply}");
-    // …and could not write while answering.
-    assert!(reply.contains("cards cannot change here"), "{reply}");
-    assert!(
-        rumu_cards::open_deck(home.path(), "finance")
-            .unwrap()
-            .unwrap()
-            .read("leak")
-            .unwrap()
-            .is_none()
-    );
-    // Nor could a clean-context sub-agent of it.
-    assert!(reply.contains("sub-agent write"), "{reply}");
-    assert!(
-        rumu_cards::open_deck(home.path(), "finance")
-            .unwrap()
-            .unwrap()
-            .read("leak-sub")
-            .unwrap()
-            .is_none()
-    );
+    // …and kept a card of its own.
+    let ledger_deck = rumu_cards::Decks::load(home.path()).unwrap();
+    let ledger_deck = ledger_deck.get(LEDGER).unwrap();
+    assert!(ledger_deck.read("noted").unwrap().is_some(), "{reply}");
 
-    // The answer ran as a session of ledger.
+    // The task ran as a session of ledger.
     let sessions = kernel.list_sessions().unwrap();
     let ledger = deck_id(home.path(), "ledger");
     let assistants: Vec<&str> = sessions.iter().map(|s| s.assistant.as_str()).collect();
@@ -289,7 +254,7 @@ async fn approved_ask_is_answered_by_the_other_assistant() {
 }
 
 #[tokio::test]
-async fn declined_ask_never_reaches_the_other_assistant() {
+async fn a_declined_task_never_reaches_the_other_assistant() {
     let home = home();
     let kernel = kernel(home.path()).await;
     let (reply, asked) = scout_turn(&kernel, home.path(), json!({ "allow": false })).await;
@@ -364,7 +329,7 @@ async fn aborting_the_turn_cancels_the_question() {
     assert!(kernel.decisions().is_empty());
 }
 
-/// scout asks; ledger thinks forever.
+/// scout hands the task over; ledger thinks forever.
 struct StuckLlm;
 
 #[async_trait]
@@ -377,19 +342,15 @@ impl Llm for StuckLlm {
         nodes: &[Node],
         _on_delta: Option<OnDelta>,
     ) -> std::result::Result<LlmResponse, rumu_kernel::LlmError> {
-        if first_user(nodes).starts_with("The assistant `scout` asks you") {
+        if first_user(nodes).starts_with("The assistant `scout` hands you") {
             return std::future::pending().await;
         }
-        Ok(LlmResponse::calls([ToolCall::new(
-            "a1",
-            "ask",
-            json!({ "to": LEDGER, "questions": [{ "question": "what is the monthly budget?" }] }),
-        )]))
+        Ok(LlmResponse::calls([ToolCall::new("a1", "agent", task())]))
     }
 }
 
 #[tokio::test]
-async fn aborting_the_asker_winds_the_answering_turn_down() {
+async fn aborting_the_hand_over_winds_the_delegated_turn_down() {
     let home = home();
     let kernel = kernel_on(home.path(), Arc::new(StuckLlm)).await;
     let scout = deck_id(home.path(), "scout");
@@ -405,7 +366,7 @@ async fn aborting_the_asker_winds_the_answering_turn_down() {
                 "decision.requested" => kernel
                     .answer_decision(params["id"].as_str().unwrap(), json!({ "allow": true }))
                     .unwrap(),
-                "turn.started" if params["reason"] == "consult" => {
+                "turn.started" if params["reason"] == "delegate" => {
                     ledger = params["branch"].as_str().map(str::to_owned);
                     kernel.abort(&scout).unwrap();
                 }
@@ -415,7 +376,7 @@ async fn aborting_the_asker_winds_the_answering_turn_down() {
         }
     })
     .await;
-    assert!(finished.is_ok(), "the answering turn never finished");
+    assert!(finished.is_ok(), "the delegated turn never finished");
     // Its loop guard is gone: a new prompt on it starts a turn, not a steer.
     let ledger = BranchId::from(ledger.unwrap().as_str());
     assert!(!kernel.is_running(&ledger));

@@ -84,8 +84,11 @@ pub async fn load_all(
     // `code` is built last: its API stub covers every other plugin's tools
     // (stdio included) plus the kernel's built-in tools passed by the caller.
     // It exposes only `code` itself, so there is no cycle.
-    let mut all_tools: Vec<rumu_core::ToolSpec> =
-        plugins.iter().flat_map(|p| p.manifest().tools).collect();
+    let mut all_tools: Vec<rumu_core::ToolSpec> = plugins
+        .iter()
+        .flat_map(|p| p.manifest().tools)
+        .filter(|t| t.name != rumu_core::DELEGATE_TOOL)
+        .collect();
     all_tools.extend_from_slice(builtin_tools);
     plugins.push(Arc::new(CodePlugin::new(&all_tools)));
     Ok(plugins)

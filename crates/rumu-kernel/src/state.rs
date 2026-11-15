@@ -90,7 +90,7 @@ fn fold_node(st: &mut PathState, body: &NodeBody) {
         st.restrict = Some(set.names);
     } else if let Some(root) = content.decode::<SessionRoot>() {
         st.assistant = root.assistant.clone();
-        st.asked_by = root.asked_by;
+        st.delegated_by = root.delegated_by;
         st.model = root.model;
         // The session's own deck is always at `/cards/self`.
         st.mounts = vec![CardMount {
@@ -206,7 +206,7 @@ mod tests {
     fn root(mounts: Vec<CardMount>) -> Node {
         marker(&SessionRoot {
             assistant: "x".into(),
-            asked_by: None,
+            delegated_by: None,
             mounts,
             model: None,
         })

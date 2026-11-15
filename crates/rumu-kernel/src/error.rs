@@ -95,9 +95,9 @@ pub enum Error {
     #[error("no model writes session titles; pick one in Settings")]
     NoTitleModel,
 
-    /// A session answering an `ask` keeps its mounts, so it has no project.
-    #[error("a session answering a question keeps its mounts")]
-    AskedSessionMounts,
+    /// A sub-agent's `model` / `effort` that it cannot run on.
+    #[error("{0}")]
+    ModelPick(String),
 
     // ---- lifecycle / control flow ----
     /// The enclosing turn was aborted while an internal call was queued.

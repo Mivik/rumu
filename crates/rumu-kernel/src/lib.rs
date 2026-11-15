@@ -95,8 +95,11 @@ pub fn agent_tool() -> ToolSpec {
 task id now and its final summary (plus a transcript address you can `read` for details) in a \
 note when it finishes; pass `background: false` to wait for the summary here instead. `inherit.context` defaults to \"full\" — it continues from \
 this exact point and sees everything you see; \"none\" starts a clean context containing only the \
-task. `inherit.workspaces` restricts which workspaces it may use (omit for all). Use for \
-open-ended work whose details don't need to stay here."
+task. `inherit.workspaces` restricts which workspaces it may use (omit for all). `model` (a \
+model alias, `rumu/<name>`) and `effort` set what it runs on; with context \"full\" only `effort` \
+may change. `assistant` (another assistant's id) hands the task to that assistant instead: it \
+works in a session of its own, with its own cards and model, and sees only the task (no \
+`inherit`). Use for open-ended work whose details don't need to stay here."
             .into(),
         schema: tool_schema::<turn::AgentArgs>(),
         background: false,
@@ -329,10 +332,13 @@ impl Kernel {
             }
         }
         // The kernel owns `agent` and `task_kill`; they are not
-        // routed to a plugin.
+        // routed to a plugin. `delegate` is `agent`'s half for another
+        // assistant: routed, never listed.
         system.push_str("\n\n");
         system.push_str(TASK_INSTRUCTIONS);
-        tools.retain(|t| !matches!(t.name.as_str(), "agent" | "task_kill"));
+        tools.retain(|t| {
+            !matches!(t.name.as_str(), "agent" | "task_kill") && t.name != rumu_core::DELEGATE_TOOL
+        });
         tools.push(agent_tool());
         tools.push(task_kill_tool());
         // Advertise `background` only on tools that may run as a task.
@@ -657,7 +663,7 @@ impl Kernel {
     ) -> Result<(SessionInfo, Branch)> {
         self.create_rooted_session(SessionRoot {
             assistant,
-            asked_by: None,
+            delegated_by: None,
             mounts: Vec::new(),
             model: None,
         })
@@ -665,7 +671,7 @@ impl Kernel {
     }
 
     /// Create a session from a fully populated root marker (the deck id, the
-    /// asked-by reference, and the default mounts, the project included).
+    /// delegating assistant, and the default mounts, the project included).
     pub async fn create_rooted_session(
         self: &Arc<Self>,
         root_data: SessionRoot,
@@ -789,9 +795,6 @@ impl Kernel {
             .ok_or_else(|| Error::SessionNotFound(session.clone()))?;
         let branch = info.active_branch;
         let state = derive_state(&self.pending_path_nodes(&branch)?);
-        if state.asked_by.is_some() {
-            return Err(Error::AskedSessionMounts);
-        }
         if state.project == mount.as_ref().map(|m| m.deck.clone()) {
             return Ok(());
         }

@@ -1,5 +1,5 @@
 //! Questions put to the user on behalf of a tool call (`Cx::decide`), and
-//! one-turn sessions run on behalf of one (`Cx::consult`).
+//! other assistants' sessions run on behalf of one (`Cx::delegate`).
 //!
 //! A decision is runtime-only: a `decision.requested` push the client answers
 //! with `decision.answer` (by id), resolved with a `decision.resolved` push.
@@ -8,7 +8,7 @@
 
 use std::sync::Arc;
 
-use rumu_core::{BranchId, Consult, ConsultReply, Content, SessionRoot};
+use rumu_core::{BranchId, Content, Delegation, DelegationReply, SessionRoot};
 use serde_json::{Value, json};
 use tokio::sync::oneshot;
 use tokio_util::sync::CancellationToken;
@@ -123,22 +123,30 @@ impl Kernel {
         list.into_iter().map(|(_, v)| v).collect()
     }
 
-    /// Run `consult` as a new session of its assistant: one prompt, one loop. Its
-    /// token is a child of `from`'s loop, so aborting the asking turn aborts
-    /// the answer. The turn is spawned: an abort drops the asking tool call,
-    /// and this future with it, while the turn still has to wind down.
-    pub(crate) async fn consult(
+    /// Run `delegation` as a new session of its assistant: one prompt, one
+    /// loop. Its token is a child of `from`'s loop, so aborting the handing
+    /// turn aborts it. The turn is spawned: an abort drops the handing tool
+    /// call, and this future with it, while the turn still has to wind down.
+    pub(crate) async fn delegate(
         self: &Arc<Self>,
         from: &BranchId,
-        consult: Consult,
-    ) -> Result<ConsultReply> {
+        delegation: Delegation,
+    ) -> Result<DelegationReply> {
+        let model = self
+            .model_override(
+                delegation.model,
+                delegation.effort,
+                delegation.base.as_ref(),
+            )
+            .map_err(Error::ModelPick)?
+            .or(delegation.base);
         let token = self.loop_token(from).child_token();
         let (info, branch) = self
             .create_rooted_session(SessionRoot {
-                assistant: consult.assistant,
-                asked_by: Some(consult.asked_by),
-                mounts: consult.mounts,
-                model: None,
+                assistant: delegation.assistant,
+                delegated_by: Some(delegation.delegated_by),
+                mounts: delegation.mounts,
+                model,
             })
             .await?;
         self.inner
@@ -150,7 +158,7 @@ impl Kernel {
         let kernel = self.clone();
         tokio::spawn(async move {
             let run = kernel
-                .consult_turn(&branch.id, consult.prompt, &token)
+                .delegated_turn(&branch.id, delegation.prompt, &token)
                 .await;
             let (text, failure) = match run {
                 Ok(text) => (Ok(text), None),
@@ -161,23 +169,23 @@ impl Kernel {
         });
         let text = rx
             .await
-            .map_err(|_| Error::Internal("consulted turn vanished".into()))?
-            .map_err(|e| Error::Internal(format!("consulted session failed: {e}")))?;
-        Ok(ConsultReply {
+            .map_err(|_| Error::Internal("delegated turn vanished".into()))?
+            .map_err(|e| Error::Internal(format!("delegated session failed: {e}")))?;
+        Ok(DelegationReply {
             session: info.id,
             text,
         })
     }
 
-    /// The consulted session's turn: its final reply, or `None` when a hook
+    /// The delegated session's turn: its final reply, or `None` when a hook
     /// blocked the prompt or the turn was aborted.
-    async fn consult_turn(
+    async fn delegated_turn(
         self: &Arc<Self>,
         branch: &BranchId,
         prompt: Content,
         token: &CancellationToken,
     ) -> Result<Option<String>> {
-        if self.open_turn(branch, prompt, true, "consult").await? {
+        if self.open_turn(branch, prompt, true, "delegate").await? {
             return Ok(None);
         }
         let outcome = self.run_loop(branch.clone(), token).await?;

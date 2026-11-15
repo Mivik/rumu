@@ -86,8 +86,8 @@
     "images": "{count} image | {count} images"
   },
   "ask": {
-    "title": "{from} wants to ask {to}",
-    "hint": "{to} answers from its own memory; nothing is saved unless {from} writes it down.",
+    "title": "{from} wants to hand {to} a task",
+    "hint": "{to} does it in a session of its own and may write to its own cards.",
     "mountTitle": "{from} wants to mount {deck}",
     "mountHint": "{deck} would be mounted at {at}, and its cards readable from then on.",
     "moveProjectTitle": "{from} wants to move this session into {project}",

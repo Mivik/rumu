@@ -204,6 +204,7 @@ impl Kernel {
         call_id: &str,
         task: String,
         inherit: rumu_core::Inherit,
+        ask: crate::turn::ModelAsk,
     ) -> Result<ToolOutput> {
         let kind = TaskKind::Agent { child_branch: None };
         let label = format!("agent: {task}");
@@ -225,7 +226,7 @@ impl Kernel {
         let fork_call = call_id.to_owned();
         tokio::spawn(async move {
             let outcome = match kernel
-                .run_agent(&owner, &fork_call, None, &task, inherit, &token)
+                .run_agent(&owner, &fork_call, None, &task, inherit, ask, &token)
                 .await
             {
                 Ok(AgentRun::Summary { text, child }) => {

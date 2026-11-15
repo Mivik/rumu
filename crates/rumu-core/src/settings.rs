@@ -10,7 +10,18 @@ use crate::Structured;
 /// A reasoning effort. Each model accepts a subset (see the adapter's
 /// catalog); an effort it does not take is moved to the nearest one it does.
 #[derive(
-    Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord, Hash, Serialize, Deserialize, ts_rs::TS,
+    Debug,
+    Clone,
+    Copy,
+    PartialEq,
+    Eq,
+    PartialOrd,
+    Ord,
+    Hash,
+    Serialize,
+    Deserialize,
+    ts_rs::TS,
+    schemars::JsonSchema,
 )]
 #[serde(rename_all = "lowercase")]
 #[ts(export)]

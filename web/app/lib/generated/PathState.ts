@@ -40,9 +40,10 @@ default_workspace?: string | null,
  */
 assistant: string, 
 /**
- * The assistant whose `ask` this session answers, from the session's root.
+ * The assistant whose `agent` call this session works for, from the
+ * session's root.
  */
-asked_by?: string | null, 
+delegated_by?: string | null, 
 /**
  * The branch's card mount table (root defaults + `card_mount` markers).
  */

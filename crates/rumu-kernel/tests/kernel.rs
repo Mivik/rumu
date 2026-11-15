@@ -696,7 +696,7 @@ async fn setup_in_project(
     let (session, _) = kernel
         .create_rooted_session(SessionRoot {
             assistant: "assistant".into(),
-            asked_by: None,
+            delegated_by: None,
             mounts: vec![project_mount(deck)],
             ..Default::default()
         })
@@ -2656,31 +2656,6 @@ async fn move_project_records_markers_default_and_note() {
         .await
         .unwrap();
     assert_eq!(kernel.branch_path(&branch).unwrap().0.len(), len);
-}
-
-/// An `ask` session keeps its mounts, so it can never gain a project.
-#[tokio::test]
-async fn move_project_refuses_an_asked_session() {
-    let registry = registry_with(&[("proj", "/p/proj")], "proj-deck", &["proj"]);
-    let (kernel, _llm) = kernel_with(vec![], vec![], registry);
-    let (asked, _) = kernel
-        .create_rooted_session(SessionRoot {
-            assistant: "assistant".into(),
-            asked_by: Some("asker".into()),
-            ..Default::default()
-        })
-        .await
-        .unwrap();
-    let err = kernel
-        .move_project(&asked.id, Some(project_mount("proj-deck")), "no".into())
-        .await
-        .unwrap_err();
-    assert!(
-        matches!(err, rumu_kernel::Error::AskedSessionMounts),
-        "{err:#}"
-    );
-    let (_, st) = kernel.branch_path(&asked.active_branch).unwrap();
-    assert!(st.project.is_none());
 }
 
 /// `SessionInfo.project` tracks the active branch: created, moved, switched,
@@ -5291,6 +5266,69 @@ async fn model_use_marker_is_written_only_when_the_pick_changes() {
     assert!(kernel.use_model(&b, other.clone()).await.unwrap());
     let (_, st) = kernel.branch_path(&b).unwrap();
     assert_eq!(st.model, Some(other));
+}
+
+/// A sub-agent with the whole context stays on its parent's model but may
+/// change the effort; another model is refused, and only aliases are offered.
+#[tokio::test]
+async fn agent_full_context_changes_only_the_effort() {
+    use rumu_core::{Effort, ModelUse};
+    let plugin = Arc::new(plugin_with(
+        "branch",
+        &["agent"],
+        vec![],
+        noop_hooks(),
+        noop_tools(),
+    ));
+    let (kernel, _llm, session, branch) = setup(
+        vec![plugin],
+        vec![
+            LlmResponse::calls(vec![
+                ToolCall::new(
+                    "e1",
+                    "agent",
+                    json!({ "background": false, "task": "quick look", "effort": "low" }),
+                ),
+                ToolCall::new(
+                    "e2",
+                    "agent",
+                    json!({ "background": false, "task": "x", "model": "p/other" }),
+                ),
+            ]),
+            LlmResponse::text("looked"),
+            LlmResponse::text("parent done"),
+        ],
+    )
+    .await;
+    let parent = ModelUse {
+        model: "p/m".into(),
+        effort: Some(Effort::High),
+    };
+    kernel.use_model(&branch, parent.clone()).await.unwrap();
+
+    let (_, nodes, state) = run_turn_on(&kernel, &branch, "go").await;
+    assert_eq!(state.model, Some(parent));
+    let child = kernel
+        .session_tree(&session)
+        .unwrap()
+        .2
+        .into_iter()
+        .find(|b| matches!(&b.kind, rumu_core::BranchKind::Agent { task, .. } if task == "quick look"))
+        .expect("agent child");
+    let (_, st) = kernel.branch_path(&child.id).unwrap();
+    assert_eq!(
+        st.model,
+        Some(ModelUse {
+            model: "p/m".into(),
+            effort: Some(Effort::Low),
+        })
+    );
+    let (text, err) = result_text(&nodes, "e2");
+    assert!(err, "{text}");
+    assert!(
+        text.contains("`p/other` is not a model alias (aliases: none)"),
+        "{text}"
+    );
 }
 
 // ---------- side questions ----------

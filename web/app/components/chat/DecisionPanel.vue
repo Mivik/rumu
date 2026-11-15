@@ -61,7 +61,7 @@ const view = computed<RequestView | null>(() => {
     case 'ask':
       return {
         title: t('chat.ask.title', { from: r.from, to: r.to }),
-        detail: r.question,
+        detail: r.task,
         hint: t('chat.ask.hint', { from: r.from, to: r.to }),
       }
     case 'card_mount':

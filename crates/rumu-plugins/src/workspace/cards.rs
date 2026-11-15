@@ -155,16 +155,6 @@ impl WorkspacePlugin {
         });
         let cards = self.cards(cx)?;
         let state = cx.state()?;
-        if let Some(asker) = &state.asked_by {
-            let asker = self
-                .decks()
-                .get(asker)
-                .map(|d| d.meta.name)
-                .unwrap_or_else(|| asker.clone());
-            return Err(ToolError::model(format!(
-                "you are answering `{asker}`'s question; cards cannot change here"
-            )));
-        }
         if let Some(err) = invalid_card_ref(&cards, public) {
             return Err(err);
         }

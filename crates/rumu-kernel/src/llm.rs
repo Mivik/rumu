@@ -4,7 +4,8 @@ use std::sync::Arc;
 
 use async_trait::async_trait;
 use rumu_core::{
-    CallStats, CompactSettings, ModelPick, Node, ReasoningBlock, Titles, ToolCall, ToolSpec, Usage,
+    CallStats, CompactSettings, ModelPick, Node, ReasoningBlock, Role, Titles, ToolCall, ToolSpec,
+    Usage,
 };
 
 /// A model-call failure.
@@ -216,6 +217,26 @@ pub trait Llm: Send + Sync {
     fn budget(&self, pick: ModelPick<'_>) -> Budget {
         let _ = pick;
         Budget::default()
+    }
+
+    /// The provider model (`provider/model-id`) `pick` runs on; `None` when
+    /// it names none.
+    fn target(&self, pick: ModelPick<'_>) -> Option<String> {
+        match pick {
+            ModelPick::Use(u) => Some(u.model.clone()),
+            ModelPick::Role(_) => None,
+        }
+    }
+
+    /// The model ref bound to `role`.
+    fn role_model(&self, role: Role) -> Option<String> {
+        let _ = role;
+        None
+    }
+
+    /// The aliases' refs (`rumu/<name>`): the models a sub-agent may pick.
+    fn aliases(&self) -> Vec<String> {
+        Vec::new()
     }
 }
 

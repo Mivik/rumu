@@ -4,7 +4,7 @@ use std::sync::Arc;
 
 use async_trait::async_trait;
 use rumu_core::{
-    Branch, BranchId, Consult, ConsultReply, History, InnerCall, Node, PathState, Progress,
+    Branch, BranchId, Delegation, DelegationReply, History, InnerCall, Node, PathState, Progress,
     ProgressSink, Result, Runtime, SessionId, SessionInfo, TaskId, TaskInfo,
 };
 use serde_json::{Value, json};
@@ -66,8 +66,8 @@ impl Runtime for KernelRuntime {
         Ok(self.0.decide(branch, call_id, request).await?)
     }
 
-    async fn consult(&self, branch: &BranchId, consult: Consult) -> Result<ConsultReply> {
-        Ok(self.0.consult(branch, consult).await?)
+    async fn delegate(&self, branch: &BranchId, delegation: Delegation) -> Result<DelegationReply> {
+        Ok(self.0.delegate(branch, delegation).await?)
     }
 
     fn cancel_invokes(&self, _branch: &BranchId, parent_call: &str) {

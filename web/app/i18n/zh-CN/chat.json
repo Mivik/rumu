@@ -86,8 +86,8 @@
     "images": "{count} 张图片"
   },
   "ask": {
-    "title": "{from} 想问 {to}",
-    "hint": "{to} 会根据自己的记忆回答；除非 {from} 自己记下来，否则不会保存。",
+    "title": "{from} 想请 {to} 完成任务",
+    "hint": "{to} 将在单独的会话中完成，可写入自己的卡片。",
     "mountTitle": "{from} 想挂载 {deck}",
     "mountHint": "{deck} 会挂载到 {at}，之后可以读取其中的卡片。",
     "moveProjectTitle": "{from} 想把本会话移入 {project}",

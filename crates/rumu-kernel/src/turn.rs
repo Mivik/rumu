@@ -8,8 +8,8 @@ use crate::{Error, Result};
 use rumu_core::kind;
 use rumu_core::{
     Branch, BranchId, BranchKind, BranchStatus, CODE_DENIED_TOOLS, Call, CallStats, CompactReason,
-    Content, Cx, FILE_PATCH_TAG, Inherit, InheritContext, InnerCall, Invoke, NodeBody, NodeId,
-    Plugin, RUMU_WORKSPACE, SYSTEM_SOURCE, SessionId, ToolCall, ToolError, ToolOutput,
+    Content, Cx, DELEGATE_TOOL, Effort, FILE_PATCH_TAG, Inherit, InheritContext, InnerCall, Invoke, NodeBody, NodeId,
+    ModelPick, ModelUse, Plugin, RUMU_WORKSPACE, Role, SYSTEM_SOURCE, SessionId, ToolCall, ToolError, ToolOutput,
     ToolResultExt, TurnError, WorkspaceSet, WorkspaceUse, parse_args, truncate_output,
 };
 use schemars::JsonSchema;
@@ -651,7 +651,14 @@ impl Kernel {
                     .get("background")
                     .and_then(Value::as_bool)
                     .unwrap_or(name == "agent" && matches!(caller, Caller::Model));
-                let background_tool = self.tools.iter().any(|t| t.name == name && t.background);
+                // `agent` for another assistant is the plugin's `delegate`.
+                let name = if name == "agent" && args.get("assistant").is_some_and(|a| !a.is_null()) {
+                    DELEGATE_TOOL.to_owned()
+                } else {
+                    name
+                };
+                let background_tool = name == DELEGATE_TOOL
+                    || self.tools.iter().any(|t| t.name == name && t.background);
                 let strip_background = |args: &mut Value| {
                     if let Some(obj) = args.as_object_mut() {
                         obj.remove("background");
@@ -687,7 +694,7 @@ impl Kernel {
                         .and_then(|args| args.into_parts().map_err(ToolError::model))
                     {
                         Err(e) => ToolOutput::err(e),
-                        Ok((task, inherit)) => {
+                        Ok((task, inherit, ask)) => {
                             if wants_background && matches!(caller, Caller::Model) {
                                 match self.start_agent_task(
                                     branch,
@@ -695,6 +702,7 @@ impl Kernel {
                                     &call.call_id,
                                     task,
                                     inherit,
+                                    ask,
                                 ) {
                                     Ok(out) => out,
                                     Err(e) => ToolOutput::err(format!("agent failed: {e}")),
@@ -707,7 +715,7 @@ impl Kernel {
                                     }
                                 };
                                 match Box::pin(self.run_agent(
-                                    branch, fork_call, inner_call, &task, inherit, token,
+                                    branch, fork_call, inner_call, &task, inherit, ask, token,
                                 ))
                                 .await
                                 {
@@ -948,6 +956,7 @@ impl Kernel {
     /// is then the internal call recorded on the branch). With `context:
     /// "none"` it forks at the session root and seeds only markers plus the
     /// task.
+    #[allow(clippy::too_many_arguments)]
     pub(crate) async fn run_agent(
         self: &Arc<Self>,
         from: &BranchId,
@@ -955,6 +964,7 @@ impl Kernel {
         inner_call: Option<&str>,
         task: &str,
         inherit: Inherit,
+        ask: ModelAsk,
         parent_token: &CancellationToken,
     ) -> Result<AgentRun> {
         let parent = self
@@ -998,6 +1008,23 @@ impl Kernel {
             ));
         }
 
+        // The model it asks for. With the whole context it stays on this
+        // model: another one could not take this path's reasoning or cache.
+        let model = match self.model_override(ask.model, ask.effort, parent_state.model.as_ref()) {
+            Ok(m) => m,
+            Err(e) => return Ok(AgentRun::Refused(e)),
+        };
+        if let (InheritContext::Full, Some(m)) = (&inherit.context, &model)
+            && self.llm.target(ModelPick::Use(m))
+                != self.llm.target(crate::compact::pick(&parent_state.model))
+        {
+            return Ok(AgentRun::Refused(
+                "agent: with context \"full\" a sub-agent stays on this model (only `effort` may \
+                 change); use context \"none\" for another model"
+                    .into(),
+            ));
+        }
+
         // Fork point plus the child's first own nodes. Both context modes
         // are expressed this way so future modes can add their own seeding.
         let (fork, initial) = match inherit.context {
@@ -1019,6 +1046,12 @@ impl Kernel {
                 let mut initial = Vec::new();
                 if let Some(names) = child_workspaces {
                     initial.push(set_marker(names));
+                }
+                if let Some(m) = model.filter(|m| Some(m) != parent_state.model.as_ref()) {
+                    initial.push(NodeBody::Note {
+                        source: SYSTEM_SOURCE.into(),
+                        content: Content::marker(&m),
+                    });
                 }
                 // The batch is answered by placeholders that say whose it is,
                 // and the goal comes as a prompt of its own: delivered as the
@@ -1097,8 +1130,8 @@ impl Kernel {
                         content: Content::marker(&WorkspaceUse { name }),
                     });
                 }
-                // The child runs on the parent's model.
-                if let Some(model) = &parent_state.model {
+                // The child runs on the model it asked for, else the parent's.
+                if let Some(model) = model.as_ref().or(parent_state.model.as_ref()) {
                     initial.push(NodeBody::Note {
                         source: SYSTEM_SOURCE.into(),
                         content: Content::marker(model),
@@ -1268,7 +1301,7 @@ fn args_summary(name: &str, args: &Value) -> String {
             .filter_map(|key| args.get(*key).and_then(Value::as_str))
             .find(|text| !text.trim().is_empty())
             .unwrap_or_default(),
-        "agent" => args.get("task").and_then(Value::as_str).unwrap_or_default(),
+        "agent" | DELEGATE_TOOL => args.get("task").and_then(Value::as_str).unwrap_or_default(),
         _ => "",
     };
     let text = if text.is_empty() {
@@ -1296,16 +1329,23 @@ pub(crate) struct AgentArgs {
     task: String,
     /// how the sub-agent inherits from this branch
     inherit: Option<InheritArgs>,
+    /// a model alias (`rumu/<name>`) to run on
+    model: Option<String>,
+    /// the reasoning effort to run at
+    effort: Option<Effort>,
+    /// another assistant's id: it does the task in a session of its own (omit for yourself)
+    assistant: Option<String>,
     /// true (default): run in the background, returning a task id now and a notification when it finishes; false: wait here for its summary
     background: Option<bool>,
 }
 
 impl AgentArgs {
-    /// Split into the run's `(task, inherit)`, rejecting a blank task.
-    fn into_parts(self) -> std::result::Result<(String, Inherit), &'static str> {
-        // `background` is a kernel affordance acted on before this point; it is
-        // parsed only so `deny_unknown_fields` accepts it.
-        let _ = self.background;
+    /// Split into the run's `(task, inherit, model)`, rejecting a blank task.
+    fn into_parts(self) -> std::result::Result<(String, Inherit, ModelAsk), &'static str> {
+        // `background` is a kernel affordance acted on before this point, and
+        // an `assistant` is routed to `delegate`; they are parsed only so
+        // `deny_unknown_fields` accepts them.
+        let _ = (self.background, self.assistant);
         let task = self.task.trim();
         if task.is_empty() {
             return Err("agent: `task` must not be empty");
@@ -1325,7 +1365,53 @@ impl AgentArgs {
                 context,
                 workspaces,
             },
+            ModelAsk {
+                model: self.model,
+                effort: self.effort,
+            },
         ))
+    }
+}
+
+/// The model an `agent` call asks for: an alias, and the effort.
+#[derive(Debug, Clone, Default)]
+pub(crate) struct ModelAsk {
+    pub model: Option<String>,
+    pub effort: Option<Effort>,
+}
+
+impl Kernel {
+    /// What a sub-agent asking for `model` (an alias) at `effort` runs on:
+    /// that alias, or `base`'s model (else the default one) at `effort`;
+    /// `None` when it asks for neither. `Err` is the refusal.
+    pub(crate) fn model_override(
+        &self,
+        model: Option<String>,
+        effort: Option<Effort>,
+        base: Option<&ModelUse>,
+    ) -> std::result::Result<Option<ModelUse>, String> {
+        let model = match model {
+            Some(m) => {
+                let aliases = self.llm.aliases();
+                if !aliases.contains(&m) {
+                    return Err(format!(
+                        "agent: `{m}` is not a model alias (aliases: {})",
+                        if aliases.is_empty() {
+                            "none".into()
+                        } else {
+                            aliases.join(", ")
+                        }
+                    ));
+                }
+                m
+            }
+            None if effort.is_none() => return Ok(None),
+            None => base
+                .map(|b| b.model.clone())
+                .or_else(|| self.llm.role_model(Role::Default))
+                .ok_or("agent: no model to set `effort` on; no default model is set")?,
+        };
+        Ok(Some(ModelUse { model, effort }))
     }
 }
 

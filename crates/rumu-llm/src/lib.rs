@@ -619,6 +619,19 @@ impl Llm for GenaiLlm {
             compact_role: r.roles.compact.is_some(),
         }
     }
+
+    fn target(&self, pick: ModelPick<'_>) -> Option<String> {
+        self.resolved().resolve(pick).ok().flatten().map(|t| t.model_ref)
+    }
+
+    fn role_model(&self, role: Role) -> Option<String> {
+        self.resolved().roles.get(role).map(str::to_owned)
+    }
+
+    fn aliases(&self) -> Vec<String> {
+        let r = self.resolved();
+        r.aliases.keys().map(|n| format!("{ALIAS_PROVIDER}/{n}")).collect()
+    }
 }
 
 fn genai_effort(effort: Effort) -> ReasoningEffort {

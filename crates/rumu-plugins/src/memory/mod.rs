@@ -222,8 +222,7 @@ impl MemoryPlugin {
             text.push_str("\nMounts:");
             let session = cx.session.to_string();
             for mounted in cards.mounts() {
-                let asks = state.asked_by.is_none()
-                    && !allowed(
+                let asks = !allowed(
                         &self.decks,
                         &state,
                         &session,
@@ -255,7 +254,7 @@ another deck, write a link card in this deck (`link: @rumu:/cards/<path>`) and l
 update the charter (what each directory holds, what to read first). Keep no separate index card: \
 the catalog lists the cards.",
         );
-        if state.asked_by.is_none() {
+        if state.delegated_by.is_none() {
             let others: Vec<String> = self
                 .decks
                 .assistants()
@@ -270,7 +269,7 @@ the catalog lists the cards.",
                 .collect();
             if !others.is_empty() {
                 text.push_str(&format!(
-                    "\n\nOther assistants (`ask` takes the id): {}.",
+                    "\n\nOther assistants (`agent` takes the id as `assistant`): {}.",
                     others.join(", ")
                 ));
             }

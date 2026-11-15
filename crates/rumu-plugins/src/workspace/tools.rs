@@ -905,11 +905,6 @@ impl WorkspacePlugin {
                 let Some(path) = card_ref_of(&abs) else {
                     return Err(self.rumu_write_refused(&abs));
                 };
-                if cx.state()?.asked_by.is_some() {
-                    return Err(ToolError::model(
-                        "you are answering a question; cards cannot change here",
-                    ));
-                }
                 let cards = self.cards(cx)?;
                 if let Some(err) = invalid_card_ref(&cards, path) {
                     return Err(err);

@@ -171,11 +171,6 @@ impl WorkspacePlugin {
         at: &str,
         cx: &Cx,
     ) -> ToolResult<ToolOutput> {
-        if state.asked_by.is_some() {
-            return Err(ToolError::model(
-                "you are answering a question; this session keeps its mounts",
-            ));
-        }
         let at = normalize_mount_point(at).map_err(ToolError::model)?;
         let visible = self
             .decks()
@@ -220,11 +215,6 @@ impl WorkspacePlugin {
         at: &str,
         cx: &Cx,
     ) -> ToolResult<ToolOutput> {
-        if state.asked_by.is_some() {
-            return Err(ToolError::model(
-                "you are answering a question; this session keeps its mounts",
-            ));
-        }
         let at = normalize_mount_point(at).map_err(ToolError::model)?;
         if at != PROJECT_MOUNT {
             return Err(ToolError::model(
