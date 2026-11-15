@@ -20,7 +20,7 @@ allow_ask: Array<string>,
  */
 mounts: Array<DeckMount>, 
 /**
- * The model its sessions start on.
+ * The model its sessions run on, until one picks another.
  */
 model?: ModelUse, 
 /**
