@@ -913,6 +913,19 @@ async fn dispatch(state: &AppState, method: &str, p: &Value) -> Result<Value> {
             Ok(json!({ "branch": branch }))
         }
 
+        // A side question off the main line `branch`; `quote` (optional) is
+        // the passage `{ node, text }` it is about.
+        "branch.side" => {
+            let branch: BranchId = str_param(p, "branch")?.into();
+            let text = str_param(p, "text")?;
+            let quote = match p.get("quote") {
+                Some(q) if !q.is_null() => Some(parse_params(q)?),
+                _ => None,
+            };
+            let side = kernel.side(&branch, quote, Content::text(text)).await?;
+            Ok(json!({ "branch": side }))
+        }
+
         "branch.regenerate" => {
             let node: NodeId = str_param(p, "node")?.into();
             let branch = kernel.regenerate(&node, parse_params(p)?).await?;

@@ -362,6 +362,13 @@ impl Kernel {
         let mut replied = false;
         // This reply's request overflowed once already.
         let mut overflowed = false;
+        // A side question has no tools: its calls are refused once, and a
+        // second batch ends the loop rather than going round again.
+        let side = matches!(
+            self.store.get_branch(&branch)?.map(|b| b.kind),
+            Some(BranchKind::Side { .. })
+        );
+        let mut refused = false;
 
         loop {
             if token.is_cancelled() {
@@ -529,6 +536,15 @@ impl Kernel {
             if resp.tool_calls.is_empty() {
                 replied = true;
                 break;
+            }
+            if side {
+                self.fail_open_calls(&branch, &resp.tool_calls, crate::side::SIDE_NO_TOOLS)
+                    .await?;
+                if refused {
+                    break;
+                }
+                refused = true;
+                continue;
             }
 
             // Tool batch (sequential is fine).

@@ -3635,10 +3635,7 @@ async fn activate_refuses_agent_branches_and_switches_variants() {
         .id
         .clone();
     let err = kernel.activate_branch(&child).unwrap_err();
-    assert!(
-        matches!(err, rumu_kernel::Error::AgentBranchNotActivatable(_)),
-        "{err:#}"
-    );
+    assert!(matches!(err, rumu_kernel::Error::NotMainLine(_)), "{err:#}");
     assert_eq!(active(), main);
     assert_eq!(status(&main), BranchStatus::Active);
     assert_eq!(status(&child), BranchStatus::Done);
@@ -5293,4 +5290,110 @@ async fn model_use_marker_is_written_only_when_the_pick_changes() {
     assert!(kernel.use_model(&b, other.clone()).await.unwrap());
     let (_, st) = kernel.branch_path(&b).unwrap();
     assert_eq!(st.model, Some(other));
+}
+
+// ---------- side questions ----------
+
+/// Ask a side question off `main`, wait for its turn, and return the side
+/// branch with its path.
+async fn ask_side(
+    kernel: &Arc<Kernel>,
+    main: &BranchId,
+    quote: Option<rumu_core::Quote>,
+    text: &str,
+) -> (rumu_core::Branch, Vec<Node>) {
+    let mut rx = kernel.tap_pushes();
+    let side = kernel.side(main, quote, Content::text(text)).await.unwrap();
+    wait_turn(&mut rx, Some(side.id.0.as_str())).await;
+    let (nodes, _) = kernel.branch_path(&side.id).unwrap();
+    (side, nodes)
+}
+
+#[tokio::test]
+async fn side_question_forks_at_the_head_and_leaves_the_main_line_alone() {
+    let (kernel, llm, _s, main) = setup(
+        vec![],
+        vec![
+            LlmResponse::text("slow start doubles cwnd"),
+            LlmResponse::text("it starts at one MSS"),
+        ],
+    )
+    .await;
+    let (_, before, _) = run_turn(&kernel, &main, "how does tcp start?").await;
+    let reply = before.last().unwrap().id.clone();
+
+    let quote = rumu_core::Quote {
+        node: reply.clone(),
+        text: "doubles cwnd".into(),
+    };
+    let (side, nodes) = ask_side(&kernel, &main, Some(quote.clone()), "why slow?").await;
+    assert_eq!(side.forked_from.as_ref(), Some(&reply));
+    assert!(matches!(&side.kind,
+        rumu_core::BranchKind::Side { parent_branch, quote: Some(q) } if parent_branch == &main && q == &quote));
+    assert_eq!(
+        body_kinds(&nodes),
+        vec![
+            "marker[root]",
+            "user",
+            "assistant",
+            "note",
+            "user",
+            "assistant"
+        ]
+    );
+
+    // The model saw the main conversation, then the framing with the quote.
+    let seen = llm.projections().pop().unwrap();
+    assert!(seen.iter().any(|n| matches!(&n.body,
+        NodeBody::Note { content, .. } if content.text.contains("> doubles cwnd"))));
+
+    // The main line is untouched and still the active one.
+    let (after, _) = kernel.branch_path(&main).unwrap();
+    assert_eq!(after.len(), before.len());
+    let session = kernel.list_sessions().unwrap().remove(0);
+    assert_eq!(session.active_branch, main);
+    assert_eq!(session.title, "how does tcp start?");
+
+    // It hangs off the main line, it is not one.
+    assert!(matches!(
+        kernel.activate_branch(&side.id),
+        Err(rumu_kernel::Error::NotMainLine(_))
+    ));
+    assert!(matches!(
+        kernel.side(&side.id, None, Content::text("again")).await,
+        Err(rumu_kernel::Error::NotMainLine(_))
+    ));
+}
+
+#[tokio::test]
+async fn side_question_refuses_tool_calls() {
+    let plugin = Arc::new(plugin_with(
+        "calc",
+        &["plus"],
+        vec![],
+        noop_hooks(),
+        plus_tool(),
+    ));
+    let (kernel, _llm, _s, main) = setup(
+        vec![plugin],
+        vec![
+            LlmResponse::text("hi"),
+            LlmResponse::calls(vec![ToolCall::new("c1", "plus", json!({"a": 1, "b": 1}))]),
+            LlmResponse::text("two, from memory"),
+            LlmResponse::calls(vec![ToolCall::new("c2", "plus", json!({"a": 2, "b": 2}))]),
+            LlmResponse::calls(vec![ToolCall::new("c3", "plus", json!({"a": 3, "b": 3}))]),
+        ],
+    )
+    .await;
+    run_turn(&kernel, &main, "hello").await;
+
+    let (_, nodes) = ask_side(&kernel, &main, None, "what is 1+1?").await;
+    let (text, err) = result_text(&nodes, "c1");
+    assert!(err && text.contains("no tools"), "{text}");
+    assert_eq!(body_kinds(&nodes).last().unwrap(), "assistant");
+
+    // A second batch after the refusal ends the turn instead of looping.
+    let (_, nodes) = ask_side(&kernel, &main, None, "and 2+2?").await;
+    assert!(result_text(&nodes, "c2").1 && result_text(&nodes, "c3").1);
+    assert_eq!(body_kinds(&nodes).last().unwrap(), "tool_result");
 }

@@ -719,6 +719,7 @@ fn render_overview(info: &SessionInfo, nodes: &[Node], branches: &[Branch]) -> S
         let kind = match &b.kind {
             BranchKind::Main => "main",
             BranchKind::Agent { .. } => "agent",
+            BranchKind::Side { .. } => "side",
         };
         let status = match b.status {
             rumu_core::BranchStatus::Active => "active",

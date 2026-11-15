@@ -10,6 +10,7 @@ mod host;
 mod llm;
 mod predicate;
 mod scripted;
+mod side;
 mod state;
 mod task;
 mod title;
@@ -861,16 +862,16 @@ impl Kernel {
     }
 
     /// Make `branch` the session's active one — the message variant
-    /// switcher's pick among the branches that share a parent. Sub-agent
-    /// branches are refused: they belong to their parent's tool call, not
-    /// the user.
+    /// switcher's pick among the branches that share a parent. Sub-agent and
+    /// side-question branches are refused: they hang off a main line, they
+    /// are not one.
     pub fn activate_branch(&self, branch: &BranchId) -> Result<()> {
         let b = self
             .store
             .get_branch(branch)?
             .ok_or_else(|| Error::BranchNotFound(branch.clone()))?;
-        if matches!(b.kind, BranchKind::Agent { .. }) {
-            return Err(Error::AgentBranchNotActivatable(b.id.clone()));
+        if !matches!(b.kind, BranchKind::Main) {
+            return Err(Error::NotMainLine(b.id.clone()));
         }
         let mut session = self
             .store

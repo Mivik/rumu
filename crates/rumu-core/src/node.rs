@@ -694,6 +694,24 @@ pub enum BranchKind {
         #[serde(default)]
         inherit: Inherit,
     },
+    /// A side question: the user's aside off `parent_branch` (a main line),
+    /// forked at its last safe point. It sees the conversation up to there;
+    /// the main line never sees it. No tools: every call is refused.
+    Side {
+        parent_branch: BranchId,
+        /// The passage of the parent's conversation the question is about.
+        #[serde(default, skip_serializing_if = "Option::is_none")]
+        quote: Option<Quote>,
+    },
+}
+
+/// A passage the user selected in a message.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, ts_rs::TS)]
+#[ts(export)]
+pub struct Quote {
+    /// The assistant node whose text holds it.
+    pub node: NodeId,
+    pub text: String,
 }
 
 /// How an `agent` sub-agent inherits from the branch that spawned it.
