@@ -6,7 +6,7 @@
   "mounts": "Mounted decks",
   "instructions": "Instructions",
   "model": "Model",
-  "modelDefault": "Default model",
+  "modelDefault": "None",
   "look": "Look",
   "lookShuffle": "Shuffle",
   "lookTone": "Color",

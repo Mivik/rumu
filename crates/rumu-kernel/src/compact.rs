@@ -298,8 +298,8 @@ fn note(text: impl Into<String>) -> Node {
 
 impl Kernel {
     /// The model `branch` runs on, by its whole path.
-    fn pick_of(path: &[Node]) -> Option<rumu_core::ModelUse> {
-        crate::state::derive_state(path).model
+    fn pick_of(&self, path: &[Node]) -> Option<rumu_core::ModelUse> {
+        self.model_of(&crate::state::derive_state(path))
     }
 
     /// Compact `branch` when its view has outgrown the threshold. Not again
@@ -311,7 +311,7 @@ impl Kernel {
         token: &CancellationToken,
     ) -> Result<()> {
         let path = self.path_nodes(branch)?;
-        let model = Self::pick_of(&path);
+        let model = self.pick_of(&path);
         let budget = self.llm.budget(pick(&model));
         if !budget.settings.auto || estimate(&path) < threshold(&budget) {
             return Ok(());
@@ -349,7 +349,7 @@ impl Kernel {
         let path = self.path_nodes(branch)?;
         let order = view_order(&path);
         let view: Vec<Node> = order.iter().map(|&i| path[i].clone()).collect();
-        let model = Self::pick_of(&path);
+        let model = self.pick_of(&path);
         let budget = self.llm.budget(pick(&model));
         let w = window(&budget);
         let before = estimate(&path);
@@ -522,11 +522,11 @@ impl Kernel {
     }
 }
 
-/// The pick a path's `model.use` (or the default role) makes.
+/// The pick a path's model (see [`Kernel::model_of`]) makes.
 pub(crate) fn pick(model: &Option<rumu_core::ModelUse>) -> ModelPick<'_> {
     match model {
         Some(u) => ModelPick::Use(u),
-        None => ModelPick::Role(Role::Default),
+        None => ModelPick::Unset,
     }
 }
 

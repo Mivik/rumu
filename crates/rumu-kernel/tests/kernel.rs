@@ -698,7 +698,6 @@ async fn setup_in_project(
             assistant: "assistant".into(),
             delegated_by: None,
             mounts: vec![project_mount(deck)],
-            ..Default::default()
         })
         .await
         .unwrap();
@@ -1036,11 +1035,8 @@ async fn tool_error_results() {
 /// there — the turn's reply then reads as an interruption.
 #[tokio::test]
 async fn branch_updated_carries_the_new_head() {
-    let (kernel, _llm, _s, b) = setup(
-        vec![],
-        vec![LlmResponse::text("a"), LlmResponse::text("b")],
-    )
-    .await;
+    let (kernel, _llm, _s, b) =
+        setup(vec![], vec![LlmResponse::text("a"), LlmResponse::text("b")]).await;
     let mut rx = kernel.tap_pushes();
     kernel.prompt(&b, "hi").await.unwrap();
     let (done, seen) = wait_turn_collect(&mut rx, Some(b.0.as_str())).await;
@@ -1062,7 +1058,11 @@ async fn branch_updated_carries_the_new_head() {
         }
     }
     let (nodes, _) = kernel.branch_path(&b).unwrap();
-    assert_eq!(head, nodes.last().unwrap().id.0, "client head lags the path");
+    assert_eq!(
+        head,
+        nodes.last().unwrap().id.0,
+        "client head lags the path"
+    );
 }
 
 // ---------- image attachments ----------
@@ -1465,7 +1465,7 @@ async fn retry_applies_the_current_choice() {
         effort: None,
     };
     let choice = rumu_kernel::Choice {
-        model: Some(cheap.clone()),
+        model: Some(Some(cheap.clone())),
     };
     kernel.retry(&branch, choice).await.unwrap();
     let (done, _) = collect_turn(&mut rx, &branch.0).await;
@@ -5278,9 +5278,11 @@ async fn model_use_marker_is_written_only_when_the_pick_changes() {
         model: "rumu/cheap".into(),
         effort: Some(Effort::Low),
     };
-    assert!(kernel.use_model(&b, cheap.clone()).await.unwrap());
+    // The assistant's model is where a path starts.
+    assert!(!kernel.use_model(&b, None).await.unwrap());
+    assert!(kernel.use_model(&b, Some(cheap.clone())).await.unwrap());
     // The same pick again writes nothing.
-    assert!(!kernel.use_model(&b, cheap.clone()).await.unwrap());
+    assert!(!kernel.use_model(&b, Some(cheap.clone())).await.unwrap());
     let (_, nodes, state) = run_turn(&kernel, &b, "hi").await;
     assert_eq!(state.model.as_ref(), Some(&cheap));
     let markers = nodes
@@ -5300,9 +5302,19 @@ async fn model_use_marker_is_written_only_when_the_pick_changes() {
         model: "p/m".into(),
         effort: None,
     };
-    assert!(kernel.use_model(&b, other.clone()).await.unwrap());
+    assert!(kernel.use_model(&b, Some(other.clone())).await.unwrap());
     let (_, st) = kernel.branch_path(&b).unwrap();
     assert_eq!(st.model, Some(other));
+    // Back to the assistant's.
+    assert!(kernel.use_model(&b, None).await.unwrap());
+    let (_, st) = kernel.branch_path(&b).unwrap();
+    assert_eq!(st.model, None);
+
+    // A choice tells an absent model (leave it) from a null one (the
+    // assistant's).
+    let absent: rumu_kernel::Choice = serde_json::from_value(json!({})).unwrap();
+    let null: rumu_kernel::Choice = serde_json::from_value(json!({ "model": null })).unwrap();
+    assert_eq!((absent.model, null.model), (None, Some(None)));
 }
 
 /// A sub-agent with the whole context stays on its parent's model but may
@@ -5341,7 +5353,10 @@ async fn agent_full_context_changes_only_the_effort() {
         model: "p/m".into(),
         effort: Some(Effort::High),
     };
-    kernel.use_model(&branch, parent.clone()).await.unwrap();
+    kernel
+        .use_model(&branch, Some(parent.clone()))
+        .await
+        .unwrap();
 
     let (_, nodes, state) = run_turn_on(&kernel, &branch, "go").await;
     assert_eq!(state.model, Some(parent));
@@ -5365,6 +5380,56 @@ async fn agent_full_context_changes_only_the_effort() {
     assert!(
         text.contains("`p/other` is not a model alias (aliases: none)"),
         "{text}"
+    );
+}
+
+/// A path with no `model.use` marker runs on its assistant's model: an
+/// effort-only sub-agent sets the effort on that one.
+#[tokio::test]
+async fn agent_effort_applies_to_the_assistants_model() {
+    use rumu_core::{Effort, ModelUse};
+    let plugin = Arc::new(plugin_with(
+        "branch",
+        &["agent"],
+        vec![],
+        noop_hooks(),
+        noop_tools(),
+    ));
+    let (kernel, _llm, session, branch) = setup(
+        vec![plugin],
+        vec![
+            LlmResponse::calls(vec![ToolCall::new(
+                "e1",
+                "agent",
+                json!({ "background": false, "task": "quick look", "effort": "low" }),
+            )]),
+            LlmResponse::text("looked"),
+            LlmResponse::text("parent done"),
+        ],
+    )
+    .await;
+    kernel.set_assistant_model(Arc::new(|_| {
+        Some(ModelUse {
+            model: "p/m".into(),
+            effort: Some(Effort::High),
+        })
+    }));
+    let (_, _, state) = run_turn_on(&kernel, &branch, "go").await;
+    assert_eq!(state.model, None);
+    let child = kernel
+        .session_tree(&session)
+        .unwrap()
+        .2
+        .into_iter()
+        .find(|b| matches!(&b.kind, rumu_core::BranchKind::Agent { .. }))
+        .expect("agent child");
+    let (_, st) = kernel.branch_path(&child.id).unwrap();
+    assert_eq!(
+        st.model,
+        Some(ModelUse {
+            model: "p/m".into(),
+            effort: Some(Effort::Low),
+        })
     );
 }
 

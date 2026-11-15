@@ -2,8 +2,9 @@
 //! then merging in the workspace registry.
 
 use rumu_core::{
-    CardMount, CardUnmount, ModelUse, Node, NodeBody, PROJECT_MOUNT, PathState, RUMU_WORKSPACE,
-    SCRATCH_WORKSPACE, SessionId, SessionRoot, WorkspaceSet, WorkspaceUse, Workspaces,
+    CardMount, CardUnmount, ModelReset, ModelUse, Node, NodeBody, PROJECT_MOUNT, PathState,
+    RUMU_WORKSPACE, SCRATCH_WORKSPACE, SessionId, SessionRoot, WorkspaceSet, WorkspaceUse,
+    Workspaces,
 };
 
 /// Fold nodes (root → head, in order) into the derived path state.
@@ -84,6 +85,8 @@ fn fold_node(st: &mut PathState, body: &NodeBody) {
     };
     if let Some(model) = content.decode::<ModelUse>() {
         st.model = Some(model);
+    } else if content.decode::<ModelReset>().is_some() {
+        st.model = None;
     } else if let Some(use_) = content.decode::<WorkspaceUse>() {
         st.default_workspace = Some(use_.name);
     } else if let Some(set) = content.decode::<WorkspaceSet>() {
@@ -91,7 +94,6 @@ fn fold_node(st: &mut PathState, body: &NodeBody) {
     } else if let Some(root) = content.decode::<SessionRoot>() {
         st.assistant = root.assistant.clone();
         st.delegated_by = root.delegated_by;
-        st.model = root.model;
         // The session's own deck is always at `/cards/self`.
         st.mounts = vec![CardMount {
             deck: root.assistant,
@@ -208,7 +210,6 @@ mod tests {
             assistant: "x".into(),
             delegated_by: None,
             mounts,
-            model: None,
         })
     }
 
@@ -341,24 +342,16 @@ mod tests {
     }
 
     #[test]
-    fn the_root_model_holds_until_a_marker_picks_another() {
-        let start = ModelUse {
-            model: "rumu/fast".into(),
-            effort: None,
-        };
-        let seeded = marker(&SessionRoot {
-            assistant: "x".into(),
-            model: Some(start.clone()),
-            ..Default::default()
-        });
-        assert_eq!(
-            derive_state(std::slice::from_ref(&seeded)).model,
-            Some(start)
-        );
+    fn a_reset_returns_the_path_to_its_assistants_model() {
+        let start = root(Vec::new());
+        assert_eq!(derive_state(std::slice::from_ref(&start)).model, None);
         let picked = ModelUse {
             model: "a/m".into(),
             effort: Some(rumu_core::Effort::Low),
         };
-        assert_eq!(derive_state(&[seeded, marker(&picked)]).model, Some(picked));
+        let path = [start, marker(&picked)];
+        assert_eq!(derive_state(&path).model, Some(picked));
+        let path = [path[0].clone(), path[1].clone(), marker(&ModelReset {})];
+        assert_eq!(derive_state(&path).model, None);
     }
 }

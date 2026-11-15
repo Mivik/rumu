@@ -50,7 +50,7 @@ use genai::resolver::{AuthData, Endpoint};
 use genai::{Client, ModelIden, ServiceTarget};
 use rumu_blob::Blobs;
 use rumu_core::{
-    Attachment, ALIAS_PROVIDER, CallStats, CompactSettings, Content, ModelAlias, Effort,
+    ALIAS_PROVIDER, Attachment, CallStats, CompactSettings, Content, Effort, ModelAlias,
     ModelConfig, ModelInfo, ModelPick, Node, NodeBody, Protocol, ProviderSettings, ReasoningBlock,
     Role, Roles, Segment, Titles, ToolCall, ToolSpec, Usage, image_label, split_model_ref,
 };
@@ -151,7 +151,7 @@ impl GenaiLlm {
                 )));
             }
         }
-        for role in [Role::Default, Role::Title, Role::Compact] {
+        for role in [Role::Title, Role::Compact] {
             if let Some(r) = config.roles.get(role) {
                 let known = split_model_ref(r).is_some_and(|(p, m)| match p {
                     ALIAS_PROVIDER => config.aliases.contains_key(m),
@@ -292,16 +292,16 @@ fn adapter_kind(protocol: Protocol) -> AdapterKind {
 }
 
 impl Resolved {
-    /// The model `pick` names: `None` for a role no model is bound to (the
-    /// default role must be bound).
+    /// The model `pick` names: `None` for a role no model is bound to.
     fn resolve(&self, pick: ModelPick<'_>) -> Result<Option<Target>, LlmError> {
         match pick {
-            ModelPick::Role(role) => match self.roles.get(role) {
-                Some(r) => self.model(r, None).map(Some),
-                None if role == Role::Default => Err(LlmError::MissingModel),
-                None => Ok(None),
-            },
+            ModelPick::Role(role) => self
+                .roles
+                .get(role)
+                .map(|r| self.model(r, None))
+                .transpose(),
             ModelPick::Use(u) => self.model(&u.model, u.effort).map(Some),
+            ModelPick::Unset => Err(LlmError::MissingModel),
         }
     }
 
@@ -621,16 +621,19 @@ impl Llm for GenaiLlm {
     }
 
     fn target(&self, pick: ModelPick<'_>) -> Option<String> {
-        self.resolved().resolve(pick).ok().flatten().map(|t| t.model_ref)
-    }
-
-    fn role_model(&self, role: Role) -> Option<String> {
-        self.resolved().roles.get(role).map(str::to_owned)
+        self.resolved()
+            .resolve(pick)
+            .ok()
+            .flatten()
+            .map(|t| t.model_ref)
     }
 
     fn aliases(&self) -> Vec<String> {
         let r = self.resolved();
-        r.aliases.keys().map(|n| format!("{ALIAS_PROVIDER}/{n}")).collect()
+        r.aliases
+            .keys()
+            .map(|n| format!("{ALIAS_PROVIDER}/{n}"))
+            .collect()
     }
 }
 
@@ -2121,9 +2124,9 @@ mod tests {
         let mut c = config();
         llm.configure(&c, Arc::default()).unwrap();
         let r = llm.resolved();
-        // No default role bound.
+        // No model at all.
         assert!(matches!(
-            r.resolve(ModelPick::Role(Role::Default)),
+            r.resolve(ModelPick::Unset),
             Err(LlmError::MissingModel)
         ));
         assert!(r.resolve(ModelPick::Role(Role::Title)).unwrap().is_none());
@@ -2160,23 +2163,23 @@ mod tests {
         c.titles = Titles::Model;
         llm.configure(&c, Arc::default()).unwrap();
         assert_eq!(llm.titles(), Titles::First);
+        c.roles.compact = Some("a/m".into());
         c.roles.title = Some("rumu/cheap".into());
-        c.roles.default = Some("a/m".into());
         llm.configure(&c, Arc::default()).unwrap();
         assert_eq!(llm.titles(), Titles::Model);
         let t = llm
             .resolved()
-            .resolve(ModelPick::Role(Role::Default))
+            .resolve(ModelPick::Role(Role::Compact))
             .unwrap()
             .unwrap();
         assert_eq!(t.model_ref, "a/m");
 
         // Refused configurations leave the previous one in place.
         for bad in ["rumu/gone", "b/m"] {
-            c.roles.default = Some(bad.into());
+            c.roles.compact = Some(bad.into());
             assert!(llm.configure(&c, Arc::default()).is_err());
         }
-        c.roles.default = None;
+        c.roles.compact = None;
         c.aliases.get_mut("cheap").unwrap().model = "b/m".into();
         assert!(matches!(
             llm.configure(&c, Arc::default()),

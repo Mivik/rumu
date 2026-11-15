@@ -41,7 +41,7 @@ use std::sync::{Arc, Mutex, RwLock};
 use std::time::{Duration, SystemTime};
 
 use rumu_core::{
-    ALIAS_PROVIDER, ModelAlias, Effort, IoError, McpServerSettings, ModelConfig, ModelInfo,
+    ALIAS_PROVIDER, Effort, IoError, McpServerSettings, ModelAlias, ModelConfig, ModelInfo,
     PresetInfo, Protocol, ProviderInfo, ProviderSettings, Roles, SettingsInfo, Titles,
     enabled_models, split_model_ref, valid_mcp_name,
 };
@@ -448,7 +448,7 @@ impl Settings {
                     "alias `{name}` uses provider `{id}`"
                 )));
             }
-            if let Some(r) = [&file.roles.default, &file.roles.title, &file.roles.compact]
+            if let Some(r) = [&file.roles.title, &file.roles.compact]
                 .into_iter()
                 .flatten()
                 .find(|r| of(r))
@@ -478,11 +478,7 @@ impl Settings {
                 }
                 file.aliases.remove(old);
                 let (old, new) = (alias_ref(old), alias_ref(&name));
-                for slot in [
-                    &mut file.roles.default,
-                    &mut file.roles.title,
-                    &mut file.roles.compact,
-                ] {
+                for slot in [&mut file.roles.title, &mut file.roles.compact] {
                     if slot.as_deref() == Some(&old) {
                         *slot = Some(new.clone());
                     }
@@ -503,11 +499,7 @@ impl Settings {
         self.edit(|file| {
             file.aliases.remove(name);
             let gone = alias_ref(name);
-            for slot in [
-                &mut file.roles.default,
-                &mut file.roles.title,
-                &mut file.roles.compact,
-            ] {
+            for slot in [&mut file.roles.title, &mut file.roles.compact] {
                 if slot.as_deref() == Some(&gone) {
                     *slot = None;
                 }
@@ -997,13 +989,12 @@ mod tests {
         assert_eq!(s.model("rumu/main").unwrap().efforts, main.efforts);
         assert!(
             s.set_roles(Roles {
-                default: Some("rumu/nope".into()),
+                title: Some("rumu/nope".into()),
                 ..Roles::default()
             })
             .is_err()
         );
         s.set_roles(Roles {
-            default: Some("rumu/main".into()),
             title: Some("rumu/main".into()),
             compact: Some("rumu/main".into()),
         })
@@ -1013,7 +1004,7 @@ mod tests {
         let mut edit = alias("primary", "a/n");
         edit.rename = Some("main".into());
         let info = s.set_alias(edit).unwrap();
-        assert_eq!(info.roles.default.as_deref(), Some("rumu/primary"));
+        assert_eq!(info.roles.title.as_deref(), Some("rumu/primary"));
         assert!(s.remove_provider("a").is_err());
 
         let again = Settings::load(home.path(), llm, McpHub::new(home.path())).unwrap();
@@ -1027,7 +1018,7 @@ mod tests {
         assert_eq!(s.info().roles, Roles::default());
         // A provider a role names directly stays too.
         s.set_roles(Roles {
-            default: Some("a/m".into()),
+            compact: Some("a/m".into()),
             ..Roles::default()
         })
         .unwrap();

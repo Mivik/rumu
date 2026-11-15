@@ -1,9 +1,9 @@
 // Model settings (`settings.*`) and the composer's model pick. A branch runs
-// on its last `model.use` marker, else its assistant's model (on the root),
-// else the default model. A pick made in a session stays pending until the
-// next prompt or regeneration carries it; the server records it only when it
-// changes the branch's model. Every pick is also remembered (prefs) as the one
-// a new session starts on, unless its assistant has a model of its own.
+// on its last `model.use` marker, else its assistant's model; a null pick is
+// the assistant's. A pick made in a session stays pending until the next
+// prompt or regeneration carries it; the server records it only when it
+// changes the branch's model. Every model picked is also remembered (prefs)
+// as the one a new session starts on when its assistant has no model.
 
 import { reactive } from 'vue'
 import { t } from '../../i18n'
@@ -37,9 +37,9 @@ export const PROTOCOL_LABELS: Record<Protocol, string> = {
 export const models = reactive({
   settings: null as SettingsInfo | null,
   /** Unsent picks by session id. */
-  pending: {} as Record<string, ModelUse>,
+  pending: {} as Record<string, ModelUse | null>,
   /** The landing page's pick, for the assistant it was made with. */
-  landing: null as { assistant: string; use: ModelUse } | null,
+  landing: null as { assistant: string; use: ModelUse | null } | null,
 })
 
 /** Does a model id rule (a `*` wildcard) match an id? */
@@ -111,17 +111,25 @@ export function modelByRef(ref: string): ModelInfo | null {
   return null
 }
 
+/** The model of the assistant the composer runs as. */
+export function assistantModel(): ModelUse | null {
+  const assistant = state.sessionId ? state.pathState?.assistant : landingAssistant.value
+  return state.assistants.find((a) => a.id === assistant)?.model ?? null
+}
+
 /** What the next prompt runs on: the session's unsent pick or its branch's
  *  model; on the landing page the pick made there, else the assistant's
  *  model, else the remembered pick, while it still exists. `null` is the
- *  default profile. */
+ *  assistant's model. */
 export function currentPick(): ModelUse | null {
   const session = state.sessionId
-  if (session) return models.pending[session] ?? state.pathState?.model ?? null
+  if (session) {
+    if (session in models.pending) return models.pending[session] ?? null
+    return state.pathState?.model ?? null
+  }
   const assistant = landingAssistant.value
   if (models.landing?.assistant === assistant) return models.landing.use
-  const own = state.assistants.find((a) => a.id === assistant)?.model
-  if (own && exists(own)) return own
+  if (assistantModel()) return null
   return prefs.model && exists(prefs.model) ? prefs.model : null
 }
 
@@ -129,23 +137,23 @@ function exists(use: ModelUse): boolean {
   return !models.settings || !!modelByRef(use.model)
 }
 
-export function pick(use: ModelUse): void {
-  prefs.model = use
+export function pick(use: ModelUse | null): void {
+  if (use) prefs.model = use
   const session = state.sessionId
   if (!session) {
     models.landing = { assistant: landingAssistant.value, use }
     return
   }
-  const recorded = state.pathState?.model
-  if (recorded && sameUse(recorded, use)) delete models.pending[session]
+  if (sameUse(state.pathState?.model ?? null, use)) delete models.pending[session]
   else models.pending[session] = use
 }
 
-export function sameUse(a: ModelUse, b: ModelUse): boolean {
+export function sameUse(a: ModelUse | null, b: ModelUse | null): boolean {
+  if (!a || !b) return a === b
   return a.model === b.model && (a.effort ?? null) === (b.effort ?? null)
 }
 
-/** A pick resolved for display: the model it names (the default one when
+/** A pick resolved for display: the model it names (the assistant's when
  *  none), and the effort it runs at. */
 export interface Resolved {
   label: string
@@ -157,9 +165,10 @@ export interface Resolved {
 export function resolvePick(use: ModelUse | null): Resolved | null {
   const s = models.settings
   if (!s) return null
-  const ref = use?.model ?? s.roles.default ?? null
+  const run = use ?? assistantModel()
+  const ref = run?.model ?? null
   const model = ref ? modelByRef(ref) : null
-  const effort = use?.effort ?? model?.target?.effort ?? 'high'
+  const effort = run?.effort ?? model?.target?.effort ?? 'high'
   const efforts = model?.efforts ?? []
   return {
     label: model?.name ?? ref ?? t('settings.noModel'),

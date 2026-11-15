@@ -222,13 +222,11 @@ pub struct ModelAlias {
     pub effort: Option<Effort>,
 }
 
-/// What a background job or a fresh path runs on, by model ref.
+/// What a background job runs on, by model ref.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize, ts_rs::TS)]
 #[serde(rename_all = "snake_case")]
 #[ts(export)]
 pub enum Role {
-    /// Every path without a `model.use` marker.
-    Default,
     /// Session titles. Unset keeps the truncated first prompt.
     Title,
     /// Compaction summaries. Unset summarizes on the path's own model.
@@ -236,12 +234,9 @@ pub enum Role {
 }
 
 #[derive(Debug, Clone, Default, PartialEq, Eq, Serialize, Deserialize, ts_rs::TS)]
-#[serde(default, deny_unknown_fields)]
+#[serde(default)]
 #[ts(export)]
 pub struct Roles {
-    #[serde(skip_serializing_if = "Option::is_none")]
-    #[ts(optional)]
-    pub default: Option<String>,
     #[serde(skip_serializing_if = "Option::is_none")]
     #[ts(optional)]
     pub title: Option<String>,
@@ -253,7 +248,6 @@ pub struct Roles {
 impl Roles {
     pub fn get(&self, role: Role) -> Option<&str> {
         match role {
-            Role::Default => self.default.as_deref(),
             Role::Title => self.title.as_deref(),
             Role::Compact => self.compact.as_deref(),
         }
@@ -342,11 +336,24 @@ impl Structured for ModelUse {
     const V: u32 = 2;
 }
 
+/// Payload of the `model.reset` marker (v1): the path runs on its
+/// assistant's model again, as it does with no `model.use` marker.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+pub struct ModelReset {}
+
+impl Structured for ModelReset {
+    const TAG: &'static str = "model.reset";
+    const V: u32 = 1;
+}
+
 /// The model a call asks for.
 #[derive(Debug, Clone, Copy)]
 pub enum ModelPick<'a> {
     Role(Role),
     Use(&'a ModelUse),
+    /// A path with no model: neither a `model.use` marker nor an
+    /// assistant's. The call fails.
+    Unset,
 }
 
 /// A provider as the web sees it.

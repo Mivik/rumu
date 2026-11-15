@@ -1,6 +1,6 @@
 {
   "title": "设置",
-  "defaults": "默认模型",
+  "defaults": "标题与压缩",
   "providers": "服务商",
   "aliases": "别名",
   "aliasName": "名称",
@@ -13,7 +13,7 @@
   "searchModels": "搜索模型",
   "editModels": "编辑模型",
   "noModel": "未设置模型",
-  "roleDefault": "默认",
+  "assistantModel": "使用助手默认",
   "roleTitle": "会话标题",
   "titles_first": "首条消息",
   "titles_last": "最新消息",

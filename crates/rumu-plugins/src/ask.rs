@@ -31,7 +31,7 @@ pub struct Assistant {
     pub allow_ask: Vec<String>,
     /// Its `deck.yaml` default mounts.
     pub mounts: Vec<DeckMount>,
-    /// The model its sessions start on.
+    /// The model its sessions run on, until one picks another.
     #[serde(skip_serializing_if = "Option::is_none")]
     #[ts(optional)]
     pub model: Option<rumu_core::ModelUse>,
@@ -336,7 +336,6 @@ impl AskPlugin {
                 mounts,
                 model: args.model,
                 effort: args.effort,
-                base: to.meta.model.clone(),
                 prompt: Content::text(prompt),
             })
             .await

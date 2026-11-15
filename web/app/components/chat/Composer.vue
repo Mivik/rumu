@@ -4,7 +4,7 @@
 // session (store.sendPrompt does that).
 //
 // A sheet of paper with the writing on top and a footer that says how the
-// prompt runs: the model on the left; its reasoning effort and the send button
+// prompt runs: the model and its reasoning effort on the left; the send button
 // on the right — solid coral once there is something to send. Who a new
 // session runs as and where it works are picked above the sheet
 // (SessionPickers), so the footer is the same on the landing page and in a
@@ -40,7 +40,6 @@ import { composerFocus, openLightbox, toast } from '../../lib/state/ui'
 import { askSide, openSide, quoteBlock, quotes } from '../../lib/state/side'
 import Icon from '../ui/Icon.vue'
 import DecisionPanel from './DecisionPanel.vue'
-import EffortPicker from './EffortPicker.vue'
 import ModelPicker from './ModelPicker.vue'
 import QuoteTray from './QuoteTray.vue'
 
@@ -446,7 +445,6 @@ const placeholder = computed(() => {
           >
             <Icon name="image" :size="16" />
           </button>
-          <EffortPicker />
           <Transition
             enter-active-class="transition duration-200 ease-spring"
             enter-from-class="scale-75 opacity-0"

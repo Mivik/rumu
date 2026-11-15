@@ -49,6 +49,7 @@ delegated_by?: string | null,
  */
 mounts: Array<CardMount>, 
 /**
- * The last `model.use` marker: unset runs on the default role.
+ * The last `model.use` marker: unset (or after a `model.reset`) runs
+ * on the assistant's model.
  */
 model?: ModelUse | null, };

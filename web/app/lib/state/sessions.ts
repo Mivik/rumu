@@ -354,11 +354,12 @@ export interface PromptAttachment {
 /** What the composer shows, carried by a prompt or regeneration: the
  *  server records it when it differs from the branch it lands on. */
 export interface Choice {
-  model?: ModelUse
+  /** Null is the assistant's model. */
+  model?: ModelUse | null
 }
 
 export function composerChoice(): Choice {
-  return { model: currentPick() ?? undefined }
+  return { model: currentPick() }
 }
 
 /** The session's unsent picks are on the branch now. */

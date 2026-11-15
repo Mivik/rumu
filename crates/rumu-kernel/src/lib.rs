@@ -200,7 +200,13 @@ pub(crate) struct Inner {
     pub decisions: HashMap<String, decide::PendingDecision>,
     /// The last decision id handed out.
     pub decision_seq: u64,
+    /// An assistant's model, by deck id: what its paths run on with no
+    /// `model.use` marker.
+    pub assistant_model: AssistantModel,
 }
+
+/// Looks up an assistant's model by deck id.
+pub type AssistantModel = Arc<dyn Fn(&str) -> Option<rumu_core::ModelUse> + Send + Sync>;
 
 impl Default for Inner {
     fn default() -> Self {
@@ -220,16 +226,27 @@ impl Default for Inner {
             max_tasks_per_branch: MAX_TASKS_PER_BRANCH,
             decisions: HashMap::new(),
             decision_seq: 0,
+            assistant_model: Arc::new(|_| None),
         }
     }
 }
 
 /// The composer's pick a prompt or regeneration carries; see
-/// [`Kernel::apply_choice`]. Absent parts leave the branch as it is.
+/// [`Kernel::apply_choice`]. Absent parts leave the branch as it is; a
+/// null `model` is the assistant's.
 #[derive(Debug, Clone, Default, serde::Deserialize)]
 pub struct Choice {
-    #[serde(default)]
-    pub model: Option<rumu_core::ModelUse>,
+    #[serde(default, deserialize_with = "present")]
+    pub model: Option<Option<rumu_core::ModelUse>>,
+}
+
+/// A field that is there, null or not.
+fn present<'de, D, T>(d: D) -> std::result::Result<Option<T>, D::Error>
+where
+    D: serde::Deserializer<'de>,
+    T: serde::Deserialize<'de>,
+{
+    T::deserialize(d).map(Some)
 }
 
 pub struct Kernel {
@@ -434,6 +451,18 @@ impl Kernel {
     /// calls that acquire a permit after this returns.
     pub fn set_agent_concurrency(&self, limit: usize) {
         self.inner.lock().unwrap().agent_gate = Arc::new(Semaphore::new(limit));
+    }
+
+    /// Where assistants' models come from (none by default).
+    pub fn set_assistant_model(&self, lookup: AssistantModel) {
+        self.inner.lock().unwrap().assistant_model = lookup;
+    }
+
+    /// The model a path in `state` runs on: its `model.use` marker, else
+    /// its assistant's.
+    pub(crate) fn model_of(&self, state: &PathState) -> Option<rumu_core::ModelUse> {
+        let lookup = self.inner.lock().unwrap().assistant_model.clone();
+        state.model.clone().or_else(|| lookup(&state.assistant))
     }
 
     /// Override the per-branch limit on running background tasks.
@@ -664,7 +693,6 @@ impl Kernel {
             assistant,
             delegated_by: None,
             mounts: Vec::new(),
-            model: None,
         })
         .await
     }
@@ -818,21 +846,26 @@ impl Kernel {
     }
 
     /// The user sends a prompt after picking another model: a `model.use`
-    /// marker, written only when it differs from the branch's current one
-    /// (queued while a turn runs, so it lands ahead of the prompt). The
-    /// model is not told. Returns whether a marker was written.
+    /// marker (`model.reset` for the assistant's), written only when it
+    /// differs from the branch's current one (queued while a turn runs, so
+    /// it lands ahead of the prompt). The model is not told. Returns whether
+    /// a marker was written.
     pub async fn use_model(
         self: &Arc<Self>,
         branch: &BranchId,
-        model: rumu_core::ModelUse,
+        model: Option<rumu_core::ModelUse>,
     ) -> Result<bool> {
         let state = derive_state(&self.pending_path_nodes(branch)?);
-        if state.model.as_ref() == Some(&model) {
+        if state.model == model {
             return Ok(false);
         }
+        let content = match &model {
+            Some(m) => Content::marker(m),
+            None => Content::marker(&rumu_core::ModelReset {}),
+        };
         let body = NodeBody::Note {
             source: SYSTEM_SOURCE.into(),
-            content: Content::marker(&model),
+            content,
         };
         self.deliver(branch, NodeId::new(), body, None).await?;
         Ok(true)

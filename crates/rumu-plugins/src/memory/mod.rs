@@ -223,12 +223,12 @@ impl MemoryPlugin {
             let session = cx.session.to_string();
             for mounted in cards.mounts() {
                 let asks = !allowed(
-                        &self.decks,
-                        &state,
-                        &session,
-                        Action::Write,
-                        mounted.deck.id(),
-                    );
+                    &self.decks,
+                    &state,
+                    &session,
+                    Action::Write,
+                    mounted.deck.id(),
+                );
                 text.push_str(&format!(
                     "\n- `{RUMU_WORKSPACE}:/cards/{}` — deck `{}`{}",
                     mounted.point(),

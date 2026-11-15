@@ -35,7 +35,7 @@ interface Form {
   name: string
   mounts: DeckMount[]
   instructions: string
-  /** The model its sessions start on; null is the default model. */
+  /** The model its sessions run on, until one picks another; null is none. */
   model: ModelUse | null
   /** Each bound server with the rules enabling its tools. */
   mcp: Record<string, string[]>

@@ -4,7 +4,7 @@
 // pointing it at a newer model moves all of them. Every change saves at once.
 import { computed, reactive } from 'vue'
 import { t } from '../../i18n'
-import { ALIAS_PROVIDER, editSettings, models, nearestEffort } from '../../lib/state/models'
+import { editSettings, models, nearestEffort } from '../../lib/state/models'
 import type { Effort } from '../../lib/generated/Effort'
 import type { ModelInfo } from '../../lib/generated/ModelInfo'
 import Icon from '../ui/Icon.vue'
@@ -48,10 +48,6 @@ async function add(): Promise<void> {
   if (!canAdd.value) return
   const name = draft.name.trim()
   if (!(await editSettings('settings.set_alias', { name, model: draft.model }))) return
-  // The first model there is to run on becomes the default.
-  const s = models.settings
-  if (s && !s.roles.default)
-    await editSettings('settings.set_roles', { ...s.roles, default: `${ALIAS_PROVIDER}/${name}` })
   draft.name = ''
   draft.model = ''
 }

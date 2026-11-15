@@ -1,8 +1,8 @@
 <script setup lang="ts">
 // The models to pick from, as the composer's chip lists them: a search,
-// the aliases (unless left out), pinned ones, then each provider's
-// models (folded, but for the selected model's provider). Pins toggle in
-// place.
+// the `lead` slot (unless searching), the aliases (unless left out), pinned
+// ones, then each provider's models (folded, but for the selected model's
+// provider). Pins toggle in place.
 import { computed, ref } from 'vue'
 import { t } from '../../i18n'
 import { editSettings, modelByRef, models } from '../../lib/state/models'
@@ -81,6 +81,7 @@ async function togglePin(m: ModelInfo): Promise<void> {
     </div>
 
     <div class="flex flex-col gap-0.5">
+      <slot v-if="!q && !empty" name="lead" />
       <template v-if="aliases.length">
         <div class="panel-head">{{ t('settings.aliases') }}</div>
         <button
@@ -105,11 +106,6 @@ async function togglePin(m: ModelInfo): Promise<void> {
           <span class="min-w-0 truncate text-micro text-ink-3" :title="m.target?.model">{{
             modelByRef(m.target?.model ?? '')?.name ?? m.target?.model
           }}</span>
-          <span
-            v-if="settings?.roles.default === m.ref"
-            class="ml-auto flex-none rounded-xs border border-line px-1 text-micro text-ink-3"
-            >{{ t('settings.roleDefault') }}</span
-          >
         </button>
       </template>
 

@@ -132,23 +132,23 @@ impl Kernel {
         from: &BranchId,
         delegation: Delegation,
     ) -> Result<DelegationReply> {
+        // Its own model unless the call asks for another.
+        let lookup = self.inner.lock().unwrap().assistant_model.clone();
+        let base = lookup(&delegation.assistant);
         let model = self
-            .model_override(
-                delegation.model,
-                delegation.effort,
-                delegation.base.as_ref(),
-            )
-            .map_err(Error::ModelPick)?
-            .or(delegation.base);
+            .model_override(delegation.model, delegation.effort, base.as_ref())
+            .map_err(Error::ModelPick)?;
         let token = self.loop_token(from).child_token();
         let (info, branch) = self
             .create_rooted_session(SessionRoot {
                 assistant: delegation.assistant,
                 delegated_by: Some(delegation.delegated_by),
                 mounts: delegation.mounts,
-                model,
             })
             .await?;
+        if model.is_some() {
+            self.use_model(&branch.id, model).await?;
+        }
         self.inner
             .lock()
             .unwrap()

@@ -6,7 +6,7 @@
   "mounts": "挂载的卡组",
   "instructions": "指令",
   "model": "模型",
-  "modelDefault": "默认模型",
+  "modelDefault": "未设置",
   "look": "外观",
   "lookShuffle": "随机",
   "lookTone": "颜色",

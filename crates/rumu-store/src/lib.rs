@@ -235,7 +235,10 @@ impl Store {
             ..s.clone()
         };
         self.append(&s.id, &Record::Session(info.clone()))?;
-        st.sessions.insert(s.id.clone(), Entry::Loaded(Box::new(SessionState::new(info))));
+        st.sessions.insert(
+            s.id.clone(),
+            Entry::Loaded(Box::new(SessionState::new(info))),
+        );
         if let Some(at) = s.seen_at {
             st.seen.insert(s.id.clone(), at);
             self.save_seen(&st.seen)?;

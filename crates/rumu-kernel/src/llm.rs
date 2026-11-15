@@ -4,15 +4,14 @@ use std::sync::Arc;
 
 use async_trait::async_trait;
 use rumu_core::{
-    CallStats, CompactSettings, ModelPick, Node, ReasoningBlock, Role, Titles, ToolCall, ToolSpec,
-    Usage,
+    CallStats, CompactSettings, ModelPick, Node, ReasoningBlock, Titles, ToolCall, ToolSpec, Usage,
 };
 
 /// A model-call failure.
 #[derive(Debug, thiserror::Error)]
 pub enum LlmError {
-    /// No default model is configured.
-    #[error("no default model is configured; set one in Settings")]
+    /// The path picked no model and its assistant has none.
+    #[error("no model: pick one, or set the assistant's")]
     MissingModel,
 
     /// A model ref whose provider is not configured.
@@ -224,14 +223,8 @@ pub trait Llm: Send + Sync {
     fn target(&self, pick: ModelPick<'_>) -> Option<String> {
         match pick {
             ModelPick::Use(u) => Some(u.model.clone()),
-            ModelPick::Role(_) => None,
+            ModelPick::Role(_) | ModelPick::Unset => None,
         }
-    }
-
-    /// The model ref bound to `role`.
-    fn role_model(&self, role: Role) -> Option<String> {
-        let _ = role;
-        None
     }
 
     /// The aliases' refs (`rumu/<name>`): the models a sub-agent may pick.

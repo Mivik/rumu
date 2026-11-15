@@ -1,6 +1,6 @@
 {
   "title": "Settings",
-  "defaults": "Default models",
+  "defaults": "Titles & compaction",
   "providers": "Providers",
   "aliases": "Aliases",
   "aliasName": "Name",
@@ -13,7 +13,7 @@
   "searchModels": "Search models",
   "editModels": "Edit models",
   "noModel": "No model",
-  "roleDefault": "Default",
+  "assistantModel": "Assistant's default",
   "roleTitle": "Session titles",
   "titles_first": "First message",
   "titles_last": "Latest message",

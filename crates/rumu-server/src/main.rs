@@ -44,7 +44,10 @@ async fn main() -> Result<()> {
         .and_then(|h| h.parse().ok())
         .unwrap_or(IpAddr::V4(Ipv4Addr::LOCALHOST));
 
-    let store = Arc::new(Store::open(&home.join("sessions"), &home.join("seen.json"))?);
+    let store = Arc::new(Store::open(
+        &home.join("sessions"),
+        &home.join("seen.json"),
+    )?);
     let blobs = Blobs::in_home(&home)?;
     let config = rumu_plugins::load_config(&home)?;
     // A home without a registry starts with the current directory as its
@@ -73,6 +76,10 @@ async fn main() -> Result<()> {
         Arc::new(settings::Settings::load(&home, genai.clone(), mcp.clone())?.with_skills(skills));
     let llm = load_llm(genai)?;
     let kernel = Kernel::new(store.clone(), llm, plugins, workspaces.clone())?;
+    kernel.set_assistant_model({
+        let decks = decks.clone();
+        Arc::new(move |id| decks.get(id).and_then(|d| d.meta.model))
+    });
     settings::spawn_mcp_updates(&settings, &kernel, &mcp);
     spawn_blob_gc(store, blobs.clone());
     let stale = settings.stale_lists();

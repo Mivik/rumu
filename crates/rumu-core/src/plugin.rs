@@ -451,7 +451,11 @@ pub trait Runtime: History {
         Err(Error::msg("this host cannot ask the user"))
     }
     /// Run `delegation` as a session of its own (see [`Cx::delegate`]).
-    async fn delegate(&self, _branch: &BranchId, _delegation: Delegation) -> Result<DelegationReply> {
+    async fn delegate(
+        &self,
+        _branch: &BranchId,
+        _delegation: Delegation,
+    ) -> Result<DelegationReply> {
         Err(Error::msg("this host cannot start sessions"))
     }
 }
@@ -473,8 +477,6 @@ pub struct Delegation {
     /// The model alias asked for, and the effort.
     pub model: Option<String>,
     pub effort: Option<crate::Effort>,
-    /// What it runs on when neither is given: the assistant's own model.
-    pub base: Option<crate::ModelUse>,
     pub prompt: Content,
 }
 

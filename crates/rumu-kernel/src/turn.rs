@@ -9,7 +9,7 @@ use rumu_core::kind;
 use rumu_core::{
     Branch, BranchId, BranchKind, BranchStatus, CODE_DENIED_TOOLS, Call, CallStats, CompactReason,
     Content, Cx, DELEGATE_TOOL, Effort, FILE_PATCH_TAG, Inherit, InheritContext, InnerCall, Invoke,
-    ModelPick, ModelUse, NodeBody, NodeId, Plugin, RUMU_WORKSPACE, Role, SYSTEM_SOURCE, SessionId,
+    ModelPick, ModelUse, NodeBody, NodeId, Plugin, RUMU_WORKSPACE, SYSTEM_SOURCE, SessionId,
     ToolCall, ToolError, ToolOutput, ToolResultExt, TurnError, WorkspaceSet, WorkspaceUse,
     parse_args, truncate_output,
 };
@@ -397,7 +397,7 @@ impl Kernel {
             // the UI yet: once text or reasoning reached the client,
             // replaying would duplicate it, so the turn fails instead.
             let path = self.path_nodes(&branch)?;
-            let model = crate::state::derive_state(&path).model;
+            let model = self.model_of(&crate::state::derive_state(&path));
             let pick = crate::compact::pick(&model);
             let nodes = rumu_core::view(&path);
             let streamed = Arc::new(AtomicBool::new(false));
@@ -1012,13 +1012,14 @@ impl Kernel {
 
         // The model it asks for. With the whole context it stays on this
         // model: another one could not take this path's reasoning or cache.
-        let model = match self.model_override(ask.model, ask.effort, parent_state.model.as_ref()) {
+        let parent_model = self.model_of(&parent_state);
+        let model = match self.model_override(ask.model, ask.effort, parent_model.as_ref()) {
             Ok(m) => m,
             Err(e) => return Ok(AgentRun::Refused(e)),
         };
         if let (InheritContext::Full, Some(m)) = (&inherit.context, &model)
             && self.llm.target(ModelPick::Use(m))
-                != self.llm.target(crate::compact::pick(&parent_state.model))
+                != self.llm.target(crate::compact::pick(&parent_model))
         {
             return Ok(AgentRun::Refused(
                 "agent: with context \"full\" a sub-agent stays on this model (only `effort` may \
@@ -1384,8 +1385,8 @@ pub(crate) struct ModelAsk {
 
 impl Kernel {
     /// What a sub-agent asking for `model` (an alias) at `effort` runs on:
-    /// that alias, or `base`'s model (else the default one) at `effort`;
-    /// `None` when it asks for neither. `Err` is the refusal.
+    /// that alias, or `base`'s model at `effort`; `None` when it asks for
+    /// neither. `Err` is the refusal.
     pub(crate) fn model_override(
         &self,
         model: Option<String>,
@@ -1410,8 +1411,7 @@ impl Kernel {
             None if effort.is_none() => return Ok(None),
             None => base
                 .map(|b| b.model.clone())
-                .or_else(|| self.llm.role_model(Role::Default))
-                .ok_or("agent: no model to set `effort` on; no default model is set")?,
+                .ok_or("agent: no model to set `effort` on; the assistant has none")?,
         };
         Ok(Some(ModelUse { model, effort }))
     }

@@ -587,10 +587,6 @@ pub struct SessionRoot {
     /// starts in at [`crate::PROJECT_MOUNT`].
     #[serde(default, skip_serializing_if = "Vec::is_empty")]
     pub mounts: Vec<CardMount>,
-    /// The model its paths start on (the assistant's default), until a
-    /// `model.use` marker picks another; unset, the default role's.
-    #[serde(default, skip_serializing_if = "Option::is_none")]
-    pub model: Option<crate::ModelUse>,
 }
 
 impl Structured for SessionRoot {
@@ -814,7 +810,8 @@ pub struct PathState {
     /// The branch's card mount table (root defaults + `card_mount` markers).
     #[serde(default)]
     pub mounts: Vec<CardMount>,
-    /// The last `model.use` marker: unset runs on the default role.
+    /// The last `model.use` marker: unset (or after a `model.reset`) runs
+    /// on the assistant's model.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub model: Option<crate::ModelUse>,
 }
