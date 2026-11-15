@@ -8,9 +8,10 @@ use crate::{Error, Result};
 use rumu_core::kind;
 use rumu_core::{
     Branch, BranchId, BranchKind, BranchStatus, CODE_DENIED_TOOLS, Call, CallStats, CompactReason,
-    Content, Cx, DELEGATE_TOOL, Effort, FILE_PATCH_TAG, Inherit, InheritContext, InnerCall, Invoke, NodeBody, NodeId,
-    ModelPick, ModelUse, Plugin, RUMU_WORKSPACE, Role, SYSTEM_SOURCE, SessionId, ToolCall, ToolError, ToolOutput,
-    ToolResultExt, TurnError, WorkspaceSet, WorkspaceUse, parse_args, truncate_output,
+    Content, Cx, DELEGATE_TOOL, Effort, FILE_PATCH_TAG, Inherit, InheritContext, InnerCall, Invoke,
+    ModelPick, ModelUse, NodeBody, NodeId, Plugin, RUMU_WORKSPACE, Role, SYSTEM_SOURCE, SessionId,
+    ToolCall, ToolError, ToolOutput, ToolResultExt, TurnError, WorkspaceSet, WorkspaceUse,
+    parse_args, truncate_output,
 };
 use schemars::JsonSchema;
 use serde::Deserialize;
@@ -652,7 +653,8 @@ impl Kernel {
                     .and_then(Value::as_bool)
                     .unwrap_or(name == "agent" && matches!(caller, Caller::Model));
                 // `agent` for another assistant is the plugin's `delegate`.
-                let name = if name == "agent" && args.get("assistant").is_some_and(|a| !a.is_null()) {
+                let name = if name == "agent" && args.get("assistant").is_some_and(|a| !a.is_null())
+                {
                     DELEGATE_TOOL.to_owned()
                 } else {
                     name
@@ -1223,7 +1225,7 @@ impl Kernel {
             .ok_or_else(|| Error::Internal("agent branch vanished while finishing".into()))?;
         let mut done = b.clone();
         done.status = BranchStatus::Done;
-        self.store.update_branch(&done)?;
+        self.store.set_branch_status(&done.id, done.status)?;
         self.push("branch.updated", json!({ "branch": done }));
         self.push("turn.done", json!({ "branch": child.id }));
 

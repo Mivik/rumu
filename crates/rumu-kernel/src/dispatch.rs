@@ -2,7 +2,7 @@
 
 use std::sync::Arc;
 
-use rumu_core::{BranchId, Cx, Decision, Event, HookOutput, kind, now};
+use rumu_core::{BranchId, Cx, Decision, Event, HookOutput, kind};
 use serde_json::{Value, json};
 
 use crate::{Kernel, RegisteredHook, Result, fields, host::KernelRuntime};
@@ -193,8 +193,6 @@ impl Kernel {
         for q in queued {
             self.append_body(branch, q.body, Some(q.id)).await?;
         }
-        // Touch the session clock so recent sessions sort correctly.
-        self.store.touch_session(&self.session_of(branch)?, now())?;
         Ok(())
     }
 }

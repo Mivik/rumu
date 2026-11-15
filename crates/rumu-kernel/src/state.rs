@@ -351,7 +351,10 @@ mod tests {
             model: Some(start.clone()),
             ..Default::default()
         });
-        assert_eq!(derive_state(std::slice::from_ref(&seeded)).model, Some(start));
+        assert_eq!(
+            derive_state(std::slice::from_ref(&seeded)).model,
+            Some(start)
+        );
         let picked = ModelUse {
             model: "a/m".into(),
             effort: Some(rumu_core::Effort::Low),

@@ -8,15 +8,17 @@
 //! {"t":"session","id":"7c9e…","title":"","active_branch":"7c9e…","created_at":1,"updated_at":1}
 //! {"t":"branch","id":"7c9e…","session":"7c9e…","head":"7c9e…","forked_from":null,"kind":{"type":"main"},"status":"active","created_at":1}
 //! {"t":"node","id":"7c9e…","parent":null,"session":"7c9e…","at":1,"body":{"type":"note","source":"system","content":{"text":"","data":{"tag":"root","v":1,"data":{}}}}}
-//! {"t":"branch_update","id":"7c9e…","head":"7c9e…","status":"done"}
-//! {"t":"meta","title":"refactor","updated_at":2}
+//! {"t":"node","branch":"7c9e…","id":"5d1a…","parent":"7c9e…","session":"7c9e…","at":2,"body":{"type":"user","content":{"text":"hi"}}}
+//! {"t":"branch_update","id":"7c9e…","status":"done"}
+//! {"t":"meta","title":"refactor","updated_at":3}
 //! ```
 //!
 //! Loading a file folds the records into memory: `session` is the header
 //! (the initial [`SessionInfo`]), `meta` patches it (title /
 //! active_branch / project / updated_at — whatever the mutating call changed),
 //! `branch` adds a branch and `branch_update` moves its head/status, and
-//! `node` appends a node. Optional fields are `#[serde(default)]` and
+//! `node` adds a node — with `branch`, it is also that branch's new head.
+//! A session's `updated_at` is never older than its newest node. Optional fields are `#[serde(default)]` and
 //! skipped when unset, so the format can grow without migrations; records
 //! with an unknown tag (e.g. a retired record type) are ignored.
 //!
@@ -100,9 +102,16 @@ enum Record {
         #[serde(default, skip_serializing_if = "Option::is_none")]
         status: Option<BranchStatus>,
     },
-    // Boxed: `Node` dwarfs the other variants and every record is built once
-    // per mutation.
-    Node(Box<Node>),
+    /// A node; with `branch`, it was appended there and is that branch's
+    /// new head.
+    Node {
+        #[serde(default, skip_serializing_if = "Option::is_none")]
+        branch: Option<BranchId>,
+        // Boxed: `Node` dwarfs the other variants and every record is built
+        // once per mutation.
+        #[serde(flatten)]
+        node: Box<Node>,
+    },
     /// A record tag this build does not know (e.g. a retired record type):
     /// parsed and dropped so old journals still load.
     #[serde(other)]
@@ -244,24 +253,9 @@ impl Store {
         Ok(())
     }
 
-    /// Bump `updated_at` (used on every node append).
-    pub fn touch_session(&self, id: &SessionId, at: Timestamp) -> Result<()> {
-        self.patch_session(id, Some(at), None)
-    }
-
-    /// Record that the user looked at the session at `at`.
-    pub fn mark_seen(&self, id: &SessionId, at: Timestamp) -> Result<()> {
-        self.patch_session(id, None, Some(at))
-    }
-
-    /// Append a `meta` record moving the session's clocks (a no-op on
+    /// Record that the user looked at the session at `at` (a no-op on
     /// unknown sessions).
-    fn patch_session(
-        &self,
-        id: &SessionId,
-        updated_at: Option<Timestamp>,
-        seen_at: Option<Timestamp>,
-    ) -> Result<()> {
+    pub fn mark_seen(&self, id: &SessionId, at: Timestamp) -> Result<()> {
         let mut st = self.state.lock().unwrap();
         if st.loaded(id)?.is_none() {
             return Ok(());
@@ -270,8 +264,8 @@ impl Store {
             title: None,
             active_branch: None,
             project: None,
-            updated_at,
-            seen_at,
+            updated_at: None,
+            seen_at: Some(at),
         };
         self.append(id, &rec)?;
         st.apply(id, rec);
@@ -335,18 +329,18 @@ impl Store {
         })
     }
 
-    pub fn update_branch(&self, b: &Branch) -> Result<()> {
+    pub fn set_branch_status(&self, id: &BranchId, status: BranchStatus) -> Result<()> {
         let mut st = self.state.lock().unwrap();
-        let Some(sid) = st.branch_owner.get(&b.id).cloned() else {
+        let Some(sid) = st.branch_owner.get(id).cloned() else {
             return Ok(()); // a no-op on unknown branches
         };
         if st.loaded(&sid)?.is_none() {
             return Ok(());
         }
         let rec = Record::BranchUpdate {
-            id: b.id.clone(),
-            head: Some(b.head.clone()),
-            status: Some(b.status),
+            id: id.clone(),
+            head: None,
+            status: Some(status),
         };
         self.append(&sid, &rec)?;
         st.apply(&sid, rec);
@@ -372,13 +366,28 @@ impl Store {
 
     // ---- nodes ----
 
+    /// Store a node without moving any branch head (session roots and
+    /// copies, whose branch record already names its head).
     pub fn insert_node(&self, n: &Node) -> Result<()> {
+        self.put_node(None, n)
+    }
+
+    /// Append `n` to `branch`: one record that stores the node and makes it
+    /// the branch's head.
+    pub fn append_node(&self, branch: &BranchId, n: &Node) -> Result<()> {
+        self.put_node(Some(branch.clone()), n)
+    }
+
+    fn put_node(&self, branch: Option<BranchId>, n: &Node) -> Result<()> {
         let mut st = self.state.lock().unwrap();
         // See `insert_branch`: a deleted session stays deleted.
         if st.loaded(&n.session)?.is_none() {
             return Ok(());
         }
-        let rec = Record::Node(Box::new(n.clone()));
+        let rec = Record::Node {
+            branch,
+            node: Box::new(n.clone()),
+        };
         self.append(&n.session, &rec)?;
         st.apply(&n.session, rec);
         Ok(())
@@ -457,8 +466,8 @@ impl StoreState {
             Record::Branch(b) => {
                 self.branch_owner.insert(b.id.clone(), sid.clone());
             }
-            Record::Node(n) => {
-                self.node_owner.insert(n.id.clone(), sid.clone());
+            Record::Node { node, .. } => {
+                self.node_owner.insert(node.id.clone(), sid.clone());
             }
             _ => {}
         }
@@ -508,7 +517,7 @@ impl StoreState {
                             Record::Branch(b) => {
                                 branch_owner.push((b.id.clone(), b.session.clone()));
                             }
-                            Record::Node(node) => {
+                            Record::Node { node, .. } => {
                                 node_owner.push((node.id.clone(), node.session.clone()));
                             }
                             _ => {}
@@ -540,7 +549,7 @@ impl StoreState {
                 Ok(rec) => {
                     match &rec {
                         Record::Branch(b) => branch_owner.push((b.id.clone(), b.session.clone())),
-                        Record::Node(node) => {
+                        Record::Node { node, .. } => {
                             node_owner.push((node.id.clone(), node.session.clone()))
                         }
                         _ => {}
@@ -613,7 +622,7 @@ impl SessionState {
                     self.info.project = v;
                 }
                 if let Some(v) = updated_at {
-                    self.info.updated_at = v;
+                    self.info.updated_at = self.info.updated_at.max(v);
                 }
                 if seen_at.is_some() {
                     self.info.seen_at = seen_at;
@@ -632,8 +641,12 @@ impl SessionState {
                     }
                 }
             }
-            Record::Node(n) => {
-                self.nodes.insert(n.id.clone(), *n);
+            Record::Node { branch, node } => {
+                if let Some(b) = branch.and_then(|id| self.branches.get_mut(&id)) {
+                    b.head = node.id.clone();
+                }
+                self.info.updated_at = self.info.updated_at.max(node.at);
+                self.nodes.insert(node.id.clone(), *node);
             }
             Record::Unknown => {}
         }
@@ -781,17 +794,28 @@ mod tests {
     fn seen_at_survives_a_reload() {
         let dir = temp_dir("seen");
         let store = Store::open(&dir).unwrap();
-        let (session, _, _) = mk_session(&store);
-        store.touch_session(&session.id, 5).unwrap();
+        let (session, branch, root) = mk_session(&store);
         store.mark_seen(&session.id, 7).unwrap();
-        store.touch_session(&session.id, 9).unwrap();
+        let child = Node {
+            id: NodeId::new(),
+            parent: Some(root.id.clone()),
+            session: session.id.clone(),
+            at: root.at + 9,
+            dur_ms: None,
+            body: NodeBody::User {
+                content: rumu_core::Content::text("hi"),
+            },
+        };
+        store.append_node(&branch.id, &child).unwrap();
         drop(store);
         let info = Store::open(&dir)
             .unwrap()
             .get_session(&session.id)
             .unwrap()
             .unwrap();
-        assert_eq!((info.updated_at, info.seen_at), (9, Some(7)));
+        // `updated_at` follows the newest node.
+        assert_eq!(info.updated_at, root.at + 9);
+        assert_eq!(info.seen_at, Some(7));
         std::fs::remove_dir_all(dir).unwrap();
     }
 
@@ -810,10 +834,7 @@ mod tests {
                 content: rumu_core::Content::text("hi"),
             },
         };
-        store.insert_node(&child).unwrap();
-        let mut b = store.get_branch(&branch.id).unwrap().unwrap();
-        b.head = child.id.clone();
-        store.update_branch(&b).unwrap();
+        store.append_node(&branch.id, &child).unwrap();
 
         let got = store.get_node(&child.id).unwrap().unwrap();
         assert_eq!(got.dur_ms, Some(1234));
@@ -1191,20 +1212,17 @@ mod tests {
                     content: rumu_core::Content::text("hi"),
                 },
             };
-            store.insert_node(&child).unwrap();
-            store.touch_session(&session.id, 77).unwrap();
-
-            let mut b = branch.clone();
-            b.head = child.id.clone();
-            b.status = BranchStatus::Done;
-            store.update_branch(&b).unwrap();
+            store.append_node(&branch.id, &child).unwrap();
+            store
+                .set_branch_status(&branch.id, BranchStatus::Done)
+                .unwrap();
 
             let mut s = session.clone();
             s.title = "t1".into();
             s.project = Some("proj-deck".into());
             store.update_session(&s).unwrap();
             // A sparse clock patch must not clear the project.
-            store.touch_session(&session.id, 78).unwrap();
+            store.mark_seen(&session.id, 78).unwrap();
             (session.id, branch.id, child.id)
         };
 

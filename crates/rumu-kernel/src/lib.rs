@@ -278,12 +278,11 @@ impl Kernel {
         // that were running them are never resumed: close them out so the tree
         // does not claim a live sub-agent forever.
         for session in store.list_sessions()? {
-            for mut branch in store.branches_of_session(&session.id)? {
+            for branch in store.branches_of_session(&session.id)? {
                 if matches!(branch.kind, BranchKind::Agent { .. })
                     && branch.status == BranchStatus::Active
                 {
-                    branch.status = BranchStatus::Done;
-                    store.update_branch(&branch)?;
+                    store.set_branch_status(&branch.id, BranchStatus::Done)?;
                 }
             }
         }
@@ -914,7 +913,7 @@ impl Kernel {
         // No await inside: holding this plain mutex covers the whole
         // read-head → insert → update-head sequence.
         let _append = self.append_lock.lock().unwrap();
-        let mut b = self
+        let b = self
             .store
             .get_branch(branch)?
             .ok_or_else(|| Error::BranchNotFound(branch.clone()))?;
@@ -927,10 +926,7 @@ impl Kernel {
             dur_ms,
             body: body.clone(),
         };
-        self.store.insert_node(&node)?;
-        b.head = node.id.clone();
-        self.store.update_branch(&b)?;
-        self.store.touch_session(&b.session, at)?;
+        self.store.append_node(branch, &node)?;
         self.push("node.appended", json!({ "branch": branch, "node": node }));
 
         // The session is listed under its active branch's project.
@@ -1173,7 +1169,7 @@ impl Kernel {
             return;
         };
         b.status = status;
-        let _ = self.store.update_branch(&b);
+        let _ = self.store.set_branch_status(branch, status);
         self.push("branch.updated", json!({ "branch": b }));
     }
 
