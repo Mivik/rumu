@@ -254,7 +254,7 @@ onBeforeUnmount(() => {
             <template v-else>
               <button
                 v-if="quote"
-                class="mb-3 line-clamp-3 w-full border-l-2 border-agent pl-2.5 text-left text-meta text-ink-2"
+                class="mb-3 line-clamp-3 w-full border-l-[3px] border-agent pl-2.5 text-left text-meta text-ink-2"
                 @click="locate(quote)"
               >
                 {{ quote.text }}

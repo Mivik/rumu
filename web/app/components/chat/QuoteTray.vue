@@ -14,7 +14,7 @@ import Icon from '../ui/Icon.vue'
     <div v-for="(q, i) in quotes" :key="`${q.node}:${q.text}`" class="tray-row">
       <div>
         <div class="flex min-w-0 items-start gap-2 pt-2 pl-1">
-          <p class="line-clamp-2 min-w-0 flex-1 border-l-2 border-brand pl-2.5 text-meta text-ink-2">
+          <p class="line-clamp-2 min-w-0 flex-1 border-l-[3px] border-brand pl-2.5 text-meta text-ink-2">
             {{ q.text }}
           </p>
           <button

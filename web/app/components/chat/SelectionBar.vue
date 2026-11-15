@@ -76,17 +76,15 @@ onBeforeUnmount(() => {
          mouse would collapse it) -->
     <div
       v-if="selection"
-      class="flex max-w-full min-w-0 items-center gap-1.5 rounded-full border border-line bg-surface py-1 pr-1 pl-3.5 shadow-pop select-none"
+      class="flex items-center gap-0.5 rounded-full border border-line bg-surface p-1 shadow-pop select-none"
       @pointerdown.prevent="freeze"
     >
-      <span class="max-w-[22em] min-w-0 truncate text-meta text-ink-2"
-        >“{{ selection.text.replace(/\s+/g, ' ') }}”</span
-      >
-      <button class="quote-key bg-brand text-on-brand" @click="take(quote)">
-        <Icon name="quote" :size="14" />{{ t('chat.side.quote') }}
+      <button class="quote-key text-brand-strong hover:bg-brand-soft" @click="take(quote)">
+        <Icon name="quote" :size="15" />{{ t('chat.side.quote') }}
       </button>
-      <button class="quote-key bg-agent text-surface" @click="take((q) => openSide(null, q))">
-        <Icon name="side" :size="14" />{{ t('chat.side.title') }}
+      <span class="h-4 w-px flex-none bg-line" />
+      <button class="quote-key text-agent hover:bg-agent-soft" @click="take((q) => openSide(null, q))">
+        <Icon name="side" :size="15" />{{ t('chat.side.title') }}
       </button>
     </div>
   </Transition>
@@ -97,14 +95,16 @@ onBeforeUnmount(() => {
   display: inline-flex;
   flex: none;
   align-items: center;
-  gap: 4px;
-  height: 28px;
-  padding: 0 10px;
+  gap: 5px;
+  height: 30px;
+  padding: 0 12px 0 10px;
   border-radius: 99px;
   font-size: var(--text-meta);
   font-weight: 600;
   touch-action: manipulation;
-  transition: scale 0.15s var(--ease-soft);
+  transition:
+    background-color 0.15s,
+    scale 0.15s var(--ease-soft);
 }
 
 .quote-key:active {
