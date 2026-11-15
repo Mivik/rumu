@@ -26,6 +26,7 @@ import TraceView from './TraceView.vue'
 import StatsView from './StatsView.vue'
 import ViewTabs from './ViewTabs.vue'
 import SidePop from './SidePop.vue'
+import SelectionBar from './SelectionBar.vue'
 import Welcome from './Welcome.vue'
 import SessionPickers from './SessionPickers.vue'
 import AssistantAvatar from '../brand/AssistantAvatar.vue'
@@ -187,7 +188,13 @@ function composerRoot(): HTMLElement | null {
 
         <!-- min-h-0: a tall decision panel shrinks into the room left above the
              sheet's foot instead of pushing the send row past its edge -->
-        <div ref="composerEl" class="flex min-h-0 flex-col px-3 pt-1 pb-3 sm:px-6 sm:pb-5">
+        <div ref="composerEl" class="relative flex min-h-0 flex-col px-3 pt-1 pb-3 sm:px-6 sm:pb-5">
+          <!-- a selection's keys float over the conversation's foot -->
+          <div
+            class="pointer-events-none absolute inset-x-3 bottom-full z-10 flex justify-center pb-1 sm:inset-x-6 [&>*]:pointer-events-auto"
+          >
+            <SelectionBar />
+          </div>
           <!-- steering prompts accepted while busy, until they are written -->
           <div
             v-if="queuedPrompts.length"

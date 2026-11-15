@@ -385,7 +385,7 @@ const placeholder = computed(() => {
         </button>
       </div>
     </div>
-    <QuoteTray @quoted="textareaEl?.focus()" />
+    <QuoteTray />
     <textarea
       ref="textareaEl"
       v-model="draft"
