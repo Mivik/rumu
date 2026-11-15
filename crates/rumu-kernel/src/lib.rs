@@ -913,7 +913,7 @@ impl Kernel {
         // No await inside: holding this plain mutex covers the whole
         // read-head → insert → update-head sequence.
         let _append = self.append_lock.lock().unwrap();
-        let b = self
+        let mut b = self
             .store
             .get_branch(branch)?
             .ok_or_else(|| Error::BranchNotFound(branch.clone()))?;
@@ -927,6 +927,8 @@ impl Kernel {
             body: body.clone(),
         };
         self.store.append_node(branch, &node)?;
+        // The store moved the head; the copy pushed below carries it.
+        b.head = node.id.clone();
         self.push("node.appended", json!({ "branch": branch, "node": node }));
 
         // The session is listed under its active branch's project.

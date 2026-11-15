@@ -1028,6 +1028,43 @@ async fn tool_error_results() {
     assert_eq!(body_kinds(&nodes).last().unwrap(), "assistant");
 }
 
+/// Every append announces the branch with the head it now has. A client that
+/// keeps the pushed copy of the branch replays `node.appended` (moves the
+/// head) and `branch.updated` (replaces the branch); a copy holding the head
+/// from before the append would put the head back one node, and since the
+/// next append's parent no longer matches, the client would stop advancing
+/// there — the turn's reply then reads as an interruption.
+#[tokio::test]
+async fn branch_updated_carries_the_new_head() {
+    let (kernel, _llm, _s, b) = setup(
+        vec![],
+        vec![LlmResponse::text("a"), LlmResponse::text("b")],
+    )
+    .await;
+    let mut rx = kernel.tap_pushes();
+    kernel.prompt(&b, "hi").await.unwrap();
+    let (done, seen) = wait_turn_collect(&mut rx, Some(b.0.as_str())).await;
+    assert_eq!(done["method"], "turn.done");
+
+    let mut head = String::new();
+    for v in &seen {
+        match v["method"].as_str() {
+            Some("node.appended") => {
+                head = v["params"]["node"]["id"].as_str().unwrap().to_owned();
+            }
+            Some("branch.updated") => {
+                let branch = &v["params"]["branch"];
+                if branch["id"].as_str() == Some(b.0.as_str()) {
+                    head = branch["head"].as_str().unwrap().to_owned();
+                }
+            }
+            _ => {}
+        }
+    }
+    let (nodes, _) = kernel.branch_path(&b).unwrap();
+    assert_eq!(head, nodes.last().unwrap().id.0, "client head lags the path");
+}
+
 // ---------- image attachments ----------
 
 fn attachment(hash: &str) -> Attachment {
