@@ -106,6 +106,8 @@
     "session": "本会话内允许",
     "always": "始终允许",
     "waiting": "待确认",
+    "fold": "折叠",
+    "unfold": "展开",
     "questionsTitle": "{from} 想问你",
     "questionN": "问题 {n}",
     "multiple": "可多选",

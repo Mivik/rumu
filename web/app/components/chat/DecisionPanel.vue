@@ -13,12 +13,17 @@
 // height is left above the writing, and the panel caps and scrolls within
 // that — so a long request on a phone no longer pushes the writing and its
 // send key off the sheet's bottom edge.
-import { computed, onBeforeUnmount, onMounted, shallowRef, watch } from 'vue'
+//
+// The title row folds the panel down to itself: the request stays pending
+// (and answers already typed stay put), while the conversation above gets
+// the room back. A request that arrives afterwards unfolds it again.
+import { computed, onBeforeUnmount, onMounted, ref, shallowRef, watch } from 'vue'
 import { t } from '../../i18n'
 import { catOf } from '../../lib/assistantFace'
 import { answerDecision, state } from '../../lib/store'
 import type { DecisionScope, PendingDecision } from '../../lib/types'
 import RumuCat from '../brand/RumuCat.vue'
+import Icon from '../ui/Icon.vue'
 import QuestionsForm from './QuestionsForm.vue'
 
 const pending = computed(() => state.decisions.filter((d) => d.session === state.sessionId))
@@ -28,8 +33,13 @@ const current = computed(() => pending.value[0] ?? null)
 /** What the panel shows: the current request, or the last one while the
  *  panel folds away after it was answered. */
 const shown = shallowRef<PendingDecision | null>(current.value)
+/** Folded down to the title row. */
+const folded = ref(false)
 watch(current, (d) => {
-  if (d) shown.value = d
+  if (d) {
+    shown.value = d
+    folded.value = false
+  }
 })
 
 /** Title, quoted detail (if any) and hint for the shown request. */
@@ -131,7 +141,9 @@ onBeforeUnmount(() => window.removeEventListener('keydown', onKey, true))
     :class="current ? 'grid-rows-[1fr]' : 'grid-rows-[0fr]'"
     :inert="!current"
   >
-    <div class="min-h-0">
+    <!-- min-w-0: the folded title is one nowrap line, and without it the row
+         sizes the panel to that line instead of the sheet's width -->
+    <div class="min-h-0 min-w-0">
       <Transition
         mode="out-in"
         enter-active-class="transition duration-200 ease-soft"
@@ -147,69 +159,95 @@ onBeforeUnmount(() => window.removeEventListener('keydown', onKey, true))
           aria-modal="false"
           :aria-label="view.title"
         >
-          <div class="flex flex-none items-center gap-2">
-            <RumuCat state="waiting" :cat="cat" :size="34" :paper="false" class="-my-1" />
-            <p class="min-w-0 text-message font-semibold text-ink">{{ view.title }}</p>
-            <span v-if="pending.length > 1" class="ml-auto text-micro text-ink-3 tabular-nums">
+          <button
+            type="button"
+            class="flex w-full flex-none items-center gap-2 text-left"
+            :aria-expanded="!folded"
+            :aria-label="folded ? t('chat.ask.unfold') : t('chat.ask.fold')"
+            @click="folded = !folded"
+          >
+            <RumuCat state="waiting" :cat="cat" :size="34" :paper="false" class="-my-1 flex-none" />
+            <span class="min-w-0 flex-1 text-message font-semibold text-ink" :class="{ truncate: folded }">
+              {{ view.title }}
+            </span>
+            <span v-if="pending.length > 1" class="flex-none text-micro text-ink-3 tabular-nums">
               1 / {{ pending.length }}
             </span>
-          </div>
-          <QuestionsForm v-if="shown.request.kind === 'questions'" :id="shown.id" :request="shown.request" />
-          <div v-else class="min-h-0 flex-1 overflow-y-auto">
-            <div v-if="view.before !== undefined" class="mt-2 grid gap-2 sm:grid-cols-2">
-              <div>
-                <p class="text-micro text-ink-3">{{ t('chat.ask.before') }}</p>
+            <Icon
+              name="chevron"
+              :size="14"
+              class="flex-none text-ink-3 transition-transform duration-200"
+              :class="folded ? '-rotate-90' : 'rotate-90'"
+            />
+          </button>
+          <div
+            class="grid min-h-0 overflow-hidden transition-[grid-template-rows] duration-300 ease-soft"
+            :class="folded ? 'grid-rows-[0fr]' : 'grid-rows-[1fr]'"
+            :inert="folded"
+          >
+            <div class="flex min-h-0 flex-col">
+              <QuestionsForm
+                v-if="shown.request.kind === 'questions'"
+                :id="shown.id"
+                :request="shown.request"
+              />
+              <div v-else class="min-h-0 flex-1 overflow-y-auto">
+                <div v-if="view.before !== undefined" class="mt-2 grid gap-2 sm:grid-cols-2">
+                  <div>
+                    <p class="text-micro text-ink-3">{{ t('chat.ask.before') }}</p>
+                    <blockquote
+                      class="mt-1 max-h-40 overflow-y-auto rounded-control bg-surface px-3 py-2 font-mono text-micro whitespace-pre-wrap text-ink-2 ring-1 ring-line-soft"
+                    >
+                      {{ view.before }}
+                    </blockquote>
+                  </div>
+                  <div>
+                    <p class="text-micro text-ink-3">{{ t('chat.ask.after') }}</p>
+                    <blockquote
+                      class="mt-1 max-h-40 overflow-y-auto rounded-control bg-surface px-3 py-2 font-mono text-micro whitespace-pre-wrap text-ink-2 ring-1 ring-line-soft"
+                    >
+                      {{ view.after }}
+                    </blockquote>
+                  </div>
+                </div>
                 <blockquote
-                  class="mt-1 max-h-40 overflow-y-auto rounded-control bg-surface px-3 py-2 font-mono text-micro whitespace-pre-wrap text-ink-2 ring-1 ring-line-soft"
+                  v-else-if="view.detail"
+                  class="mt-2 max-h-40 overflow-y-auto rounded-control bg-surface px-3 py-2 text-secondary whitespace-pre-wrap text-ink-2 ring-1 ring-line-soft"
                 >
-                  {{ view.before }}
+                  {{ view.detail }}
                 </blockquote>
+                <p v-if="view.hint" class="mt-1.5 text-micro text-ink-3">{{ view.hint }}</p>
+                <div class="mt-2.5 flex flex-wrap items-center justify-end gap-1.5">
+                  <button
+                    type="button"
+                    class="btn flex-auto px-3 py-1 sm:mr-auto sm:flex-none"
+                    @click="answer(false)"
+                  >
+                    {{ t('chat.ask.deny') }}
+                  </button>
+                  <button
+                    type="button"
+                    class="btn flex-auto px-3 py-1 sm:flex-none"
+                    @click="answer(true, 'always')"
+                  >
+                    {{ t('chat.ask.always') }}
+                  </button>
+                  <button
+                    type="button"
+                    class="btn flex-auto px-3 py-1 sm:flex-none"
+                    @click="answer(true, 'session')"
+                  >
+                    {{ t('chat.ask.session') }}
+                  </button>
+                  <button
+                    type="button"
+                    class="btn btn-primary flex-auto px-3 py-1 sm:flex-none"
+                    @click="answer(true)"
+                  >
+                    {{ t('chat.ask.once') }}
+                  </button>
+                </div>
               </div>
-              <div>
-                <p class="text-micro text-ink-3">{{ t('chat.ask.after') }}</p>
-                <blockquote
-                  class="mt-1 max-h-40 overflow-y-auto rounded-control bg-surface px-3 py-2 font-mono text-micro whitespace-pre-wrap text-ink-2 ring-1 ring-line-soft"
-                >
-                  {{ view.after }}
-                </blockquote>
-              </div>
-            </div>
-            <blockquote
-              v-else-if="view.detail"
-              class="mt-2 max-h-40 overflow-y-auto rounded-control bg-surface px-3 py-2 text-secondary whitespace-pre-wrap text-ink-2 ring-1 ring-line-soft"
-            >
-              {{ view.detail }}
-            </blockquote>
-            <p v-if="view.hint" class="mt-1.5 text-micro text-ink-3">{{ view.hint }}</p>
-            <div class="mt-2.5 flex flex-wrap items-center justify-end gap-1.5">
-              <button
-                type="button"
-                class="btn flex-auto px-3 py-1 sm:mr-auto sm:flex-none"
-                @click="answer(false)"
-              >
-                {{ t('chat.ask.deny') }}
-              </button>
-              <button
-                type="button"
-                class="btn flex-auto px-3 py-1 sm:flex-none"
-                @click="answer(true, 'always')"
-              >
-                {{ t('chat.ask.always') }}
-              </button>
-              <button
-                type="button"
-                class="btn flex-auto px-3 py-1 sm:flex-none"
-                @click="answer(true, 'session')"
-              >
-                {{ t('chat.ask.session') }}
-              </button>
-              <button
-                type="button"
-                class="btn btn-primary flex-auto px-3 py-1 sm:flex-none"
-                @click="answer(true)"
-              >
-                {{ t('chat.ask.once') }}
-              </button>
             </div>
           </div>
         </div>

@@ -106,6 +106,8 @@
     "session": "Allow for this session",
     "always": "Always allow",
     "waiting": "Waiting for your answer",
+    "fold": "Collapse",
+    "unfold": "Expand",
     "questionsTitle": "{from} asks you",
     "questionN": "Question {n}",
     "multiple": "Choose any",
