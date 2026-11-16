@@ -206,41 +206,39 @@ const iconTone: Record<Status, string> = {
         >
           {{ t('tools.row.openSubAgent') }}
         </Chip>
-        <div v-if="isOpen(c.call_id)" class="reveal flex flex-col gap-1.5 pt-1 pr-2 pb-2 pl-[28px]">
-          <FileDiff
-            v-if="patchOf(c)"
-            :patch="patchOf(c)"
-            :path="pathOf(c)"
-            :args="argsOf(c)"
-            class="overflow-hidden rounded-control border border-line-soft"
-          />
-          <FileView
-            v-else-if="c.name === 'read' && status(c) === 'ok'"
-            :text="c.output"
-            :path="pathOf(c)"
-            :args="argsOf(c)"
-            class="overflow-hidden rounded-control border border-line-soft"
-          />
-          <BashView
-            v-else-if="c.name === 'bash'"
-            :output="output(c)"
-            :failed="status(c) !== 'ok'"
-            class="overflow-hidden rounded-control border border-line-soft"
-          />
-          <template v-else>
-            <div>
-              <div class="mb-1 text-micro font-semibold text-ink-3">{{ t('tools.detail.args') }}</div>
-              <div class="code whitespace-normal"><JsonTree :value="c.args" bare /></div>
+        <FileDiff
+          v-if="isOpen(c.call_id) && patchOf(c)"
+          class="reveal"
+          :patch="patchOf(c)"
+          :path="pathOf(c)"
+          :args="argsOf(c)"
+        />
+        <FileView
+          v-else-if="isOpen(c.call_id) && c.name === 'read' && status(c) === 'ok'"
+          class="reveal"
+          :text="c.output"
+          :path="pathOf(c)"
+          :args="argsOf(c)"
+        />
+        <BashView
+          v-else-if="isOpen(c.call_id) && c.name === 'bash'"
+          class="reveal"
+          :output="output(c)"
+          :failed="status(c) !== 'ok'"
+        />
+        <div v-else-if="isOpen(c.call_id)" class="reveal flex flex-col gap-1.5 pt-1 pr-2 pb-2 pl-[28px]">
+          <div>
+            <div class="mb-1 text-micro font-semibold text-ink-3">{{ t('tools.detail.args') }}</div>
+            <div class="code whitespace-normal"><JsonTree :value="c.args" bare /></div>
+          </div>
+          <div>
+            <div class="mb-1 text-micro font-semibold text-ink-3">
+              {{ c.is_error ? t('tools.detail.outputError') : t('tools.detail.output') }}
             </div>
-            <div>
-              <div class="mb-1 text-micro font-semibold text-ink-3">
-                {{ c.is_error ? t('tools.detail.outputError') : t('tools.detail.output') }}
-              </div>
-              <pre class="code" :class="{ 'border-danger/40 text-danger': c.is_error }">{{
-                output(c) || t('common.empty')
-              }}</pre>
-            </div>
-          </template>
+            <pre class="code" :class="{ 'border-danger/40 text-danger': c.is_error }">{{
+              output(c) || t('common.empty')
+            }}</pre>
+          </div>
         </div>
       </div>
     </div>
