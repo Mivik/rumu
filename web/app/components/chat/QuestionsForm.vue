@@ -31,7 +31,12 @@ function own(i: number): boolean {
 
 /** Whether an option counts as picked. On a single choice the user's own words
  *  take its place, so a picked option counts for nothing while there are some —
- *  and shows as unpicked, rather than being dropped silently on the way out. */
+ *  and shows as unpicked, rather than being dropped silently on the way out.
+ *
+ *  TODO: the row is meant to become a comment added to the options rather than
+ *  a "something else" standing in for one (its label, `chat.ask.custom`, would
+ *  change with it). That drop of this exclusivity — an option and words both
+ *  counting — is left out for now. */
 function picked(i: number, label: string): boolean {
   if (!props.request.questions[i]!.multiple && own(i)) return false
   return drafts[i]!.selected.includes(label)
