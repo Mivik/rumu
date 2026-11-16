@@ -197,12 +197,12 @@ const groups = computed<Group[]>(() => {
   }
   return [...map.values()].sort((a, b) => {
     if (!a.projectId !== !b.projectId) return a.projectId ? -1 : 1
-    // A group holding the unsent session counts as active, and lands above
-    // even a busy one, as a session just created would.
-    const busyA = a.sessions.length > 0 || a.draft
-    const busyB = b.sessions.length > 0 || b.draft
+    // The unsent session is not a reason to move a group: going home would
+    // reshuffle the whole column under the pointer, and opening the session
+    // shuffle it back. It lands where its group already stands.
+    const busyA = a.sessions.length > 0
+    const busyB = b.sessions.length > 0
     if (busyA !== busyB) return busyA ? -1 : 1
-    if (a.draft !== b.draft) return a.draft ? -1 : 1
     if (busyA && a.activity !== b.activity) return b.activity - a.activity
     return a.name.localeCompare(b.name, locale.value)
   })
