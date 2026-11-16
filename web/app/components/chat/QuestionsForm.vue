@@ -12,21 +12,39 @@ import Icon from '../ui/Icon.vue'
 
 const props = defineProps<{ id: string; request: QuestionsRequest }>()
 
-/** Where each question's answer stands. `own` is whether the user's own
- *  words count (for a question without options, always). */
-const drafts = reactive(
-  props.request.questions.map((q) => ({ selected: [] as string[], custom: '', own: !q.options.length })),
+/** One question's answer: the options picked, the words written, and whether
+ *  the words count. The flag is kept apart from the words so that either side
+ *  can be turned off and back on without losing what it held: for a single
+ *  choice the words stand in for the picked option, for several they add to it.
+ *
+ *  TODO: the row is meant to become a comment *added* to the options rather
+ *  than a "something else" standing in for one (`chat.ask.custom` would change
+ *  with it); a single choice would then keep its option too. */
+type Draft = { selected: string[]; custom: string; useCustom: boolean }
+
+const drafts = reactive<Draft[]>(
+  props.request.questions.map((q) => ({ selected: [], custom: '', useCustom: !q.options.length })),
 )
 const index = ref(0)
 const customEl = ref<HTMLInputElement>()
+const optionsEl = ref<HTMLElement>()
 
 const question = computed(() => props.request.questions[index.value]!)
 const draft = computed(() => drafts[index.value]!)
 const last = computed(() => index.value === props.request.questions.length - 1)
 
-function answered(i: number): boolean {
+function customCounts(i: number): boolean {
   const d = drafts[i]!
-  return d.selected.length > 0 || (d.own && d.custom.trim() !== '')
+  return d.useCustom && d.custom.trim() !== ''
+}
+
+function picked(i: number, label: string): boolean {
+  const d = drafts[i]!
+  return (props.request.questions[i]!.multiple || !d.useCustom) && d.selected.includes(label)
+}
+
+function answered(i: number): boolean {
+  return customCounts(i) || drafts[i]!.selected.some((label) => picked(i, label))
 }
 
 const complete = computed(() => drafts.every((_, i) => answered(i)))
@@ -40,31 +58,31 @@ function pick(label: string): void {
     return
   }
   d.selected = [label]
-  d.own = false
+  d.useCustom = false
   if (!last.value) setTimeout(() => go(index.value + 1), 160)
 }
 
-/** The own-words row: choosing it (or typing into it) makes it count; for a
- *  single choice it replaces the picked option. */
-function useOwn(): void {
-  const d = draft.value
-  d.own = true
-  if (!question.value.multiple) d.selected = []
+/** Typing chooses the row; emptying it gives a single choice its option back. */
+function onCustomInput(e: Event): void {
+  draft.value.useCustom = (e.target as HTMLInputElement).value.trim() !== '' || !question.value.options.length
 }
 
-function toggleOwn(): void {
-  if (draft.value.own && question.value.options.length) {
-    draft.value.own = false
-    return
-  }
-  useOwn()
-  void nextTick(() => customEl.value?.focus())
+function toggleCustom(): void {
+  const d = draft.value
+  if (d.custom.trim() === '') customEl.value?.focus()
+  else d.useCustom = !d.useCustom
 }
 
 function go(i: number): void {
+  const typing = document.activeElement === customEl.value
   index.value = i
-  // A question without options is answered by typing: put the caret there.
-  if (!props.request.questions[i]!.options.length) void nextTick(() => customEl.value?.focus())
+  // One input serves every question, so a caret in it would stay put: send it
+  // on to the next question's first option instead. A question without
+  // options is answered by typing, so the caret goes into the box.
+  const options = props.request.questions[i]!.options.length
+  if (typing || !options) {
+    void nextTick(() => (options ? optionsEl.value?.querySelector('button') : customEl.value)?.focus())
+  }
 }
 
 function next(): void {
@@ -74,9 +92,9 @@ function next(): void {
 
 function submit(): void {
   void answerDecision(props.id, {
-    answers: drafts.map((d) => ({
-      selected: d.selected,
-      custom: d.own && d.custom.trim() ? d.custom.trim() : undefined,
+    answers: drafts.map((d, i) => ({
+      selected: d.selected.filter((label) => picked(i, label)),
+      custom: customCounts(i) ? d.custom.trim() : undefined,
     })),
   })
 }
@@ -118,6 +136,7 @@ function onCustomKey(e: KeyboardEvent): void {
       <p v-if="question.multiple" class="mt-0.5 text-micro text-ink-3">{{ t('chat.ask.multiple') }}</p>
 
       <div
+        ref="optionsEl"
         class="mt-2 divide-y divide-line-soft overflow-hidden rounded-control bg-surface ring-1 ring-line-soft"
         :role="question.multiple ? 'group' : 'radiogroup'"
         :aria-label="question.question"
@@ -127,9 +146,9 @@ function onCustomKey(e: KeyboardEvent): void {
           :key="o.label"
           type="button"
           :role="question.multiple ? 'checkbox' : 'radio'"
-          :aria-checked="draft.selected.includes(o.label)"
+          :aria-checked="picked(index, o.label)"
           class="q-option"
-          :class="{ 'is-on': draft.selected.includes(o.label) }"
+          :class="{ 'is-on': picked(index, o.label) }"
           @click="pick(o.label)"
         >
           <span class="q-mark" :class="question.multiple ? 'rounded-[5px]' : 'rounded-full'">
@@ -141,16 +160,16 @@ function onCustomKey(e: KeyboardEvent): void {
           </span>
         </button>
         <!-- the user's own words: always there -->
-        <div class="q-option" :class="{ 'is-on': question.options.length && draft.own }">
+        <div class="q-option" :class="{ 'is-on': question.options.length && customCounts(index) }">
           <button
             v-if="question.options.length"
             type="button"
             :role="question.multiple ? 'checkbox' : 'radio'"
-            :aria-checked="draft.own"
+            :aria-checked="customCounts(index)"
             :aria-label="t('chat.ask.custom')"
             class="q-mark"
             :class="question.multiple ? 'rounded-[5px]' : 'rounded-full'"
-            @click="toggleOwn"
+            @click="toggleCustom"
           >
             <Icon v-if="question.multiple" name="ok" :size="11" />
           </button>
@@ -159,7 +178,7 @@ function onCustomKey(e: KeyboardEvent): void {
             v-model="draft.custom"
             class="min-w-0 flex-1 border-0 bg-transparent p-0 text-secondary focus:shadow-none"
             :placeholder="question.options.length ? t('chat.ask.custom') : t('chat.ask.answer')"
-            @focus="useOwn"
+            @input="onCustomInput"
             @keydown="onCustomKey"
           />
         </div>
