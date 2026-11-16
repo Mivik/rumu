@@ -3384,49 +3384,82 @@ async fn bash_streams_progress_chunks() {
     assert!(chunks.contains("two"), "chunks: {chunks:?}");
 }
 
-/// A background bash future that is dropped kills its process (`kill_on_drop`).
+/// A background bash future that is dropped kills its process tree: the
+/// shell and the processes it started.
 #[tokio::test]
 async fn background_bash_is_killed_when_dropped() {
     let dir = tempfile::tempdir().unwrap();
     let pid_file = dir.path().join("pid");
     let (plugin, host, _cx, _home) = setup(dir.path(), false);
     let cx = host.cx_with(true);
-    let script = format!("echo $$ > {}; exec sleep 60", pid_file.display());
+    let script = format!("sleep 60 & echo $$ $! > {}; wait", pid_file.display());
     let args = json!({ "command": script });
 
     let handle = tokio::spawn(async move {
         let _ = plugin.call_tool("bash", args, &cx).await;
     });
-    // Wait until the shell wrote its pid, then drop the future.
-    let mut pid = None;
+    // Wait until the shell wrote its pids, then drop the future.
+    let mut pids = None;
     for _ in 0..200 {
         if let Ok(text) = std::fs::read_to_string(&pid_file)
-            && let Ok(p) = text.trim().parse::<i32>()
+            && let Some((shell, child)) = text.trim().split_once(' ')
+            && let (Ok(shell), Ok(child)) = (shell.parse::<i32>(), child.parse::<i32>())
         {
-            pid = Some(p);
+            pids = Some([shell, child]);
             break;
         }
         tokio::time::sleep(std::time::Duration::from_millis(10)).await;
     }
-    let pid = pid.expect("bash started");
+    let pids = pids.expect("bash started");
     handle.abort();
     let _ = handle.await;
 
-    let mut gone = false;
-    for _ in 0..200 {
-        let alive = std::process::Command::new("kill")
+    for pid in pids {
+        let mut gone = false;
+        for _ in 0..200 {
+            let alive = std::process::Command::new("kill")
+                .arg("-0")
+                .arg(pid.to_string())
+                .stderr(std::process::Stdio::null())
+                .status()
+                .is_ok_and(|s| s.success());
+            if !alive {
+                gone = true;
+                break;
+            }
+            tokio::time::sleep(std::time::Duration::from_millis(10)).await;
+        }
+        assert!(gone, "process {pid} survived the dropped bash future");
+    }
+}
+
+/// A shell that exits on its own returns at once and leaves the processes it
+/// detached (`… > /dev/null &`) running.
+#[tokio::test]
+async fn bash_leaves_detached_processes_alone() {
+    let dir = tempfile::tempdir().unwrap();
+    let (plugin, _host, cx, _home) = setup(dir.path(), false);
+    let args = json!({ "command": "sleep 30 > /dev/null 2>&1 & echo $!", "timeout": 5 });
+    let out = plugin.call_tool("bash", args, &cx).await.unwrap();
+    let text = out.content.text.clone();
+    let pid: i32 = text
+        .lines()
+        .last()
+        .and_then(|l| l.trim().parse().ok())
+        .filter(|&p: &i32| p > 1)
+        .unwrap_or_else(|| panic!("no pid in {text:?}"));
+    let alive = |pid: i32| {
+        std::process::Command::new("kill")
             .arg("-0")
             .arg(pid.to_string())
             .stderr(std::process::Stdio::null())
             .status()
-            .is_ok_and(|s| s.success());
-        if !alive {
-            gone = true;
-            break;
-        }
-        tokio::time::sleep(std::time::Duration::from_millis(10)).await;
-    }
-    assert!(gone, "process {pid} survived the dropped bash future");
+            .is_ok_and(|s| s.success())
+    };
+    assert!(alive(pid), "detached process {pid} was killed");
+    let _ = std::process::Command::new("kill")
+        .arg(pid.to_string())
+        .status();
 }
 
 /// `read @rumu:/tasks/<id>` renders the task's status and buffered output.

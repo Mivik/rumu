@@ -16,6 +16,7 @@ rmcp.workspace = true
 base64.workspace = true
 async-trait.workspace = true
 jiff.workspace = true
+process-wrap.workspace = true
 schemars.workspace = true
 serde.workspace = true
 # `code` API stubs list tool args in schema order.

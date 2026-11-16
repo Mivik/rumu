@@ -13,6 +13,11 @@ use std::sync::OnceLock;
 use std::time::Duration;
 
 use async_trait::async_trait;
+#[cfg(windows)]
+use process_wrap::tokio::JobObject;
+#[cfg(unix)]
+use process_wrap::tokio::ProcessSession;
+use process_wrap::tokio::{ChildWrapper, CommandWrap};
 use rumu_core::{IoError, Utf8TypedPathBuf, Utf8UnixPath};
 use tokio::io::{AsyncRead, AsyncReadExt};
 use tokio::process::Command;
@@ -78,7 +83,8 @@ pub(crate) trait Backend: Send + Sync {
     /// Run a bash script in the workspace root. Merging stderr into stdout is
     /// the backend's job (the `exec 2>&1` trick); timeouts are enforced by
     /// the caller. Output chunks are passed to `on_chunk` as they arrive (for
-    /// live `bash` progress); the child is killed if the future is dropped.
+    /// live `bash` progress); the child and its descendants are killed if the
+    /// future is dropped (see [`ProcessTree`]).
     async fn exec(
         &self,
         script: &str,
@@ -108,32 +114,125 @@ async fn read_pipe<R>(
     }
 }
 
+/// Decodes a byte stream chunk by chunk without splitting a multi-byte
+/// character across two chunks (which would turn both halves into U+FFFD).
+#[derive(Default)]
+struct Utf8Chunks {
+    pending: Vec<u8>,
+}
+
+impl Utf8Chunks {
+    /// The text of the held-back bytes plus `bytes`, minus an incomplete
+    /// character at the end, which waits for the next chunk.
+    fn push(&mut self, bytes: &[u8]) -> String {
+        self.pending.extend_from_slice(bytes);
+        let keep = incomplete_tail(&self.pending);
+        let tail = self.pending.split_off(self.pending.len() - keep);
+        let text = String::from_utf8_lossy(&self.pending).into_owned();
+        self.pending = tail;
+        text
+    }
+
+    /// Whatever is still held back (a truncated character at EOF).
+    fn finish(&mut self) -> String {
+        let text = String::from_utf8_lossy(&self.pending).into_owned();
+        self.pending.clear();
+        text
+    }
+}
+
+/// How many trailing bytes form the start of a character that is not
+/// complete yet (0 when the buffer ends on a character boundary).
+fn incomplete_tail(bytes: &[u8]) -> usize {
+    for back in 1..=bytes.len().min(4) {
+        let b = bytes[bytes.len() - back];
+        if b & 0xC0 != 0x80 {
+            let len = match b {
+                0xC0..=0xDF => 2,
+                0xE0..=0xEF => 3,
+                0xF0..=0xF7 => 4,
+                _ => 1,
+            };
+            return if len > back { back } else { 0 };
+        }
+    }
+    0
+}
+
+/// A spawned shell together with every process it starts. Dropping it
+/// before the shell has exited (a timed-out, aborted or killed call) kills
+/// the whole tree, not just the shell. Unix starts the shell in a new session
+/// (`setsid`: `killpg` reaches its descendants, and none of them can grab
+/// the server's terminal); Windows puts it in a job object. Descendants still
+/// running after the shell exits on its own (`nohup … &`) are left alone.
+struct ProcessTree {
+    child: Box<dyn ChildWrapper>,
+    exited: bool,
+}
+
+impl ProcessTree {
+    fn spawn(command: Command) -> std::io::Result<Self> {
+        let mut wrap = CommandWrap::from(command);
+        #[cfg(unix)]
+        wrap.wrap(ProcessSession);
+        #[cfg(windows)]
+        wrap.wrap(JobObject);
+        Ok(Self {
+            child: wrap.spawn()?,
+            exited: false,
+        })
+    }
+
+    /// Wait for the shell itself. The wrapper's own `wait` also waits for
+    /// every descendant, which would hang on a backgrounded daemon.
+    async fn wait(&mut self) -> std::io::Result<std::process::ExitStatus> {
+        let status = self.child.inner_mut().wait().await?;
+        self.exited = true;
+        Ok(status)
+    }
+}
+
+impl Drop for ProcessTree {
+    fn drop(&mut self) {
+        if !self.exited {
+            let _ = self.child.start_kill();
+        }
+    }
+}
+
 /// Pump a spawned child's stdout/stderr through `on_chunk` and aggregate them.
 async fn collect_stream(
-    child: &mut tokio::process::Child,
+    tree: &mut ProcessTree,
     on_chunk: &mut (dyn for<'a> FnMut(&'a str) + Send),
 ) -> Result<(Vec<u8>, Vec<u8>, i32)> {
     let (tx, mut rx) = tokio::sync::mpsc::unbounded_channel();
-    if let Some(out) = child.stdout.take() {
+    if let Some(out) = tree.child.stdout().take() {
         tokio::spawn(read_pipe(out, false, tx.clone()));
     }
-    if let Some(err) = child.stderr.take() {
+    if let Some(err) = tree.child.stderr().take() {
         tokio::spawn(read_pipe(err, true, tx.clone()));
     }
     drop(tx);
     let (mut stdout, mut stderr) = (Vec::new(), Vec::new());
+    let (mut stdout_text, mut stderr_text) = (Utf8Chunks::default(), Utf8Chunks::default());
     while let Some((is_stderr, bytes)) = rx.recv().await {
-        if is_stderr {
-            stderr.extend_from_slice(&bytes);
+        let (buf, decoder) = if is_stderr {
+            (&mut stderr, &mut stderr_text)
         } else {
-            stdout.extend_from_slice(&bytes);
-        }
-        let text = String::from_utf8_lossy(&bytes);
+            (&mut stdout, &mut stdout_text)
+        };
+        buf.extend_from_slice(&bytes);
+        let text = decoder.push(&bytes);
         if !text.is_empty() {
             on_chunk(&text);
         }
     }
-    let status = child
+    for text in [stdout_text.finish(), stderr_text.finish()] {
+        if !text.is_empty() {
+            on_chunk(&text);
+        }
+    }
+    let status = tree
         .wait()
         .await
         .map_err(|source| IoError::op("waiting for the shell", source))?;
@@ -206,23 +305,22 @@ impl Backend for LocalBackend {
         // (appending `2>&1` would lose to redirections inside the command).
         let script = format!("exec 2>&1\n{script}");
         let shell = if has_bash() { "bash" } else { "sh" };
-        let mut child = Command::new(shell)
+        let mut command = Command::new(shell);
+        command
             .arg("-c")
             .arg(&script)
             .current_dir(&self.root)
             .stdin(Stdio::null())
             .stdout(Stdio::piped())
-            .stderr(Stdio::piped())
-            .kill_on_drop(true)
-            .spawn()
-            .map_err(|source| {
-                IoError::new(
-                    "spawning",
-                    format!("{shell} in {}", self.root.display()),
-                    source,
-                )
-            })?;
-        let (stdout, stderr, code) = collect_stream(&mut child, on_chunk).await?;
+            .stderr(Stdio::piped());
+        let mut tree = ProcessTree::spawn(command).map_err(|source| {
+            IoError::new(
+                "spawning",
+                format!("{shell} in {}", self.root.display()),
+                source,
+            )
+        })?;
+        let (stdout, stderr, code) = collect_stream(&mut tree, on_chunk).await?;
         let mut combined = String::from_utf8_lossy(&stdout).into_owned();
         let stderr = String::from_utf8_lossy(&stderr);
         if !stderr.trim().is_empty() {
@@ -459,15 +557,12 @@ impl Backend for SshBackend {
         on_chunk: &mut (dyn for<'a> FnMut(&'a str) + Send),
     ) -> Result<ExecOutput> {
         let root = posix(&self.root)?;
-        let mut child = self
-            .command(&remote_exec_cmd(root, script))
-            .stdout(Stdio::piped())
-            .stderr(Stdio::piped())
-            .spawn()
-            .map_err(|source| {
-                IoError::new("spawning", format!("ssh exec on {}", self.host), source)
-            })?;
-        let (stdout, stderr, code) = collect_stream(&mut child, on_chunk).await?;
+        let mut command = self.command(&remote_exec_cmd(root, script));
+        command.stdout(Stdio::piped()).stderr(Stdio::piped());
+        let mut tree = ProcessTree::spawn(command).map_err(|source| {
+            IoError::new("spawning", format!("ssh exec on {}", self.host), source)
+        })?;
+        let (stdout, stderr, code) = collect_stream(&mut tree, on_chunk).await?;
         // stderr of the local ssh process itself (not the remote command)
         // rides along after the combined stream.
         let mut combined = String::from_utf8_lossy(&stdout).into_owned();
@@ -534,6 +629,24 @@ pub(crate) fn is_not_found(e: &BackendError) -> bool {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn utf8_chunks_hold_split_characters() {
+        let bytes = "a中😀b".as_bytes();
+        // Every split point, including inside both multi-byte characters.
+        for at in 0..=bytes.len() {
+            let mut decoder = Utf8Chunks::default();
+            let mut text = decoder.push(&bytes[..at]);
+            text.push_str(&decoder.push(&bytes[at..]));
+            text.push_str(&decoder.finish());
+            assert_eq!(text, "a中😀b", "split at {at}");
+        }
+        // Invalid bytes still decode lossily, and a truncated character at
+        // EOF comes out on `finish`.
+        let mut decoder = Utf8Chunks::default();
+        assert_eq!(decoder.push(b"x\xffy\xe4\xb8"), "x\u{fffd}y");
+        assert_eq!(decoder.finish(), "\u{fffd}");
+    }
 
     #[test]
     fn quoting_and_remote_commands() {
