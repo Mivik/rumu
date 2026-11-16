@@ -11,27 +11,35 @@
 //!
 //! [Agent Client Protocol]: https://agentclientprotocol.com
 
+mod config;
+mod decide;
 mod events;
 mod session;
 mod v1;
 
 use std::collections::HashMap;
 use std::path::Path;
+use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::{Arc, Mutex};
 
 use agent_client_protocol::schema::ProtocolVersion;
 use agent_client_protocol::v1::schema::{
-    AgentCapabilities, CancelNotification, Implementation, InitializeRequest, InitializeResponse,
-    NewSessionRequest, NewSessionResponse, PromptCapabilities, PromptRequest, PromptResponse,
-    SessionNotification, StopReason,
+    AgentCapabilities, CancelNotification, ContentBlock, Implementation, InitializeRequest,
+    InitializeResponse, Meta, NewSessionRequest, NewSessionResponse, PromptCapabilities,
+    PromptRequest, PromptResponse, SessionNotification, SetSessionConfigOptionRequest,
+    SetSessionConfigOptionResponse, StopReason,
 };
 use agent_client_protocol::v1::{ConnectionTo, Responder};
-use agent_client_protocol::{Agent, Client, Error, ErrorCode, Stdio};
-use serde_json::Value;
+use agent_client_protocol::{
+    Agent, Client, Error, ErrorCode, JsonRpcRequest, JsonRpcResponse, Stdio,
+};
+use serde::{Deserialize, Serialize};
+use serde_json::{Value, json};
 use tokio::sync::broadcast;
 use tokio::sync::broadcast::error::RecvError;
 
 use crate::{boot, ws};
+use config::{Choices, Config};
 use session::{Outcome, Session, Stop};
 
 /// The rumu stack, driven as a WebSocket client would.
@@ -54,10 +62,34 @@ impl Rumu {
     }
 }
 
+/// `_session/steering`: send a message into the running turn.
+#[derive(Debug, Clone, Serialize, Deserialize, JsonRpcRequest)]
+#[request(method = "_session/steering", response = SteerResponse)]
+#[serde(rename_all = "camelCase")]
+struct SteerRequest {
+    session_id: String,
+    prompt: Vec<ContentBlock>,
+    #[serde(default, rename = "_meta")]
+    meta: Option<Value>,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize, JsonRpcResponse)]
+struct SteerResponse {
+    /// `injected`, `startedNewTurn` or `promptRequired`.
+    outcome: String,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    reason: Option<String>,
+}
+
 /// The agent's state across the connection.
 struct Acp {
     rumu: Rumu,
     sessions: Mutex<HashMap<String, Arc<Session>>>,
+    /// Whether the client takes form elicitations.
+    elicit: AtomicBool,
+    /// The session prompted last: a decision of a session this connection
+    /// did not open (a delegated assistant's) is put to its client.
+    last: Mutex<Option<String>>,
 }
 
 impl Acp {
@@ -68,6 +100,10 @@ impl Acp {
             .get(id)
             .cloned()
             .ok_or_else(|| invalid(format!("unknown session `{id}`")))
+    }
+
+    fn touch(&self, id: &str) {
+        *self.last.lock().unwrap() = Some(id.to_owned());
     }
 }
 
@@ -90,13 +126,26 @@ pub async fn run(home: &Path) -> anyhow::Result<()> {
     let acp = Arc::new(Acp {
         rumu,
         sessions: Mutex::new(HashMap::new()),
+        elicit: AtomicBool::new(false),
+        last: Mutex::new(None),
     });
     Agent
         .v1()
         .name("rumu")
         .on_receive_request(
-            async move |_: InitializeRequest, responder: Responder<InitializeResponse>, _cx| {
-                responder.respond(initialize_response())
+            {
+                let acp = acp.clone();
+                async move |req: InitializeRequest,
+                            responder: Responder<InitializeResponse>,
+                            _cx| {
+                    let form = req
+                        .client_capabilities
+                        .elicitation
+                        .as_ref()
+                        .is_some_and(|e| e.form.is_some());
+                    acp.elicit.store(form, Ordering::SeqCst);
+                    responder.respond(initialize_response())
+                }
             },
             agent_client_protocol::on_receive_request!(),
         )
@@ -124,6 +173,7 @@ pub async fn run(home: &Path) -> anyhow::Result<()> {
                         Ok(s) => s,
                         Err(e) => return responder.respond_with_error(e),
                     };
+                    acp.touch(&session.id);
                     let text = v1::prompt_text(&req.prompt);
                     let acp = acp.clone();
                     cx.spawn(async move {
@@ -154,6 +204,34 @@ pub async fn run(home: &Path) -> anyhow::Result<()> {
             },
             agent_client_protocol::on_receive_notification!(),
         )
+        .on_receive_request(
+            {
+                let acp = acp.clone();
+                async move |req: SetSessionConfigOptionRequest,
+                            responder: Responder<SetSessionConfigOptionResponse>,
+                            _cx| {
+                    match set_config(&acp, &req).await {
+                        Ok(options) => {
+                            responder.respond(SetSessionConfigOptionResponse::new(options))
+                        }
+                        Err(e) => responder.respond_with_error(e),
+                    }
+                }
+            },
+            agent_client_protocol::on_receive_request!(),
+        )
+        .on_receive_request(
+            {
+                let acp = acp.clone();
+                async move |req: SteerRequest, responder: Responder<SteerResponse>, _cx| {
+                    match steer(&acp, req).await {
+                        Ok(response) => responder.respond(response),
+                        Err(e) => responder.respond_with_error(e),
+                    }
+                }
+            },
+            agent_client_protocol::on_receive_request!(),
+        )
         .connect_with(Stdio::new(), async move |cx: ConnectionTo<Client>| {
             tokio::select! {
                 () = pump(acp, cx.clone(), pushes) => Ok(()),
@@ -168,21 +246,88 @@ pub async fn run(home: &Path) -> anyhow::Result<()> {
 
 fn initialize_response() -> InitializeResponse {
     let capabilities = AgentCapabilities::new()
-        .prompt_capabilities(PromptCapabilities::new().embedded_context(true));
+        .prompt_capabilities(PromptCapabilities::new().embedded_context(true))
+        // A `session/prompt` sent while one runs waits its turn.
+        .meta(Meta::from_iter([(
+            "promptQueueing".to_owned(),
+            json!(true),
+        )]));
     InitializeResponse::new(ProtocolVersion::V1)
         .agent_capabilities(capabilities)
         .agent_info(Implementation::new("rumu", env!("CARGO_PKG_VERSION")).title("rumu"))
+        .meta(Meta::from_iter([(
+            "steering".to_owned(),
+            json!({ "supported": true }),
+        )]))
 }
 
 async fn new_session(acp: &Acp, req: &NewSessionRequest) -> Result<NewSessionResponse, Error> {
-    let session = Session::create(&acp.rumu, &req.cwd)
+    let choices = Choices::load(&acp.rumu).await.map_err(internal)?;
+    let mut config = Config::default();
+    choices.resolve(&mut config);
+    let session = Session::create(&acp.rumu, &req.cwd, config.clone())
         .await
         .map_err(internal)?;
+    let options = choices.options(&config);
     acp.sessions
         .lock()
         .unwrap()
         .insert(session.id.clone(), session.clone());
-    Ok(NewSessionResponse::new(session.id.clone()))
+    Ok(NewSessionResponse::new(session.id.clone()).config_options(options))
+}
+
+async fn set_config(
+    acp: &Acp,
+    req: &SetSessionConfigOptionRequest,
+) -> Result<Vec<agent_client_protocol::v1::schema::SessionConfigOption>, Error> {
+    let session = acp.session(&req.session_id.0)?;
+    let value = match &req.value {
+        agent_client_protocol::v1::schema::SessionConfigOptionValue::ValueId { value } => {
+            value.0.to_string()
+        }
+        _ => return Err(invalid("rumu's options are all selects")),
+    };
+    let choices = Choices::load(&acp.rumu).await.map_err(internal)?;
+    let mut config = session.config.lock().unwrap().clone();
+    let before = config.assistant.clone();
+    choices
+        .apply(&mut config, &req.config_id.0, &value)
+        .map_err(invalid)?;
+    if config.assistant != before {
+        session
+            .rebind(&acp.rumu, config.assistant.as_deref())
+            .await
+            .map_err(invalid)?;
+    }
+    *session.config.lock().unwrap() = config.clone();
+    Ok(choices.options(&config))
+}
+
+async fn steer(acp: &Acp, req: SteerRequest) -> Result<SteerResponse, Error> {
+    let session = acp.session(&req.session_id)?;
+    let text = v1::prompt_text(&req.prompt);
+    if text.trim().is_empty() {
+        return Err(invalid("the steering prompt is empty"));
+    }
+    let busy = session.busy();
+    let required = req
+        .meta
+        .as_ref()
+        .and_then(|m| m.pointer("/steering/idleBehavior"))
+        .and_then(Value::as_str)
+        == Some("promptRequired");
+    if !busy && required {
+        return Ok(SteerResponse {
+            outcome: "promptRequired".into(),
+            reason: Some("noRunningTurn".into()),
+        });
+    }
+    acp.touch(&session.id);
+    session.steer(&acp.rumu, text).await.map_err(internal)?;
+    Ok(SteerResponse {
+        outcome: if busy { "injected" } else { "startedNewTurn" }.into(),
+        reason: None,
+    })
 }
 
 fn prompt_response(outcome: Outcome) -> PromptResponse {
@@ -220,8 +365,43 @@ async fn pump(acp: Arc<Acp>, cx: ConnectionTo<Client>, mut pushes: broadcast::Re
             .unwrap_or_default();
         let params = push.get("params").unwrap_or(&Value::Null);
         let sessions: Vec<Arc<Session>> = acp.sessions.lock().unwrap().values().cloned().collect();
+        if method == "decision.requested" {
+            let of = params.get("session").and_then(Value::as_str);
+            let last = acp.last.lock().unwrap().clone();
+            let session = sessions
+                .iter()
+                .find(|s| Some(s.rumu_session().as_str()) == of)
+                .or_else(|| sessions.iter().find(|s| Some(&s.id) == last.as_ref()));
+            let (rumu, cx, params) = (acp.rumu.clone(), cx.clone(), params.clone());
+            let elicit = acp.elicit.load(Ordering::SeqCst);
+            let id = session.map(|s| s.id.clone());
+            tokio::spawn(async move {
+                match id {
+                    Some(id) => decide::answer(rumu, cx, id, elicit, params).await,
+                    // No client session to ask: declined.
+                    None => {
+                        let _ = rumu
+                            .call(
+                                "decision.answer",
+                                json!({ "id": params.get("id"), "answer": {} }),
+                            )
+                            .await;
+                    }
+                }
+            });
+            continue;
+        }
         for session in sessions {
-            for event in session.feed(method, params) {
+            let state = if session.needs_state(method, params) {
+                acp.rumu
+                    .call("branch.path", json!({ "branch": session.branch() }))
+                    .await
+                    .ok()
+                    .and_then(|v| serde_json::from_value(v.get("state")?.clone()).ok())
+            } else {
+                None
+            };
+            for event in session.feed(method, params, state.as_ref()) {
                 let update = SessionNotification::new(session.id.clone(), v1::update(event));
                 if cx.send_notification(update).is_err() {
                     return;

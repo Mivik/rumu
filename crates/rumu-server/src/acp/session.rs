@@ -2,15 +2,16 @@
 //! for, and how a client's working directory becomes its workspace.
 
 use std::path::{Component, Path, PathBuf};
-use std::sync::atomic::{AtomicU64, Ordering};
+use std::sync::atomic::{AtomicBool, AtomicU64, Ordering};
 use std::sync::{Arc, Mutex};
 use std::time::Duration;
 
-use rumu_core::{Usage, Workspace};
+use rumu_core::{PathState, Usage, Workspace};
 use serde_json::{Value, json};
 use tokio::sync::watch;
 
 use super::Rumu;
+use super::config::Config;
 use super::events::{Event, Translator};
 
 /// How long a prompt waits, once the branch is idle, for its last pushes to
@@ -34,7 +35,8 @@ pub(super) struct Outcome {
     pub usage: Usage,
 }
 
-/// The rumu session behind an ACP session.
+/// The rumu session behind an ACP session. The assistant can still change
+/// before the first prompt, which replaces it.
 struct Bind {
     session: String,
     branch: String,
@@ -50,7 +52,12 @@ struct Failure {
 pub(super) struct Session {
     /// The ACP session id: the id of the first rumu session behind it.
     pub id: String,
+    /// The working directory's workspace and the project it is in.
+    place: Place,
     bind: Mutex<Bind>,
+    pub config: Mutex<Config>,
+    /// Set by the first prompt.
+    started: AtomicBool,
     /// One prompt at a time; the others queue here in order.
     slot: tokio::sync::Mutex<()>,
     /// Bumped by every `session/cancel`: prompts started or queued before
@@ -65,6 +72,7 @@ pub(super) struct Session {
 
 /// Where a session works: the client's directory as a workspace, in a
 /// project.
+#[derive(Clone)]
 struct Place {
     workspace: String,
     root: String,
@@ -74,17 +82,21 @@ struct Place {
 }
 
 impl Session {
-    /// A new session working in `cwd`, as the default assistant.
-    pub async fn create(rumu: &Rumu, cwd: &Path) -> Result<Arc<Self>, String> {
+    /// A new session working in `cwd`, as `assistant` (the default one when
+    /// `None`).
+    pub async fn create(rumu: &Rumu, cwd: &Path, config: Config) -> Result<Arc<Self>, String> {
         let place = place(rumu, cwd).await?;
-        let (session, branch) = open(rumu, &place, None).await?;
+        let (session, branch) = open(rumu, &place, config.assistant.as_deref()).await?;
         Ok(Arc::new(Self {
             id: session.clone(),
+            place,
             bind: Mutex::new(Bind {
                 session,
                 translator: Translator::new(branch.clone()),
                 branch,
             }),
+            config: Mutex::new(config),
+            started: AtomicBool::new(false),
             slot: tokio::sync::Mutex::new(()),
             cancels: AtomicU64::new(0),
             idle: watch::channel(0).0,
@@ -98,9 +110,49 @@ impl Session {
         self.bind.lock().unwrap().branch.clone()
     }
 
+    /// The rumu session's id.
+    pub fn rumu_session(&self) -> String {
+        self.bind.lock().unwrap().session.clone()
+    }
+
+    /// Whether a prompt was ever sent.
+    pub fn started(&self) -> bool {
+        self.started.load(Ordering::SeqCst)
+    }
+
+    /// Start over on a new rumu session as `assistant`: only before the
+    /// first prompt (the old session is deleted).
+    pub async fn rebind(&self, rumu: &Rumu, assistant: Option<&str>) -> Result<(), String> {
+        if self.started() {
+            return Err("the assistant is fixed once the session has a prompt".into());
+        }
+        let (session, branch) = open(rumu, &self.place, assistant).await?;
+        let old = {
+            let mut bind = self.bind.lock().unwrap();
+            let old = std::mem::replace(&mut bind.session, session);
+            bind.translator = Translator::new(branch.clone());
+            bind.branch = branch;
+            old
+        };
+        rumu.call("session.delete", json!({ "session": old }))
+            .await
+            .map(|_| ())
+    }
+
+    /// Whether the push concerns this session's main line, and carries
+    /// tool calls whose paths need its state to resolve.
+    pub fn needs_state(&self, method: &str, params: &Value) -> bool {
+        method == "node.appended"
+            && self.bind.lock().unwrap().translator.on_main(params)
+            && params
+                .pointer("/node/body/tool_calls")
+                .and_then(Value::as_array)
+                .is_some_and(|calls| !calls.is_empty())
+    }
+
     /// Take in one push: keep the session's books, and return what the
     /// client should see of it.
-    pub fn feed(&self, method: &str, params: &Value) -> Vec<Event> {
+    pub fn feed(&self, method: &str, params: &Value, state: Option<&PathState>) -> Vec<Event> {
         let mut bind = self.bind.lock().unwrap();
         let main = bind.translator.on_main(params);
         match method {
@@ -134,7 +186,7 @@ impl Session {
             }
             _ => {}
         }
-        bind.translator.feed(method, params)
+        bind.translator.feed(method, params, state)
     }
 
     /// Run one prompt: queued behind the ones before it, then sent, then
@@ -151,12 +203,17 @@ impl Session {
                 usage: Usage::default(),
             });
         }
+        self.started.store(true, Ordering::SeqCst);
         *self.failure.lock().unwrap() = None;
         let before = self.usage.lock().unwrap().clone();
         let branch = self.branch();
         let mut idle = self.idle.subscribe();
-        rumu.call("prompt", json!({ "branch": branch, "text": text }))
-            .await?;
+        let model = self.config.lock().unwrap().choice();
+        rumu.call(
+            "prompt",
+            json!({ "branch": branch, "text": text, "model": model }),
+        )
+        .await?;
         rumu.call("branch.wait_idle", json!({ "branch": branch }))
             .await?;
         if tokio::time::timeout(FLUSH_WAIT, idle.changed())
@@ -200,6 +257,24 @@ impl Session {
         rumu.call("abort", json!({ "branch": self.branch() }))
             .await
             .map(|_| ())
+    }
+
+    /// Whether a prompt is in flight.
+    pub fn busy(&self) -> bool {
+        self.slot.try_lock().is_err()
+    }
+
+    /// Send `text` now: into the running turn when there is one, else as a
+    /// turn of its own that no prompt waits for.
+    pub async fn steer(&self, rumu: &Rumu, text: String) -> Result<(), String> {
+        let model = self.config.lock().unwrap().choice();
+        self.started.store(true, Ordering::SeqCst);
+        rumu.call(
+            "prompt",
+            json!({ "branch": self.branch(), "text": text, "model": model }),
+        )
+        .await
+        .map(|_| ())
     }
 }
 
