@@ -14,7 +14,7 @@ import Icon from '../ui/Icon.vue'
 const props = defineProps<{ view?: ToolRowView; call?: ToolCall }>()
 
 const task = computed(() => {
-  const raw = argsOf(props.view?.row.call ?? props.call)?.task
+  const raw = argsOf(props.view?.row.call ?? props.call ?? null)?.task
   return typeof raw === 'string' ? raw.trim() : (props.view?.callFull ?? '')
 })
 const child = computed(() =>
