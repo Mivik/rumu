@@ -19,6 +19,7 @@ use serde_json::{Value, json};
 
 use super::backend::{Backend, BackendError, ExecOutput, is_not_found, probe_uname};
 use super::patch;
+use super::watch::Batch;
 use super::{WorkspacePlugin, usable_ctl_dir};
 use crate::Result;
 use rumu_core::Cx;
@@ -190,6 +191,8 @@ struct BashArgs {
     workspace: Option<String>,
     /// seconds, default 60, max 600
     timeout: Option<u64>,
+    /// with `background: true`: send new output to you as notes while it runs
+    watch: Option<bool>,
 }
 
 #[derive(Debug, Deserialize, JsonSchema)]
@@ -297,7 +300,9 @@ workspace, lists cards."
 directory (`workspace` argument; default = the default workspace). Returns combined \
 stdout+stderr (truncated to ~20k chars) and the exit code. Default timeout 60s (max \
 600s). Disabled on read-only workspaces and on the `@rumu` workspace. Give every call a \
-`description` (5-10 words, active voice): the transcript shows it as the call's summary."
+`description` (5-10 words, active voice): the transcript shows it as the call's summary. \
+`watch: true` (with `background: true`) delivers new output as a note about once a second and \
+wakes you; filter in the script (e.g. `grep --line-buffered`) and end it with `task_kill`."
                     .into(),
                 schema: tool_schema::<BashArgs>(),
                 background: true,
@@ -999,36 +1004,59 @@ impl WorkspacePlugin {
         if ws.read_only {
             return Err(read_only_err(&ws, "bash is disabled"));
         }
+        let watch = match args.watch {
+            Some(true) => Some(self.watch_for(cx)?),
+            _ => None,
+        };
         let effects = self.maybe_inject_agents(cx, &ws).await;
         let backend = self.backend_for(&ws);
         // Stream every chunk to the UI (tool.progress) / the task buffer
-        // (task.progress). Background bash has no timeout of its own: it ends
-        // when the command exits, `task_kill`s it, or its owner aborts.
-        let mut on_chunk = |chunk: &str| cx.progress(Progress::Append(chunk.to_owned()));
-        let exec: std::result::Result<ExecOutput, BackendError> =
-            if cx.call().is_some_and(|c| c.background) {
-                backend.exec(&args.command, &mut on_chunk).await
-            } else {
-                match tokio::time::timeout(
-                    Duration::from_secs(timeout),
-                    backend.exec(&args.command, &mut on_chunk),
-                )
-                .await
-                {
-                    Ok(r) => r,
-                    Err(_) => {
-                        return Err(ToolError::model(format!(
-                            "`{}` timed out after {timeout}s",
-                            args.command
-                        ))
-                        .with_effects(effects));
-                    }
+        // (task.progress), and to the watch batch. Background bash has no
+        // timeout of its own: it ends when the command exits, `task_kill`s
+        // it, or its owner aborts.
+        let batch = std::sync::Mutex::new(Batch::default());
+        let notify = tokio::sync::Notify::new();
+        let mut on_chunk = |chunk: &str| {
+            cx.progress(Progress::Append(chunk.to_owned()));
+            if watch.is_some() {
+                batch
+                    .lock()
+                    .unwrap()
+                    .push(chunk, tokio::time::Instant::now());
+                notify.notify_one();
+            }
+        };
+        let exec: std::result::Result<ExecOutput, BackendError> = if let Some(watch) = &watch {
+            let exec = backend.exec(&args.command, &mut on_chunk);
+            watch.run(exec, &batch, &notify, cx).await
+        } else if cx.call().is_some_and(|c| c.background) {
+            backend.exec(&args.command, &mut on_chunk).await
+        } else {
+            match tokio::time::timeout(
+                Duration::from_secs(timeout),
+                backend.exec(&args.command, &mut on_chunk),
+            )
+            .await
+            {
+                Ok(r) => r,
+                Err(_) => {
+                    return Err(ToolError::model(format!(
+                        "`{}` timed out after {timeout}s",
+                        args.command
+                    ))
+                    .with_effects(effects));
                 }
-            };
+            }
+        };
         match exec {
             Ok(out) => Ok(BashOutcome {
                 code: out.code,
-                output: out.combined,
+                // A watch already posted the rest: the result (and so the
+                // completion note) carries only what is still pending.
+                output: match watch {
+                    Some(_) => batch.lock().unwrap().take(),
+                    None => out.combined,
+                },
                 effects,
                 structured: cx.call().is_some_and(|c| c.parent.is_some()),
             }),

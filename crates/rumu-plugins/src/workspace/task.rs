@@ -9,7 +9,8 @@
 //! old transcript entries remain ordinary notes/results.
 
 use rumu_core::{
-    Cx, OUTPUT_LIMIT, RUMU_WORKSPACE, TaskId, ToolError, ToolOutput, ToolResult, Utf8UnixPath,
+    Cx, OUTPUT_LIMIT, RUMU_WORKSPACE, TaskId, TaskInfo, ToolError, ToolOutput, ToolResult,
+    Utf8UnixPath,
 };
 
 use super::WorkspacePlugin;
@@ -42,34 +43,7 @@ impl WorkspacePlugin {
         let Some((info, output)) = cx.history().task(&id)? else {
             return Err(ToolError::model(format!("no task `{id}`")));
         };
-        let mut text = format!(
-            "task {} · {} · {} · started {}\nowner branch {} · call {}",
-            info.id,
-            info.status.label(),
-            info.label(),
-            iso_local(info.started_at),
-            info.branch,
-            info.call_id
-        );
-        if let Some(ended) = info.ended_at {
-            text.push_str(&format!(" · ended {}", iso_local(ended)));
-        }
-        text.push_str("\n\n");
-        if output.is_empty() {
-            text.push_str("(no output yet)");
-        } else {
-            text.push_str(&output);
-        }
-        // The result renders images as their placeholder (task views are
-        // text-only).
-        if let Some(result) = &info.result {
-            let rendered = result.rendered();
-            if !rendered.is_empty() {
-                text.push_str("\n\n--- result ---\n");
-                text.push_str(&rendered);
-            }
-        }
-        let text = match slice_lines(text, offset, limit) {
+        let text = match slice_lines(task_view(&info, &output), offset, limit) {
             Ok(t) => t,
             Err(e) => return Err(ToolError::model(e)),
         };
@@ -95,6 +69,40 @@ impl WorkspacePlugin {
             .collect();
         Ok(format!("tasks ({}):\n{}", cx.session, lines.join("\n")).into())
     }
+}
+
+/// The unpaged `@rumu:/tasks/<id>` view: a header, the buffered output, and
+/// the result once the task ended. Watch events count their line numbers in
+/// it, so `offset` / `limit` land on the same lines.
+pub(super) fn task_view(info: &TaskInfo, output: &str) -> String {
+    let mut text = format!(
+        "task {} · {} · {} · started {}\nowner branch {} · call {}",
+        info.id,
+        info.status.label(),
+        info.label(),
+        iso_local(info.started_at),
+        info.branch,
+        info.call_id
+    );
+    if let Some(ended) = info.ended_at {
+        text.push_str(&format!(" · ended {}", iso_local(ended)));
+    }
+    text.push_str("\n\n");
+    if output.is_empty() {
+        text.push_str("(no output yet)");
+    } else {
+        text.push_str(output);
+    }
+    // The result renders images as their placeholder (task views are
+    // text-only).
+    if let Some(result) = &info.result {
+        let rendered = result.rendered();
+        if !rendered.is_empty() {
+            text.push_str("\n\n--- result ---\n");
+            text.push_str(&rendered);
+        }
+    }
+    text
 }
 
 /// Cap the view like any tool output, but point at `offset` / `limit` paging
