@@ -62,8 +62,16 @@ function toggleOwn(): void {
 }
 
 function go(i: number): void {
+  // One own-words input serves every question, reused as `index` moves, so a
+  // caret kept there would follow into the next question's row without that row
+  // being chosen — `own` turns on at `focus`, which does not fire for an element
+  // that never lost it, and words in an unchosen row count for nothing
+  // (`answered`) and would not be sent (`submit`). Leaving drops the caret.
+  customEl.value?.blur()
   index.value = i
   // A question without options is answered by typing: put the caret there.
+  // Its row never shows as chosen, so the caret is all that says where the
+  // answer goes.
   if (!props.request.questions[i]!.options.length) void nextTick(() => customEl.value?.focus())
 }
 
