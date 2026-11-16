@@ -35,7 +35,8 @@ SSH tunnel or HTTPS through a reverse proxy.
 - **Project** — what a session works on: a deck plus the workspaces it mounts.
   See [docs/projects.md](docs/projects.md).
 
-More: [compaction](docs/compaction.md), [MCP](docs/mcp.md), [skills](docs/skills.md).
+More: [compaction](docs/compaction.md), [MCP](docs/mcp.md), [skills](docs/skills.md),
+[editors and Harbor over ACP](docs/acp.md).
 
 ## Development
 

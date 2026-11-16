@@ -1,0 +1,9 @@
+{
+  "id": "rumu",
+  "name": "rumu",
+  "version": "0.1.0",
+  "description": "rumu over ACP, from a local build mounted at /opt/rumu",
+  "distribution": {
+    "local": { "cmd": "/opt/rumu/launch.sh" }
+  }
+}
