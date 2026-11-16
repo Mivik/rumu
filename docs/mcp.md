@@ -89,7 +89,9 @@ harnesses' own docs.
     titles and descriptions. Each hit prints like `read`, so the model can
     call it right away; the default limit is 5.
 - `call_tool { tool: "<server>/<tool>", args }` calls it. The result's text
-  and images come back as the tool result, `isError` as an error. An unknown
+  and images come back as the tool result, `isError` as an error; each image
+  is also copied to `@scratch:.inbox/attachments/` like a prompt's, the text
+  naming the file. An unknown
   name is refused with the server's tool names. It can run in the
   background, and `code` scripts reach it as `rumu.call_tool`.
 - Servers outside the session's list, and tools its rules leave out, are

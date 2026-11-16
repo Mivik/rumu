@@ -20,8 +20,8 @@ use rumu_cards::Decks;
 use rumu_cards::recall::{Doc, rank_docs};
 use rumu_core::{
     Content, Cx, Decision, Event, HookOutput, HookSpec, Manifest, McpStatus, McpUse, PathState,
-    Plugin, RUMU_WORKSPACE, Structured, ToolError, ToolOutput, ToolResult, ToolResultExt, ToolSpec,
-    Utf8UnixPath, parse_args, rules_enable, tool_schema,
+    Plugin, RUMU_WORKSPACE, SCRATCH_WORKSPACE, Structured, ToolError, ToolOutput, ToolResult,
+    ToolResultExt, ToolSpec, Utf8UnixPath, parse_args, rules_enable, tool_schema,
 };
 use schemars::JsonSchema;
 use serde::{Deserialize, Serialize};
@@ -172,12 +172,18 @@ impl McpPlugin {
             .call(tool, args.args.unwrap_or_default())
             .await
             .map_err(|e| ToolError::model(format!("call_tool {}: {e}", args.tool)))?;
-        self.output(&result).await
+        let scratch = state
+            .workspaces
+            .iter()
+            .find(|w| w.name == SCRATCH_WORKSPACE)
+            .map(|w| PathBuf::from(w.root.as_str()));
+        self.output(&result, scratch).await
     }
 
     /// A `tools/call` result as a tool output: text blocks joined, images
-    /// attached, other media named.
-    async fn output(&self, result: &Value) -> ToolResult<ToolOutput> {
+    /// attached — and copied into `scratch` (the session's `@scratch` root)
+    /// like a prompt's, the text naming the file — other media named.
+    async fn output(&self, result: &Value, scratch: Option<PathBuf>) -> ToolResult<ToolOutput> {
         let mut parts: Vec<String> = Vec::new();
         let mut images = Vec::new();
         for block in result["content"].as_array().into_iter().flatten() {
@@ -191,12 +197,26 @@ impl McpPlugin {
                     let blobs = self.blobs().map_err(|e| {
                         ToolError::model(format!("call_tool: storing an image: {e}"))
                     })?;
-                    let attachment =
-                        tokio::task::spawn_blocking(move || blobs.ingest_image(&bytes, None))
-                            .await
-                            .map_err(|e| ToolError::model(format!("call_tool: {e}")))?
-                            .map_err(|e| ToolError::model(format!("call_tool: an image: {e}")))?;
+                    let root = scratch.clone();
+                    let (attachment, file) =
+                        tokio::task::spawn_blocking(move || -> rumu_blob::Result<_> {
+                            let a = blobs.ingest_image(&bytes, None)?;
+                            let file = a.scratch_path();
+                            if let Some(root) = root {
+                                blobs.copy_to(&a.hash, &root.join(&file))?;
+                            }
+                            Ok((a, file))
+                        })
+                        .await
+                        .map_err(|e| ToolError::model(format!("call_tool: {e}")))?
+                        .map_err(|e| ToolError::model(format!("call_tool: an image: {e}")))?;
                     images.push(attachment);
+                    if scratch.is_some() {
+                        parts.push(format!(
+                            "[image {} saved as {SCRATCH_WORKSPACE}:{file}]",
+                            images.len()
+                        ));
+                    }
                 }
                 "audio" => parts.push(format!(
                     "[audio ({}) omitted]",

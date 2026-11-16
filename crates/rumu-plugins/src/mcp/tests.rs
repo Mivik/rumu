@@ -167,6 +167,36 @@ async fn call_tool_returns_text_errors_and_structured_content() {
     assert!(out.is_error && out.content.text.contains("no MCP server `broken`"));
 }
 
+/// An image block is attached and copied into `@scratch:.inbox/attachments/`,
+/// the text naming the file; without a scratch root it is only attached.
+#[tokio::test]
+async fn an_image_result_lands_in_the_scratch_inbox() {
+    const DOT_PNG: &str = "iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAYAAAAfFcSJAAAADUlEQVR42mNk+M9QDwADhgGAWjR9awAAAABJRU5ErkJggg==";
+    let home = tempfile::tempdir().unwrap();
+    let decks = assistant_decks(home.path());
+    let plugin = McpPlugin::new(home.path(), McpHub::new(home.path()), decks);
+    let result = json!({ "content": [
+        { "type": "text", "text": "a dot" },
+        { "type": "image", "mimeType": "image/png", "data": DOT_PNG },
+    ] });
+    let scratch = home.path().join("scratch/s1");
+
+    let out = plugin.output(&result, Some(scratch.clone())).await.unwrap();
+    let [image] = &out.content.attachments[..] else {
+        panic!("one attachment: {:?}", out.content.attachments)
+    };
+    let file = image.scratch_path();
+    assert_eq!(
+        out.content.text,
+        format!("a dot\n[image 1 saved as @scratch:{file}]")
+    );
+    assert!(scratch.join(&file).is_file());
+
+    let out = plugin.output(&result, None).await.unwrap();
+    assert_eq!(out.content.text, "a dot");
+    assert_eq!(out.content.attachments.len(), 1);
+}
+
 #[tokio::test]
 async fn a_dropped_call_is_not_retried_and_reconnects_once() {
     let home = tempfile::tempdir().unwrap();
