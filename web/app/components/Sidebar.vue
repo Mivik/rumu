@@ -34,6 +34,7 @@ import {
 import type { Project, SessionInfo } from '../lib/types'
 import { layout } from '../lib/layout'
 import { openPage, sheetOf, type Page } from '../lib/router'
+import { landingWritten } from '../lib/state/drafts'
 import { models } from '../lib/state/models'
 import { prefs } from '../lib/state/prefs'
 import { requestComposerFocus } from '../lib/state/ui'
@@ -65,6 +66,9 @@ function page(name: Page): void {
 /** The page open in the chat's place, which its entry here marks. */
 const onPage = computed(() => (state.page ? sheetOf(state.page.page) : null))
 
+/** The landing page is in view: its new session is the current row. */
+const onLanding = computed(() => !state.sessionId && !state.page)
+
 /** An entry under the wordmark: a sheet of paper while its page is open. */
 function navTone(name: Page | null): string[] {
   return [
@@ -88,9 +92,11 @@ function newIn(project: string | null): void {
   layout.sidebarOpen = false
 }
 
-/** The unsent new session is the landing page's composer: put the caret there. */
+/** The unsent new session is the landing page's composer: go back to it, or
+ *  put the caret there when it is open already. */
 function openDraft(): void {
-  requestComposerFocus()
+  if (onLanding.value) requestComposerFocus()
+  else goHome()
   layout.sidebarOpen = false
 }
 
@@ -183,8 +189,9 @@ const groups = computed<Group[]>(() => {
     group.activity = Math.max(group.activity, s.touched_at)
   }
   // The landing composer is a new session not created yet: its row sits in
-  // the group it would be born into, unless a boot is still resolving.
-  if (!state.sessionId && !state.booting && !state.page) {
+  // the group it would be born into, unless a boot is still resolving. Once
+  // written it stays while other sessions are open, until sent or emptied.
+  if (!state.booting && (onLanding.value || landingWritten.value)) {
     const draft = map.get(landingProject.value ?? '')
     if (draft) draft.draft = true
   }
@@ -475,8 +482,13 @@ const otherLocale = computed<Locale>(
         <button
           v-if="group.draft && !collapsed(group)"
           type="button"
-          aria-current="page"
-          class="flex w-full min-w-0 items-center rounded-control border border-line bg-surface-2 py-2 pr-1 pl-3 text-left text-secondary font-bold text-ink shadow-soft outline-none focus-visible:ring-2 focus-visible:ring-brand/25"
+          :aria-current="onLanding ? 'page' : undefined"
+          class="flex w-full min-w-0 items-center rounded-control border py-2 pr-1 pl-3 text-left text-secondary transition-colors duration-200 outline-none focus-visible:ring-2 focus-visible:ring-brand/25"
+          :class="
+            onLanding
+              ? 'border-line bg-surface-2 font-bold text-ink shadow-soft'
+              : 'border-transparent text-ink-2 hover:bg-surface-2/60 hover:text-ink'
+          "
           @click="openDraft"
         >
           <span class="min-w-0 flex-1 truncate">{{ t('chat.sidebar.newSession') }}</span>

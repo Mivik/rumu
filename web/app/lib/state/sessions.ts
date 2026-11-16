@@ -23,7 +23,7 @@ import type {
   Workspace,
 } from '../types'
 import type { ModelUse } from '../generated/ModelUse'
-import { dropDraft, pruneDrafts } from './drafts'
+import { dropDraft, landingWritten, pruneDrafts } from './drafts'
 import { currentPick, models } from './models'
 import { isUnseen } from './derived'
 import { state } from './state'
@@ -154,7 +154,8 @@ export async function openSession(id: SessionId, opts: { history?: OpenHistory }
     viewAssistant(tree.session.assistant)
     replaceTree(tree)
     state.activeBranch = tree.session.active_branch
-    chooseLandingProject(tree.session.project ?? null)
+    // A new session already written keeps the project it was written for.
+    if (!landingWritten.value) chooseLandingProject(tree.session.project ?? null)
     const history = opts.history ?? 'push'
     if (history !== 'none') {
       state.page = null

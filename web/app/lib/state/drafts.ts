@@ -88,6 +88,13 @@ watch(() => keyOf(state.sessionId), draftFor, { immediate: true, flush: 'sync' }
 /** The open session's draft, or the landing page's. */
 export const activeDraft = computed(() => drafts[keyOf(state.sessionId)]!)
 
+/** The new session written but not sent yet: it stays in the sidebar, and in
+ *  its project, while other sessions are open. */
+export const landingWritten = computed(() => {
+  const d = drafts['']
+  return !!d && (d.text.trim() !== '' || d.images.length > 0)
+})
+
 function stored(d: Draft): Stored | null {
   const images = d.images
     .filter((i) => i.status === 'done')
