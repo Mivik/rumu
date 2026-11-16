@@ -12,42 +12,39 @@ import Icon from '../ui/Icon.vue'
 
 const props = defineProps<{ id: string; request: QuestionsRequest }>()
 
-/** One question's answer: the options picked, the words written, and `side`,
- *  which of the two counts — the box can hold words that do not (written first,
- *  then an option picked), while going back must still show what was picked.
+/** One question's answer: the options picked, the words written, and whether
+ *  the words count. The flag is kept apart from the words so that either side
+ *  can be turned off and back on without losing what it held: for a single
+ *  choice the words stand in for the picked option, for several they add to it.
  *
  *  TODO: the row is meant to become a comment *added* to the options rather
  *  than a "something else" standing in for one (`chat.ask.custom` would change
- *  with it). Both would then count, and `side` would go with that. */
-type Draft = { selected: string[]; custom: string; side: 'option' | 'custom' }
+ *  with it); a single choice would then keep its option too. */
+type Draft = { selected: string[]; custom: string; useCustom: boolean }
 
 const drafts = reactive<Draft[]>(
-  props.request.questions.map((q) => ({
-    selected: [],
-    custom: '',
-    side: q.options.length ? 'option' : 'custom',
-  })),
+  props.request.questions.map((q) => ({ selected: [], custom: '', useCustom: !q.options.length })),
 )
 const index = ref(0)
 const customEl = ref<HTMLInputElement>()
+const optionsEl = ref<HTMLElement>()
 
 const question = computed(() => props.request.questions[index.value]!)
 const draft = computed(() => drafts[index.value]!)
 const last = computed(() => index.value === props.request.questions.length - 1)
 
-function own(i: number): boolean {
+function customCounts(i: number): boolean {
   const d = drafts[i]!
-  return d.custom.trim() !== '' && (props.request.questions[i]!.multiple || d.side === 'custom')
+  return d.useCustom && d.custom.trim() !== ''
 }
 
 function picked(i: number, label: string): boolean {
   const d = drafts[i]!
-  if (!props.request.questions[i]!.multiple && d.side !== 'option') return false
-  return d.selected.includes(label)
+  return (props.request.questions[i]!.multiple || !d.useCustom) && d.selected.includes(label)
 }
 
 function answered(i: number): boolean {
-  return own(i) || drafts[i]!.selected.some((label) => picked(i, label))
+  return customCounts(i) || drafts[i]!.selected.some((label) => picked(i, label))
 }
 
 const complete = computed(() => drafts.every((_, i) => answered(i)))
@@ -61,30 +58,31 @@ function pick(label: string): void {
     return
   }
   d.selected = [label]
-  d.side = 'option'
+  d.useCustom = false
   if (!last.value) setTimeout(() => go(index.value + 1), 160)
 }
 
+/** Typing chooses the row; emptying it gives a single choice its option back. */
 function onCustomInput(e: Event): void {
-  if (question.value.multiple) return
-  if ((e.target as HTMLInputElement).value.trim() !== '') draft.value.side = 'custom'
+  draft.value.useCustom = (e.target as HTMLInputElement).value.trim() !== '' || !question.value.options.length
 }
 
-function leadToOwn(): void {
+function toggleCustom(): void {
   const d = draft.value
-  if (question.value.multiple || !question.value.options.length || d.custom.trim() === '') {
-    customEl.value?.focus()
-    return
-  }
-  d.side = d.side === 'custom' ? 'option' : 'custom'
+  if (d.custom.trim() === '') customEl.value?.focus()
+  else d.useCustom = !d.useCustom
 }
 
 function go(i: number): void {
-  // One input serves every question: its caret must not carry on into the next.
-  customEl.value?.blur()
+  const typing = document.activeElement === customEl.value
   index.value = i
-  // A question without options is answered by typing: put the caret there.
-  if (!props.request.questions[i]!.options.length) void nextTick(() => customEl.value?.focus())
+  // One input serves every question, so a caret in it would stay put: send it
+  // on to the next question's first option instead. A question without
+  // options is answered by typing, so the caret goes into the box.
+  const options = props.request.questions[i]!.options.length
+  if (typing || !options) {
+    void nextTick(() => (options ? optionsEl.value?.querySelector('button') : customEl.value)?.focus())
+  }
 }
 
 function next(): void {
@@ -94,14 +92,10 @@ function next(): void {
 
 function submit(): void {
   void answerDecision(props.id, {
-    answers: drafts.map((d, i) => {
-      const custom = d.custom.trim()
-      const one = !props.request.questions[i]!.multiple
-      return {
-        selected: one && d.side === 'custom' ? [] : d.selected,
-        custom: (own(i) ? custom : '') || undefined,
-      }
-    }),
+    answers: drafts.map((d, i) => ({
+      selected: d.selected.filter((label) => picked(i, label)),
+      custom: customCounts(i) ? d.custom.trim() : undefined,
+    })),
   })
 }
 
@@ -142,6 +136,7 @@ function onCustomKey(e: KeyboardEvent): void {
       <p v-if="question.multiple" class="mt-0.5 text-micro text-ink-3">{{ t('chat.ask.multiple') }}</p>
 
       <div
+        ref="optionsEl"
         class="mt-2 divide-y divide-line-soft overflow-hidden rounded-control bg-surface ring-1 ring-line-soft"
         :role="question.multiple ? 'group' : 'radiogroup'"
         :aria-label="question.question"
@@ -165,16 +160,16 @@ function onCustomKey(e: KeyboardEvent): void {
           </span>
         </button>
         <!-- the user's own words: always there -->
-        <div class="q-option" :class="{ 'is-on': question.options.length && own(index) }">
+        <div class="q-option" :class="{ 'is-on': question.options.length && customCounts(index) }">
           <button
             v-if="question.options.length"
             type="button"
             :role="question.multiple ? 'checkbox' : 'radio'"
-            :aria-checked="own(index)"
+            :aria-checked="customCounts(index)"
             :aria-label="t('chat.ask.custom')"
             class="q-mark"
             :class="question.multiple ? 'rounded-[5px]' : 'rounded-full'"
-            @click="leadToOwn"
+            @click="toggleCustom"
           >
             <Icon v-if="question.multiple" name="ok" :size="11" />
           </button>
