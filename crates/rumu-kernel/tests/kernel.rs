@@ -459,10 +459,7 @@ impl Plugin for TestPlugin {
                     let cx = cx.clone();
                     handles.push(tokio::spawn(async move {
                         match cx
-                            .invoke(
-                                "agent",
-                                json!({ "task": task, "inherit": { "context": "none" } }),
-                            )
+                            .invoke("agent", json!({ "task": task, "mode": "fresh" }))
                             .await
                         {
                             Ok(r) => r.output.content.text,
@@ -868,7 +865,7 @@ async fn sub_agent_task_does_not_retitle_the_session() {
             LlmResponse::calls(vec![ToolCall::new(
                 "e1",
                 "agent",
-                json!({"background": false, "task": "find the config file"}),
+                json!({"mode": "fork", "background": false, "task": "find the config file"}),
             )]),
             // the sub-agent ends with a plain reply
             LlmResponse::text("config lives in /etc/rumu"),
@@ -1913,7 +1910,7 @@ async fn agent_forks_a_child_and_survives_batch_order() {
             ToolCall::new(
                 "e1",
                 "agent",
-                json!({"background": false, "task": "find the config file"}),
+                json!({"mode": "fork", "background": false, "task": "find the config file"}),
             ),
             ToolCall::new("o1", "other", json!({})),
         ],
@@ -1922,7 +1919,7 @@ async fn agent_forks_a_child_and_survives_batch_order() {
             ToolCall::new(
                 "e1",
                 "agent",
-                json!({"background": false, "task": "find the config file"}),
+                json!({"mode": "fork", "background": false, "task": "find the config file"}),
             ),
         ],
     ] {
@@ -2036,7 +2033,7 @@ async fn agent_context_none_starts_at_the_root() {
             LlmResponse::calls(vec![ToolCall::new(
                 "e1",
                 "agent",
-                json!({ "background": false, "task": "independent work", "inherit": { "context": "none" } }),
+                json!({ "background": false, "task": "independent work", "mode": "fresh" }),
             )]),
             LlmResponse::text("clean summary"),
             LlmResponse::text("parent done"),
@@ -2115,7 +2112,7 @@ async fn agent_unknown_workspace_errors_without_a_branch() {
             LlmResponse::calls(vec![ToolCall::new(
                 "e1",
                 "agent",
-                json!({ "background": false, "task": "x", "inherit": { "workspaces": ["ghost"] } }),
+                json!({ "background": false, "task": "x", "workspaces": ["ghost"] }),
             )]),
             LlmResponse::text("done"),
         ],
@@ -2171,7 +2168,8 @@ async fn agent_workspaces_narrow_the_child_state() {
                 "agent",
                 json!({
                     "background": false, "task": "full",
-                    "inherit": { "workspaces": ["proj"] }
+                    "mode": "fork",
+                    "workspaces": ["proj"]
                 }),
             )]),
             LlmResponse::text("full child done"),
@@ -2181,7 +2179,8 @@ async fn agent_workspaces_narrow_the_child_state() {
                 "agent",
                 json!({
                     "background": false, "task": "clean",
-                    "inherit": { "context": "none", "workspaces": ["proj"] }
+                    "mode": "fresh",
+                    "workspaces": ["proj"]
                 }),
             )]),
             LlmResponse::text("clean child done"),
@@ -2245,7 +2244,7 @@ async fn agent_context_none_inherits_the_project() {
             LlmResponse::calls(vec![ToolCall::new(
                 "e1",
                 "agent",
-                json!({ "background": false, "task": "clean", "inherit": { "context": "none" } }),
+                json!({ "background": false, "task": "clean", "mode": "fresh" }),
             )]),
             LlmResponse::text("child done"),
             LlmResponse::text("parent done"),
@@ -2295,22 +2294,22 @@ async fn agent_depth_limit_refuses_the_fourth_level() {
         LlmResponse::calls(vec![ToolCall::new(
             "g1",
             "agent",
-            json!({ "background": false, "task": "two" }),
+            json!({ "mode": "fork", "background": false, "task": "two" }),
         )]),
         LlmResponse::calls(vec![ToolCall::new(
             "g2",
             "agent",
-            json!({ "background": false, "task": "three" }),
+            json!({ "mode": "fork", "background": false, "task": "three" }),
         )]),
         LlmResponse::calls(vec![ToolCall::new(
             "g3",
             "agent",
-            json!({ "background": false, "task": "four" }),
+            json!({ "mode": "fork", "background": false, "task": "four" }),
         )]),
         LlmResponse::calls(vec![ToolCall::new(
             "g4",
             "agent",
-            json!({ "background": false, "task": "five" }),
+            json!({ "mode": "fork", "background": false, "task": "five" }),
         )]),
         LlmResponse::text("level 3 done"),
         LlmResponse::text("level 2 done"),
@@ -3613,7 +3612,7 @@ async fn activate_refuses_agent_branches_and_switches_variants() {
             LlmResponse::calls(vec![ToolCall::new(
                 "e1",
                 "agent",
-                json!({"background": false, "task": "dig"}),
+                json!({"mode": "fork", "background": false, "task": "dig"}),
             )]),
             LlmResponse::text("child summary"),
             LlmResponse::text("parent done"),
@@ -3819,6 +3818,7 @@ fn note_post(text: &str, wake: bool) -> Post {
     Post {
         effects: vec![Content::text(text)],
         wake,
+        paced: false,
     }
 }
 
@@ -4091,6 +4091,43 @@ async fn storm_guard_stops_runaway_wakes() {
     }
 }
 
+/// Paced posts (a poster with its own rate limit and lifetime) wake past the
+/// storm guard's budget, and do not use it up for other wakes.
+#[tokio::test]
+async fn paced_wakes_skip_the_storm_guard() {
+    let plugin = Arc::new(plugin_with(
+        "poster",
+        &[],
+        vec![],
+        noop_hooks(),
+        noop_tools(),
+    ));
+    let turns = rumu_kernel::MAX_WAKE_TURNS + 2;
+    let script = (0..turns + 1)
+        .map(|_| LlmResponse::text("ok"))
+        .collect::<Vec<_>>();
+    let (kernel, _llm, _s, branch) = setup(vec![plugin.clone()], script).await;
+    kernel.set_wake_debounce(Duration::from_millis(5));
+    let mut rx = kernel.tap_pushes();
+
+    for i in 0..turns {
+        let mut post = note_post(&format!("event-{i}"), true);
+        post.paced = true;
+        plugin.post(&branch, post).expect("post");
+        let (done, _) = collect_turn(&mut rx, &branch.0).await;
+        assert_eq!(done["method"], "turn.done");
+    }
+    // An ordinary wake still has the whole budget.
+    plugin
+        .post(&branch, note_post("plain", true))
+        .expect("post");
+    let (done, _) = collect_turn(&mut rx, &branch.0).await;
+    assert_eq!(done["method"], "turn.done");
+    while let Ok(v) = rx.try_recv() {
+        assert_ne!(v["method"], "warning", "unexpected warning: {v}");
+    }
+}
+
 /// The `post` event is interceptable: Block drops the post, Rewrite patches
 /// its effects, and `source` is matchable.
 #[tokio::test]
@@ -4320,7 +4357,7 @@ async fn wake_post_reactivates_a_finished_agent_branch() {
             LlmResponse::calls(vec![ToolCall::new(
                 "e1",
                 "agent",
-                json!({"background": false, "task": "look"}),
+                json!({"mode": "fork", "background": false, "task": "look"}),
             )]),
             LlmResponse::text("child summary"),
             LlmResponse::text("parent done"),
@@ -4386,7 +4423,7 @@ async fn agent_wake_turn_runs_to_a_final_reply() {
         LlmResponse::calls(vec![ToolCall::new(
             "e1",
             "agent",
-            json!({ "background": false, "task": "look" }),
+            json!({ "mode": "fork", "background": false, "task": "look" }),
         )]),
         LlmResponse::text("child summary"),
         LlmResponse::text("parent done"),
@@ -4853,7 +4890,7 @@ async fn agent_runs_in_background_by_default() {
             LlmResponse::calls(vec![ToolCall::new(
                 "e1",
                 "agent",
-                json!({ "task": "find it" }),
+                json!({ "mode": "fork", "task": "find it" }),
             )]),
             LlmResponse::text("parent done"),
             LlmResponse::text("parent woke"),
@@ -4928,7 +4965,7 @@ async fn user_abort_of_agent_branch_reports_cancelled() {
             LlmResponse::calls(vec![ToolCall::new(
                 "e1",
                 "agent",
-                json!({ "task": "find it" }),
+                json!({ "mode": "fork", "task": "find it" }),
             )]),
             LlmResponse::text("parent done"),
             LlmResponse::text("parent woke"),
@@ -4998,7 +5035,7 @@ async fn sub_agent_waits_for_its_own_background_task() {
             LlmResponse::calls(vec![ToolCall::new(
                 "e1",
                 "agent",
-                json!({ "background": false, "task": "wait for work" }),
+                json!({ "mode": "fork", "background": false, "task": "wait for work" }),
             )]),
             LlmResponse::text("parent done"),
         ],
@@ -5336,12 +5373,12 @@ async fn agent_full_context_changes_only_the_effort() {
                 ToolCall::new(
                     "e1",
                     "agent",
-                    json!({ "background": false, "task": "quick look", "effort": "low" }),
+                    json!({ "mode": "fork", "background": false, "task": "quick look", "effort": "low" }),
                 ),
                 ToolCall::new(
                     "e2",
                     "agent",
-                    json!({ "background": false, "task": "x", "model": "p/other" }),
+                    json!({ "mode": "fork", "background": false, "task": "x", "model": "p/other" }),
                 ),
             ]),
             LlmResponse::text("looked"),
@@ -5401,7 +5438,7 @@ async fn agent_effort_applies_to_the_assistants_model() {
             LlmResponse::calls(vec![ToolCall::new(
                 "e1",
                 "agent",
-                json!({ "background": false, "task": "quick look", "effort": "low" }),
+                json!({ "mode": "fork", "background": false, "task": "quick look", "effort": "low" }),
             )]),
             LlmResponse::text("looked"),
             LlmResponse::text("parent done"),

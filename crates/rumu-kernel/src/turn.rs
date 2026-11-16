@@ -144,7 +144,7 @@ impl Kernel {
         .await?;
         // If the turn ended between the check and the delivery, the debounced
         // wake path starts a new turn; while busy it is a no-op.
-        self.request_wake(branch, Some(SYSTEM_SOURCE), true);
+        self.request_wake(branch, Some(SYSTEM_SOURCE), true, true);
         Ok(())
     }
 
@@ -654,9 +654,8 @@ impl Kernel {
                     .get("background")
                     .and_then(Value::as_bool)
                     .unwrap_or(name == "agent" && matches!(caller, Caller::Model));
-                // `agent` for another assistant is the plugin's `delegate`.
-                let name = if name == "agent" && args.get("assistant").is_some_and(|a| !a.is_null())
-                {
+                // `agent` in a session of its own is the plugin's `delegate`.
+                let name = if name == "agent" && args.get("mode") == Some(&json!("session")) {
                     DELEGATE_TOOL.to_owned()
                 } else {
                     name
@@ -953,12 +952,12 @@ impl Kernel {
     /// carries the address of the child's transcript, which `read` can open
     /// (`@rumu:/sessions/...`).
     ///
-    /// With `context: "full"` the fork point is the assistant node containing
+    /// With mode `fork` the fork point is the assistant node containing
     /// `call_id` (found by walking the path, not by assuming it is the head:
     /// inside a tool batch earlier calls have already appended ToolResults,
     /// and a script's agent forks at the enclosing `code` call; `inner_call`
-    /// is then the internal call recorded on the branch). With `context:
-    /// "none"` it forks at the session root and seeds only markers plus the
+    /// is then the internal call recorded on the branch). With mode
+    /// `fresh` it forks at the session root and seeds only markers plus the
     /// task.
     #[allow(clippy::too_many_arguments)]
     pub(crate) async fn run_agent(
@@ -1024,8 +1023,8 @@ impl Kernel {
                 != self.llm.target(crate::compact::pick(&parent_model))
         {
             return Ok(AgentRun::Refused(
-                "agent: with context \"full\" a sub-agent stays on this model (only `effort` may \
-                 change); use context \"none\" for another model"
+                "agent: with mode \"fork\" a sub-agent stays on this model (only `effort` may \
+                 change); use mode \"fresh\" for another model"
                     .into(),
             ));
         }
@@ -1332,35 +1331,39 @@ fn args_summary(name: &str, args: &Value) -> String {
 pub(crate) struct AgentArgs {
     /// what the sub-agent should do, 1-2 sentences
     task: String,
-    /// how the sub-agent inherits from this branch
-    inherit: Option<InheritArgs>,
-    /// a model alias (`rumu/<name>`) to run on
+    /// fresh (default): a clean branch here that sees only the task; fork: continue from here with this whole conversation; session: a session of its own that sees only the task
+    mode: Option<Mode>,
+    /// session only: the assistant's id (default: yourself)
+    assistant: Option<String>,
+    /// a model alias (`rumu/<name>`) to run on; not with fork
     model: Option<String>,
     /// the reasoning effort to run at
     effort: Option<Effort>,
-    /// another assistant's id: it does the task in a session of its own (omit for yourself)
-    assistant: Option<String>,
+    /// fork / fresh only: "all" (default) or an array of workspace names it may use
+    workspaces: Option<Workspaces>,
     /// true (default): run in the background, returning a task id now and a notification when it finishes; false: wait here for its summary
     background: Option<bool>,
 }
 
 impl AgentArgs {
     /// Split into the run's `(task, inherit, model)`, rejecting a blank task.
+    /// `mode: "session"` never gets here: the kernel routes it to `delegate`.
     fn into_parts(self) -> std::result::Result<(String, Inherit, ModelAsk), &'static str> {
-        // `background` is a kernel affordance acted on before this point, and
-        // an `assistant` is routed to `delegate`; they are parsed only so
-        // `deny_unknown_fields` accepts them.
-        let _ = (self.background, self.assistant);
+        // `background` is a kernel affordance acted on before this point; it
+        // is parsed only so `deny_unknown_fields` accepts it.
+        let _ = self.background;
+        if self.assistant.is_some() {
+            return Err("agent: `assistant` goes with mode \"session\"");
+        }
         let task = self.task.trim();
         if task.is_empty() {
             return Err("agent: `task` must not be empty");
         }
-        let inherit = self.inherit.unwrap_or_default();
-        let context = match inherit.context.unwrap_or_default() {
-            ContextMode::Full => InheritContext::Full,
-            ContextMode::None => InheritContext::None,
+        let context = match self.mode.unwrap_or_default() {
+            Mode::Fork => InheritContext::Full,
+            Mode::Fresh | Mode::Session => InheritContext::None,
         };
-        let workspaces = match inherit.workspaces {
+        let workspaces = match self.workspaces {
             Some(Workspaces::Names(names)) => Some(names),
             Some(Workspaces::All(_)) | None => None,
         };
@@ -1419,23 +1422,15 @@ impl Kernel {
     }
 }
 
-// `inherit` arguments; absent means "inherit everything".
-#[derive(Debug, Default, Deserialize, JsonSchema)]
-#[serde(deny_unknown_fields)]
-struct InheritArgs {
-    /// full (default): continue from here with this whole conversation; none: start clean with only the task
-    context: Option<ContextMode>,
-    /// "all" (default) or an array of workspace names the sub-agent may use
-    workspaces: Option<Workspaces>,
-}
-
-// Context inheritance; mirrors `rumu_core::InheritContext`.
+// Where an `agent` runs: `Fork` and `Fresh` are branches of this session
+// (`rumu_core::InheritContext::Full` / `None`), `Session` a session of its own.
 #[derive(Debug, Default, Deserialize, JsonSchema)]
 #[serde(rename_all = "snake_case")]
-enum ContextMode {
+enum Mode {
+    Fork,
     #[default]
-    Full,
-    None,
+    Fresh,
+    Session,
 }
 
 // `"all"` or an explicit workspace-name list.

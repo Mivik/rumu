@@ -61,7 +61,7 @@ async fn agent_transcript_address_is_readable() {
                 ToolCall::new(
                     "e1",
                     "agent",
-                    json!({ "background": false, "task": "find the config file" }),
+                    json!({ "mode": "fork", "background": false, "task": "find the config file" }),
                 ),
                 ToolCall::new("o1", "other", json!({})),
             ]),

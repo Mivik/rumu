@@ -86,7 +86,7 @@ const LEDGER: &str = "0193a2f1-0000-7000-8000-000000000003";
 
 /// scout's `agent` call for ledger.
 fn task() -> Value {
-    json!({ "background": false, "assistant": LEDGER, "task": "find the monthly budget" })
+    json!({ "background": false, "mode": "session", "assistant": LEDGER, "task": "find the monthly budget" })
 }
 
 fn home() -> tempfile::TempDir {
@@ -327,6 +327,50 @@ async fn aborting_the_turn_cancels_the_question() {
         }
     }
     assert!(kernel.decisions().is_empty());
+}
+
+/// scout hands a task to itself: `mode: "session"` without `assistant`.
+struct SelfLlm;
+
+#[async_trait]
+impl Llm for SelfLlm {
+    async fn complete(
+        &self,
+        _pick: rumu_core::ModelPick<'_>,
+        _system: &str,
+        _tools: &[ToolSpec],
+        nodes: &[Node],
+        _on_delta: Option<OnDelta>,
+    ) -> std::result::Result<LlmResponse, rumu_kernel::LlmError> {
+        if first_user(nodes).starts_with("You handed yourself this task") {
+            return Ok(LlmResponse::text("done on my own"));
+        }
+        Ok(match last_result(nodes) {
+            None => LlmResponse::calls([ToolCall::new(
+                "a1",
+                "agent",
+                json!({ "background": false, "mode": "session", "task": "tidy up" }),
+            )]),
+            Some(result) => LlmResponse::text(format!("scout heard: {result}")),
+        })
+    }
+}
+
+#[tokio::test]
+async fn a_task_handed_to_yourself_runs_unasked_in_a_new_session() {
+    let home = home();
+    let kernel = kernel_on(home.path(), Arc::new(SelfLlm)).await;
+    let (reply, asked) = scout_turn(&kernel, home.path(), json!({ "allow": false })).await;
+    assert_eq!(asked, 0);
+    assert!(reply.contains("`scout` reports"), "{reply}");
+    assert!(reply.contains("done on my own"), "{reply}");
+    let scout = deck_id(home.path(), "scout");
+    let sessions = kernel.list_sessions().unwrap();
+    assert_eq!(
+        sessions.iter().filter(|s| s.assistant == scout).count(),
+        2,
+        "the handing session and its own"
+    );
 }
 
 /// scout hands the task over; ledger thinks forever.

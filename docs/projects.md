@@ -37,11 +37,11 @@ An assistant works in any project.
   `RUMU_HOME/scratch/<session id>`, created on first use and removed with the
   session. Its branches and sub-agents share it. It is local only, never
   synced or versioned: use it for throwaway files. Like `@rumu`, it is always
-  addressable, even when `inherit.workspaces` narrows a sub-agent.
+  addressable, even when an `agent`'s `workspaces` narrows a sub-agent.
 - Every registered workspace is addressable from every session. Attaching
   was never a sandbox (`bash` in a local workspace reaches the whole
-  machine), so sessions keep no list of attached workspaces. A sub-agent's
-  `inherit.workspaces` still narrows what it may address.
+  machine), so sessions keep no list of attached workspaces. An `agent`'s
+  `workspaces` still narrows what a sub-agent may address.
 - A project **mounts** workspaces: an ordered list of names, the first being
   the project's default. A workspace may be mounted in several projects (a
   read-only upstream checkout, say).
@@ -183,7 +183,7 @@ stays a tool. Which set a workspace is in shows in its path, not in a field:
   workspace: assistants carry no workspaces.
 - The attached list the user sets per branch: the composer's workspace
   panel, the `workspaces` of a prompt's choice and `prefs.workspaces`. The
-  `workspace.set` marker stays only for `inherit.workspaces`.
+  `workspace.set` marker stays only for an `agent`'s `workspaces`.
 - The assistant roster as the sidebar's top level: the roster lives in the
   new-session picker.
 

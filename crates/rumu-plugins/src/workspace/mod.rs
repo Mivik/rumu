@@ -31,6 +31,7 @@ mod session;
 mod task;
 mod time;
 mod tools;
+mod watch;
 
 #[cfg(test)]
 mod tests;
@@ -43,7 +44,9 @@ use std::path::{Path, PathBuf};
 use std::sync::Mutex;
 
 use async_trait::async_trait;
-use rumu_core::{Cx, Manifest, Plugin, SCRATCH_WORKSPACE, ToolOutput, Workspace, Workspaces};
+use rumu_core::{
+    Cx, Inbox, Manifest, Plugin, SCRATCH_WORKSPACE, ToolOutput, Workspace, Workspaces,
+};
 use serde_json::Value;
 use tracing::warn;
 
@@ -72,6 +75,10 @@ pub struct WorkspacePlugin {
     mcp: Option<std::sync::Arc<crate::McpHub>>,
     /// The skills behind `@rumu:/skills`.
     skills: Option<std::sync::Arc<crate::Skills>>,
+    /// The kernel's channel for `bash` watch events (set by `attach`).
+    inbox: std::sync::OnceLock<std::sync::Arc<dyn Inbox>>,
+    /// When a watch posts its pending output.
+    watch_timing: watch::WatchTiming,
 }
 
 impl WorkspacePlugin {
@@ -86,6 +93,8 @@ impl WorkspacePlugin {
             agents_missing: Mutex::new(std::collections::HashSet::new()),
             mcp: None,
             skills: None,
+            inbox: std::sync::OnceLock::new(),
+            watch_timing: Default::default(),
         }
     }
 
@@ -236,6 +245,10 @@ pub(crate) fn backend_for(ctl_dir: &Path, ws: &Workspace) -> std::sync::Arc<dyn 
 impl Plugin for WorkspacePlugin {
     fn manifest(&self) -> Manifest {
         tools::manifest()
+    }
+
+    fn attach(&self, inbox: std::sync::Arc<dyn Inbox>) {
+        let _ = self.inbox.set(inbox);
     }
 
     async fn call_tool(&self, name: &str, args: Value, cx: &Cx) -> rumu_core::Result<ToolOutput> {

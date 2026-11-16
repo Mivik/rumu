@@ -461,7 +461,11 @@ impl Kernel {
             let request = PostRequest {
                 branch: info.branch.clone(),
                 source,
-                post: Post { effects, wake },
+                post: Post {
+                    effects,
+                    wake,
+                    paced: false,
+                },
                 ack: Some(ack_tx),
             };
             if self.post_tx.send(request).is_err() {
