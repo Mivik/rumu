@@ -17,7 +17,7 @@ pub(super) fn iso_local(ms: Millis) -> String {
 fn render(ms: Millis, tz: TimeZone) -> String {
     Timestamp::from_millisecond(ms)
         .unwrap_or(Timestamp::UNIX_EPOCH)
-        .to_zoned(tz)
+        .to_zoned_datetime(tz)
         .strftime("%Y-%m-%dT%H:%M:%S%:z")
         .to_string()
 }

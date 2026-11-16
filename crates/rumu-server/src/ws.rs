@@ -243,6 +243,10 @@ async fn blob_media(
         .await
     {
         Ok(res) => res.map(axum::body::Body::new),
+        // tower-http 0.7 hands a missing file back as an error, not a 404.
+        Err(e) if e.kind() == std::io::ErrorKind::NotFound => {
+            return blob_error(&rumu_blob::Error::NotFound(hash.to_owned()));
+        }
         Err(e) => {
             return (
                 StatusCode::INTERNAL_SERVER_ERROR,

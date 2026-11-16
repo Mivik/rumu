@@ -23,20 +23,20 @@ async-trait = "0.1"
 axum = { version = "0.8", features = ["ws"] }
 base64 = "0.23"
 futures-util = "0.3"
-genai = "0.7.3"
+genai = "0.7.5"
 gix = { version = "0.90", default-features = false, features = ["index", "sha1"] }
 globset = "0.4"
 imara-diff = { version = "0.2", default-features = false }
 image = { version = "0.25", default-features = false, features = ["png", "jpeg", "gif", "webp"] }
-jiff = "0.2"
-json-patch = "4"
+jiff = "1.0"
+json-patch = "5"
 process-wrap = { version = "10", default-features = false, features = ["tokio1", "process-session", "job-object"] }
 regex = "1"
 reqwest = { version = "0.13", default-features = false, features = ["rustls"] }
-rmcp = { version = "3.9", default-features = false, features = ["client", "transport-child-process", "transport-streamable-http-client-reqwest", "reqwest"] }
+rmcp = { version = "3.10", default-features = false, features = ["client", "transport-child-process", "transport-streamable-http-client-reqwest", "reqwest"] }
 rquickjs = "0.14"
 rust-embed = { version = "8", features = ["mime-guess"] }
-tower-http = { version = "0.6", features = ["fs"] }
+tower-http = { version = "0.7", features = ["fs"] }
 schemars = "1"
 serde = { version = "1", features = ["derive"] }
 serde_json = "1"
@@ -46,7 +46,7 @@ tempfile = "3"
 thiserror = "2"
 tokio = { version = "1", features = ["full"] }
 ts-rs = { version = "12", features = ["serde-json-impl", "no-serde-warnings"] }
-typed-path = "0.11"
+typed-path = "0.13"
 tokio-util = "0.7"
 tokio-tungstenite = { version = "0.30", default-features = false, features = ["connect", "handshake"] }
 tracing = "0.1"
