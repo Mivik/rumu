@@ -19,6 +19,11 @@ pub const RUMU_WORKSPACE: &str = "@rumu";
 /// `@` keeps it apart from preset names.
 pub const SCRATCH_WORKSPACE: &str = "@scratch";
 
+/// The directory inside `@scratch` that rumu itself writes (prompt
+/// attachments, incoming events): hidden from `ls` and globs, so the
+/// model's own files and clean-ups stay clear of it.
+pub const SCRATCH_INBOX: &str = ".inbox";
+
 /// Names that can never be workspaces: the common URI schemes are reserved
 /// so `http://…`-shaped text is never mistaken for a qualified path
 /// (CommonMark renders `proj:x` as a link, so the syntax must stay

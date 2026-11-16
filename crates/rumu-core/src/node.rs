@@ -2,7 +2,7 @@ use serde::de::DeserializeOwned;
 use serde::{Deserialize, Serialize};
 use serde_json::Value;
 
-use crate::{BranchId, NodeId, SCRATCH_WORKSPACE, SessionId, Timestamp, Workspace};
+use crate::{BranchId, NodeId, SCRATCH_INBOX, SCRATCH_WORKSPACE, SessionId, Timestamp, Workspace};
 
 /// A persisted event. All nodes of a session form a tree via `parent`.
 #[derive(Debug, Clone, Serialize, Deserialize, ts_rs::TS)]
@@ -129,7 +129,7 @@ impl Attachment {
     }
 
     /// Where a prompt's attachment is copied inside the session's `@scratch`
-    /// so tools can work on it: `attachments/<hash prefix>.<ext>`.
+    /// so tools can work on it: `.inbox/attachments/<hash prefix>.<ext>`.
     pub fn scratch_path(&self) -> String {
         let ext = match self.mime.split_once('/') {
             Some((_, "jpeg")) => "jpg",
@@ -137,7 +137,7 @@ impl Attachment {
             None => "bin",
         };
         let stem = self.hash.get(..12).unwrap_or(&self.hash);
-        format!("attachments/{stem}.{ext}")
+        format!("{SCRATCH_INBOX}/attachments/{stem}.{ext}")
     }
 }
 

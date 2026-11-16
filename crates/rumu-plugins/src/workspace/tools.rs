@@ -111,7 +111,8 @@ tools. `workspace_use(name)` changes the default; `workspace_use()` lists worksp
 workspaces refuse writes and bash.\n\n\
 `@scratch` is this session's throwaway workspace on this machine, shared with its branches and \
 sub-agents and deleted with the session. Use it for scripts, downloads, clones and generated \
-files; what should outlive the session belongs in a card or a project workspace.\n\n\
+files; what should outlive the session belongs in a card or a project workspace. Its \
+`.inbox/` is written by rumu (attachments, events): read it, don't change it.\n\n\
 To give the user a page, document, diagram, code, image, audio or video to look at, or any file \
 to download, write it to a file (usually in \
 `@scratch`) and `show` it; `show` it again after a change for a new version. HTML runs sandboxed \

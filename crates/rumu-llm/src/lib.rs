@@ -1594,7 +1594,7 @@ mod tests {
         // A prompt's image is labelled with its `@scratch` copy.
         let label = |n: usize| {
             format!(
-                "text:\"Image {n} (@scratch:attachments/{}.png):\"",
+                "text:\"Image {n} (@scratch:.inbox/attachments/{}.png):\"",
                 &atts[n - 1].hash[..12]
             )
         };
