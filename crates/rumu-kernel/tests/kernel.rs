@@ -459,10 +459,7 @@ impl Plugin for TestPlugin {
                     let cx = cx.clone();
                     handles.push(tokio::spawn(async move {
                         match cx
-                            .invoke(
-                                "agent",
-                                json!({ "task": task, "mode": "fresh" }),
-                            )
+                            .invoke("agent", json!({ "task": task, "mode": "fresh" }))
                             .await
                         {
                             Ok(r) => r.output.content.text,
