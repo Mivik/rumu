@@ -103,8 +103,9 @@ impl Kernel {
             .map(|e| (e.token.clone(), e.info.clone()))
     }
 
-    /// Wake every waiter: a task's status or `post_done` changed.
-    fn signal_tasks(&self) {
+    /// Wake every waiter: a task's status or `post_done` changed, or a
+    /// branch may have gone idle.
+    pub(crate) fn signal_tasks(&self) {
         self.task_changed.send_modify(|v| *v = v.wrapping_add(1));
     }
 
@@ -525,6 +526,37 @@ impl Kernel {
                 _ = changed.changed() => {}
             }
         }
+    }
+
+    /// Is `branch` done for now: no loop running, no wake waiting to start
+    /// one, and no background sub-agent of it (or of a sub-agent below it)
+    /// still running or yet to report? A background tool task does not count:
+    /// it may never end (a dev server), and its completion wakes the branch
+    /// later like any post.
+    pub fn is_idle(&self, branch: &BranchId) -> Result<bool> {
+        let subtree = self.branch_subtree(branch)?;
+        let inner = self.inner.lock().unwrap();
+        let loops = subtree.iter().any(|b| {
+            inner.running.contains_key(b) || inner.wake_pending.get(b).is_some_and(|p| p.active)
+        });
+        let tasks = inner.tasks.values().any(|e| {
+            matches!(e.info.kind, TaskKind::Agent { .. })
+                && subtree.contains(&e.info.branch)
+                && (e.info.status.is_running() || !e.post_done)
+        });
+        Ok(!loops && !tasks)
+    }
+
+    /// Wait until `branch` [is idle](Self::is_idle), then push `branch.idle`:
+    /// a subscriber sees every push of the work it waited for before that one.
+    pub async fn wait_idle(&self, branch: &BranchId) -> Result<()> {
+        let mut changed = self.task_changed.subscribe();
+        while !self.is_idle(branch)? {
+            // The sender lives as long as the kernel.
+            let _ = changed.changed().await;
+        }
+        self.push("branch.idle", json!({ "branch": branch }));
+        Ok(())
     }
 
     /// Abort-time cleanup: cancel every running task owned by `branch` or one

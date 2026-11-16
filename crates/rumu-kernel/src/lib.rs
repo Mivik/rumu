@@ -271,8 +271,8 @@ pub struct Kernel {
     /// Serializes node appends: a script's concurrent invokes (`Promise.all`)
     /// must chain onto the branch head in completion order, not race for it.
     pub(crate) append_lock: Mutex<()>,
-    /// Bumped whenever a task's status or `post_done` changes; waiters sleep
-    /// on it instead of polling.
+    /// Bumped whenever a task's status or `post_done` changes, or a loop or
+    /// a pending wake goes away; waiters sleep on it instead of polling.
     pub(crate) task_changed: watch::Sender<u64>,
     /// Ordered out-of-band posts, drained by the worker task.
     post_tx: mpsc::UnboundedSender<PostRequest>,
@@ -882,6 +882,19 @@ impl Kernel {
         Ok(())
     }
 
+    /// The user makes `name` the branch's default workspace: a
+    /// `workspace.use` marker, with `text` telling the model. Queued while a
+    /// turn runs.
+    pub async fn use_workspace(
+        self: &Arc<Self>,
+        branch: &BranchId,
+        name: String,
+        text: String,
+    ) -> Result<()> {
+        self.deliver_note(branch, text, &WorkspaceUse { name })
+            .await
+    }
+
     /// A user action recorded on the branch: the model reads `text`, the
     /// state follows `marker`. Queued while a turn runs.
     async fn deliver_note<T: rumu_core::Structured>(
@@ -1152,6 +1165,7 @@ impl Kernel {
 
         if exceeded {
             // Storm guard: content is still written, only the turn is skipped.
+            self.signal_tasks();
             self.flush_queue(branch).await?;
             self.warn(format!(
                 "wake storm on branch {branch}: {MAX_WAKE_TURNS} consecutive wake turns without \
@@ -1223,6 +1237,7 @@ impl Kernel {
             inner.streaming.remove(branch);
             inner.wake_pending.get(branch).is_some_and(|p| p.active)
         };
+        self.signal_tasks();
         // Node appends only touch `updated_at`; announce it once per loop so
         // session lists see the new activity.
         if let Ok(session) = self.session_of(branch)

@@ -18,6 +18,8 @@ rumu-kernel = { path = "crates/rumu-kernel" }
 rumu-store = { path = "crates/rumu-store" }
 rumu-llm = { path = "crates/rumu-llm" }
 rumu-plugins = { path = "crates/rumu-plugins" }
+# Pins its schema crate exactly: bump both together.
+agent-client-protocol = { version = "5.3.0", features = ["stdio", "unstable_end_turn_token_usage"] }
 anyhow = "1"
 async-trait = "0.1"
 axum = { version = "0.8", features = ["ws"] }

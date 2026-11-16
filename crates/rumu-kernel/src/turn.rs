@@ -238,6 +238,8 @@ impl Kernel {
             t.cancel();
         }
         inner.wake_pending.remove(branch);
+        drop(inner);
+        self.signal_tasks();
         Ok(())
     }
 

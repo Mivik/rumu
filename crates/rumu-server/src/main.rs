@@ -1,5 +1,7 @@
-//! The `rumu` binary: axum WebSocket server + static frontend.
+//! The `rumu` binary: axum WebSocket server + static frontend, or with
+//! `acp` an Agent Client Protocol agent on stdio.
 
+mod acp;
 mod auth;
 mod boot;
 mod settings;
@@ -7,7 +9,7 @@ mod ws;
 
 use std::net::{IpAddr, Ipv4Addr, SocketAddr};
 
-use anyhow::Result;
+use anyhow::{Result, bail};
 use tracing::info;
 use tracing_subscriber::EnvFilter;
 
@@ -15,6 +17,11 @@ use tracing_subscriber::EnvFilter;
 async fn main() -> Result<()> {
     init_tracing();
     let home = boot::home()?;
+    match std::env::args().nth(1).as_deref() {
+        None => {}
+        Some("acp") => return acp::run(&home).await,
+        Some(other) => bail!("unknown command `{other}` (usage: rumu [acp])"),
+    }
     let token = auth::Token::load(&home)?;
     let port: u16 = std::env::var("RUMU_PORT")
         .ok()
@@ -49,10 +56,13 @@ async fn main() -> Result<()> {
 }
 
 /// Initialize logging; `RUST_LOG` overrides the default `info` level.
+/// Colors only on a terminal: `rumu acp`'s stderr usually goes to a log.
 fn init_tracing() {
+    use std::io::IsTerminal;
     let filter = EnvFilter::try_from_default_env().unwrap_or_else(|_| EnvFilter::new("info"));
     tracing_subscriber::fmt()
         .with_env_filter(filter)
+        .with_ansi(std::io::stderr().is_terminal())
         .with_writer(std::io::stderr)
         .init();
 }

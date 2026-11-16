@@ -358,10 +358,22 @@ async fn handle_request(state: &AppState, raw: &str) -> String {
         .unwrap_or_default()
         .to_owned();
     let params = req.get("params").cloned().unwrap_or(json!({}));
-    match dispatch(state, &method, &params).await {
+    match call(state, &method, &params).await {
         Ok(result) => json!({ "jsonrpc": "2.0", "id": id, "result": result }).to_string(),
-        Err(e) => error_frame(id, e.code(), e.to_string()).to_string(),
+        Err((code, message)) => error_frame(id, code, message).to_string(),
     }
+}
+
+/// Run one request as a WebSocket client would: its result, or the JSON-RPC
+/// error code and message.
+pub(crate) async fn call(
+    state: &AppState,
+    method: &str,
+    params: &Value,
+) -> std::result::Result<Value, (i64, String)> {
+    dispatch(state, method, params)
+        .await
+        .map_err(|e| (e.code(), e.to_string()))
 }
 
 /// The assistant deck named by the `assistant` id param (the default
@@ -911,6 +923,29 @@ async fn dispatch(state: &AppState, method: &str, p: &Value) -> Result<Value> {
         "abort" => {
             let branch: BranchId = str_param(p, "branch")?.into();
             kernel.abort(&branch)?;
+            Ok(json!({}))
+        }
+
+        // Resolves once nothing more happens on the branch until it is
+        // prompted (see `Kernel::is_idle`), right after a `branch.idle` push.
+        "branch.wait_idle" => {
+            let branch: BranchId = str_param(p, "branch")?.into();
+            kernel.wait_idle(&branch).await?;
+            Ok(json!({}))
+        }
+
+        // Make the registered workspace `name` the branch's default, telling
+        // the model `text`.
+        "branch.use_workspace" => {
+            let branch: BranchId = str_param(p, "branch")?.into();
+            let name = str_param(p, "name")?;
+            if state.workspaces.get(name).is_none() {
+                return Err(ServerError::InvalidParams(format!("no workspace `{name}`")));
+            }
+            let text = str_param(p, "text")?;
+            kernel
+                .use_workspace(&branch, name.to_owned(), text.to_owned())
+                .await?;
             Ok(json!({}))
         }
 

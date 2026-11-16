@@ -40,8 +40,9 @@ pub use skills::{SKILLS_DIR, Skills, SkillsPlugin};
 pub use stdio::{StdioError, StdioPlugin};
 pub use workspace::{BackendError, WorkspacePlugin, snapshot_file};
 pub use workspaces::{
-    PROJECTS_FILE, Project, WORKSPACES_FILE, create_project, drop_project, load_workspaces,
-    project_of, projects, remove_workspace, seed_project, set_project_workspaces, upsert_workspace,
+    PROJECTS_FILE, Project, WORKSPACES_FILE, create_project, cwd_workspace_name, drop_project,
+    load_workspaces, project_of, projects, remove_workspace, seed_project, set_project_workspaces,
+    upsert_workspace,
 };
 
 #[cfg(test)]

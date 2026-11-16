@@ -409,9 +409,9 @@ fn check(name: String, entry: Entry) -> Result<Workspace> {
     ))
 }
 
-/// The cwd's basename, lowercased with other characters folded to `-`; an
-/// unusable basename becomes `ws`.
-fn cwd_workspace_name(root: &str) -> String {
+/// A workspace name for the directory `root`: its basename, lowercased with
+/// other characters folded to `-`; an unusable basename becomes `ws`.
+pub fn cwd_workspace_name(root: &str) -> String {
     let base = Path::new(root)
         .file_name()
         .map(|s| s.to_string_lossy().into_owned())
