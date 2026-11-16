@@ -12,23 +12,19 @@ import Icon from '../ui/Icon.vue'
 
 const props = defineProps<{ id: string; request: QuestionsRequest }>()
 
-/** One question's answer: the options picked, the words written, and which of
- *  the two is the answer. `side` is needed because the box can hold words that
- *  do not count — written first, then an option picked — while going back to a
- *  question must still show what was picked there.
+/** One question's answer: the options picked, the words written, and `side`,
+ *  which of the two counts — the box can hold words that do not (written first,
+ *  then an option picked), while going back must still show what was picked.
  *
  *  TODO: the row is meant to become a comment *added* to the options rather
- *  than a "something else" standing in for one (its label, `chat.ask.custom`,
- *  would change with it). That drop of the single-choice choice between an
- *  option and words — both would count — would take `side` and the rules below
- *  with it. Left out for now. */
+ *  than a "something else" standing in for one (`chat.ask.custom` would change
+ *  with it). Both would then count, and `side` would go with that. */
 type Draft = { selected: string[]; custom: string; side: 'option' | 'custom' }
 
 const drafts = reactive<Draft[]>(
   props.request.questions.map((q) => ({
     selected: [],
     custom: '',
-    // A question without options is answered by its words, and only by them.
     side: q.options.length ? 'option' : 'custom',
   })),
 )
@@ -39,16 +35,11 @@ const question = computed(() => props.request.questions[index.value]!)
 const draft = computed(() => drafts[index.value]!)
 const last = computed(() => index.value === props.request.questions.length - 1)
 
-/** Whether a question's own-words row is its answer: it was chosen and it
- *  holds words. Neither focus nor mere content is part of it. A question that
- *  takes several answers keeps them beside the words instead. */
 function own(i: number): boolean {
   const d = drafts[i]!
   return d.custom.trim() !== '' && (props.request.questions[i]!.multiple || d.side === 'custom')
 }
 
-/** Whether an option counts as picked: a single choice answers with one thing,
- *  so options count only while they are that thing. */
 function picked(i: number, label: string): boolean {
   const d = drafts[i]!
   if (!props.request.questions[i]!.multiple && d.side !== 'option') return false
@@ -70,22 +61,15 @@ function pick(label: string): void {
     return
   }
   d.selected = [label]
-  // Choosing an option answers the question with it; the words stay in the box,
-  // no longer the answer, so going back still shows the option as picked.
   d.side = 'option'
   if (!last.value) setTimeout(() => go(index.value + 1), 160)
 }
 
-/** Typing words is what makes them the answer; the box merely holding some
- *  (focus, tabbing in, coming back to the question) does not. */
 function onCustomInput(e: Event): void {
   if (question.value.multiple) return
   if ((e.target as HTMLInputElement).value.trim() !== '') draft.value.side = 'custom'
 }
 
-/** The mark beside the own-words row: with words written it takes them back as
- *  the answer (and lets go of them again); without any there is nothing to pick,
- *  so it only leads to the row. */
 function leadToOwn(): void {
   const d = draft.value
   if (question.value.multiple || !question.value.options.length || d.custom.trim() === '') {
@@ -96,14 +80,10 @@ function leadToOwn(): void {
 }
 
 function go(i: number): void {
-  // One own-words input serves every question, reused as `index` moves: a caret
-  // kept there would carry on into the next question's row, where the words
-  // would count as *that* question's answer. Leaving a question drops the caret.
+  // One input serves every question: its caret must not carry on into the next.
   customEl.value?.blur()
   index.value = i
   // A question without options is answered by typing: put the caret there.
-  // Its row never shows as chosen, so the caret is all that says where the
-  // answer goes.
   if (!props.request.questions[i]!.options.length) void nextTick(() => customEl.value?.focus())
 }
 
@@ -116,7 +96,6 @@ function submit(): void {
   void answerDecision(props.id, {
     answers: drafts.map((d, i) => {
       const custom = d.custom.trim()
-      // A single choice answers with one thing: whatever `side` names.
       const one = !props.request.questions[i]!.multiple
       return {
         selected: one && d.side === 'custom' ? [] : d.selected,
