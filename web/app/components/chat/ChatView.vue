@@ -205,8 +205,9 @@ function composerRoot(): HTMLElement | null {
               :key="q.id"
               class="ml-auto w-fit max-w-[85%] rounded-sheet rounded-br-xs border border-dashed border-brand/40 bg-brand-soft/50 px-4 py-2 text-message text-ink-3 sm:max-w-[70%]"
             >
-              <span class="mr-1.5 text-micro font-semibold text-ink-2">{{ t('chat.header.queued') }}</span
-              >{{ q.text }}
+              <span class="mr-1.5 text-micro font-semibold text-ink-2">{{ t('chat.header.queued') }}</span>{{
+                q.text
+              }}
             </div>
           </div>
           <!-- background tasks of this branch: a tab on the composer's edge -->
