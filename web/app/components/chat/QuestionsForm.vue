@@ -22,14 +22,14 @@ const props = defineProps<{ id: string; request: QuestionsRequest }>()
  *  would change with it). That drop of the single-choice choice between an
  *  option and words — both would count — would take `side` and the rules below
  *  with it. Left out for now. */
-type Draft = { selected: string[]; custom: string; side: 'option' | 'words' }
+type Draft = { selected: string[]; custom: string; side: 'option' | 'custom' }
 
 const drafts = reactive<Draft[]>(
   props.request.questions.map((q) => ({
     selected: [],
     custom: '',
     // A question without options is answered by its words, and only by them.
-    side: q.options.length ? 'option' : 'words',
+    side: q.options.length ? 'option' : 'custom',
   })),
 )
 const index = ref(0)
@@ -44,7 +44,7 @@ const last = computed(() => index.value === props.request.questions.length - 1)
  *  takes several answers keeps them beside the words instead. */
 function own(i: number): boolean {
   const d = drafts[i]!
-  return d.custom.trim() !== '' && (props.request.questions[i]!.multiple || d.side === 'words')
+  return d.custom.trim() !== '' && (props.request.questions[i]!.multiple || d.side === 'custom')
 }
 
 /** Whether an option counts as picked: a single choice answers with one thing,
@@ -80,7 +80,7 @@ function pick(label: string): void {
  *  (focus, tabbing in, coming back to the question) does not. */
 function onCustomInput(e: Event): void {
   if (question.value.multiple) return
-  if ((e.target as HTMLInputElement).value.trim() !== '') draft.value.side = 'words'
+  if ((e.target as HTMLInputElement).value.trim() !== '') draft.value.side = 'custom'
 }
 
 /** The mark beside the own-words row: with words written it takes them back as
@@ -92,7 +92,7 @@ function leadToOwn(): void {
     customEl.value?.focus()
     return
   }
-  d.side = d.side === 'words' ? 'option' : 'words'
+  d.side = d.side === 'custom' ? 'option' : 'custom'
 }
 
 function go(i: number): void {
@@ -119,7 +119,7 @@ function submit(): void {
       // A single choice answers with one thing: whatever `side` names.
       const one = !props.request.questions[i]!.multiple
       return {
-        selected: one && d.side === 'words' ? [] : d.selected,
+        selected: one && d.side === 'custom' ? [] : d.selected,
         custom: (own(i) ? custom : '') || undefined,
       }
     }),
