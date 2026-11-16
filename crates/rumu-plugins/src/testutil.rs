@@ -566,6 +566,7 @@ mod tests {
                 Post {
                     effects: vec![Content::text("hi")],
                     wake: true,
+                    paced: false,
                 },
             )
             .unwrap();
@@ -578,6 +579,7 @@ mod tests {
                     Post {
                         effects: vec![Content::default()],
                         wake: false,
+                        paced: false,
                     },
                 )
                 .is_err()

@@ -19,7 +19,7 @@ use serde_json::{Value, json};
 
 use super::backend::{Backend, BackendError, ExecOutput, is_not_found, probe_uname};
 use super::patch;
-use super::watch::Batch;
+use super::watch::WatchArgs;
 use super::{WorkspacePlugin, usable_ctl_dir};
 use crate::Result;
 use rumu_core::Cx;
@@ -185,14 +185,15 @@ struct BashArgs {
     command: String,
     /// the call's intent, 5-10 words in active voice ("List files in src",
     /// "Run the parser tests"); shown as the call's summary in the transcript
-    #[allow(dead_code)] // read from the raw args by the UI and the task label
     description: Option<String>,
     /// workspace name; default: the branch default
     workspace: Option<String>,
-    /// seconds, default 60, max 600
+    /// seconds, default 60, max 600; with `watch`: its lifetime, default
+    /// 1800, max 86400
     timeout: Option<u64>,
-    /// with `background: true`: send new output to you as notes while it runs
-    watch: Option<bool>,
+    /// with `background: true`: send new output lines to you as notes while
+    /// it runs (`{}` for every line)
+    watch: Option<WatchArgs>,
 }
 
 #[derive(Debug, Deserialize, JsonSchema)]
@@ -301,8 +302,10 @@ directory (`workspace` argument; default = the default workspace). Returns combi
 stdout+stderr (truncated to ~20k chars) and the exit code. Default timeout 60s (max \
 600s). Disabled on read-only workspaces and on the `@rumu` workspace. Give every call a \
 `description` (5-10 words, active voice): the transcript shows it as the call's summary. \
-`watch: true` (with `background: true`) delivers new output as a note about once a second and \
-wakes you; filter in the script (e.g. `grep --line-buffered`) and end it with `task_kill`."
+`watch` (with `background: true`) delivers new output lines as notes that wake you, until \
+the command exits, `until` matches, `task_kill` or its lifetime ends. Prefer `match`/`until` \
+to piping into grep (pipes buffer lines), and make `match` cover failures too (Traceback, \
+Error, Killed): silence is not success."
                     .into(),
                 schema: tool_schema::<BashArgs>(),
                 background: true,
@@ -994,41 +997,38 @@ impl WorkspacePlugin {
         }
     }
 
-    async fn tool_bash(&self, state: &PathState, args: &Value, cx: &Cx) -> ToolResult<BashOutcome> {
+    async fn tool_bash(&self, state: &PathState, args: &Value, cx: &Cx) -> ToolResult<ToolOutput> {
         let args: BashArgs = parse_args("bash", args)?;
-        let timeout = args
-            .timeout
-            .unwrap_or(BASH_TIMEOUT_DEFAULT)
-            .clamp(1, BASH_TIMEOUT_MAX);
         let ws = bash_target(state, args.workspace.as_deref())?;
         if ws.read_only {
             return Err(read_only_err(&ws, "bash is disabled"));
         }
         let watch = match args.watch {
-            Some(true) => Some(self.watch_for(cx)?),
-            _ => None,
+            Some(w) => Some(self.watch_for(cx, w, args.timeout, args.description.as_deref())?),
+            None => None,
         };
+        let timeout = args
+            .timeout
+            .unwrap_or(BASH_TIMEOUT_DEFAULT)
+            .clamp(1, BASH_TIMEOUT_MAX);
         let effects = self.maybe_inject_agents(cx, &ws).await;
         let backend = self.backend_for(&ws);
         // Stream every chunk to the UI (tool.progress) / the task buffer
-        // (task.progress), and to the watch batch. Background bash has no
-        // timeout of its own: it ends when the command exits, `task_kill`s
-        // it, or its owner aborts.
-        let batch = std::sync::Mutex::new(Batch::default());
-        let notify = tokio::sync::Notify::new();
+        // (task.progress), and to the watch. Background bash without `watch`
+        // has no timeout of its own: it ends when the command exits,
+        // `task_kill`s it, or its owner aborts.
         let mut on_chunk = |chunk: &str| {
             cx.progress(Progress::Append(chunk.to_owned()));
-            if watch.is_some() {
-                batch
-                    .lock()
-                    .unwrap()
-                    .push(chunk, tokio::time::Instant::now());
-                notify.notify_one();
+            if let Some(watch) = &watch {
+                watch.push(chunk);
             }
         };
         let exec: std::result::Result<ExecOutput, BackendError> = if let Some(watch) = &watch {
             let exec = backend.exec(&args.command, &mut on_chunk);
-            watch.run(exec, &batch, &notify, cx).await
+            match watch.run(exec, cx).await {
+                Ok(exec) => exec,
+                Err(ended) => return Ok(ToolOutput::ok(ended).with_effects(effects)),
+            }
         } else if cx.call().is_some_and(|c| c.background) {
             backend.exec(&args.command, &mut on_chunk).await
         } else {
@@ -1053,13 +1053,14 @@ impl WorkspacePlugin {
                 code: out.code,
                 // A watch already posted the rest: the result (and so the
                 // completion note) carries only what is still pending.
-                output: match watch {
-                    Some(_) => batch.lock().unwrap().take(),
+                output: match &watch {
+                    Some(watch) => watch.tail(cx),
                     None => out.combined,
                 },
                 effects,
                 structured: cx.call().is_some_and(|c| c.parent.is_some()),
-            }),
+            }
+            .into()),
             Err(e) => Err(backend_err("bash", None, e).with_effects(effects)),
         }
     }

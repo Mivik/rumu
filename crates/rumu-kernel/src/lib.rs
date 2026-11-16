@@ -147,6 +147,9 @@ pub(crate) struct WakePending {
     pub active: bool,
     pub sources: Vec<String>,
     pub user: bool,
+    /// Some queued item counts toward the storm guard: anything but a paced
+    /// post (see [`Post::paced`]).
+    pub counted: bool,
 }
 
 /// One queued out-of-band post, drained in order by the kernel worker.
@@ -1045,7 +1048,7 @@ impl Kernel {
                     body,
                 });
                 if let Some((source, user)) = wake {
-                    Self::mark_wake_locked(&mut inner, branch, Some(source), user);
+                    Self::mark_wake_locked(&mut inner, branch, Some(source), user, true);
                 }
                 return Ok(id);
             }
@@ -1088,11 +1091,19 @@ impl Kernel {
     }
 
     /// Record a pending wake for `branch`; the caller must hold `inner`.
-    /// Marking is idempotent (sources deduplicate, `user` accumulates).
-    fn mark_wake_locked(inner: &mut Inner, branch: &BranchId, source: Option<&str>, user: bool) {
+    /// Marking is idempotent (sources deduplicate, `user` and `counted`
+    /// accumulate).
+    fn mark_wake_locked(
+        inner: &mut Inner,
+        branch: &BranchId,
+        source: Option<&str>,
+        user: bool,
+        counted: bool,
+    ) {
         let pending = inner.wake_pending.entry(branch.clone()).or_default();
         pending.active = true;
         pending.user |= user;
+        pending.counted |= counted;
         if let Some(source) = source
             && !pending.sources.iter().any(|s| s == source)
         {
@@ -1102,14 +1113,21 @@ impl Kernel {
 
     /// Mark a pending wake on `branch` and (re)start the debounce timer: the
     /// single wake entry point. Multiple requests inside the window collapse
-    /// into one turn.
+    /// into one turn. `counted`: the item counts toward the storm guard.
     pub(crate) fn request_wake(
         self: &Arc<Self>,
         branch: &BranchId,
         source: Option<&str>,
         user: bool,
+        counted: bool,
     ) {
-        Self::mark_wake_locked(&mut self.inner.lock().unwrap(), branch, source, user);
+        Self::mark_wake_locked(
+            &mut self.inner.lock().unwrap(),
+            branch,
+            source,
+            user,
+            counted,
+        );
         self.schedule_wake(branch);
     }
 
@@ -1121,6 +1139,7 @@ impl Kernel {
         if let Some(pending) = self.inner.lock().unwrap().wake_pending.get_mut(branch) {
             pending.active = false;
             pending.user = false;
+            pending.counted = false;
             pending.sources.clear();
         }
     }
@@ -1140,7 +1159,9 @@ impl Kernel {
     }
 
     /// Start a turn for a queued wake item when the branch is idle, unless
-    /// the storm guard trips (then write the content and warn).
+    /// the storm guard trips (then write the content and warn). A wake made
+    /// only of paced posts neither counts nor trips: its poster bounds its
+    /// own rate and lifetime.
     async fn wake_if_idle(self: &Arc<Self>, branch: &BranchId) -> Result<()> {
         let (token, user, sources, exceeded) = {
             let mut inner = self.inner.lock().unwrap();
@@ -1155,10 +1176,12 @@ impl Kernel {
             }
             let pending = inner.wake_pending.remove(branch).unwrap_or_default();
             let count = inner.storm.get(branch).copied().unwrap_or(0);
-            if count >= MAX_WAKE_TURNS {
+            if pending.counted && count >= MAX_WAKE_TURNS {
                 (None, pending.user, pending.sources, true)
             } else {
-                inner.storm.insert(branch.clone(), count + 1);
+                if pending.counted {
+                    inner.storm.insert(branch.clone(), count + 1);
+                }
                 let token = CancellationToken::new();
                 inner.running.insert(branch.clone(), token.clone());
                 (Some(token), pending.user, pending.sources, false)
@@ -1248,7 +1271,8 @@ impl Kernel {
             self.push("session.updated", json!({ "session": info }));
         }
         if pending {
-            self.request_wake(branch, None, false);
+            // Re-arm only: the queued items already decided `counted`.
+            self.request_wake(branch, None, false, false);
         }
     }
 
@@ -1401,7 +1425,7 @@ impl Kernel {
                 .unwrap_or_default();
         self.deliver_effects(&req.branch, &source, effects).await?;
         if wake {
-            self.request_wake(&req.branch, Some(&source), false);
+            self.request_wake(&req.branch, Some(&source), false, !req.post.paced);
         }
         Ok(())
     }

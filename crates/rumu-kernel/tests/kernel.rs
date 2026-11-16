@@ -3818,6 +3818,7 @@ fn note_post(text: &str, wake: bool) -> Post {
     Post {
         effects: vec![Content::text(text)],
         wake,
+        paced: false,
     }
 }
 
@@ -4087,6 +4088,43 @@ async fn storm_guard_stops_runaway_wakes() {
     );
     while let Ok(v) = rx.try_recv() {
         assert_ne!(v["method"], "turn.started", "unexpected turn: {v}");
+    }
+}
+
+/// Paced posts (a poster with its own rate limit and lifetime) wake past the
+/// storm guard's budget, and do not use it up for other wakes.
+#[tokio::test]
+async fn paced_wakes_skip_the_storm_guard() {
+    let plugin = Arc::new(plugin_with(
+        "poster",
+        &[],
+        vec![],
+        noop_hooks(),
+        noop_tools(),
+    ));
+    let turns = rumu_kernel::MAX_WAKE_TURNS + 2;
+    let script = (0..turns + 1)
+        .map(|_| LlmResponse::text("ok"))
+        .collect::<Vec<_>>();
+    let (kernel, _llm, _s, branch) = setup(vec![plugin.clone()], script).await;
+    kernel.set_wake_debounce(Duration::from_millis(5));
+    let mut rx = kernel.tap_pushes();
+
+    for i in 0..turns {
+        let mut post = note_post(&format!("event-{i}"), true);
+        post.paced = true;
+        plugin.post(&branch, post).expect("post");
+        let (done, _) = collect_turn(&mut rx, &branch.0).await;
+        assert_eq!(done["method"], "turn.done");
+    }
+    // An ordinary wake still has the whole budget.
+    plugin
+        .post(&branch, note_post("plain", true))
+        .expect("post");
+    let (done, _) = collect_turn(&mut rx, &branch.0).await;
+    assert_eq!(done["method"], "turn.done");
+    while let Ok(v) = rx.try_recv() {
+        assert_ne!(v["method"], "warning", "unexpected warning: {v}");
     }
 }
 

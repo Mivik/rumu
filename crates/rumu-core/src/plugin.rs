@@ -396,13 +396,17 @@ pub trait History: Send + Sync {
 }
 
 /// One out-of-band post to a branch: effects to append, and whether the post
-/// may start a turn when the branch is idle.
+/// may start a turn when the branch is idle. `paced` marks a poster that
+/// bounds its own rate and lifetime (a `bash` watch): a wake made only of
+/// paced posts does not count toward the kernel's wake-storm guard.
 #[derive(Debug, Clone, Default, Serialize, Deserialize)]
 pub struct Post {
     #[serde(default)]
     pub effects: Vec<Effect>,
     #[serde(default)]
     pub wake: bool,
+    #[serde(default)]
+    pub paced: bool,
 }
 
 /// The kernel's out-of-band delivery channel, one per plugin.

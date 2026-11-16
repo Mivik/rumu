@@ -3274,6 +3274,7 @@ dependencies = [
  "image",
  "jiff 1.0.0",
  "process-wrap",
+ "regex",
  "rmcp",
  "rquickjs",
  "rumu-blob",

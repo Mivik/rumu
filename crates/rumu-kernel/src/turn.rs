@@ -144,7 +144,7 @@ impl Kernel {
         .await?;
         // If the turn ended between the check and the delivery, the debounced
         // wake path starts a new turn; while busy it is a no-op.
-        self.request_wake(branch, Some(SYSTEM_SOURCE), true);
+        self.request_wake(branch, Some(SYSTEM_SOURCE), true, true);
         Ok(())
     }
 
