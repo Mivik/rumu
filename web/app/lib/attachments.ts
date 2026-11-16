@@ -18,6 +18,15 @@ export function blobUrl(hash: string): string {
   return `/blobs/${hash}`
 }
 
+/** Where a prompt's image (or an MCP result's) is copied in the session's
+ *  `@scratch`: `.inbox/attachments/<hash prefix>.<ext>`. Mirrors
+ *  `Attachment::scratch_path` in rumu-core. */
+export function scratchPath(a: Attachment): string {
+  const slash = a.mime.indexOf('/')
+  const sub = slash < 0 ? 'bin' : a.mime.slice(slash + 1)
+  return `.inbox/attachments/${a.hash.slice(0, 12)}.${sub === 'jpeg' ? 'jpg' : sub}`
+}
+
 /** `text` behind the anchors of `count` images — the form every
  *  web-composed message takes. The anchors touch: the projection cuts the
  *  text at each one, and a whitespace-only piece between two images would be

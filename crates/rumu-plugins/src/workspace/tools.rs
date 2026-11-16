@@ -117,7 +117,9 @@ files; what should outlive the session belongs in a card or a project workspace.
 To give the user a page, document, diagram, code, image, audio or video to look at, or any file \
 to download, write it to a file (usually in \
 `@scratch`) and `show` it; `show` it again after a change for a new version. HTML runs sandboxed \
-with no network: inline its scripts, styles and images.\n\n\
+with no network: inline its scripts, styles and images. To put an image in your reply itself, \
+write `![alt](<address>)` with the address of one already in the conversation: a `show`n file, \
+or an attachment's `@scratch:.inbox/…` copy; any other address shows as a link.\n\n\
 `@rumu` holds rumu's own data (no bash):\n\
 - `@rumu:/cards/<mount>/<path>`: cards of the decks mounted on this branch (`/cards/self` is \
 yours). `read` gives an editable view (YAML frontmatter, then the body); a write is refused if \

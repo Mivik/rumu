@@ -20,7 +20,7 @@ import hljs from 'highlight.js/lib/core'
 import { marked, type Token } from 'marked'
 import { shallowRef } from 'vue'
 import { t } from '../i18n'
-import { state } from './state/state'
+import { state, type LightboxImage } from './state/state'
 import { INTERNAL_WORKSPACE, SCRATCH_WORKSPACE } from './types'
 
 /** One chunk per grammar, fetched on first use. Core stays in the entry
@@ -380,17 +380,51 @@ function anchorFor(href: string, base: CardBase | undefined): string | null {
   return path ? `data-card-deck="${escapeHtml(base.deck)}" data-card-path="${escapeHtml(path)}"` : null
 }
 
+/** What `![alt](address)` shows for a workspace address, or null. */
+export type ImageResolver = (address: string) => LightboxImage | null
+
+/** The box an image in the text is first drawn in (CSS narrows it further
+ *  on a small screen), so nothing shifts as it loads. */
+const IMAGE_MAX_W = 480
+const IMAGE_MAX_H = 320
+
+/** A workspace address as an image: what `image` resolves it to (opening
+ *  full-size on click), else a link to the address — never a broken image.
+ *  `alt` and `rawSrc` are as marked escaped them. */
+function addressImage(rawSrc: string, alt: string, rest: string, image?: ImageResolver): string {
+  const src = rawSrc.replaceAll('&amp;', '&').replaceAll('&quot;', '"')
+  const found = image?.(src)
+  if (!found) return addressLink(src, alt || rawSrc)
+  let size = ''
+  if (found.width && found.height) {
+    const s = Math.min(1, IMAGE_MAX_W / found.width, IMAGE_MAX_H / found.height)
+    size = ` width="${Math.max(1, Math.round(found.width * s))}" height="${Math.max(1, Math.round(found.height * s))}"`
+  }
+  const title = rest.includes(' title=') ? rest : ` title="${rawSrc}"`
+  return `<img src="${escapeHtml(found.src)}" alt="${alt}"${title}${size} data-lightbox loading="lazy">`
+}
+
 /**
  * Chat text keeps single newlines as line breaks (`breaks`); hand-written
  * documents such as knowledge cards are hard-wrapped, so they pass
  * `breaks: false`. When rendering a card, pass it as `base` so links
- * relative to it (`./x`, `../x/y.md`) open cards of the same deck.
+ * relative to it (`./x`, `../x/y.md`) open cards of the same deck. An image
+ * at a workspace address (`![alt](@scratch:a.png)`) shows what `image`
+ * resolves it to, else becomes a link to the address.
  */
 export function renderMarkdown(
   src: string,
-  { breaks = true, base }: { breaks?: boolean; base?: CardBase } = {},
+  { breaks = true, base, image }: { breaks?: boolean; base?: CardBase; image?: ImageResolver } = {},
 ): string {
-  const html = marked.parse(src ?? '', { async: false, breaks })
+  const html = marked
+    .parse(src ?? '', { async: false, breaks })
+    .replace(
+      /<img src="([^"]*)" alt="([^"]*)"([^>]*)>/g,
+      (whole, rawSrc: string, alt: string, rest: string) =>
+        anchorFor(rawSrc.replaceAll('&amp;', '&'), undefined)
+          ? addressImage(rawSrc, alt, rest, image)
+          : whole,
+    )
   const linked = html.replace(/<a href="([^"]*)"([^>]*)>/g, (whole, rawHref: string, rest: string) => {
     const href = rawHref.replaceAll('&amp;', '&').replaceAll('&quot;', '"')
     const attrs = anchorFor(href, base)

@@ -5,7 +5,7 @@ import { auth, captureToken, initAuth, setToken } from '../lib/auth'
 import { rumu } from '../lib/api'
 import { followLink } from '../lib/links'
 import { startApp } from '../lib/store'
-import { toast } from '../lib/state/ui'
+import { openLightbox, toast } from '../lib/state/ui'
 import { copyText } from '../lib/util'
 
 /** Copy a fence's source; the button acknowledges inline for a moment. */
@@ -48,6 +48,13 @@ export default defineNuxtPlugin(() => {
     const copy = target?.closest?.('.md-copy') as HTMLButtonElement | null
     if (copy) {
       void copyCode(copy)
+      return
+    }
+
+    // An image in the text (lib/markdown.ts): open it full-size.
+    const img = target?.closest?.('img[data-lightbox]') as HTMLImageElement | null
+    if (img) {
+      openLightbox({ src: img.getAttribute('src')!, name: img.alt || null })
       return
     }
 

@@ -21,6 +21,7 @@ import { forkSession, regenerateFrom, state, useBranchView } from '../../lib/sto
 import { catOf } from '../../lib/assistantFace'
 import type { CatState } from '../../lib/cat'
 import { renderMarkdown } from '../../lib/markdown'
+import { pathImage } from '../../lib/artifacts'
 import { fileEditsOf } from '../../lib/toolrows'
 import { contentText, copyText } from '../../lib/util'
 import { toast } from '../../lib/state/ui'
@@ -233,13 +234,13 @@ const bare = computed(() => !items.value.length && !props.group.assistants.lengt
         v-else-if="item.streaming"
         v-enter="'enter-fade'"
         class="md streaming-caret"
-        v-html="renderMarkdown(streamText)"
+        v-html="renderMarkdown(streamText, { image: (a) => pathImage(a) })"
       />
       <div
         v-else-if="item.node"
         :data-path-node="item.node.id"
         class="md"
-        v-html="renderMarkdown(textOf(item.node))"
+        v-html="renderMarkdown(textOf(item.node), { image: (a) => pathImage(a, item.node!.id) })"
       />
     </template>
 
