@@ -29,20 +29,34 @@ function read(): Quote | null {
 
 // A phone's selection settles only once its handles are let go, and a press
 // on a key collapses it before the click lands: the reading waits a beat,
-// and a press freezes what it saw.
+// and a press freezes what it saw — only while it lasts: a press that ends
+// without a key's click (on the gap, dragged off, a touch turned scroll)
+// lets the bar follow the selection again.
 let timer = 0
 let frozen: Quote | null = null
+let press: AbortController | null = null
 
 function onSelectionChange(): void {
   clearTimeout(timer)
   timer = window.setTimeout(() => {
     const q = read()
-    if (q || !frozen) selection.value = q
+    if (q || !press) selection.value = q
+    if (!press) frozen = null
   }, 200)
 }
 
 function freeze(): void {
   frozen = selection.value
+  press?.abort()
+  press = new AbortController()
+  const release = (): void => {
+    press?.abort()
+    press = null
+    onSelectionChange()
+  }
+  const opts = { capture: true, signal: press.signal }
+  document.addEventListener('pointerup', release, opts)
+  document.addEventListener('pointercancel', release, opts)
 }
 
 function take(use: (q: Quote) => void): void {
@@ -61,6 +75,7 @@ function quote(q: Quote): void {
 onMounted(() => document.addEventListener('selectionchange', onSelectionChange))
 onBeforeUnmount(() => {
   document.removeEventListener('selectionchange', onSelectionChange)
+  press?.abort()
   clearTimeout(timer)
 })
 </script>
