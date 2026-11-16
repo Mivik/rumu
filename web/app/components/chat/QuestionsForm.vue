@@ -12,10 +12,26 @@ import Icon from '../ui/Icon.vue'
 
 const props = defineProps<{ id: string; request: QuestionsRequest }>()
 
-/** Where each question's answer stands: the options picked and the words the
- *  user wrote. Their own words count once there are some — typing is what
- *  chooses that row. */
-const drafts = reactive(props.request.questions.map(() => ({ selected: [] as string[], custom: '' })))
+/** One question's answer: the options picked, the words written, and which of
+ *  the two is the answer. `side` is needed because the box can hold words that
+ *  do not count — written first, then an option picked — while going back to a
+ *  question must still show what was picked there.
+ *
+ *  TODO: the row is meant to become a comment *added* to the options rather
+ *  than a "something else" standing in for one (its label, `chat.ask.custom`,
+ *  would change with it). That drop of the single-choice choice between an
+ *  option and words — both would count — would take `side` and the rules below
+ *  with it. Left out for now. */
+type Draft = { selected: string[]; custom: string; side: 'option' | 'words' }
+
+const drafts = reactive<Draft[]>(
+  props.request.questions.map((q) => ({
+    selected: [],
+    custom: '',
+    // A question without options is answered by its words, and only by them.
+    side: q.options.length ? 'option' : 'words',
+  })),
+)
 const index = ref(0)
 const customEl = ref<HTMLInputElement>()
 
@@ -23,23 +39,20 @@ const question = computed(() => props.request.questions[index.value]!)
 const draft = computed(() => drafts[index.value]!)
 const last = computed(() => index.value === props.request.questions.length - 1)
 
-/** Whether a question's own-words row is its answer: it holds words. Focus is
- *  not part of it — tabbing into the row must not pick it. */
+/** Whether a question's own-words row is its answer: it was chosen and it
+ *  holds words. Neither focus nor mere content is part of it. A question that
+ *  takes several answers keeps them beside the words instead. */
 function own(i: number): boolean {
-  return drafts[i]!.custom.trim() !== ''
+  const d = drafts[i]!
+  return d.custom.trim() !== '' && (props.request.questions[i]!.multiple || d.side === 'words')
 }
 
-/** Whether an option counts as picked. On a single choice the user's own words
- *  take its place, so a picked option counts for nothing while there are some —
- *  and shows as unpicked, rather than being dropped silently on the way out.
- *
- *  TODO: the row is meant to become a comment added to the options rather than
- *  a "something else" standing in for one (its label, `chat.ask.custom`, would
- *  change with it). That drop of this exclusivity — an option and words both
- *  counting — is left out for now. */
+/** Whether an option counts as picked: a single choice answers with one thing,
+ *  so options count only while they are that thing. */
 function picked(i: number, label: string): boolean {
-  if (!props.request.questions[i]!.multiple && own(i)) return false
-  return drafts[i]!.selected.includes(label)
+  const d = drafts[i]!
+  if (!props.request.questions[i]!.multiple && d.side !== 'option') return false
+  return d.selected.includes(label)
 }
 
 function answered(i: number): boolean {
@@ -57,13 +70,29 @@ function pick(label: string): void {
     return
   }
   d.selected = [label]
+  // Choosing an option answers the question with it; the words stay in the box,
+  // no longer the answer, so going back still shows the option as picked.
+  d.side = 'option'
   if (!last.value) setTimeout(() => go(index.value + 1), 160)
 }
 
-/** The mark beside the own-words row only leads to it: the words are the
- *  choice, so there is nothing to pick before there are any. */
+/** Typing words is what makes them the answer; the box merely holding some
+ *  (focus, tabbing in, coming back to the question) does not. */
+function onCustomInput(e: Event): void {
+  if (question.value.multiple) return
+  if ((e.target as HTMLInputElement).value.trim() !== '') draft.value.side = 'words'
+}
+
+/** The mark beside the own-words row: with words written it takes them back as
+ *  the answer (and lets go of them again); without any there is nothing to pick,
+ *  so it only leads to the row. */
 function leadToOwn(): void {
-  customEl.value?.focus()
+  const d = draft.value
+  if (question.value.multiple || !question.value.options.length || d.custom.trim() === '') {
+    customEl.value?.focus()
+    return
+  }
+  d.side = d.side === 'words' ? 'option' : 'words'
 }
 
 function go(i: number): void {
@@ -87,9 +116,12 @@ function submit(): void {
   void answerDecision(props.id, {
     answers: drafts.map((d, i) => {
       const custom = d.custom.trim()
-      // Single choice: the words stand in place of the option.
-      const own = custom !== '' && !props.request.questions[i]!.multiple
-      return { selected: own ? [] : d.selected, custom: custom || undefined }
+      // A single choice answers with one thing: whatever `side` names.
+      const one = !props.request.questions[i]!.multiple
+      return {
+        selected: one && d.side === 'words' ? [] : d.selected,
+        custom: (own(i) ? custom : '') || undefined,
+      }
     }),
   })
 }
@@ -172,6 +204,7 @@ function onCustomKey(e: KeyboardEvent): void {
             v-model="draft.custom"
             class="min-w-0 flex-1 border-0 bg-transparent p-0 text-secondary focus:shadow-none"
             :placeholder="question.options.length ? t('chat.ask.custom') : t('chat.ask.answer')"
+            @input="onCustomInput"
             @keydown="onCustomKey"
           />
         </div>
