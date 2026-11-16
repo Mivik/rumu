@@ -10,6 +10,8 @@
 // (SessionPickers), so the footer is the same on the landing page and in a
 // session.
 // While rumu works, sending steers the turn and a stop button joins it.
+// The writing and its images are the open session's draft (or the landing
+// page's), kept per session across switches and reloads (lib/state/drafts).
 //
 // A tool call waiting on the user's approval unfolds from the top of the
 // sheet (DecisionPanel), above the writing. The sheet is a column that may
@@ -46,33 +48,37 @@ import {
   stopTurn,
 } from '../../lib/store'
 import type { PromptAttachment } from '../../lib/store'
-import type { Attachment, Content, Node as TreeNode } from '../../lib/types'
-import { blobUrl, typedText, uploadBlob, withLeadingAnchors } from '../../lib/attachments'
+import type { Content, Node as TreeNode } from '../../lib/types'
+import { typedText, uploadBlob, withLeadingAnchors } from '../../lib/attachments'
 import { composerFocus, editTarget, openLightbox, toast } from '../../lib/state/ui'
 import { askSide, openSide, quoteBlock, quotes } from '../../lib/state/side'
+import {
+  activeDraft,
+  nextImageId,
+  releaseImage,
+  storedImage,
+  type Draft,
+  type PendingImage,
+} from '../../lib/state/drafts'
 import Icon from '../ui/Icon.vue'
 import DecisionPanel from './DecisionPanel.vue'
 import ModelPicker from './ModelPicker.vue'
 import QuoteTray from './QuoteTray.vue'
 
-/** One image being attached: the file, its local preview, and where its
- * upload stands. An image the edited message already carries has no file. */
-interface PendingImage {
-  id: number
-  file?: File
-  name: string
-  /** Object URL of the file's bytes, or the stored blob, for the tray's preview. */
-  url: string
-  status: 'uploading' | 'done' | 'failed'
-  attachment?: Attachment
-  error?: string
-  ctrl: AbortController
-}
-
 const MAX_IMAGES = 20
 
-const draft = ref('')
-const attachments = ref<PendingImage[]>([])
+/** The message being edited, held apart from the session's draft. */
+const editing = ref<Draft | null>(null)
+/** What the sheet shows: the edit, else the open session's draft (lib/state/drafts). */
+const current = computed(() => editing.value ?? activeDraft.value)
+const draft = computed({
+  get: () => current.value.text,
+  set: (text) => (current.value.text = text),
+})
+const attachments = computed({
+  get: () => current.value.images,
+  set: (images) => (current.value.images = images),
+})
 const rootEl = ref<HTMLElement>()
 const textareaEl = ref<HTMLTextAreaElement>()
 const fileEl = ref<HTMLInputElement>()
@@ -87,8 +93,6 @@ const canSend = computed(
 )
 /** The draft asks on the side (`/btw`), not in the conversation. */
 const btw = computed(() => !!state.sessionId && !editTarget.value && /^\/btw(\s|$)/.test(draft.value))
-
-let attachSeq = 0
 
 async function run(item: PendingImage): Promise<void> {
   if (!item.file) return
@@ -117,7 +121,7 @@ function attachFiles(list: FileList | File[]): void {
   if (!images.length) return
   for (const file of images) {
     const item = reactive<PendingImage>({
-      id: ++attachSeq,
+      id: nextImageId(),
       file,
       name: file.name,
       url: URL.createObjectURL(file),
@@ -135,16 +139,10 @@ function preview(item: PendingImage): void {
   openLightbox(item.attachment ?? { src: item.url, name: item.name || null })
 }
 
-/** Drop a tile: stop its upload and free its local preview. */
-function release(item: PendingImage): void {
-  item.ctrl.abort()
-  if (item.file) URL.revokeObjectURL(item.url)
-}
-
 function removeAt(i: number): void {
   const item = attachments.value[i]
   if (!item) return
-  release(item)
+  releaseImage(item)
   attachments.value.splice(i, 1)
 }
 
@@ -235,20 +233,15 @@ onMounted(() => document.addEventListener('click', onTapAnywhere, true))
 
 onBeforeUnmount(() => {
   document.removeEventListener('click', onTapAnywhere, true)
-  for (const item of [...attachments.value, ...(stash?.attachments ?? [])]) release(item)
+  endEdit()
 })
 
 // ---- editing a sent message ----
 
-/** The draft set aside while a message is edited. */
-let stash: { draft: string; attachments: PendingImage[] } | null = null
-
 function endEdit(): void {
-  if (!stash) return
-  for (const item of attachments.value) release(item)
-  draft.value = stash.draft
-  attachments.value = stash.attachments
-  stash = null
+  if (!editing.value) return
+  for (const item of editing.value.images) releaseImage(item)
+  editing.value = null
 }
 
 function userContent(node: TreeNode): Content {
@@ -258,18 +251,10 @@ function userContent(node: TreeNode): Content {
 function beginEdit(node: TreeNode): void {
   const content = userContent(node)
   const images = content.attachments ?? []
-  stash = { draft: draft.value, attachments: attachments.value }
-  draft.value = typedText(content.text, images.length)
-  attachments.value = images.map((a) =>
-    reactive<PendingImage>({
-      id: ++attachSeq,
-      name: a.name ?? '',
-      url: blobUrl(a.hash),
-      status: 'done',
-      attachment: a,
-      ctrl: new AbortController(),
-    }),
-  )
+  editing.value = reactive({
+    text: typedText(content.text, images.length),
+    images: images.map((a) => storedImage(a)),
+  })
   engaged.value = true
   void nextTick(() => {
     const el = textareaEl.value
@@ -304,6 +289,8 @@ async function submit(): Promise<void> {
     .map((i) => ({ hash: i.attachment!.hash, name: i.name || undefined }))
   const text = draft.value.trim()
   const target = editTarget.value
+  const origin = current.value
+  const landing = !state.sessionId
   // `/compact [focus]` compacts the open session's branch instead.
   const compact = /^\/compact(?:\s+([\s\S]*))?$/.exec(text)
   if (compact && !target && !items.length && state.sessionId) {
@@ -332,18 +319,29 @@ async function submit(): Promise<void> {
   draft.value = ''
   quotes.value = []
   attachments.value = []
-  // Put everything back if creating/sending failed so nothing is lost.
   const ok = target ? await editPrompt(target, body, sent) : await sendPrompt(body, sent)
   if (ok) {
-    for (const item of items) release(item)
+    for (const item of items) releaseImage(item)
     if (target && editTarget.value === target) editTarget.value = null
-  } else if (editTarget.value === target) {
-    draft.value = text
-    quotes.value = quoted
-    attachments.value = items
-  } else {
-    for (const item of items) release(item)
+    return
   }
+  // Put everything back so nothing is lost: into the edit if it is still on,
+  // else where it was written — or, from the landing page, into the session
+  // that may have been created before the prompt failed.
+  const back = target
+    ? editTarget.value === target
+      ? editing.value
+      : null
+    : landing
+      ? activeDraft.value
+      : origin
+  if (!back) {
+    for (const item of items) releaseImage(item)
+    return
+  }
+  back.text = text
+  back.images = items
+  quotes.value = quoted
 }
 
 function onKeydown(e: KeyboardEvent): void {

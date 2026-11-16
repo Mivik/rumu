@@ -23,6 +23,7 @@ import type {
   Workspace,
 } from '../types'
 import type { ModelUse } from '../generated/ModelUse'
+import { dropDraft, pruneDrafts } from './drafts'
 import { currentPick, models } from './models'
 import { isUnseen } from './derived'
 import { state } from './state'
@@ -57,6 +58,7 @@ export async function refreshLists(): Promise<void> {
     state.workspaces = workspaces
     state.projects = projects
     state.sessions = sessions
+    pruneDrafts(sessions)
     state.assistants = assistants
     if (!assistants.some((a) => a.id === state.assistant)) {
       state.assistant = defaultAssistant()
@@ -319,9 +321,11 @@ export async function forkSession(node: NodeId): Promise<void> {
  * replaced so Back cannot reopen a dead session. */
 export function forgetSession(id: SessionId): void {
   state.sessions = state.sessions.filter((s) => s.id !== id)
-  if (state.sessionId !== id) return
-  closeSession()
-  commitRoute('replace')
+  if (state.sessionId === id) {
+    closeSession()
+    commitRoute('replace')
+  }
+  dropDraft(id)
 }
 
 /** Delete a session and its stored history for good. */
