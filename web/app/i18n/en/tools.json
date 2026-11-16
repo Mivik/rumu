@@ -29,7 +29,8 @@
   "activity": {
     "error": "· error | · {count} errors",
     "blocked": "blocked | {count} blocked",
-    "worked": "worked for {duration} · {count} call | worked for {duration} · {count} calls"
+    "worked": "worked for {duration} · {count} call | worked for {duration} · {count} calls",
+    "fold": "Collapse"
   },
   "running": {
     "silent": "no output for {duration}"

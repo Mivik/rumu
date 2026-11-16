@@ -16,7 +16,7 @@
 // each thought, each run of calls as a ToolList box, each edit as its card.
 // A bare thought — no catalog, no calls — keeps its own disclosure
 // (ThoughtStep).
-import { computed, onBeforeUnmount, ref, watch } from 'vue'
+import { computed, nextTick, onBeforeUnmount, ref, watch } from 'vue'
 import { t, locale } from '../../i18n'
 import type {
   ActivityRecall,
@@ -205,6 +205,14 @@ function toggleOpen(): void {
   manual.value = !open.value
   if (manual.value) revealed.value = new Set(blocks.value.map((b) => b.key))
 }
+/** The summary line, for folding from the foot of a long run. */
+const toggleEl = ref<HTMLElement | null>(null)
+/** Folding from the foot pulls the summary line back into view if the
+ *  shrinking body left it above the scroller's top. */
+function foldFromFoot(): void {
+  manual.value = false
+  void nextTick(() => toggleEl.value?.scrollIntoView({ block: 'nearest' }))
+}
 </script>
 
 <template>
@@ -214,6 +222,7 @@ function toggleOpen(): void {
   <div v-else class="flex min-w-0 flex-col items-start">
     <div class="flex max-w-full min-w-0 flex-wrap items-center gap-x-2 gap-y-1">
       <button
+        ref="toggleEl"
         type="button"
         class="reason-toggle max-w-full min-w-0"
         :class="open ? 'text-ink-2' : 'text-ink-3 hover:text-ink-2'"
@@ -278,6 +287,17 @@ function toggleOpen(): void {
           :flat="!views.length && !running"
         />
       </template>
+      <!-- a long run read to its end folds from here, no trip back up -->
+      <button
+        v-if="!live"
+        type="button"
+        class="reason-toggle self-start text-ink-3 hover:text-ink-2"
+        :aria-expanded="true"
+        @click="foldFromFoot"
+      >
+        <Icon name="chevron" :size="12" class="reason-chevron flex-none -rotate-90" />
+        {{ t('tools.activity.fold') }}
+      </button>
     </div>
     <!-- folded, what it changed and what still runs stay in view -->
     <div v-else-if="edits.length || running" class="mt-2 flex w-full flex-col gap-2">

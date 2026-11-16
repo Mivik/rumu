@@ -29,7 +29,8 @@
   "activity": {
     "error": "· 错误 | · {count} 个错误",
     "blocked": "已拦截 | {count} 个已拦截",
-    "worked": "工作 {duration} · {count} 次调用"
+    "worked": "工作 {duration} · {count} 次调用",
+    "fold": "收起"
   },
   "running": {
     "silent": "{duration} 无输出"
