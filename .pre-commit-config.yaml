@@ -1,0 +1,35 @@
+# Git hooks mirroring CI. Install with `prek install` (or `pre-commit install`).
+default_install_hook_types: [pre-commit, pre-push]
+
+repos:
+  - repo: local
+    hooks:
+      - id: cargo-fmt
+        name: cargo fmt
+        language: system
+        entry: cargo fmt --check
+        types: [rust]
+        pass_filenames: false
+
+      - id: prettier
+        name: prettier
+        language: system
+        entry: web/node_modules/.bin/prettier --check --ignore-unknown
+        files: ^web/
+        exclude: ^web/(app/lib/generated/|pnpm-lock\.yaml$)
+
+      - id: cargo-clippy
+        name: cargo clippy
+        language: system
+        entry: cargo clippy --workspace --all-targets -- -D warnings
+        types: [rust]
+        pass_filenames: false
+        stages: [pre-push]
+
+      - id: typecheck
+        name: nuxt typecheck
+        language: system
+        entry: pnpm -C web typecheck
+        files: ^web/
+        pass_filenames: false
+        stages: [pre-push]
