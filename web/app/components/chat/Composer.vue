@@ -30,13 +30,25 @@
 // Text selected in a reply offers itself above the writing (QuoteTray): as a
 // quote leading the message, or as a side question. `/btw` asks on the side
 // too (SidePop); the sheet's edge turns the side's teal while it would.
+//
+// Editing a sent message (`editTarget`) loads its text and images here, the
+// draft set aside until the edit is resent or cancelled; sending forks from
+// just before the message (store.editPrompt).
 import { computed, nextTick, onBeforeUnmount, onMounted, reactive, ref, watch } from 'vue'
 import { t } from '../../i18n'
-import { compactBranch, isBusy, landingAssistant, sendPrompt, state, stopTurn } from '../../lib/store'
+import {
+  compactBranch,
+  editPrompt,
+  isBusy,
+  landingAssistant,
+  sendPrompt,
+  state,
+  stopTurn,
+} from '../../lib/store'
 import type { PromptAttachment } from '../../lib/store'
-import type { Attachment } from '../../lib/types'
-import { uploadBlob, withLeadingAnchors } from '../../lib/attachments'
-import { composerFocus, openLightbox, toast } from '../../lib/state/ui'
+import type { Attachment, Content, Node as TreeNode } from '../../lib/types'
+import { blobUrl, typedText, uploadBlob, withLeadingAnchors } from '../../lib/attachments'
+import { composerFocus, editTarget, openLightbox, toast } from '../../lib/state/ui'
 import { askSide, openSide, quoteBlock, quotes } from '../../lib/state/side'
 import Icon from '../ui/Icon.vue'
 import DecisionPanel from './DecisionPanel.vue'
@@ -44,11 +56,12 @@ import ModelPicker from './ModelPicker.vue'
 import QuoteTray from './QuoteTray.vue'
 
 /** One image being attached: the file, its local preview, and where its
- * upload stands. */
+ * upload stands. An image the edited message already carries has no file. */
 interface PendingImage {
   id: number
-  file: File
-  /** Object URL of the original bytes, for the tray's preview. */
+  file?: File
+  name: string
+  /** Object URL of the file's bytes, or the stored blob, for the tray's preview. */
   url: string
   status: 'uploading' | 'done' | 'failed'
   attachment?: Attachment
@@ -73,11 +86,12 @@ const canSend = computed(
       attachments.value.some((a) => a.status === 'done')),
 )
 /** The draft asks on the side (`/btw`), not in the conversation. */
-const btw = computed(() => !!state.sessionId && /^\/btw(\s|$)/.test(draft.value))
+const btw = computed(() => !!state.sessionId && !editTarget.value && /^\/btw(\s|$)/.test(draft.value))
 
 let attachSeq = 0
 
 async function run(item: PendingImage): Promise<void> {
+  if (!item.file) return
   item.status = 'uploading'
   item.error = undefined
   try {
@@ -105,6 +119,7 @@ function attachFiles(list: FileList | File[]): void {
     const item = reactive<PendingImage>({
       id: ++attachSeq,
       file,
+      name: file.name,
       url: URL.createObjectURL(file),
       status: 'uploading',
       ctrl: new AbortController(),
@@ -117,14 +132,19 @@ function attachFiles(list: FileList | File[]): void {
 /** Show a tile full-size: the stored image once uploaded, the local
  *  preview before that. */
 function preview(item: PendingImage): void {
-  openLightbox(item.attachment ?? { src: item.url, name: item.file.name || null })
+  openLightbox(item.attachment ?? { src: item.url, name: item.name || null })
+}
+
+/** Drop a tile: stop its upload and free its local preview. */
+function release(item: PendingImage): void {
+  item.ctrl.abort()
+  if (item.file) URL.revokeObjectURL(item.url)
 }
 
 function removeAt(i: number): void {
   const item = attachments.value[i]
   if (!item) return
-  item.ctrl.abort()
-  URL.revokeObjectURL(item.url)
+  release(item)
   attachments.value.splice(i, 1)
 }
 
@@ -178,6 +198,7 @@ const idle = computed(
   () =>
     !engaged.value &&
     !!state.sessionId &&
+    !editTarget.value &&
     !attachments.value.length &&
     !state.decisions.some((d) => d.session === state.sessionId),
 )
@@ -214,11 +235,65 @@ onMounted(() => document.addEventListener('click', onTapAnywhere, true))
 
 onBeforeUnmount(() => {
   document.removeEventListener('click', onTapAnywhere, true)
-  for (const item of attachments.value) {
-    item.ctrl.abort()
-    URL.revokeObjectURL(item.url)
-  }
+  for (const item of [...attachments.value, ...(stash?.attachments ?? [])]) release(item)
 })
+
+// ---- editing a sent message ----
+
+/** The draft set aside while a message is edited. */
+let stash: { draft: string; attachments: PendingImage[] } | null = null
+
+function endEdit(): void {
+  if (!stash) return
+  for (const item of attachments.value) release(item)
+  draft.value = stash.draft
+  attachments.value = stash.attachments
+  stash = null
+}
+
+function userContent(node: TreeNode): Content {
+  return (node.body as Extract<TreeNode['body'], { type: 'user' }>).content
+}
+
+function beginEdit(node: TreeNode): void {
+  const content = userContent(node)
+  const images = content.attachments ?? []
+  stash = { draft: draft.value, attachments: attachments.value }
+  draft.value = typedText(content.text, images.length)
+  attachments.value = images.map((a) =>
+    reactive<PendingImage>({
+      id: ++attachSeq,
+      name: a.name ?? '',
+      url: blobUrl(a.hash),
+      status: 'done',
+      attachment: a,
+      ctrl: new AbortController(),
+    }),
+  )
+  engaged.value = true
+  void nextTick(() => {
+    const el = textareaEl.value
+    if (!el) return
+    el.focus()
+    el.setSelectionRange(el.value.length, el.value.length)
+  })
+}
+
+watch(editTarget, (node) => {
+  endEdit()
+  if (node) beginEdit(node)
+})
+
+/** The message as it would be sent equals the edited one. */
+function unchanged(node: TreeNode, text: string, sent: PromptAttachment[]): boolean {
+  const content = userContent(node)
+  const was = content.attachments ?? []
+  return (
+    text === content.text.trim() &&
+    sent.length === was.length &&
+    sent.every((a, i) => a.hash === was[i]!.hash)
+  )
+}
 
 async function submit(): Promise<void> {
   if (!canSend.value) return
@@ -226,11 +301,12 @@ async function submit(): Promise<void> {
   // Tiles that never made it stay behind; they are not part of the message.
   const sent: PromptAttachment[] = items
     .filter((i) => i.status === 'done')
-    .map((i) => ({ hash: i.attachment!.hash, name: i.file.name || undefined }))
+    .map((i) => ({ hash: i.attachment!.hash, name: i.name || undefined }))
   const text = draft.value.trim()
+  const target = editTarget.value
   // `/compact [focus]` compacts the open session's branch instead.
   const compact = /^\/compact(?:\s+([\s\S]*))?$/.exec(text)
-  if (compact && !items.length && state.sessionId) {
+  if (compact && !target && !items.length && state.sessionId) {
     draft.value = ''
     if (!(await compactBranch(compact[1]?.trim() ?? ''))) draft.value = text
     return
@@ -238,7 +314,7 @@ async function submit(): Promise<void> {
   // `/btw [question]` asks on the side instead, about the first quoted
   // passage if there is one; bare, it opens the side questions.
   const aside = /^\/btw(?:\s+([\s\S]*))?$/.exec(text)
-  if (aside && !items.length && state.sessionId) {
+  if (aside && !target && !items.length && state.sessionId) {
     const question = aside[1]?.trim() ?? ''
     const quote = quotes.value.shift() ?? null
     draft.value = ''
@@ -248,21 +324,34 @@ async function submit(): Promise<void> {
   }
   // Quoted passages lead the message, as markdown quotes.
   const quoted = quotes.value
-  const body = [...quoted.map(quoteBlock), text].filter(Boolean).join('\n\n')
+  const body = withLeadingAnchors([...quoted.map(quoteBlock), text].filter(Boolean).join('\n\n'), sent.length)
+  if (target && unchanged(target, body, sent)) {
+    editTarget.value = null
+    return
+  }
   draft.value = ''
   quotes.value = []
   attachments.value = []
   // Put everything back if creating/sending failed so nothing is lost.
-  if (!(await sendPrompt(withLeadingAnchors(body, sent.length), sent))) {
+  const ok = target ? await editPrompt(target, body, sent) : await sendPrompt(body, sent)
+  if (ok) {
+    for (const item of items) release(item)
+    if (target && editTarget.value === target) editTarget.value = null
+  } else if (editTarget.value === target) {
     draft.value = text
     quotes.value = quoted
     attachments.value = items
   } else {
-    for (const item of items) URL.revokeObjectURL(item.url)
+    for (const item of items) release(item)
   }
 }
 
 function onKeydown(e: KeyboardEvent): void {
+  if (e.key === 'Escape' && editTarget.value) {
+    e.preventDefault()
+    editTarget.value = null
+    return
+  }
   if (e.key !== 'Enter' || e.isComposing) return
   // Only a bare Enter sends; Shift and Alt break the line instead.
   if (!e.shiftKey && !e.altKey) {
@@ -320,6 +409,14 @@ const placeholder = computed(() => {
     ? t('chat.composer.steerPlaceholder', { name })
     : t('chat.composer.placeholder', { name })
 })
+
+const sendLabel = computed(() =>
+  editTarget.value
+    ? t('chat.user.resend')
+    : isBusy.value
+      ? t('chat.composer.steer')
+      : t('chat.composer.send'),
+)
 </script>
 
 <template>
@@ -338,18 +435,30 @@ const placeholder = computed(() => {
     @drop="onDrop"
   >
     <DecisionPanel />
-    <div v-if="attachments.length" class="flex flex-wrap gap-2 px-4 pt-3">
+    <div v-if="editTarget" class="flex items-center gap-2 pt-2 pr-2 pl-4 text-meta text-ink-2">
+      <Icon name="edit" :size="13" />
+      <span class="flex-1">{{ t('chat.user.edit') }}</span>
+      <button
+        class="icon-btn size-6"
+        :title="t('chat.user.cancel')"
+        :aria-label="t('chat.user.cancel')"
+        @click="editTarget = null"
+      >
+        <Icon name="close" :size="13" />
+      </button>
+    </div>
+    <div v-if="attachments.length" class="flex flex-wrap gap-2 px-4" :class="editTarget ? 'pt-2' : 'pt-3'">
       <div v-for="(item, i) in attachments" :key="item.id" class="relative">
         <button
           type="button"
           class="block rounded-control transition-opacity hover:opacity-90"
-          :title="item.file.name || t('chat.image.open')"
+          :title="item.name || t('chat.image.open')"
           :aria-label="t('chat.image.open')"
           @click="preview(item)"
         >
           <img
             :src="item.url"
-            :alt="item.file.name"
+            :alt="item.name"
             class="size-14 rounded-control border border-line bg-surface-2 object-cover"
             :class="{
               'opacity-60': item.status === 'uploading',
@@ -390,7 +499,7 @@ const placeholder = computed(() => {
       v-model="draft"
       class="max-h-[240px] min-h-[calc(2lh+1rem)] resize-none rounded-none border-0 bg-transparent px-4 pb-1 text-message leading-normal transition-[min-height,max-height,padding] duration-300 ease-soft [field-sizing:content] focus:shadow-none"
       :class="[
-        attachments.length ? 'pt-2' : 'pt-3',
+        attachments.length || editTarget ? 'pt-2' : 'pt-3',
         idle &&
           'max-sm:max-h-[calc(1lh+1.25rem)] max-sm:min-h-[calc(1lh+1.25rem)] max-sm:overflow-hidden max-sm:py-2.5',
         idle && isBusy && 'max-sm:pr-12',
@@ -464,8 +573,8 @@ const placeholder = computed(() => {
           <button
             class="composer-send"
             :disabled="!canSend"
-            :title="isBusy ? t('chat.composer.steer') : t('chat.composer.send')"
-            :aria-label="isBusy ? t('chat.composer.steer') : t('chat.composer.send')"
+            :title="sendLabel"
+            :aria-label="sendLabel"
             @click="submit"
           >
             <Icon name="send" :size="16" />

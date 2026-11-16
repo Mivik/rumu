@@ -1,14 +1,23 @@
-// Transient UI state: toasts, the card drawer, the image lightbox, and the
-// composer's focus requests.
+// Transient UI state: toasts, the card drawer, the image lightbox, the
+// composer's focus requests, and the message it is editing.
 
-import { ref } from 'vue'
-import type { Attachment, ToastKind } from '../types'
+import { ref, shallowRef, watch } from 'vue'
+import type { Attachment, Node, ToastKind } from '../types'
 import { blobUrl } from '../attachments'
 import { state, type LightboxImage, type Toast } from './state'
 
 /** Rising on every request, so the composer takes focus however often it is
  *  asked — even when it was already mounted (landing → landing). */
 export const composerFocus = ref(0)
+
+/** The sent user message the composer is editing, if any: one at a time,
+ *  since the composer is the editor. Another session ends the edit. */
+export const editTarget = shallowRef<Node | null>(null)
+
+watch(
+  () => state.sessionId,
+  () => (editTarget.value = null),
+)
 
 /** Put the caret in the composer: returning home from the sidebar should land
  *  the user in the writing box, not on the button they just clicked. */

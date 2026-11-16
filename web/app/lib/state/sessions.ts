@@ -478,9 +478,7 @@ export async function stopTurn(): Promise<void> {
  * Edit a sent prompt: fork from just before it and send the new text there,
  * replacing the branch that held the original message and reply — its
  * alternative stays reachable from the user message's variant switcher. It
- * runs on the composer's pick, not the one the original was sent with. An
- * edited message resends its attachments unchanged — the edited text's
- * anchors say where they sit.
+ * runs on the composer's pick, not the one the original was sent with.
  */
 export async function editPrompt(
   node: Node,

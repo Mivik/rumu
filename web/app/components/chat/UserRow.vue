@@ -2,25 +2,23 @@
 // A user message: right-aligned coral-tinted bubble (max ~70% of the column,
 // width fits content, no avatar); its coral ring on the thread is ConversationView's.
 // Edit/copy/regenerate/fork sit under the message's bottom-right: always shown
-// on touch, revealed on hover with a fine pointer. Editing swaps the bubble for
-// a textarea and resends the prompt on a branch forked from just before it;
+// on touch, revealed on hover with a fine pointer. Editing loads the message
+// into the composer (`editTarget`), outlined here while it is there;
 // regenerate asks the same question again
 // (same op as the assistant side's regenerate — the reply is replaced); fork
 // copies the conversation up to here into a new session.
 //
 // Images lead the message as thumbnails, the way the web composer sends them
 // (`withLeadingAnchors`); the text below is what was typed. An anchor placed
-// elsewhere by another client stays visible as text. Editing changes only the
-// typed text and resends the images as they are.
-import { computed, nextTick, ref } from 'vue'
+// elsewhere by another client stays visible as text.
+import { computed, ref } from 'vue'
 import { t } from '../../i18n'
 import type { Node } from '../../lib/types'
-import type { PromptAttachment } from '../../lib/store'
-import { editPrompt, forkSession, isBusy, regenerateFrom, useBranchView } from '../../lib/store'
+import { forkSession, isBusy, regenerateFrom, useBranchView } from '../../lib/store'
 import { renderMarkdown } from '../../lib/markdown'
-import { renderedContent, typedText, withLeadingAnchors } from '../../lib/attachments'
+import { renderedContent, typedText } from '../../lib/attachments'
 import { copyText } from '../../lib/util'
-import { toast } from '../../lib/state/ui'
+import { editTarget, toast } from '../../lib/state/ui'
 import Icon from '../ui/Icon.vue'
 import BranchSwitcher from './BranchSwitcher.vue'
 import ContextPills from './ContextPills.vue'
@@ -32,68 +30,7 @@ const view = useBranchView()
 const content = computed(() => (props.node.body as Extract<Node['body'], { type: 'user' }>).content)
 const images = computed(() => content.value.attachments ?? [])
 const text = computed(() => typedText(content.value.text, images.value.length))
-
-/** The attachments an edit resends, unchanged. */
-function resendAttachments(): PromptAttachment[] {
-  return images.value.map((a) => ({ hash: a.hash, name: a.name ?? undefined }))
-}
-
-const editing = ref(false)
-const saving = ref(false)
-const draft = ref('')
-const editor = ref<HTMLTextAreaElement | null>(null)
-const bubble = ref<HTMLElement | null>(null)
-/** The message's text height when editing began: the editor never opens
- *  shorter than the message it replaces. */
-const editMinH = ref(0)
-
-async function startEdit(): Promise<void> {
-  if (isBusy.value) return
-  const b = bubble.value
-  if (b) {
-    const cs = getComputedStyle(b)
-    editMinH.value = b.clientHeight - parseFloat(cs.paddingTop) - parseFloat(cs.paddingBottom)
-  }
-  draft.value = text.value
-  editing.value = true
-  await nextTick()
-  const el = editor.value
-  if (!el) return
-  el.focus()
-  el.setSelectionRange(el.value.length, el.value.length)
-}
-
-function cancelEdit(): void {
-  if (saving.value) return
-  editing.value = false
-  draft.value = ''
-}
-
-async function saveEdit(): Promise<void> {
-  const next = draft.value.trim()
-  const resend = resendAttachments()
-  if ((!next && !resend.length) || saving.value) return
-  if (next === text.value.trim()) {
-    editing.value = false
-    return
-  }
-  saving.value = true
-  try {
-    if (await editPrompt(props.node, withLeadingAnchors(next, resend.length), resend)) editing.value = false
-  } finally {
-    saving.value = false
-  }
-}
-
-function onEditorKeydown(e: KeyboardEvent): void {
-  if (e.key === 'Escape') {
-    e.preventDefault()
-    cancelEdit()
-  } else if (e.key === 'Enter' && !e.shiftKey && !e.isComposing) {
-    e.preventDefault()
-    saveEdit()
-  }
-}
+const editing = computed(() => editTarget.value?.id === props.node.id)
 
 async function onCopy(): Promise<void> {
   // The clipboard gets the text-only form: images as their placeholders.
@@ -125,46 +62,9 @@ function onFork(): void {
   <div class="group/urow relative flex min-w-0 flex-col gap-1.5">
     <div :data-path-node="node.id" class="flex min-w-0 justify-end">
       <div
-        v-if="editing"
-        class="w-[85%] min-w-0 rounded-sheet rounded-br-xs bg-brand-soft px-4 py-2 text-ink shadow-soft sm:w-[70%]"
+        class="flex max-w-[85%] min-w-0 flex-col items-end gap-1.5 rounded-sheet outline-offset-4 transition-[outline-color] sm:max-w-[70%]"
+        :class="editing ? 'outline-2 outline-brand/50' : 'outline-transparent'"
       >
-        <!-- the images are resent as they are; shown so the edit has its context -->
-        <div v-if="images.length" class="mb-2 flex flex-wrap gap-1.5">
-          <ImageThumb
-            v-for="(a, i) in images"
-            :key="`${a.hash}:${i}`"
-            :attachment="a"
-            :max-h="56"
-            :max-w="96"
-          />
-        </div>
-        <textarea
-          ref="editor"
-          v-model="draft"
-          rows="2"
-          :style="{ minHeight: `${editMinH}px` }"
-          :aria-label="t('chat.user.edit')"
-          class="max-h-[50vh] min-h-[52px] w-full resize-none [field-sizing:content] rounded-none border-0 bg-transparent p-0 text-message leading-normal text-ink focus:shadow-none"
-          @keydown="onEditorKeydown"
-        />
-        <div class="mt-1 flex items-center justify-end gap-3">
-          <button
-            class="text-micro font-semibold text-ink-2 transition-colors hover:text-ink disabled:opacity-50"
-            :disabled="saving"
-            @click="cancelEdit"
-          >
-            {{ t('chat.user.cancel') }}
-          </button>
-          <button
-            class="text-micro font-semibold text-brand-strong transition-opacity hover:underline disabled:opacity-50"
-            :disabled="saving || (!draft.trim() && !images.length)"
-            @click="saveEdit"
-          >
-            {{ t('chat.user.resend') }}
-          </button>
-        </div>
-      </div>
-      <div v-else class="flex max-w-[85%] min-w-0 flex-col items-end gap-1.5 sm:max-w-[70%]">
         <div v-if="images.length" class="flex flex-wrap justify-end gap-1.5">
           <ImageThumb
             v-for="(a, i) in images"
@@ -176,7 +76,6 @@ function onFork(): void {
         </div>
         <div
           v-if="text"
-          ref="bubble"
           class="md w-fit max-w-full rounded-sheet rounded-br-xs bg-brand-soft px-4 py-2 text-ink"
           :title="new Date(node.at).toLocaleString()"
           v-html="renderMarkdown(text)"
@@ -186,7 +85,7 @@ function onFork(): void {
 
     <!-- actions sit at the message's bottom-right: always on touch, revealed on hover with a fine pointer -->
     <div
-      v-if="!editing && !view.sub"
+      v-if="!view.sub"
       class="mt-0.5 flex h-5 items-center justify-end gap-0.5 opacity-100 transition duration-200 ease-soft pointer-fine:opacity-0 pointer-fine:group-hover/urow:opacity-100 pointer-fine:group-focus-within/urow:opacity-100"
     >
       <BranchSwitcher :parent-id="node.parent" />
@@ -194,8 +93,9 @@ function onFork(): void {
         class="icon-btn size-5"
         :title="t('chat.user.editTitle')"
         :aria-label="t('chat.user.editTitle')"
-        :disabled="isBusy"
-        @click="startEdit"
+        :aria-pressed="editing"
+        :disabled="isBusy && !editing"
+        @click="editTarget = editing ? null : node"
       >
         <Icon name="edit" :size="12" />
       </button>
