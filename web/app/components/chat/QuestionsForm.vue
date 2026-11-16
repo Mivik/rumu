@@ -12,11 +12,10 @@ import Icon from '../ui/Icon.vue'
 
 const props = defineProps<{ id: string; request: QuestionsRequest }>()
 
-/** Where each question's answer stands. `own` is whether the user's own
- *  words count (for a question without options, always). */
-const drafts = reactive(
-  props.request.questions.map((q) => ({ selected: [] as string[], custom: '', own: !q.options.length })),
-)
+/** Where each question's answer stands: the options picked and the words the
+ *  user wrote. Their own words count once there are some — typing is what
+ *  chooses that row. */
+const drafts = reactive(props.request.questions.map(() => ({ selected: [] as string[], custom: '' })))
 const index = ref(0)
 const customEl = ref<HTMLInputElement>()
 
@@ -24,9 +23,22 @@ const question = computed(() => props.request.questions[index.value]!)
 const draft = computed(() => drafts[index.value]!)
 const last = computed(() => index.value === props.request.questions.length - 1)
 
+/** Whether a question's own-words row is its answer: it holds words. Focus is
+ *  not part of it — tabbing into the row must not pick it. */
+function own(i: number): boolean {
+  return drafts[i]!.custom.trim() !== ''
+}
+
+/** Whether an option counts as picked. On a single choice the user's own words
+ *  take its place, so a picked option counts for nothing while there are some —
+ *  and shows as unpicked, rather than being dropped silently on the way out. */
+function picked(i: number, label: string): boolean {
+  if (!props.request.questions[i]!.multiple && own(i)) return false
+  return drafts[i]!.selected.includes(label)
+}
+
 function answered(i: number): boolean {
-  const d = drafts[i]!
-  return d.selected.length > 0 || (d.own && d.custom.trim() !== '')
+  return own(i) || drafts[i]!.selected.some((label) => picked(i, label))
 }
 
 const complete = computed(() => drafts.every((_, i) => answered(i)))
@@ -40,33 +52,19 @@ function pick(label: string): void {
     return
   }
   d.selected = [label]
-  d.own = false
   if (!last.value) setTimeout(() => go(index.value + 1), 160)
 }
 
-/** The own-words row: choosing it (or typing into it) makes it count; for a
- *  single choice it replaces the picked option. */
-function useOwn(): void {
-  const d = draft.value
-  d.own = true
-  if (!question.value.multiple) d.selected = []
-}
-
-function toggleOwn(): void {
-  if (draft.value.own && question.value.options.length) {
-    draft.value.own = false
-    return
-  }
-  useOwn()
-  void nextTick(() => customEl.value?.focus())
+/** The mark beside the own-words row only leads to it: the words are the
+ *  choice, so there is nothing to pick before there are any. */
+function leadToOwn(): void {
+  customEl.value?.focus()
 }
 
 function go(i: number): void {
-  // One own-words input serves every question, reused as `index` moves, so a
-  // caret kept there would follow into the next question's row without that row
-  // being chosen — `own` turns on at `focus`, which does not fire for an element
-  // that never lost it, and words in an unchosen row count for nothing
-  // (`answered`) and would not be sent (`submit`). Leaving drops the caret.
+  // One own-words input serves every question, reused as `index` moves: a caret
+  // kept there would carry on into the next question's row, where the words
+  // would count as *that* question's answer. Leaving a question drops the caret.
   customEl.value?.blur()
   index.value = i
   // A question without options is answered by typing: put the caret there.
@@ -82,10 +80,12 @@ function next(): void {
 
 function submit(): void {
   void answerDecision(props.id, {
-    answers: drafts.map((d) => ({
-      selected: d.selected,
-      custom: d.own && d.custom.trim() ? d.custom.trim() : undefined,
-    })),
+    answers: drafts.map((d, i) => {
+      const custom = d.custom.trim()
+      // Single choice: the words stand in place of the option.
+      const own = custom !== '' && !props.request.questions[i]!.multiple
+      return { selected: own ? [] : d.selected, custom: custom || undefined }
+    }),
   })
 }
 
@@ -135,9 +135,9 @@ function onCustomKey(e: KeyboardEvent): void {
           :key="o.label"
           type="button"
           :role="question.multiple ? 'checkbox' : 'radio'"
-          :aria-checked="draft.selected.includes(o.label)"
+          :aria-checked="picked(index, o.label)"
           class="q-option"
-          :class="{ 'is-on': draft.selected.includes(o.label) }"
+          :class="{ 'is-on': picked(index, o.label) }"
           @click="pick(o.label)"
         >
           <span class="q-mark" :class="question.multiple ? 'rounded-[5px]' : 'rounded-full'">
@@ -149,16 +149,16 @@ function onCustomKey(e: KeyboardEvent): void {
           </span>
         </button>
         <!-- the user's own words: always there -->
-        <div class="q-option" :class="{ 'is-on': question.options.length && draft.own }">
+        <div class="q-option" :class="{ 'is-on': question.options.length && own(index) }">
           <button
             v-if="question.options.length"
             type="button"
             :role="question.multiple ? 'checkbox' : 'radio'"
-            :aria-checked="draft.own"
+            :aria-checked="own(index)"
             :aria-label="t('chat.ask.custom')"
             class="q-mark"
             :class="question.multiple ? 'rounded-[5px]' : 'rounded-full'"
-            @click="toggleOwn"
+            @click="leadToOwn"
           >
             <Icon v-if="question.multiple" name="ok" :size="11" />
           </button>
@@ -167,7 +167,6 @@ function onCustomKey(e: KeyboardEvent): void {
             v-model="draft.custom"
             class="min-w-0 flex-1 border-0 bg-transparent p-0 text-secondary focus:shadow-none"
             :placeholder="question.options.length ? t('chat.ask.custom') : t('chat.ask.answer')"
-            @focus="useOwn"
             @keydown="onCustomKey"
           />
         </div>
