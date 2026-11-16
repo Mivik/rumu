@@ -147,6 +147,8 @@ const errorCount = computed(() => views.value.filter((v) => v.status === 'error'
 const blockedCount = computed(() => views.value.filter((v) => v.status === 'blocked').length)
 /** The run's `agent` calls (a plugin's are its script's business). */
 const agents = computed(() => views.value.filter((v) => v.name === 'agent'))
+/** Its `agent` calls still waiting on their sub-agent: cards, not running rows. */
+const runningAgents = computed(() => running.value?.calls.filter((c) => c.call.name === 'agent') ?? [])
 
 /** Each call's full facts, one per line, for the summary's tooltip. */
 const summaryTitle = computed(() => views.value.map(toolRowTitle).join('\n'))
@@ -283,8 +285,9 @@ function toggleOpen(): void {
       <RunningTools v-if="running" :step="running" />
     </div>
     <!-- the sub-agents it started stand outside the fold -->
-    <div v-if="agents.length" class="mt-2 flex w-full flex-col gap-1.5">
+    <div v-if="agents.length || runningAgents.length" class="mt-2 flex w-full flex-col gap-1.5">
       <AgentCard v-for="v in agents" :key="v.row.result.id" v-enter="'enter-fade'" :view="v" />
+      <AgentCard v-for="c in runningAgents" :key="c.call.call_id" v-enter="'enter-fade'" :call="c.call" />
     </div>
   </div>
 </template>

@@ -1,42 +1,50 @@
 <script setup lang="ts">
 // A sub-agent the turn started, outside the folded activity run: its task
-// and how it is doing. Click → its transcript beside the chat.
+// and how it is doing — a finished call's row (`view`), or a call still
+// waiting on its sub-agent (`call`). Click → its transcript beside the chat.
 import { computed } from 'vue'
 import { t } from '../../i18n'
-import { openAgentView, state } from '../../lib/store'
+import { findAgentChild, openAgentView, state } from '../../lib/store'
+import type { ToolCall } from '../../lib/types'
 import type { ToolRowView } from '../../lib/toolrows'
 import { argsOf } from '../../lib/toolrows'
 import { taskStatusWord } from '../../lib/tasks'
 import Icon from '../ui/Icon.vue'
 
-const props = defineProps<{ view: ToolRowView }>()
+const props = defineProps<{ view?: ToolRowView; call?: ToolCall }>()
 
 const task = computed(() => {
-  const raw = argsOf(props.view.row.call)?.task
-  return typeof raw === 'string' ? raw.trim() : props.view.callFull
+  const raw = argsOf(props.view?.row.call ?? props.call)?.task
+  return typeof raw === 'string' ? raw.trim() : (props.view?.callFull ?? '')
 })
-const child = computed(() => props.view.agentChild)
+const child = computed(() =>
+  props.view ? props.view.agentChild : props.call ? findAgentChild(props.call.call_id) : null,
+)
 const open = computed(() => !!child.value && state.agentView === child.value.id)
 
-/** Running while its task or its branch is; otherwise the task's outcome. */
+/** Running while its call, its task or its branch is; otherwise the task's outcome. */
 const running = computed(
-  () => props.view.taskStatus === 'running' || (!!child.value && !!state.busy[child.value.id]),
+  () => !props.view || props.view.taskStatus === 'running' || (!!child.value && !!state.busy[child.value.id]),
 )
 const failed = computed(
   () =>
-    props.view.status !== 'ok' || props.view.taskStatus === 'failed' || props.view.taskStatus === 'cancelled',
+    !!props.view &&
+    (props.view.status !== 'ok' ||
+      props.view.taskStatus === 'failed' ||
+      props.view.taskStatus === 'cancelled'),
 )
 const statusText = computed(() => {
   if (running.value) return taskStatusWord('running')
-  if (props.view.taskStatus && props.view.taskStatus !== 'done') return taskStatusWord(props.view.taskStatus)
-  return props.view.status === 'ok' ? '' : props.view.statusLabel
+  const v = props.view!
+  if (v.taskStatus && v.taskStatus !== 'done') return taskStatusWord(v.taskStatus)
+  return v.status === 'ok' ? '' : v.statusLabel
 })
 </script>
 
 <template>
   <button
     type="button"
-    :data-path-node="view.row.result.id"
+    :data-path-node="view?.row.result.id"
     class="agent-card"
     :class="{ 'is-open': open }"
     :disabled="!child"

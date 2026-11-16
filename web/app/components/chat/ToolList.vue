@@ -6,16 +6,18 @@
 // full call/result lives in the row's tooltip and its own expansion
 // (args/output). "ok" rows carry no status word (the icon suffices), errors
 // keep theirs, and a call a hook blocked gets a small rubber stamp (stamped
-// on, when it happens live) and starts expanded. `agent` calls are plain
-// rows here: the AgentCard below the run is where a sub-agent shows.
+// on, when it happens live) and starts expanded. An `agent` row carries an
+// "open sub-agent" chip (a background one: its task chip); the AgentCard
+// below the run is where a sub-agent shows.
 import { computed } from 'vue'
 import { t } from '../../i18n'
 import type { ToolRowInfo } from '../../lib/store'
-import { openTaskDetail, state } from '../../lib/store'
+import { openAgentView, openTaskDetail, state } from '../../lib/store'
 import { cardById } from '../../lib/cards'
 import type { ToolRowView } from '../../lib/toolrows'
 import { argsOf, isRowOpen, outputJson, toggleRow, toolRowTitle, toolRowView } from '../../lib/toolrows'
 import { taskStatusWord } from '../../lib/tasks'
+import { shortId } from '../../lib/util'
 import { toolIcon } from '../../lib/toolIcon'
 import { highlightLine } from '../../lib/markdown'
 import { vEnter } from '../../lib/motion'
@@ -142,6 +144,16 @@ function liveTaskOutput(id: string | null): string {
           · {{ v.resultText }}
         </span>
         <span class="ml-auto flex flex-none items-center gap-2">
+          <Chip
+            v-if="v.agentChild && !v.taskId && state.agentView !== v.agentChild.id"
+            icon="agent"
+            tone="agent"
+            clickable
+            :title="t('tools.row.subAgentTitle', { id: shortId(v.agentChild.id) })"
+            @click.stop="openAgentView(v.agentChild.id)"
+          >
+            {{ t('tools.row.openSubAgent') }}
+          </Chip>
           <Chip
             v-if="v.taskId"
             tone="tool"

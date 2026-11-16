@@ -5,6 +5,7 @@
 // (a tool error, a hook block) reads in danger.
 import { computed } from 'vue'
 import { t } from '../../i18n'
+import { vFollow } from '../../lib/motion'
 import { bashExit } from '../../lib/toolrows'
 
 const props = defineProps<{
@@ -22,9 +23,12 @@ const result = computed(() => {
 
 <template>
   <div class="term">
-    <pre v-if="result.body" class="term-out" :class="{ 'text-danger': failed && result.code === null }">{{
-      result.body
-    }}</pre>
+    <pre
+      v-if="result.body"
+      v-follow="running"
+      class="term-out"
+      :class="{ 'text-danger': failed && result.code === null }"
+      >{{ result.body }}</pre>
     <div v-else-if="!running" class="term-foot">{{ t('common.noOutput') }}</div>
     <div v-if="running" class="term-foot flex items-center gap-1.5">
       <span class="dot-live size-1.5 rounded-full bg-brand" />{{ t('tools.status.running') }}
