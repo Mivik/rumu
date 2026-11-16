@@ -93,13 +93,15 @@ pub fn agent_tool() -> ToolSpec {
         name: "agent".into(),
         description: "Run a sub-agent on `task`. It runs in the background by default: you get a \
 task id now and its final summary (plus a transcript address you can `read` for details) in a \
-note when it finishes; pass `background: false` to wait for the summary here instead. `inherit.context` defaults to \"full\" — it continues from \
-this exact point and sees everything you see; \"none\" starts a clean context containing only the \
-task. `inherit.workspaces` restricts which workspaces it may use (omit for all). `model` (a \
-model alias, `rumu/<name>`) and `effort` set what it runs on; with context \"full\" only `effort` \
-may change. `assistant` (another assistant's id) hands the task to that assistant instead: it \
-works in a session of its own, with its own cards and model, and sees only the task (no \
-`inherit`). Use for open-ended work whose details don't need to stay here."
+note when it finishes; pass `background: false` to wait for the summary here instead. `mode` \
+sets where it runs:\n\
+- \"fresh\" (default): a clean branch of this session that sees only the task; any `model`.\n\
+- \"fork\": continues from this exact point and sees everything you see; it stays on this \
+model, only `effort` may change.\n\
+- \"session\": a session of its own that sees only the task, run by `assistant` (an assistant's \
+id; default yourself) with its own mounts and model; any `model`.\n\
+`workspaces` (fork / fresh) restricts which workspaces it may use (omit for all). `model` is a \
+model alias (`rumu/<name>`). Use for open-ended work whose details don't need to stay here."
             .into(),
         schema: tool_schema::<turn::AgentArgs>(),
         background: false,

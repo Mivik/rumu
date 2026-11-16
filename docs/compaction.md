@@ -210,7 +210,7 @@ usual tail.
 ## Agents and branches
 
 Sub-agent branches compact on their own with the same rule. A
-`context: "full"` child forks from the parent's path, so it inherits the
+`mode: "fork"` child forks from the parent's path, so it inherits the
 parent's view. Regenerating or editing a node before a compaction forks a
 branch without that compaction.
 

@@ -269,7 +269,7 @@ the catalog lists the cards.",
                 .collect();
             if !others.is_empty() {
                 text.push_str(&format!(
-                    "\n\nOther assistants (`agent` takes the id as `assistant`): {}.",
+                    "\n\nOther assistants (`agent` with mode \"session\" takes the id as `assistant`): {}.",
                     others.join(", ")
                 ));
             }
