@@ -365,14 +365,23 @@ async fn parallel_tools_run_concurrently() {
 async fn unawaited_calls_are_cancelled() {
     let mut agent = tool("agent");
     agent.parallel = true;
-    let p = CodePlugin::new(&[agent]);
+    let p = CodePlugin::new(&[agent, tool("read")]);
     let host = FakeRuntime::arc();
-    queue(&host, vec![ScriptedInner::ok("done").with_delay(30_000)]);
+    queue(
+        &host,
+        vec![
+            ScriptedInner::ok("done").with_delay(30_000),
+            ScriptedInner::ok("x"),
+        ],
+    );
     let started = Instant::now();
+    // Awaiting a second call keeps the script alive until the first one has
+    // reached the host: otherwise the script can end before the host ever
+    // sees it, and there would be nothing to cancel.
     let out = p
         .call_tool(
             "code",
-            json!({ "code": "rumu.agent({path: 'a'}); return 'early';" }),
+            json!({ "code": "rumu.agent({path: 'a'}); await rumu.read({path: 'b'}); return 'early';" }),
             &host.cx(),
         )
         .await
