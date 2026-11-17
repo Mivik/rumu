@@ -95,7 +95,7 @@ const ALIASES: Record<string, string> = {
 
 /** Bumped when a lazy grammar finishes registering, so every computed that
  * rendered a code block (and thus read it) re-runs and highlights the block. */
-export const grammarVersion = shallowRef(0)
+const grammarVersion = shallowRef(0)
 const loading = new Set<string>()
 
 function loadGrammar(name: string): void {
@@ -178,6 +178,12 @@ type Katex = typeof import('katex').default
 let katex: Katex | null = null
 let katexLoading = false
 const katexVersion = shallowRef(0)
+
+/** Bumped when a grammar or KaTeX lands: HTML rendered before may now
+ *  render differently. For renders kept outside a reactive effect. */
+export function assetsVersion(): number {
+  return grammarVersion.value + katexVersion.value
+}
 
 function loadKatex(): void {
   if (katex || katexLoading) return

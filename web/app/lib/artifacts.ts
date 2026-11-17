@@ -80,7 +80,7 @@ export function artifactUrl(a: Artifact): string {
  *  snapshots under their path — each with the path index of its node, in
  *  path order. Only bytes some node already holds, so a reply shows the same
  *  image however late it is reread. */
-const imagesOnPath = computed(() => {
+export const imagesOnPath = computed(() => {
   const byAddress = new Map<string, { image: LightboxImage; at: number }[]>()
   const add = (address: string, image: LightboxImage, at: number) => {
     const list = byAddress.get(address) ?? []
