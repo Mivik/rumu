@@ -78,6 +78,8 @@ pub(crate) trait Backend: Send + Sync {
     /// Create/overwrite a file. Its parent directory must exist: a missing one
     /// is [`is_not_found`], never created.
     async fn write_bytes(&self, abs: &Utf8TypedPathBuf, bytes: &[u8]) -> Result<()>;
+    /// Delete a file; a missing one is [`is_not_found`].
+    async fn remove_file(&self, abs: &Utf8TypedPathBuf) -> Result<()>;
     /// `(name, is_dir)` entries of a directory, sorted by name.
     async fn list_dir(&self, abs: &Utf8TypedPathBuf) -> Result<Vec<(String, bool)>>;
     /// Run a bash script in the workspace root. Merging stderr into stdout is
@@ -278,6 +280,12 @@ impl Backend for LocalBackend {
         Ok(())
     }
 
+    async fn remove_file(&self, abs: &Utf8TypedPathBuf) -> Result<()> {
+        Ok(tokio::fs::remove_file(abs.as_str())
+            .await
+            .map_err(|source| IoError::new("removing", abs.as_str(), source))?)
+    }
+
     async fn list_dir(&self, abs: &Utf8TypedPathBuf) -> Result<Vec<(String, bool)>> {
         let mut reader = tokio::fs::read_dir(abs.as_str())
             .await
@@ -413,6 +421,12 @@ pub(crate) fn remote_write_cmd(abs: &Utf8UnixPath) -> String {
     }
 }
 
+/// `test -e <path> || exit 44; rm -- <path>`.
+pub(crate) fn remote_remove_cmd(abs: &Utf8UnixPath) -> String {
+    let path = sh_quote(abs.as_str());
+    format!("test -e {path} || exit {REMOTE_MISSING_EXIT}; rm -- {path}")
+}
+
 /// `LC_ALL=C ls -1pA <dir>` — one entry per line, dirs with a trailing `/`,
 /// deterministic C-collation order, hidden entries included (matching the
 /// local backend's `read_dir`).
@@ -528,6 +542,15 @@ impl Backend for SshBackend {
             .map_err(|source| IoError::op("waiting for the ssh write", source))?;
         if !out.status.success() {
             return Err(remote_failure("write", abs, &out));
+        }
+        Ok(())
+    }
+
+    async fn remove_file(&self, abs: &Utf8TypedPathBuf) -> Result<()> {
+        let abs = posix(abs)?;
+        let out = self.run(&remote_remove_cmd(abs)).await?;
+        if !out.status.success() {
+            return Err(remote_failure("rm", abs, &out));
         }
         Ok(())
     }

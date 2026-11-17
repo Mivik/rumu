@@ -807,7 +807,7 @@ impl WorkspacePlugin {
                         display(&ws, &abs),
                         args.content.len()
                     ))
-                    .with_data(&patch)
+                    .with_data(&patch.at(&ws, &abs))
                     .with_effects(effects)),
                     // Directories are never created for the model: a missing
                     // one usually means a mistyped path, not a new directory.
@@ -890,7 +890,7 @@ impl WorkspacePlugin {
                             display(&ws, &abs),
                             if n == 1 { "" } else { "s" }
                         ))
-                        .with_data(&patch)
+                        .with_data(&patch.at(&ws, &abs))
                         .with_effects(effects))
                     }
                     Err(e) => {

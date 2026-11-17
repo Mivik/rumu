@@ -524,6 +524,30 @@ impl Structured for WorkspaceUse {
     const V: u32 = 1;
 }
 
+/// A file on a workspace: its name and the file's absolute path on its
+/// machine.
+#[derive(Debug, Clone, PartialEq, Eq, Hash, Serialize, Deserialize, ts_rs::TS)]
+#[ts(export)]
+pub struct FileRef {
+    pub ws: String,
+    pub path: String,
+}
+
+/// Payload of the `workspace.revert` marker (v1): the user reverted the
+/// file changes made since the user message `from`; `files` are the ones
+/// put back.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, ts_rs::TS)]
+#[ts(export)]
+pub struct FilesReverted {
+    pub from: NodeId,
+    pub files: Vec<FileRef>,
+}
+
+impl Structured for FilesReverted {
+    const TAG: &'static str = "workspace.revert";
+    const V: u32 = 1;
+}
+
 /// Payload of the `workspace.set` marker (v1): a sub-agent's
 /// `inherit.workspaces`, narrowing the workspaces the branch may address from
 /// here on (every registered one otherwise). The built-in `@rumu` and

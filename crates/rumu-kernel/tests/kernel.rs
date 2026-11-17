@@ -2015,6 +2015,63 @@ async fn agent_forks_a_child_and_survives_batch_order() {
 
 // ---------- agent limits ----------
 
+/// `nodes_since` is the path from a user message on, plus the sub-agent
+/// branches started from it — not those of earlier turns.
+#[tokio::test]
+async fn nodes_since_takes_in_the_sub_agents_started_after() {
+    let plugin = Arc::new(plugin_with(
+        "branch",
+        &["agent", "other"],
+        vec![],
+        noop_hooks(),
+        Arc::new(|_, _, _| ToolOutput::ok("done")),
+    ));
+    let (kernel, _llm, _session, branch) = setup(
+        vec![plugin],
+        vec![
+            LlmResponse::calls(vec![ToolCall::new(
+                "a1",
+                "agent",
+                json!({"mode": "fork", "background": false, "task": "look"}),
+            )]),
+            // the child's own call, then its reply
+            LlmResponse::calls(vec![ToolCall::new("c1", "other", json!({}))]),
+            LlmResponse::text("child done"),
+            LlmResponse::text("first done"),
+            LlmResponse::calls(vec![ToolCall::new("o2", "other", json!({}))]),
+            LlmResponse::text("second done"),
+        ],
+    )
+    .await;
+    run_turn_on(&kernel, &branch, "first").await;
+    let (_, nodes, _) = run_turn_on(&kernel, &branch, "second").await;
+    let user = |text: &str| {
+        nodes
+            .iter()
+            .find(|n| matches!(&n.body, NodeBody::User { content } if content.text == text))
+            .unwrap()
+            .id
+            .clone()
+    };
+    let results = |from: &NodeId| -> Vec<String> {
+        kernel
+            .nodes_since(&branch, from)
+            .unwrap()
+            .iter()
+            .filter_map(|n| match &n.body {
+                NodeBody::ToolResult { call_id, .. } => Some(call_id.clone()),
+                _ => None,
+            })
+            .collect()
+    };
+    let first = results(&user("first"));
+    assert!(first.contains(&"c1".to_owned()), "{first:?}");
+    assert!(first.contains(&"o2".to_owned()), "{first:?}");
+    assert_eq!(results(&user("second")), ["o2"]);
+}
+
+// ---------- agent limits ----------
+
 /// `context: "none"` forks at the session root: the child is seeded with the
 /// task only, sees none of the parent conversation, and its transcript starts
 /// at the task node.

@@ -27,6 +27,7 @@ mod history;
 mod mount;
 mod patch;
 mod registry;
+mod revert;
 mod session;
 mod task;
 mod time;
@@ -37,6 +38,7 @@ mod watch;
 mod tests;
 
 pub use backend::BackendError;
+pub use revert::{RevertAction, RevertFile, RevertPlan, revert_files, revert_note, revert_plan};
 pub use tools::snapshot_file;
 
 use std::collections::HashMap;

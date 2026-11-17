@@ -336,6 +336,152 @@ async fn write_and_edit_carry_the_ui_patch() {
     assert!(out.content.data.is_none());
 }
 
+/// Reverting a span puts back what its `write`/`edit` calls changed: a
+/// created file is removed, an edited one restored, and one changed by hand
+/// since is left alone.
+#[tokio::test]
+async fn revert_undoes_the_recorded_writes() {
+    let dir = tempfile::tempdir().unwrap();
+    std::fs::write(dir.path().join("b.txt"), "b1\nb2\nb3\n").unwrap();
+    std::fs::write(dir.path().join("c.txt"), "c1\nc2\n").unwrap();
+    let (plugin, host, cx, _home) = setup(dir.path(), false);
+
+    let calls = [
+        (
+            "w1",
+            "write",
+            json!({ "path": "a.txt", "content": "new\n" }),
+        ),
+        (
+            "e1",
+            "edit",
+            json!({ "path": "b.txt", "old_string": "b2", "new_string": "B2" }),
+        ),
+        (
+            "e2",
+            "edit",
+            json!({ "path": "b.txt", "old_string": "b3", "new_string": "B3\nB4" }),
+        ),
+        (
+            "w2",
+            "write",
+            json!({ "path": "c.txt", "content": "c1\nC2\n" }),
+        ),
+        ("x1", "bash", json!({ "command": "true" })),
+    ];
+    let user = NodeBody::User {
+        content: "do it".into(),
+    };
+    let mut nodes = vec![sess_node("s", "u", None, 1, user)];
+    nodes.push(sess_node(
+        "s",
+        "a",
+        Some("u"),
+        2,
+        NodeBody::Assistant {
+            content: "".into(),
+            reasoning: vec![],
+            stats: Default::default(),
+            reasoning_reset: false,
+            tool_calls: calls
+                .iter()
+                .map(|(id, name, args)| rumu_core::ToolCall::new(*id, *name, args.clone()))
+                .collect(),
+            model: "m".into(),
+            usage: Default::default(),
+        },
+    ));
+    for (i, (id, name, args)) in calls.iter().enumerate() {
+        let out = plugin.call_tool(name, args.clone(), &cx).await.unwrap();
+        assert!(!out.is_error, "{name}: {}", out.content.text);
+        flush_output(&host, id, &out);
+        nodes.push(sess_node(
+            "s",
+            &format!("r{i}"),
+            None,
+            3 + i as i64,
+            NodeBody::ToolResult {
+                call_id: (*id).into(),
+                content: out.content,
+                is_error: false,
+                invoke: None,
+            },
+        ));
+    }
+    // The user edits c.txt's changed line by hand afterwards.
+    std::fs::write(dir.path().join("c.txt"), "c1\nmine\n").unwrap();
+
+    let state = host.state.lock().unwrap().clone();
+    let plan = revert_plan(&state, &nodes).await;
+    let actions: Vec<(&str, RevertAction)> = plan
+        .files
+        .iter()
+        .map(|f| (f.label.as_str(), f.action))
+        .collect();
+    assert_eq!(
+        actions,
+        [
+            ("proj:a.txt", RevertAction::Delete),
+            ("proj:b.txt", RevertAction::Restore),
+            ("proj:c.txt", RevertAction::Changed),
+        ]
+    );
+    assert_eq!(plan.commands, ["true"]);
+
+    let every: Vec<rumu_core::FileRef> = plan
+        .files
+        .iter()
+        .map(|f| rumu_core::FileRef {
+            ws: f.ws.clone(),
+            path: f.path.clone(),
+        })
+        .collect();
+    let (_, done) = revert_files(&state, &nodes, &every).await;
+    assert_eq!(done.len(), 2);
+    assert!(done.iter().all(|f| f.error.is_none()));
+    assert!(!dir.path().join("a.txt").exists());
+    assert_eq!(
+        std::fs::read_to_string(dir.path().join("b.txt")).unwrap(),
+        "b1\nb2\nb3\n"
+    );
+    assert_eq!(
+        std::fs::read_to_string(dir.path().join("c.txt")).unwrap(),
+        "c1\nmine\n"
+    );
+
+    let note = revert_note("do it", &plan, &done);
+    assert!(note.contains("restored: proj:b.txt"), "{note}");
+    assert!(note.contains("deleted: proj:a.txt"), "{note}");
+    assert!(note.contains("left as they are: proj:c.txt"), "{note}");
+    assert!(note.contains("bash"), "{note}");
+
+    // Recorded, the revert is not planned again: only the file changed by
+    // hand is left.
+    let marker = rumu_core::FilesReverted {
+        from: "u".into(),
+        files: done
+            .iter()
+            .map(|f| rumu_core::FileRef {
+                ws: f.ws.clone(),
+                path: f.path.clone(),
+            })
+            .collect(),
+    };
+    nodes.push(sess_node(
+        "s",
+        "n",
+        None,
+        100,
+        NodeBody::Note {
+            source: "system".into(),
+            content: rumu_core::Content::note_with(note, &marker),
+        },
+    ));
+    let again = revert_plan(&state, &nodes).await;
+    assert_eq!(again.files.len(), 1);
+    assert_eq!(again.files[0].action, RevertAction::Changed);
+}
+
 #[tokio::test]
 async fn read_write_edit_list_roundtrip() {
     let dir = tempfile::tempdir().unwrap();

@@ -974,6 +974,54 @@ async fn dispatch(state: &AppState, method: &str, p: &Value) -> Result<Value> {
             Ok(json!({ "branch": branch }))
         }
 
+        // What reverting the file changes since the user message `node` on
+        // `branch` would do, file by file (nothing is changed).
+        "branch.revert_plan" => {
+            let branch: BranchId = str_param(p, "branch")?.into();
+            let node: NodeId = str_param(p, "node")?.into();
+            let nodes = kernel.nodes_since(&branch, &node)?;
+            let (_, path_state) = kernel.branch_path(&branch)?;
+            Ok(json!(rumu_plugins::revert_plan(&path_state, &nodes).await))
+        }
+
+        // Revert the picked `files` ({ws, path}) of that plan, planned
+        // afresh, and tell the model on `branch`. Refused while it works.
+        "branch.revert" => {
+            let branch: BranchId = str_param(p, "branch")?.into();
+            let node: NodeId = str_param(p, "node")?.into();
+            let files: Vec<rumu_core::FileRef> =
+                parse_params(p.get("files").unwrap_or(&Value::Null))?;
+            if !kernel.is_idle(&branch)? {
+                return Err(ServerError::InvalidParams(
+                    "the branch is still working".into(),
+                ));
+            }
+            let nodes = kernel.nodes_since(&branch, &node)?;
+            let (_, path_state) = kernel.branch_path(&branch)?;
+            let (plan, done) = rumu_plugins::revert_files(&path_state, &nodes, &files).await;
+            let reverted: Vec<rumu_core::FileRef> = done
+                .iter()
+                .filter(|f| f.error.is_none())
+                .map(|f| rumu_core::FileRef {
+                    ws: f.ws.clone(),
+                    path: f.path.clone(),
+                })
+                .collect();
+            if !reverted.is_empty() {
+                let prompt = match nodes.first().map(|n| &n.body) {
+                    Some(rumu_core::NodeBody::User { content }) => content.text.as_str(),
+                    _ => "",
+                };
+                let text = rumu_plugins::revert_note(prompt, &plan, &done);
+                let marker = rumu_core::FilesReverted {
+                    from: node,
+                    files: reverted,
+                };
+                kernel.record_revert(&branch, text, &marker).await?;
+            }
+            Ok(json!({ "files": done }))
+        }
+
         "branch.retry" => {
             let branch: BranchId = str_param(p, "branch")?.into();
             kernel.retry(&branch, parse_params(p)?).await?;

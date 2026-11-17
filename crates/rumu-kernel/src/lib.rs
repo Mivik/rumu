@@ -31,10 +31,10 @@ use crate::host::KernelRuntime;
 use crate::title::TITLE_CHARS;
 use rumu_core::kind;
 use rumu_core::{
-    Branch, BranchId, BranchKind, BranchStatus, Content, Effect, Event, HookSpec, Inbox, Node,
-    NodeBody, NodeId, PathState, Plugin, Post, Runtime, SYSTEM_SOURCE, SessionId, SessionInfo,
-    SessionRoot, TaskId, Titles, ToolCall, ToolSpec, TurnError, WorkspaceUse, Workspaces, now,
-    tool_schema,
+    Branch, BranchId, BranchKind, BranchStatus, Content, Effect, Event, FilesReverted, HookSpec,
+    Inbox, Node, NodeBody, NodeId, PathState, Plugin, Post, Runtime, SYSTEM_SOURCE, SessionId,
+    SessionInfo, SessionRoot, TaskId, Titles, ToolCall, ToolSpec, TurnError, WorkspaceUse,
+    Workspaces, now, tool_schema,
 };
 use rumu_store::Store;
 use serde_json::{Value, json};
@@ -898,6 +898,66 @@ impl Kernel {
     ) -> Result<()> {
         self.deliver_note(branch, text, &WorkspaceUse { name })
             .await
+    }
+
+    /// Record on `branch` that the user reverted the file changes since
+    /// `marker.from`, telling the model `text`.
+    pub async fn record_revert(
+        self: &Arc<Self>,
+        branch: &BranchId,
+        text: String,
+        marker: &FilesReverted,
+    ) -> Result<()> {
+        self.deliver_note(branch, text, marker).await
+    }
+
+    /// The nodes of `branch`'s path from `from` (a node on it) to its head,
+    /// then those of the sub-agent branches started from them (and from
+    /// theirs) since `from`: everything that may have written files since.
+    pub fn nodes_since(&self, branch: &BranchId, from: &NodeId) -> Result<Vec<Node>> {
+        let path = self.path_nodes(branch)?;
+        let i = path
+            .iter()
+            .position(|n| n.id == *from)
+            .ok_or_else(|| Error::NodeNotFound(from.clone()))?;
+        let since = path[i].at;
+        let mut nodes = path[i..].to_vec();
+        let session = self.session_of(branch)?;
+        let mut agents: Vec<Branch> = self
+            .store
+            .branches_of_session(&session)?
+            .into_iter()
+            .filter(|b| matches!(b.kind, BranchKind::Agent { .. }) && b.created_at >= since)
+            .collect();
+        let mut seen: HashSet<NodeId> = nodes.iter().map(|n| n.id.clone()).collect();
+        // A sub-agent belongs here when the call that started it is here;
+        // repeat for the ones those started.
+        loop {
+            let calls: HashSet<&str> = nodes
+                .iter()
+                .filter_map(|n| match &n.body {
+                    NodeBody::ToolResult { call_id, .. } => Some(call_id.as_str()),
+                    _ => None,
+                })
+                .collect();
+            let (mine, rest): (Vec<Branch>, Vec<Branch>) =
+                agents.into_iter().partition(|b| match &b.kind {
+                    BranchKind::Agent { call_id, .. } => calls.contains(call_id.as_str()),
+                    _ => false,
+                });
+            agents = rest;
+            if mine.is_empty() {
+                break;
+            }
+            for b in mine {
+                for n in self.path_nodes(&b.id)? {
+                    if n.at >= since && seen.insert(n.id.clone()) {
+                        nodes.push(n);
+                    }
+                }
+            }
+        }
+        Ok(nodes)
     }
 
     /// A user action recorded on the branch: the model reads `text`, the

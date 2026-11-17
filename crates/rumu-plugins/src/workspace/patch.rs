@@ -4,9 +4,11 @@
 //! model-facing text is unchanged and no file content is stored: a `create`
 //! carries no hunks (the UI renders the call's own `content`), and an update
 //! past the caps below carries none either (the UI falls back to the args).
+//! A real-workspace patch also names the file it wrote ([`FilePatch::file`]),
+//! which is what lets [`super::revert`] undo it later.
 
 use rumu_cards::diff::Hunk;
-use rumu_core::Structured;
+use rumu_core::{FileRef, Structured, Utf8TypedPathBuf, Workspace};
 use serde::{Deserialize, Serialize};
 
 /// Sides larger than this are not diffed (hunks dropped).
@@ -22,6 +24,21 @@ pub(crate) struct FilePatch {
     pub kind: PatchKind,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub hunks: Option<Vec<Hunk>>,
+    /// The file written, on real workspaces (card writes carry none).
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    #[ts(optional)]
+    pub file: Option<FileRef>,
+}
+
+impl FilePatch {
+    /// The patch, naming the file it was applied to.
+    pub(crate) fn at(mut self, ws: &Workspace, abs: &Utf8TypedPathBuf) -> Self {
+        self.file = Some(FileRef {
+            ws: ws.name.clone(),
+            path: abs.to_string(),
+        });
+        self
+    }
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize, ts_rs::TS)]
@@ -42,6 +59,7 @@ pub(crate) fn create() -> FilePatch {
     FilePatch {
         kind: PatchKind::Create,
         hunks: None,
+        file: None,
     }
 }
 
@@ -51,6 +69,7 @@ pub(crate) fn undiffed() -> FilePatch {
     FilePatch {
         kind: PatchKind::Update,
         hunks: None,
+        file: None,
     }
 }
 
@@ -64,6 +83,7 @@ pub(crate) async fn update(old: String, new: String) -> FilePatch {
     FilePatch {
         kind: PatchKind::Update,
         hunks,
+        file: None,
     }
 }
 
