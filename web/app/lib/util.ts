@@ -51,6 +51,18 @@ export function preview(text: string, max = 80): string {
   return line.length > max ? `${line.slice(0, max - 1)}…` : line
 }
 
+/** Tokens in `text`, roughly, as the kernel counts them: four ASCII chars,
+ *  or one other char, each. */
+export function textTokens(text: string): number {
+  let ascii = 0
+  let other = 0
+  for (const c of text) {
+    if (c.codePointAt(0)! < 128) ascii++
+    else other++
+  }
+  return Math.ceil(ascii / 4) + other
+}
+
 /** Compact token count for meta lines: 1234 → '1.2k'. */
 export function fmtTokens(n: number): string {
   if (n < 1000) return String(n)

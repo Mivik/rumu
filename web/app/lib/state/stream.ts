@@ -3,10 +3,12 @@
 // reconnect) pick a running turn back up.
 
 import type { BranchId, LiveTurn, LlmDeltaPush, SessionTreeResult } from '../types'
+import { textTokens } from '../util'
 import { MAX_DELTA_CHARS, state, type DeltaBuffer } from './state'
 
 function fold(buf: DeltaBuffer, p: LlmDeltaPush): void {
   buf.seq = p.seq
+  buf.tokens += textTokens(p.reasoning ?? '') + textTokens(p.text ?? '')
   if (p.reasoning) {
     buf.reasonStart ??= Date.now()
     buf.reasoning = (buf.reasoning + p.reasoning).slice(-MAX_DELTA_CHARS)
@@ -27,7 +29,7 @@ function fold(buf: DeltaBuffer, p: LlmDeltaPush): void {
 export function applyDelta(p: LlmDeltaPush): void {
   let buf = state.deltas[p.branch]
   if (!buf) {
-    buf = { text: '', reasoning: '', hasReasoning: false, hasText: false, seq: 0 }
+    buf = { text: '', reasoning: '', hasReasoning: false, hasText: false, seq: 0, tokens: 0 }
     if (p.seq > 1) buf.early = []
     state.deltas[p.branch] = buf
   }
@@ -43,6 +45,7 @@ function fromSnapshot(live: LiveTurn, early: LlmDeltaPush[]): DeltaBuffer {
     hasReasoning: !!live.reasoning,
     hasText: !!live.text,
     seq: live.seq,
+    tokens: textTokens(live.reasoning) + textTokens(live.text),
   }
   // The thinking clock restarts at the join; a reply already under way
   // means thinking ended at some unknown time before it.

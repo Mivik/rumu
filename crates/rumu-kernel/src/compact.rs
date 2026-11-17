@@ -73,6 +73,8 @@ fn node_tokens(node: &Node) -> u64 {
 /// The size of the view of `path`: the last reply's reported usage, plus an
 /// estimate of what came after it. Only replies after the last compaction
 /// count, since earlier ones were measured against the uncompacted view.
+/// The composer's context meter mirrors this and [`threshold`]
+/// (`web/app/lib/state/context.ts`).
 pub(crate) fn estimate(path: &[Node]) -> u64 {
     let order = view_order(path);
     let after = path.iter().rposition(|n| compaction_of(n).is_some());

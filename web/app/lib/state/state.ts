@@ -95,6 +95,8 @@ export interface DeltaBuffer {
   reasonMs?: number
   /** The number of the last delta folded in. */
   seq: number
+  /** Rough tokens streamed so far (the text above keeps only its tail). */
+  tokens: number
   /** Deltas of a stream joined midway, kept until the `session.tree`
    *  snapshot supplies its start (see `mergeLive`). */
   early?: LlmDeltaPush[]

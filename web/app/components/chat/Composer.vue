@@ -62,6 +62,7 @@ import {
 } from '../../lib/state/drafts'
 import Icon from '../ui/Icon.vue'
 import DecisionPanel from './DecisionPanel.vue'
+import ContextMeter from './ContextMeter.vue'
 import ModelPicker from './ModelPicker.vue'
 import QuoteTray from './QuoteTray.vue'
 
@@ -534,6 +535,7 @@ const sendLabel = computed(() =>
           @click.self="textareaEl?.focus()"
         >
           <ModelPicker />
+          <ContextMeter />
           <span class="flex-1" @click.self="textareaEl?.focus()" />
           <input
             ref="fileEl"

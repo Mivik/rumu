@@ -444,6 +444,7 @@ pub struct SettingsInfo {
     pub aliases: Vec<ModelInfo>,
     pub roles: Roles,
     pub titles: Titles,
+    pub compact: CompactSettings,
     pub presets: Vec<PresetInfo>,
     pub mcp: Vec<crate::McpServerInfo>,
     pub skills: crate::SkillsInfo,

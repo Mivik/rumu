@@ -185,5 +185,15 @@
     "line": "Context compacted · {before} → {after} tok",
     "show": "Show summary",
     "hide": "Hide summary"
+  },
+  "context": {
+    "label": "Context",
+    "aria": "Context use",
+    "left": "{n} until auto-compaction",
+    "over": "Compacts before the next model call",
+    "manual": "Auto-compaction is off",
+    "assumed": "Window unknown; assuming {n}",
+    "compact": "Compact now",
+    "stats": "View in stats"
   }
 }

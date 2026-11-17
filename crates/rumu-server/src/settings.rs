@@ -312,6 +312,7 @@ impl Settings {
                 .collect(),
             roles: m.roles.clone(),
             titles: m.titles,
+            compact: m.compact,
             presets: offered(&catalog),
             mcp: self.mcp.info(&file.mcp),
             skills,

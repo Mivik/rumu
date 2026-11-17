@@ -185,5 +185,15 @@
     "line": "上下文已压缩 · {before} → {after} tok",
     "show": "查看摘要",
     "hide": "收起摘要"
+  },
+  "context": {
+    "label": "上下文",
+    "aria": "上下文用量",
+    "left": "距自动压缩 {n}",
+    "over": "下次调用模型前将自动压缩",
+    "manual": "自动压缩已关闭",
+    "assumed": "窗口大小未知，按 {n} 计",
+    "compact": "立即压缩",
+    "stats": "在统计中查看"
   }
 }
