@@ -7,8 +7,14 @@ import { reactive } from 'vue'
 import { openPage } from './router'
 import { state } from './state/state'
 
+/** The desktop breakpoint (Tailwind's `lg`). */
+export const WIDE = '(min-width: 64rem)'
+
 export const layout = reactive({
   sidebarOpen: false,
+  /** At the desktop breakpoint: the sidebar is static, and settings and an
+   *  open project, workspace or assistant are dialogs over the desk. */
+  wide: window.matchMedia(WIDE).matches,
   /** Set to open the providers section at adding one; taken by it. */
   addingProvider: false,
   /** Set to open the providers section at a model (`provider/model-id`);
@@ -35,6 +41,12 @@ export function addProvider(): void {
 export function showModel(ref: string): void {
   layout.showingModel = ref
   openPage('settings', 'providers')
+}
+
+/** An item of the projects or assistants page is open as a dialog. */
+export function itemDialog(): boolean {
+  const p = state.page
+  return layout.wide && !!p && (!!p.item || p.fresh) && p.page !== 'decks' && p.page !== 'settings'
 }
 
 /** Escape closes the sidebar drawer, then the side panel. A card window is a

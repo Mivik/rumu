@@ -1,5 +1,5 @@
 <script setup lang="ts">
-import { computed, onBeforeUnmount, onMounted, ref, type Component } from 'vue'
+import { computed, onBeforeUnmount, onMounted, type Component } from 'vue'
 import Sidebar from './components/Sidebar.vue'
 import AuthGate from './components/AuthGate.vue'
 import { auth } from './lib/auth'
@@ -16,9 +16,9 @@ import { openArtifact } from './lib/artifacts'
 import Toasts from './components/Toasts.vue'
 import Modal from './components/ui/Modal.vue'
 import { t } from './i18n'
-import { closePanels, layout } from './lib/layout'
+import { closePanels, itemDialog, layout, WIDE } from './lib/layout'
 import { SIDE_SHEET, SWAP } from './lib/motion'
-import { closePage, sheetOf, type Page } from './lib/router'
+import { closePage, pageUp, sheetOf, type Page } from './lib/router'
 import { state } from './lib/store'
 
 /** The side sheet's place: an overlay below xl, the third column at xl. */
@@ -37,22 +37,22 @@ const PAGES: Record<Page, Component> = {
 // and the scrim below sits over the chat. Keep the open state honest when the
 // viewport crosses that breakpoint.
 let lg: MediaQueryList | null = null
-/** Whether the sidebar is static (not a drawer) at the current viewport. */
-const lgUp = ref(window.matchMedia('(min-width: 64rem)').matches)
 
 function onBreakpoint(): void {
-  lgUp.value = lg?.matches ?? false
-  if (lgUp.value) layout.sidebarOpen = false
+  layout.wide = lg?.matches ?? false
+  if (layout.wide) layout.sidebarOpen = false
 }
 
 /** Settings beside the sidebar: a dialog over the desk, not a sheet. */
-const settingsDialog = computed(() => lgUp.value && state.page?.page === 'settings')
+const settingsDialog = computed(() => layout.wide && state.page?.page === 'settings')
 /** The page on the chat's sheet, if any. */
 const sheetPage = computed(() => (settingsDialog.value ? null : state.page))
 
 function onKey(e: KeyboardEvent): void {
   if (e.key !== 'Escape') return
-  if (settingsDialog.value && !state.drawers.length) closePage()
+  if (state.drawers.length) return
+  if (settingsDialog.value) closePage()
+  else if (itemDialog()) pageUp()
   else closePanels()
 }
 
@@ -73,7 +73,7 @@ const taskOpen = computed(
 )
 
 onMounted(() => {
-  lg = window.matchMedia('(min-width: 64rem)')
+  lg = window.matchMedia(WIDE)
   onBreakpoint()
   lg.addEventListener('change', onBreakpoint)
   window.addEventListener('keydown', onKey)
@@ -115,8 +115,8 @@ onBeforeUnmount(() => {
     <Sidebar
       class="fixed inset-y-0 left-0 z-50 w-[min(86vw,300px)] border-r border-line-soft bg-canvas transition-transform duration-300 ease-soft lg:static lg:z-auto lg:my-4 lg:ml-4 lg:w-auto lg:translate-x-0 lg:rounded-sheet lg:border-0 lg:bg-surface lg:shadow-card lg:ring-1 lg:ring-line"
       :class="layout.sidebarOpen ? 'translate-x-0 shadow-pop' : '-translate-x-full lg:translate-x-0'"
-      :inert="!layout.sidebarOpen && !lgUp ? '' : undefined"
-      :aria-hidden="!layout.sidebarOpen && !lgUp ? 'true' : undefined"
+      :inert="!layout.sidebarOpen && !layout.wide ? '' : undefined"
+      :aria-hidden="!layout.sidebarOpen && !layout.wide ? 'true' : undefined"
     />
     <!-- the chat and the pages share one cell, so a switch cross-fades -->
     <Transition v-bind="SWAP">

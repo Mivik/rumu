@@ -1,14 +1,17 @@
 <script setup lang="ts">
 // The projects page: the projects as a grid of cards and, below them, the
 // workspace registry they mount from. A project opens at `/projects/<id>`, a
-// workspace at `/workspaces/<name>`, each in the sheet's whole width with the
-// header as the trail back; `?new` on either is its creation form.
+// workspace at `/workspaces/<name>`; `?new` on either is its creation form.
+// At the desktop breakpoint it is a dialog over the grid; narrower, it takes
+// the sheet's whole width with the header as the trail back.
 import { computed, watch } from 'vue'
 import { t } from '../../i18n'
+import { layout } from '../../lib/layout'
 import { SWAP } from '../../lib/motion'
 import { openPage, pageUp } from '../../lib/router'
 import { connected, refreshWorkspaces, state } from '../../lib/store'
 import Icon from '../ui/Icon.vue'
+import Modal from '../ui/Modal.vue'
 import PageSheet from './PageSheet.vue'
 import ProjectCard from './ProjectCard.vue'
 import ProjectForm from './ProjectForm.vue'
@@ -24,6 +27,10 @@ const crumb = computed(() => {
   if (onWorkspaces.value) return state.workspaces.find((w) => w.name === r.item)?.name ?? null
   return state.projects.find((p) => p.id === r.item)?.name ?? null
 })
+/** The open item is a dialog over the grid rather than the sheet's body. */
+const dialog = computed(() => layout.wide && !!crumb.value)
+/** The item takes the sheet's body. */
+const inSheet = computed(() => !layout.wide && !!crumb.value)
 
 // A page booted from its address mounts before the socket is up.
 watch(connected, (up) => up && void refreshWorkspaces(), { immediate: true })
@@ -32,7 +39,7 @@ watch(connected, (up) => up && void refreshWorkspaces(), { immediate: true })
 <template>
   <PageSheet :title="t('projects.title')" icon="mount" tone="text-tool">
     <template #title>
-      <template v-if="crumb">
+      <template v-if="inSheet">
         <button type="button" class="flex-none text-ink-3 transition-colors hover:text-ink" @click="pageUp">
           {{ t('projects.title') }}
         </button>
@@ -45,7 +52,7 @@ watch(connected, (up) => up && void refreshWorkspaces(), { immediate: true })
     </template>
 
     <Transition v-bind="SWAP" mode="out-in">
-      <div v-if="crumb" :key="`${route.page}/${route.item}`" class="flex min-h-0 flex-1 flex-col">
+      <div v-if="inSheet" :key="`${route.page}/${route.item}`" class="flex min-h-0 flex-1 flex-col">
         <WorkspaceForm v-if="onWorkspaces" />
         <ProjectForm v-else />
       </div>
@@ -103,5 +110,25 @@ watch(connected, (up) => up && void refreshWorkspaces(), { immediate: true })
         </section>
       </div>
     </Transition>
+
+    <Modal
+      :open="dialog"
+      :label="crumb ?? ''"
+      :z="55"
+      wrapper-class="p-8"
+      panel-class="max-h-full w-[min(36rem,100%)] rounded-sheet"
+    >
+      <PageSheet modal :title="crumb ?? ''" @close="pageUp">
+        <template #title>
+          <span class="truncate" :class="{ 'font-card': onWorkspaces && !route.fresh }">{{ crumb }}</span>
+        </template>
+        <Transition v-bind="SWAP" mode="out-in">
+          <div :key="`${route.page}/${route.item}`" class="flex min-h-0 flex-1 flex-col">
+            <WorkspaceForm v-if="onWorkspaces" />
+            <ProjectForm v-else />
+          </div>
+        </Transition>
+      </PageSheet>
+    </Modal>
   </PageSheet>
 </template>
