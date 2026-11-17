@@ -38,8 +38,6 @@ export interface ReplyStat {
   /** The prompt it answers; null for a reply opened by a wake or a compaction. */
   prompt: Node | null
   calls: CallStat[]
-  /** When it started: the prompt, else its first call's start. */
-  startAt: number
   modelMs: number
   toolMs: number
   /** Time between the steps (hooks, recall, retry backoff…), idle waits excluded. */
@@ -120,7 +118,6 @@ export function repliesOf(path: Node[]): ReplyStat[] {
     if (b.type === 'user' || compactionOf(n)) {
       cur = null
       prompt = b.type === 'user' ? n : null
-      prevEnd = n.at
       idle = false
       failed = 0
       continue
@@ -144,14 +141,15 @@ export function repliesOf(path: Node[]): ReplyStat[] {
         id: n.id,
         prompt,
         calls: [],
-        startAt: prompt?.at ?? n.at - dur,
         modelMs: 0,
         toolMs: 0,
         otherMs: 0,
         failures: failed,
       }
       out.push(cur)
-      if (!prompt) prevEnd = cur.startAt
+      // The reply's time starts at its first call: no node records when the
+      // turn began, and a regenerated reply starts long after its prompt.
+      prevEnd = n.at - dur
     }
     const gap = Math.max(0, n.at - dur - prevEnd)
     if (!idle) cur.otherMs += gap
