@@ -25,6 +25,8 @@
   "written": "Written",
   "uncached": "Uncached",
   "context": "Context",
+  "requestSize": "Request size",
+  "totalBytes": "total {size}",
   "call": "Call {n}",
   "answered": "reply",
   "thought": "thought {ms}",

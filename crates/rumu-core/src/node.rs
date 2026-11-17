@@ -638,6 +638,10 @@ pub struct CallStats {
     /// Wall time the model spent reasoning before its first text token, ms.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub reason_ms: Option<u64>,
+    /// Size of the request as JSON, bytes: what went up the wire, give or
+    /// take the protocol's own field names.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub request_bytes: Option<u64>,
     /// Transient failures retried before this call succeeded.
     #[serde(default, skip_serializing_if = "is_zero")]
     pub retries: u32,
@@ -839,6 +843,7 @@ mod tests {
         let stats = CallStats {
             ttft_ms: Some(900),
             reason_ms: None,
+            request_bytes: None,
             retries: 2,
         };
         let v = json!({"type": "assistant", "content": {"text": ""}, "ttft_ms": 900,

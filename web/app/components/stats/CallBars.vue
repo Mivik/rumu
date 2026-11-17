@@ -14,7 +14,7 @@ import { computed, ref } from 'vue'
 import { t } from '../../i18n'
 import { callRate } from '../../lib/store'
 import type { CallStat } from '../../lib/store'
-import { fmtDuration } from '../../lib/util'
+import { fmtBytes, fmtDuration } from '../../lib/util'
 import TokenChips from './TokenChips.vue'
 
 const props = withDefaults(defineProps<{ calls: CallStat[]; size?: 'sm' | 'lg'; replyLabels?: boolean }>(), {
@@ -111,7 +111,10 @@ const timing = computed(() => {
           <span v-if="call.reset" class="text-warn">· {{ t('usage.reset') }}</span>
         </div>
         <div class="text-micro tabular-nums text-ink-2">
-          {{ timing }} · {{ t('usage.input') }} {{ call.input.toLocaleString() }}
+          {{ timing }} · {{ t('usage.input') }} {{ call.input.toLocaleString()
+          }}<template v-if="call.requestBytes !== null">
+            · {{ t('usage.requestSize') }} {{ fmtBytes(call.requestBytes) }}</template
+          >
         </div>
         <TokenChips
           :cached="call.cached"

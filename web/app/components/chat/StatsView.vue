@@ -10,7 +10,7 @@ import { t } from '../../i18n'
 import { modelByRef } from '../../lib/state/models'
 import { pathNodes, repliesOf, showStats, state, summarize } from '../../lib/store'
 import type { ReplyStat } from '../../lib/store'
-import { contentText, fmtDuration, fmtTokens, preview } from '../../lib/util'
+import { contentText, fmtBytes, fmtDuration, fmtTokens, preview } from '../../lib/util'
 import CallBars from '../stats/CallBars.vue'
 import TimeSplit from '../stats/TimeSplit.vue'
 import TokenChips from '../stats/TokenChips.vue'
@@ -71,6 +71,11 @@ const tiles = computed(() => {
     { label: t('usage.time'), value: fmtDuration(s.activeMs) },
     { label: t('usage.modelCalls'), value: String(s.calls) },
     {
+      label: t('usage.rate'),
+      value: s.rate === null ? '—' : String(Math.round(s.rate)),
+      unit: s.rate === null ? undefined : t('usage.unitRate'),
+    },
+    {
       label: t('usage.input'),
       value: fmtTokens(s.input),
       unit: t('usage.unitTokens'),
@@ -83,14 +88,14 @@ const tiles = computed(() => {
       sub: s.written ? `${t('usage.written')} ${fmtTokens(s.written)}` : undefined,
     },
     {
+      label: t('usage.requestSize'),
+      value: s.lastBytes === null ? '—' : fmtBytes(s.lastBytes),
+      sub: s.totalBytes ? t('usage.totalBytes', { size: fmtBytes(s.totalBytes) }) : undefined,
+    },
+    {
       label: t('usage.ttftAvg'),
       value: ms(s.avgTtftMs),
       sub: s.maxTtftMs === null ? undefined : t('usage.ttftMax', { ms: fmtDuration(s.maxTtftMs) }),
-    },
-    {
-      label: t('usage.rate'),
-      value: s.rate === null ? '—' : String(Math.round(s.rate)),
-      unit: s.rate === null ? undefined : t('usage.unitRate'),
     },
     {
       label: t('usage.retries'),
@@ -170,7 +175,7 @@ const session = computed(() => {
             </button>
           </div>
 
-          <div class="mt-3 grid grid-cols-2 gap-1.5 sm:grid-cols-4">
+          <div class="mt-3 grid grid-cols-2 gap-1.5 sm:grid-cols-3">
             <div v-for="f in tiles" :key="f.label" class="min-w-0 rounded-control bg-surface-2 px-3 py-2.5">
               <div class="truncate text-micro text-ink-3">{{ f.label }}</div>
               <div class="mt-0.5 flex items-baseline gap-1 whitespace-nowrap">

@@ -19,7 +19,7 @@ import {
 } from '../../lib/artifacts'
 import { renderMarkdown } from '../../lib/markdown'
 import { toast } from '../../lib/state/ui'
-import { copyText, workspaceLabel } from '../../lib/util'
+import { copyText, fmtBytes, workspaceLabel } from '../../lib/util'
 import Icon from '../ui/Icon.vue'
 import FileView from './FileView.vue'
 
@@ -74,15 +74,7 @@ const svg = computed(() =>
 )
 const markdown = computed(() => renderMarkdown(text.value ?? '', { breaks: false }))
 
-const size = computed(() => {
-  const n = artifact.value?.size ?? 0
-  if (n < 1024) return `${n} B`
-  const units = ['KB', 'MB', 'GB']
-  let v = n / 1024
-  let i = 0
-  for (; v >= 1024 && i < units.length - 1; i++) v /= 1024
-  return `${v < 10 ? v.toFixed(1) : Math.round(v)} ${units[i]}`
-})
+const size = computed(() => fmtBytes(artifact.value?.size ?? 0))
 
 async function onCopy(): Promise<void> {
   if (text.value === null || !artifact.value) return

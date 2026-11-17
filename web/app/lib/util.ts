@@ -59,6 +59,16 @@ export function fmtTokens(n: number): string {
   return `${(n / 1_000_000).toFixed(n < 10_000_000 ? 2 : 1).replace(/\.?0+$/, '')}M`
 }
 
+/** Compact byte size: 812 → '812 B', 587896 → '574 KB'. */
+export function fmtBytes(n: number): string {
+  if (n < 1024) return `${n} B`
+  const units = ['KB', 'MB', 'GB']
+  let v = n / 1024
+  let i = 0
+  for (; v >= 1024 && i < units.length - 1; i++) v /= 1024
+  return `${v < 10 ? v.toFixed(1) : Math.round(v)} ${units[i]}`
+}
+
 /** Compact thinking duration for the Thought disclosure: '<1s', '4s', '2m 05s'. */
 export function fmtThought(ms: number): string {
   if (ms < 950) return '<1s'

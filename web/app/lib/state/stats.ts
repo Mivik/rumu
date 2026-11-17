@@ -23,6 +23,8 @@ export interface CallStat {
   durMs: number | null
   ttftMs: number | null
   reasonMs: number | null
+  /** Request body size; null for calls recorded before it was. */
+  requestBytes: number | null
   retries: number
   reset: boolean
   /** Tool names it called; empty for a call that only answered. */
@@ -75,6 +77,10 @@ export interface Summary {
   models: { ref: string; calls: number }[]
   /** The context of the range's last call. */
   lastInput: number
+  /** Request size of the range's last call that recorded one. */
+  lastBytes: number | null
+  /** Request sizes summed: what the range uploaded. */
+  totalBytes: number
 }
 
 function callOf(n: Node, reply: number): CallStat {
@@ -90,6 +96,7 @@ function callOf(n: Node, reply: number): CallStat {
     durMs: n.dur_ms ?? null,
     ttftMs: b.ttft_ms ?? null,
     reasonMs: b.reason_ms ?? null,
+    requestBytes: b.request_bytes ?? null,
     retries: b.retries ?? 0,
     reset: b.reasoning_reset ?? false,
     tools: b.tool_calls.map((c) => c.name),
@@ -190,6 +197,8 @@ export function summarize(replies: ReplyStat[]): Summary {
     resets: 0,
     models: [],
     lastInput: 0,
+    lastBytes: null,
+    totalBytes: 0,
   }
   const models = new Map<string, number>()
   let ttftSum = 0
@@ -227,6 +236,10 @@ export function summarize(replies: ReplyStat[]): Summary {
         }
       }
       s.lastInput = c.input
+      if (c.requestBytes !== null) {
+        s.lastBytes = c.requestBytes
+        s.totalBytes += c.requestBytes
+      }
     }
   }
   s.genMs = Math.max(0, modelMs - s.waitMs)

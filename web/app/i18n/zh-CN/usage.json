@@ -25,6 +25,8 @@
   "written": "写入",
   "uncached": "未缓存",
   "context": "上下文",
+  "requestSize": "请求体积",
+  "totalBytes": "累计 {size}",
   "call": "第 {n} 次",
   "answered": "回复",
   "thought": "思考 {ms}",

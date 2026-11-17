@@ -27,6 +27,11 @@ ttft_ms?: number | null,
  */
 reason_ms?: number | null, 
 /**
+ * Size of the request as JSON, bytes: what went up the wire, give or
+ * take the protocol's own field names.
+ */
+request_bytes?: number | null, 
+/**
  * Transient failures retried before this call succeeded.
  */
 retries?: number, } | { "type": "tool_result", call_id: string, content: Content, is_error: boolean, 

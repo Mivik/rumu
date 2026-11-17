@@ -56,7 +56,7 @@ use rumu_core::{
 };
 use rumu_kernel::{Budget, Delta, Llm, LlmError, LlmResponse, OnDelta};
 use serde_json::{Value, json};
-use tracing::{info, warn};
+use tracing::warn;
 
 pub use catalog::Catalog;
 pub use list::list_models;
@@ -424,6 +424,7 @@ impl Target {
         let dropped = Arc::new(AtomicUsize::new(0));
         let opts = self.options(dropped.clone(), session);
         let target = ModelIden::new(adapter_kind(self.protocol), self.model_id.as_str());
+        let request_bytes = Some(json_len(&req));
         let sent = std::time::Instant::now();
         let res = self
             .client
@@ -529,6 +530,7 @@ impl Target {
             stats: CallStats {
                 ttft_ms,
                 reason_ms,
+                request_bytes,
                 retries: 0,
             },
             reasoning_reset: dropped > 0,
@@ -579,24 +581,14 @@ impl Llm for GenaiLlm {
                 })
                 .flat_map(|c| c.attachments.iter().cloned())
                 .collect();
-            let count = images.len();
-            let bytes = tokio::task::spawn_blocking(move || {
-                let mut bytes = 0;
+            let _ = tokio::task::spawn_blocking(move || {
                 for a in &images {
-                    match blobs.for_model(a) {
-                        Ok((_, b)) => bytes += b.len(),
-                        Err(e) => {
-                            warn!(blob = %a.hash, error = %e, "image unavailable to the model")
-                        }
+                    if let Err(e) = blobs.for_model(a) {
+                        warn!(blob = %a.hash, error = %e, "image unavailable to the model");
                     }
                 }
-                bytes
             })
-            .await
-            .unwrap_or_default();
-            if count > 0 {
-                info!(images = count, bytes, "request images");
-            }
+            .await;
         }
         let blobs = self.blobs.as_ref();
         match target
@@ -668,6 +660,24 @@ impl Llm for GenaiLlm {
             .map(|n| format!("{ALIAS_PROVIDER}/{n}"))
             .collect()
     }
+}
+
+/// Bytes of `req` serialized as JSON. The wire body adds the protocol's own
+/// field names, but text and base64 images make up the bulk either way.
+fn json_len(req: &genai::chat::ChatRequest) -> u64 {
+    struct Count(u64);
+    impl std::io::Write for Count {
+        fn write(&mut self, buf: &[u8]) -> std::io::Result<usize> {
+            self.0 += buf.len() as u64;
+            Ok(buf.len())
+        }
+        fn flush(&mut self) -> std::io::Result<()> {
+            Ok(())
+        }
+    }
+    let mut n = Count(0);
+    let _ = serde_json::to_writer(&mut n, req);
+    n.0
 }
 
 fn genai_effort(effort: Effort) -> ReasoningEffort {
