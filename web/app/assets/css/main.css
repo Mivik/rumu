@@ -284,6 +284,8 @@
     border-color: color-mix(in srgb, var(--ink-3) 55%, var(--line));
     border-radius: 5px;
     cursor: pointer;
+    /* centred on the line box, it sits a pixel below the text's ink */
+    translate: 0 -1px;
   }
 
   input[type='checkbox']::after {
