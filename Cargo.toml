@@ -54,3 +54,12 @@ tokio-tungstenite = { version = "0.30", default-features = false, features = ["c
 tracing = "0.1"
 tracing-subscriber = { version = "0.3", features = ["env-filter"] }
 uuid = { version = "1", features = ["v4"] }
+
+# Image decoding, scaling and encoding are unusably slow unoptimized (over a
+# second per image); rumu-blob instantiates the generic parts.
+[profile.dev.package]
+image.opt-level = 3
+png.opt-level = 3
+fdeflate.opt-level = 3
+zune-jpeg.opt-level = 3
+rumu-blob.opt-level = 3

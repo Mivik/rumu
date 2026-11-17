@@ -565,6 +565,28 @@ impl Llm for GenaiLlm {
         };
         let from = replay_from(nodes);
         let withheld = withholds_reasoning(to, &nodes[from..]);
+        if let Some(blobs) = self.blobs.clone() {
+            // Derive missing model copies off the executor; projecting then
+            // only reads them.
+            let images: Vec<Attachment> = nodes
+                .iter()
+                .filter_map(|n| match &n.body {
+                    NodeBody::User { content } | NodeBody::ToolResult { content, .. } => {
+                        Some(content)
+                    }
+                    _ => None,
+                })
+                .flat_map(|c| c.attachments.iter().cloned())
+                .collect();
+            let _ = tokio::task::spawn_blocking(move || {
+                for a in &images {
+                    if let Err(e) = blobs.for_model(a) {
+                        warn!(blob = %a.hash, error = %e, "image unavailable to the model");
+                    }
+                }
+            })
+            .await;
+        }
         let blobs = self.blobs.as_ref();
         match target
             .stream(
@@ -908,11 +930,11 @@ fn blocks_have_text(blocks: &[ReasoningBlock]) -> bool {
 /// (the cache contract).
 ///
 /// - User → user message following `content.segments()`: text, and each
-///   attachment as its `Image n:` label followed by a base64 image part (its
-///   blob read through `blobs`; a blob that cannot be read projects as the
-///   attachment's placeholder plus an "(image unavailable)" note instead of
-///   failing the request). Text-only content projects exactly as one text
-///   message;
+///   attachment as its `Image n:` label followed by a base64 image part (the
+///   model's copy of its blob, [`Blobs::for_model`]; a blob that cannot be
+///   read projects as the attachment's placeholder plus an "(image
+///   unavailable)" note instead of failing the request). Text-only content
+///   projects exactly as one text message;
 /// - Assistant → assistant text + tool calls, prefixed by its captured
 ///   thinking blocks so Anthropic can continue a tool-use loop (none before
 ///   the latest reasoning reset);
@@ -946,7 +968,7 @@ fn project_from(
     replay_from: usize,
     blobs: Option<&Blobs>,
 ) -> genai::chat::ChatRequest {
-    let load = |a: &Attachment| -> Option<Vec<u8>> { blobs.and_then(|b| b.get(&a.hash).ok()) };
+    let load = |a: &Attachment| blobs.and_then(|b| b.for_model(a).ok());
     let mut messages: Vec<ChatMessage> = Vec::new();
     // Images of tool results, on protocols whose tool results are text only:
     // sent as one user message right after the batch's results.
@@ -1166,10 +1188,13 @@ fn projects(body: &NodeBody) -> bool {
     }
 }
 
+/// The MIME type and bytes the model is sent for an attachment, if readable.
+type LoadImage<'a> = dyn Fn(&Attachment) -> Option<(String, Vec<u8>)> + 'a;
+
 /// One projected piece of a content with attachments, in `segments()` order.
 enum Piece {
     Text(String),
-    /// Base64 of the stored bytes, with the stored MIME type.
+    /// Base64 of the model's copy ([`Blobs::for_model`]), with its MIME type.
     Image {
         mime: String,
         data: String,
@@ -1182,22 +1207,18 @@ enum Piece {
 /// `@scratch` copy when `files` (a prompt's images, copied there on send). A
 /// blob that cannot be read becomes `Image n: [image: name W×H] (image
 /// unavailable)` — a missing image must never fail the request.
-fn pieces(
-    content: &Content,
-    load: &dyn Fn(&Attachment) -> Option<Vec<u8>>,
-    files: bool,
-) -> Vec<Piece> {
+fn pieces(content: &Content, load: &LoadImage, files: bool) -> Vec<Piece> {
     let mut out = Vec::new();
     for segment in content.segments() {
         match segment {
             Segment::Text(t) if !t.is_empty() => out.push(Piece::Text(t.to_owned())),
             Segment::Text(_) => {}
             Segment::Image { n, attachment, .. } => match load(attachment) {
-                Some(bytes) => {
+                Some((mime, bytes)) => {
                     let file = files.then(|| attachment.scratch_path());
                     out.push(Piece::Text(image_label(n, file.as_deref())));
                     out.push(Piece::Image {
-                        mime: attachment.mime.clone(),
+                        mime,
                         data: base64::engine::general_purpose::STANDARD.encode(bytes),
                         name: attachment.name.clone(),
                     });

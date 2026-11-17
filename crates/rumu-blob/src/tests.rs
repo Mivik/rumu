@@ -101,6 +101,46 @@ fn rejects_non_images() {
 }
 
 #[test]
+fn model_copy_is_the_blob_when_small_else_a_scaled_jpeg() {
+    let dir = temp_dir("model");
+    let blobs = Blobs::open(&dir).unwrap();
+    let small = blobs
+        .ingest_image(&encoded(rgb(40, 30), ImageFormat::Png), None)
+        .unwrap();
+    let (mime, bytes) = blobs.for_model(&small).unwrap();
+    assert_eq!(mime, "image/png");
+    assert_eq!(bytes, blobs.get(&small.hash).unwrap());
+
+    // Noise does not compress, so this PNG is over the passthrough size.
+    let mut seed = 1u32;
+    let noise = RgbaImage::from_fn(1800, 1000, |_, _| {
+        seed = seed.wrapping_mul(1_664_525).wrapping_add(1_013_904_223);
+        let [a, b, c, d] = seed.to_le_bytes();
+        Rgba([a, b, c, d])
+    });
+    let big = blobs
+        .ingest_image(
+            &encoded(DynamicImage::ImageRgba8(noise), ImageFormat::Png),
+            None,
+        )
+        .unwrap();
+    assert!(big.size > MODEL_PASSTHROUGH_BYTES);
+    let (mime, bytes) = blobs.for_model(&big).unwrap();
+    assert_eq!(mime, "image/jpeg");
+    let (_, w, h) = normalize::probe(&bytes).unwrap();
+    assert!(w <= MODEL_MAX_EDGE && w * h <= MODEL_MAX_PIXELS, "{w}×{h}");
+    assert_eq!((w, h), (1438, 799));
+    // Kept, and the same bytes next time.
+    assert!(dir.join("model").join(&big.hash).is_file());
+    assert_eq!(blobs.for_model(&big).unwrap().1, bytes);
+
+    // The copy goes with its blob.
+    assert_eq!(blobs.gc(&HashSet::new(), Duration::ZERO).unwrap(), 3);
+    assert!(!dir.join("model").join(&big.hash).exists());
+    fs::remove_dir_all(&dir).ok();
+}
+
+#[test]
 fn hashes_are_validated() {
     let dir = temp_dir("hash");
     let blobs = Blobs::open(&dir).unwrap();
