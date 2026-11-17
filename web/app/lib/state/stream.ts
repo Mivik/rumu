@@ -7,6 +7,12 @@ import { MAX_DELTA_CHARS, state, type DeltaBuffer } from './state'
 
 function fold(buf: DeltaBuffer, p: LlmDeltaPush): void {
   buf.seq = p.seq
+  // Marks flip at most twice per stream; the text itself changes on every
+  // delta, and anything that reads it rebuilds on every delta too.
+  let marks = state.streamMarks[p.branch]
+  if (!marks) marks = state.streamMarks[p.branch] = { reasoning: false, text: false }
+  if (p.reasoning && !marks.reasoning) marks.reasoning = true
+  if (p.text && !marks.text) marks.text = true
   if (p.reasoning) {
     buf.reasonStart ??= Date.now()
     buf.reasoning = (buf.reasoning + p.reasoning).slice(-MAX_DELTA_CHARS)
@@ -28,6 +34,7 @@ export function applyDelta(p: LlmDeltaPush): void {
     buf = { text: '', reasoning: '', seq: 0 }
     if (p.seq > 1) buf.early = []
     state.deltas[p.branch] = buf
+    state.streamMarks[p.branch] = { reasoning: false, text: false }
   }
   if (p.seq <= buf.seq) return
   buf.early?.push(p)
@@ -53,8 +60,10 @@ export function syncLive(tree: SessionTreeResult): void {
     state.busy[id] = !!live
     if (!live) {
       delete state.deltas[id]
+      delete state.streamMarks[id]
       continue
     }
+    state.streamMarks[id] = { reasoning: !!live.reasoning, text: !!live.text }
     const prev = state.deltas[id]
     // A buffer that saw its whole stream and is ahead of the snapshot stays.
     if (prev && !prev.early && prev.seq >= live.seq) continue

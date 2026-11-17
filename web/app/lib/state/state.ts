@@ -160,6 +160,11 @@ const initial = {
 
   /** Streaming buffers keyed by branch; cleared when the Assistant node is appended. */
   deltas: {} as Record<BranchId, DeltaBuffer>,
+  /** Which parts of a live stream have appeared, keyed by branch. The timeline
+   * needs to know *that* reasoning / answer text started, not the text itself:
+   * reading the buffer would rebuild the whole timeline — and with it every
+   * turn in the conversation — on every single delta. */
+  streamMarks: {} as Record<BranchId, { reasoning: boolean; text: boolean }>,
   /** Agent-loop-running flag keyed by branch (turn.started .. turn.done/error). */
   busy: {} as Record<BranchId, boolean>,
   /** Prompts accepted while a branch was busy, until their user node lands. */

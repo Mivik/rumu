@@ -219,6 +219,7 @@ export function closeSession(): void {
   state.activeBranch = null
   state.pathState = null
   state.deltas = {}
+  state.streamMarks = {}
   state.busy = {}
   state.queuedPrompts = {}
   state.retrying = {}

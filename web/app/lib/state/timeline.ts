@@ -282,7 +282,7 @@ export function buildTimeline(nodes: Node[], calls: CallsOnPath, branch: BranchI
   // Attach the live stream to the group it belongs to (single header per turn).
   // The group exists from the moment the prompt is accepted, before the first
   // token: the mascot shows up immediately and waits.
-  const delta = branch ? state.deltas[branch] : undefined
+  const marks = branch ? state.streamMarks[branch] : undefined
   let live: TimelineGroup | null = null
   if (branch && state.busy[branch]) {
     const last = out[out.length - 1]
@@ -312,8 +312,8 @@ export function buildTimeline(nodes: Node[], calls: CallsOnPath, branch: BranchI
     )
     if (running.length) pushActivity(live, { kind: 'running', calls: running })
   }
-  if (live && delta?.reasoning) pushActivity(live, { kind: 'thought', node: null, streaming: true })
-  if (live && delta?.text) live.items.push({ kind: 'text', node: null, streaming: true })
+  if (live && marks?.reasoning) pushActivity(live, { kind: 'thought', node: null, streaming: true })
+  if (live && marks?.text) live.items.push({ kind: 'text', node: null, streaming: true })
   // No user prompt on the path yet (a brand-new session mid-request):
   // nothing to hang the group under, so leave the timeline alone.
   return out

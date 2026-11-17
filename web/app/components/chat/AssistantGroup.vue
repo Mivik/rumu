@@ -50,6 +50,44 @@ function bodyOf(n: Node): AssistantBody {
 
 const streamText = computed(() => (props.live ? (activeDelta.value?.text ?? '') : ''))
 
+/** The live text as it is actually rendered: coalesced so a burst of deltas
+ * costs at most one markdown parse every ~50 ms instead of one per delta.
+ * Each parse is marked + DOMPurify over the *whole* message so far (and a
+ * fresh Document per call in Firefox), and doing that per delta kept the
+ * main thread from answering clicks while a long answer streamed. */
+const shownStream = ref('')
+let streamTimer: ReturnType<typeof setTimeout> | null = null
+let streamShownAt = 0
+
+function flushStream(): void {
+  streamTimer = null
+  streamShownAt = performance.now()
+  shownStream.value = streamText.value
+}
+
+watch(
+  streamText,
+  (text) => {
+    if (!text) {
+      // The turn ended (or the group stopped being live): drop the pending
+      // render and let the finished node take over.
+      if (streamTimer !== null) {
+        clearTimeout(streamTimer)
+        streamTimer = null
+      }
+      shownStream.value = ''
+      return
+    }
+    if (streamTimer !== null) return
+    streamTimer = setTimeout(flushStream, Math.max(0, 50 - (performance.now() - streamShownAt)))
+  },
+  { immediate: true },
+)
+
+onBeforeUnmount(() => {
+  if (streamTimer !== null) clearTimeout(streamTimer)
+})
+
 /** Before the first token there is no body yet: the cat plus "working…". */
 const hasBody = computed(() => props.group.items.length > 0 || props.group.assistants.length > 0)
 
@@ -234,10 +272,11 @@ const bare = computed(() => !items.value.length && !props.group.assistants.lengt
         v-else-if="item.streaming"
         v-enter="'enter-fade'"
         class="md streaming-caret"
-        v-html="renderMarkdown(streamText, { image: (a) => pathImage(a) })"
+        v-html="renderMarkdown(shownStream, { image: (a) => pathImage(a) })"
       />
       <div
         v-else-if="item.node"
+        v-memo="[textOf(item.node)]"
         :data-path-node="item.node.id"
         class="md"
         v-html="renderMarkdown(textOf(item.node), { image: (a) => pathImage(a, item.node!.id) })"
