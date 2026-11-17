@@ -30,8 +30,6 @@
   "providerId": "ID",
   "providerName": "名称",
   "endpoints": "端点",
-  "sticky": "粘性会话",
-  "stickyHint": "多账号网关下，每个会话固定使用同一上游账号",
   "protocol": "协议",
   "protocolAuto": "自动",
   "apiKey": "API 密钥",

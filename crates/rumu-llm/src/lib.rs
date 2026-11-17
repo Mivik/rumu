@@ -108,7 +108,8 @@ struct Target {
     max_tokens: Option<u64>,
     /// The catalog's context window.
     context: Option<u64>,
-    /// Whether requests carry the session identity ([`ProviderSettings`]).
+    /// Whether requests carry the session identity (unless
+    /// [`ProviderSettings::no_session_id`]).
     sticky: bool,
 }
 
@@ -344,7 +345,7 @@ impl Resolved {
             effort: effort.unwrap_or(Effort::High).nearest(&info.efforts),
             max_tokens: info.output,
             context: info.context,
-            sticky: provider.settings.sticky,
+            sticky: !provider.settings.no_session_id,
         })
     }
 }
