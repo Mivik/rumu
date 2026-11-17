@@ -13,7 +13,7 @@
 // landing page, as does the new-session button. The open session is a
 // bordered sheet of paper on this one; the rest are plain lines. Each row ends
 // in its last activity time, which turns into the row's menu on hover.
-import { computed, onUnmounted, ref } from 'vue'
+import { computed, onUnmounted, onUpdated, ref, watch } from 'vue'
 import { LOCALE_LABELS, SUPPORTED_LOCALES, locale, setLocale, t } from '../i18n'
 import type { Locale } from '../i18n'
 import {
@@ -237,6 +237,19 @@ function toggleMore(group: Group): void {
   if (!set.delete(group.key)) set.add(group.key)
 }
 
+/** Groups and rows slide only in the render that reorders them. Vue restarts
+ *  every running slide on any re-render of its group, and a prompt brings
+ *  several (the create reply, pushes, the title) within one slide; each
+ *  restart showed as the column jumping back and forth. The first fill of
+ *  the list on boot is not a move either. */
+const SLIDE = 'transition-transform duration-300 ease-soft'
+const moveClass = ref('no-slide')
+const order = computed(() =>
+  groups.value.map((g) => [g.key, ...shown(g).map((row) => row.s.id)].join(',')).join('|'),
+)
+watch(order, (_, before) => (moveClass.value = before.includes(',') ? SLIDE : 'no-slide'), { flush: 'pre' })
+onUpdated(() => (moveClass.value = 'no-slide'))
+
 /** Ticks the rows' relative times. */
 const now = ref(Date.now())
 const clock = setInterval(() => (now.value = Date.now()), 30_000)
@@ -422,7 +435,13 @@ const otherLocale = computed<Locale>(
 
     <div class="mt-2 h-px flex-none bg-line-soft" />
 
-    <div class="scroll-fade -mx-2 flex flex-1 flex-col gap-1 overflow-y-auto px-2 pt-2 pb-3">
+    <!-- Groups slide as wholes when their order changes; otherwise each group's
+         rows see only their own displacement and fly across the column. -->
+    <TransitionGroup
+      tag="div"
+      class="scroll-fade -mx-2 flex flex-1 flex-col gap-1 overflow-y-auto px-2 pt-2 pb-3"
+      :move-class="moveClass"
+    >
       <section
         v-for="group in groups"
         :key="group.key"
@@ -498,7 +517,7 @@ const otherLocale = computed<Locale>(
           v-if="!collapsed(group)"
           tag="div"
           class="flex flex-col gap-0.5 pb-1"
-          move-class="transition-transform duration-300 ease-soft"
+          :move-class="moveClass"
           enter-active-class="transition duration-300 ease-soft"
           enter-from-class="-translate-y-1 opacity-0"
         >
@@ -632,7 +651,7 @@ const otherLocale = computed<Locale>(
           }}
         </button>
       </section>
-    </div>
+    </TransitionGroup>
 
     <!-- the connection, at the foot -->
     <div class="flex flex-none items-center gap-2 border-t border-line-soft px-3 py-3 text-meta text-ink-3">
