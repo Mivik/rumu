@@ -19,7 +19,8 @@
     "loaded": "Loaded {name}",
     "cardBefore": "Card",
     "cardAfter": "changed",
-    "task": "Background task {id}: {status}"
+    "task": "Background task {id}: {status}",
+    "revert": "Reverted changes to {count} file | Reverted changes to {count} files"
   },
   "drawer": {
     "label": "knowledge card",

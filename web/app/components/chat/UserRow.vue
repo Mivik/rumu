@@ -6,7 +6,9 @@
 // into the composer (`editTarget`), outlined here while it is there;
 // regenerate asks the same question again
 // (same op as the assistant side's regenerate — the reply is replaced); fork
-// copies the conversation up to here into a new session.
+// copies the conversation up to here into a new session. When files were
+// written since, revert opens the preview of undoing those writes
+// (RevertDialog).
 //
 // Images lead the message as thumbnails, the way the web composer sends them
 // (`withLeadingAnchors`); the text below is what was typed. An anchor placed
@@ -18,7 +20,7 @@
 import { computed, onBeforeUnmount, ref, watch } from 'vue'
 import { t } from '../../i18n'
 import type { Node } from '../../lib/types'
-import { forkSession, isBusy, regenerateFrom, useBranchView } from '../../lib/store'
+import { forkSession, isBusy, regenerateFrom, revertibleFrom, useBranchView } from '../../lib/store'
 import { renderMarkdown } from '../../lib/markdown'
 import { renderedContent, typedText } from '../../lib/attachments'
 import { copyText } from '../../lib/util'
@@ -27,6 +29,7 @@ import Icon from '../ui/Icon.vue'
 import BranchSwitcher from './BranchSwitcher.vue'
 import ContextPills from './ContextPills.vue'
 import ImageThumb from './ImageThumb.vue'
+import RevertDialog from './RevertDialog.vue'
 
 const props = withDefaults(defineProps<{ node: Node; context?: Node[] }>(), { context: () => [] })
 const view = useBranchView()
@@ -95,6 +98,9 @@ async function onRegenerate(): Promise<void> {
 function onFork(): void {
   void forkSession(props.node.id)
 }
+
+const revertible = computed(() => !view.sub && revertibleFrom.value.has(props.node.id))
+const reverting = ref(false)
 </script>
 
 <template>
@@ -185,7 +191,18 @@ function onFork(): void {
       >
         <Icon name="fork" :size="12" />
       </button>
+      <button
+        v-if="revertible"
+        class="icon-btn size-5"
+        :title="t('chat.user.revertTitle')"
+        :aria-label="t('chat.user.revertTitle')"
+        :disabled="isBusy"
+        @click="reverting = true"
+      >
+        <Icon name="undo" :size="12" />
+      </button>
     </div>
+    <RevertDialog v-if="reverting" :node="node.id" @close="reverting = false" />
 
     <ContextPills v-if="props.context.length" :nodes="props.context" />
   </div>

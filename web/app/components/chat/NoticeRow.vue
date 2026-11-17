@@ -2,7 +2,7 @@
 // One side note (a context notice other than recalled cards; see
 // ContextPills), as a sentence that reads on its own: the default workspace
 // set, a CLAUDE.md loaded, a card that changed, a finished background task,
-// a plain note in full.
+// a plain note in full, files the user reverted.
 import type { TaskStatus } from '../../lib/types'
 
 export type Notice =
@@ -10,6 +10,7 @@ export type Notice =
   | { kind: 'update'; key: string; id: string; label: string; text: string }
   | { kind: 'task'; key: string; id: string; status: TaskStatus; text: string }
   | { kind: 'note'; key: string; text: string }
+  | { kind: 'revert'; key: string; files: string[]; text: string }
 
 const ICON: Record<Notice['kind'], string> = {
   workspace: 'mount',
@@ -17,6 +18,7 @@ const ICON: Record<Notice['kind'], string> = {
   update: 'note',
   task: 'tool',
   note: 'note',
+  revert: 'undo',
 }
 </script>
 
@@ -53,6 +55,9 @@ defineProps<{ notice: Notice }>()
     >
       {{ t('cards.notes.task', { id: notice.id, status: taskStatusWord(notice.status) }) }}
     </button>
+    <span v-else-if="notice.kind === 'revert'" class="min-w-0 truncate" :title="notice.text">
+      {{ t('cards.notes.revert', { count: notice.files.length }) }}
+    </span>
     <span v-else-if="notice.kind === 'note'" class="min-w-0 whitespace-pre-wrap">{{ notice.text }}</span>
   </div>
 </template>

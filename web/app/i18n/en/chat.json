@@ -58,7 +58,24 @@
     "resend": "Resend",
     "copied": "Copied message",
     "fold": "Show less",
-    "unfold": "Show all"
+    "unfold": "Show all",
+    "revertTitle": "Revert file changes since here"
+  },
+  "revert": {
+    "title": "Revert file changes",
+    "hint": "Restores the files write / edit wrote since this message",
+    "loading": "Loading…",
+    "empty": "No file changes to revert",
+    "restore": "restore",
+    "delete": "delete",
+    "changed": "changed since",
+    "unsupported": "can't revert",
+    "changedHint": "Changed again after the write; left as it is",
+    "unsupportedHint": "No full diff recorded, or the workspace is read-only",
+    "commands": "{count} bash command isn't covered | {count} bash commands aren't covered",
+    "submit": "Revert {count} file | Revert {count} files",
+    "done": "Reverted {count} file | Reverted {count} files",
+    "failed": "{count} file failed to revert | {count} files failed to revert"
   },
   "assistant": {
     "working": "working…",

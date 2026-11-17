@@ -23,6 +23,9 @@ import type {
   Workspace,
 } from '../types'
 import type { ModelUse } from '../generated/ModelUse'
+import type { FileRef } from '../generated/FileRef'
+import type { RevertFile } from '../generated/RevertFile'
+import type { RevertPlan } from '../generated/RevertPlan'
 import { dropDraft, landingWritten, pruneDrafts } from './drafts'
 import { currentPick, models } from './models'
 import { isUnseen } from './derived'
@@ -450,6 +453,33 @@ export async function retryBranch(): Promise<boolean> {
     state.busy[branch] = false
     toast('error', t('errors.retry'), (err as Error).message)
     return false
+  }
+}
+
+/** What reverting the file changes since the user message `node` on the
+ *  active branch would do (`branch.revert_plan`); null on failure. */
+export async function revertPlan(node: NodeId): Promise<RevertPlan | null> {
+  const branch = state.activeBranch
+  if (!branch) return null
+  try {
+    return await rumu.request<RevertPlan>('branch.revert_plan', { branch, node })
+  } catch (err) {
+    toast('error', t('errors.revert'), (err as Error).message)
+    return null
+  }
+}
+
+/** Revert `files` of that plan (`branch.revert`): the files reverted, the
+ *  failed ones carrying `error`; null when the request failed. */
+export async function revertFiles(node: NodeId, files: FileRef[]): Promise<RevertFile[] | null> {
+  const branch = state.activeBranch
+  if (!branch) return null
+  try {
+    const res = await rumu.request<{ files: RevertFile[] }>('branch.revert', { branch, node, files })
+    return res.files
+  } catch (err) {
+    toast('error', t('errors.revert'), (err as Error).message)
+    return null
   }
 }
 

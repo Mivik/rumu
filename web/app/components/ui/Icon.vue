@@ -59,6 +59,7 @@ import {
   mdiSwapHorizontal,
   mdiTimelineTextOutline,
   mdiTrashCanOutline,
+  mdiUndoVariant,
   mdiVideoOutline,
   mdiWrenchOutline,
 } from '@mdi/js'
@@ -96,6 +97,7 @@ const paths: Record<string, string> = {
   ok: mdiCheck,
   note: mdiNoteTextOutline,
   history: mdiHistory,
+  undo: mdiUndoVariant,
   file: mdiFileOutline,
   external: mdiArrowTopRight,
   close: mdiClose,

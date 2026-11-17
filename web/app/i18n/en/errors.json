@@ -21,5 +21,6 @@
   "forkSession": "Couldn't fork the session",
   "moveSession": "Couldn't move the session",
   "answer": "Answering failed",
-  "compact": "Couldn't compact the context"
+  "compact": "Couldn't compact the context",
+  "revert": "Couldn't revert the file changes"
 }

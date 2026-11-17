@@ -21,5 +21,6 @@
   "forkSession": "分叉会话失败",
   "moveSession": "移动会话失败",
   "answer": "回答失败",
-  "compact": "压缩上下文失败"
+  "compact": "压缩上下文失败",
+  "revert": "撤销文件改动失败"
 }

@@ -58,7 +58,24 @@
     "resend": "重新发送",
     "copied": "已复制消息",
     "fold": "收起",
-    "unfold": "展开全文"
+    "unfold": "展开全文",
+    "revertTitle": "撤销此后的文件改动"
+  },
+  "revert": {
+    "title": "撤销文件改动",
+    "hint": "还原自此消息起由 write / edit 写入的文件",
+    "loading": "读取中…",
+    "empty": "暂无可撤销的文件改动",
+    "restore": "还原",
+    "delete": "删除",
+    "changed": "另有改动",
+    "unsupported": "无法撤销",
+    "changedHint": "写入后又被修改，保持不动",
+    "unsupportedHint": "未记录完整差异，或工作区只读",
+    "commands": "{count} 条 bash 命令的改动不在此列",
+    "submit": "撤销 {count} 个文件",
+    "done": "已撤销 {count} 个文件",
+    "failed": "{count} 个文件撤销失败"
   },
   "assistant": {
     "working": "工作中…",

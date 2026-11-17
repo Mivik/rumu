@@ -10,6 +10,7 @@
 import { computed, ref } from 'vue'
 import { t } from '../../i18n'
 import type { Content, Node, TaskDone } from '../../lib/types'
+import type { FilesReverted } from '../../lib/generated/FilesReverted'
 import { CATALOG_TAG, ASSISTANT_INTRO_TAG, TASK_TAG, TASK_VERSION } from '../../lib/types'
 import Icon from '../ui/Icon.vue'
 import {
@@ -43,6 +44,12 @@ function taskDoneOf(content: Content): TaskDone | null {
   return t && typeof t === 'object' && typeof t.id === 'string' ? t : null
 }
 
+/** Decode a `workspace.revert` marker, if that is what this note is. */
+function revertOf(content: Content): FilesReverted | null {
+  const d = content.data
+  return d && d.tag === 'workspace.revert' && d.v === 1 ? (d.data as FilesReverted) : null
+}
+
 /** Up to 3 names shown; past that, 2 names + "+N" (rest in the hover title). */
 const SHOWN = 3
 
@@ -63,6 +70,7 @@ const parsed = computed(() => {
     const imp = importOf(b.content)
     const agents = agentsOf(b.content)
     const wsUse = workspaceUseOf(b.content)
+    const revert = revertOf(b.content)
     if (task) {
       add({ kind: 'task', key: `task:${task.id}`, id: task.id, status: task.status, text: b.content.text })
     } else if (b.source === 'memory' && update) {
@@ -91,6 +99,9 @@ const parsed = computed(() => {
       add({ kind: 'agents', key: `agents:${name}`, name })
     } else if (wsUse) {
       add({ kind: 'workspace', key: `workspace:${wsUse.name}`, name: wsUse.name })
+    } else if (revert) {
+      const files = revert.files.map((f) => `${f.ws}:${f.path}`)
+      add({ kind: 'revert', key: `revert:${n.id}`, files, text: files.join('\n') })
     } else if (b.content.text || !b.content.data) {
       add({ kind: 'note', key: `note:${n.id}`, text: b.content.text })
     }
