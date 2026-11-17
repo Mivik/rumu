@@ -908,10 +908,19 @@
    * Rows are turned in 3D around the drum's axis (inline transforms), the
    * front one on the sand band; the face fades out toward the drum's top
    * and bottom. It floats over the sheet, so a soft hairline backs the
-   * shadow and the paper behind it frosts. */
+   * shadow and the paper behind it frosts.
+   *
+   * It also floats over the composer. Whenever the composer stands clear of
+   * the right edge, `composerGap` insets the rail's layer by nothing and the
+   * layer spans the whole chat column, composer row included; the composer is
+   * the column's later sibling and both were z-index: auto, so a wheel near
+   * the track's foot slid under it. Its own z-index lifts it back. */
   .tl-wheel {
     position: absolute;
     right: 30px;
+    /* above the composer (z-index: auto, its own strip at 10), below the
+     * sidebar's scrim (40) and drawer (50) */
+    z-index: 30;
     width: 300px;
     max-width: calc(100% - 42px);
     overflow: hidden;
