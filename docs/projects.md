@@ -175,7 +175,9 @@ stays a tool. Which set a workspace is in shows in its path, not in a field:
 ## Fresh home
 
 - With no `workspaces.yaml`, rumu registers the current directory and
-  creates a project named after it, so it runs out of the box.
+  creates a project named after it, so it runs out of the box. Started from
+  the user's home directory, it registers the workspace but creates no
+  project.
 
 ## Replaces
 

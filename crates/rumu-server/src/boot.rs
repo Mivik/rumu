@@ -74,7 +74,7 @@ pub async fn boot(home: &Path) -> Result<Booted> {
     let blobs = Blobs::in_home(home)?;
     let config = rumu_plugins::load_config(home)?;
     // A home without a registry starts with the current directory as its
-    // one workspace, in a project of its own.
+    // one workspace, in a project of its own unless it is $HOME.
     let fresh = !home.join(rumu_plugins::WORKSPACES_FILE).exists();
     let workspaces = rumu_plugins::load_workspaces(home)?;
     let names: Vec<String> = workspaces.list().into_iter().map(|w| w.name).collect();

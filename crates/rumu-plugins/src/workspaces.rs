@@ -272,11 +272,16 @@ pub fn create_project(
 
 /// A fresh home's first project: the current directory's workspace (the only
 /// one registered), in a project deck of the same name. Skipped when a deck
-/// of that name already exists.
+/// of that name already exists, or when the directory is the user's home:
+/// that is where rumu starts by default, not a project.
 pub fn seed_project(home: &Path, decks: &Decks, registry: &Workspaces) -> Result<()> {
     let Ok([ws]) = <[Workspace; 1]>::try_from(registry.list()) else {
         return Ok(());
     };
+    let user_home = std::env::var_os("HOME").map(std::path::PathBuf::from);
+    if ws.ssh.is_none() && user_home.is_some_and(|h| h == Path::new(ws.root.as_str())) {
+        return Ok(());
+    }
     let name = ws.name.clone();
     if !rumu_cards::deck::valid_deck_name(&name) || decks.name_taken(&name, None) {
         return Ok(());
