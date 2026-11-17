@@ -11,7 +11,11 @@
 // Images lead the message as thumbnails, the way the web composer sends them
 // (`withLeadingAnchors`); the text below is what was typed. An anchor placed
 // elsewhere by another client stays visible as text.
-import { computed, ref } from 'vue'
+//
+// A long text folds to FOLD_PX with a fading bottom edge and a toggle under it;
+// it only folds when that hides at least FOLD_SLACK more, so a message barely
+// past the cap shows whole instead of hiding two lines behind a button.
+import { computed, onBeforeUnmount, ref, watch } from 'vue'
 import { t } from '../../i18n'
 import type { Node } from '../../lib/types'
 import { forkSession, isBusy, regenerateFrom, useBranchView } from '../../lib/store'
@@ -31,6 +35,41 @@ const content = computed(() => (props.node.body as Extract<Node['body'], { type:
 const images = computed(() => content.value.attachments ?? [])
 const text = computed(() => typedText(content.value.text, images.value.length))
 const editing = computed(() => editTarget.value?.id === props.node.id)
+
+const FOLD_PX = 320
+const FOLD_SLACK = 96
+const bubble = ref<HTMLElement>()
+const inner = ref<HTMLElement>()
+const tall = ref(false)
+const open = ref(false)
+const folded = computed(() => tall.value && !open.value)
+
+const ro =
+  typeof ResizeObserver !== 'undefined'
+    ? new ResizeObserver(() => {
+        if (inner.value) tall.value = inner.value.offsetHeight > FOLD_PX + FOLD_SLACK
+      })
+    : null
+watch(inner, (el, old) => {
+  if (old) ro?.unobserve(old)
+  if (el) ro?.observe(el)
+})
+onBeforeUnmount(() => ro?.disconnect())
+
+/** Folding a message read to its end would leave the reader below it, with
+ *  the toggle gone off the top: bring the folded bubble back into view. */
+function toggleFold(): void {
+  open.value = !open.value
+  if (open.value) return
+  // Two frames: the timeline's own resize pass (tail spacer, follow-the-end)
+  // runs after the first, and would move the scroll again.
+  requestAnimationFrame(() =>
+    requestAnimationFrame(() => {
+      const el = bubble.value
+      if (el && el.getBoundingClientRect().top < 0) el.scrollIntoView({ block: 'nearest' })
+    }),
+  )
+}
 
 async function onCopy(): Promise<void> {
   // The clipboard gets the text-only form: images as their placeholders.
@@ -76,10 +115,31 @@ function onFork(): void {
         </div>
         <div
           v-if="text"
-          class="md w-fit max-w-full rounded-sheet rounded-br-xs bg-brand-soft px-4 py-2 text-ink"
+          ref="bubble"
+          class="w-fit max-w-full rounded-sheet rounded-br-xs bg-brand-soft px-4 py-2 text-ink"
           :title="new Date(node.at).toLocaleString()"
-          v-html="renderMarkdown(text)"
-        />
+        >
+          <div
+            :class="folded && 'overflow-hidden mask-b-from-[calc(100%-4rem)] mask-b-to-100%'"
+            :style="folded ? { maxHeight: `${FOLD_PX}px` } : undefined"
+          >
+            <div ref="inner" class="md" v-html="renderMarkdown(text)" />
+          </div>
+          <button
+            v-if="tall"
+            class="mt-1 flex items-center gap-1 text-xs text-ink-2 transition-colors hover:text-ink"
+            :aria-expanded="open"
+            @click="toggleFold"
+          >
+            <Icon
+              name="chevron"
+              :size="12"
+              class="transition-transform"
+              :class="open ? '-rotate-90' : 'rotate-90'"
+            />
+            {{ open ? t('chat.user.fold') : t('chat.user.unfold') }}
+          </button>
+        </div>
       </div>
     </div>
 

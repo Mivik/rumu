@@ -56,7 +56,9 @@
     "forkTitle": "分叉为新会话",
     "cancel": "取消",
     "resend": "重新发送",
-    "copied": "已复制消息"
+    "copied": "已复制消息",
+    "fold": "收起",
+    "unfold": "展开全文"
   },
   "assistant": {
     "working": "工作中…",

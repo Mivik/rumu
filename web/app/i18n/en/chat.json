@@ -56,7 +56,9 @@
     "forkTitle": "Fork into new session",
     "cancel": "Cancel",
     "resend": "Resend",
-    "copied": "Copied message"
+    "copied": "Copied message",
+    "fold": "Show less",
+    "unfold": "Show all"
   },
   "assistant": {
     "working": "working…",
