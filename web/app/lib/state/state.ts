@@ -123,7 +123,9 @@ const initial = {
     /** Folders made in the tree that hold no card yet (`<deck id>:<path>`);
      *  a folder only exists on disk through its cards. */
     folders: new Set<string>(),
-    loading: false,
+    /** Starts true: the tree is read once the page opens, so the first render
+     *  must not claim the library is empty. */
+    loading: true,
   },
 
   sessions: [] as SessionInfo[],

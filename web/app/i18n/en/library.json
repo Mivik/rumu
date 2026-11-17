@@ -4,6 +4,7 @@
   "rename": "Rename",
   "newCard": "New card",
   "search": "Search cards",
+  "loading": "Loading cards…",
   "empty": "No decks yet. Create one to keep cards.",
   "none": "No card matches “{q}”.",
   "pick": "Pick a card or create one.",

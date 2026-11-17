@@ -23,10 +23,6 @@ link: LibraryRef | null,
  */
 dangling: boolean, 
 /**
- * Last commit touching the file: unix seconds and author name.
- */
-updated_at: number | null, updated_by: string | null, 
-/**
  * Only on search results: a short body snippet around the first match.
  */
 snippet: string | null, };

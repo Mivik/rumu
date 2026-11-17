@@ -554,6 +554,12 @@ const isFolder = (node: TreeNode): node is FolderNode => node.kind === 'folder'
       {{ t('library.none', { q: query }) }}
     </p>
     <p
+      v-else-if="!searching && !state.library.decks.length && state.library.loading"
+      class="px-2 py-8 text-center text-secondary text-ink-3"
+    >
+      {{ t('library.loading') }}
+    </p>
+    <p
       v-else-if="!searching && !state.library.decks.length"
       class="px-2 py-8 text-center text-secondary text-ink-3"
     >

@@ -4,6 +4,7 @@
   "rename": "重命名",
   "newCard": "新建卡片",
   "search": "搜索卡片",
+  "loading": "载入卡片…",
   "empty": "暂无卡组",
   "none": "无匹配“{q}”的卡片",
   "pick": "选择或新建卡片",

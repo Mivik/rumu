@@ -57,11 +57,6 @@ pub struct LibraryCard {
     pub link: Option<LibraryRef>,
     /// A link whose target no longer exists.
     pub dangling: bool,
-    /// Last commit touching the file: unix seconds and author name.
-    #[serde(skip_serializing_if = "Option::is_none")]
-    pub updated_at: Option<i64>,
-    #[serde(skip_serializing_if = "Option::is_none")]
-    pub updated_by: Option<String>,
     /// Only on search results: a short body snippet around the first match.
     #[serde(skip_serializing_if = "Option::is_none")]
     pub snippet: Option<String>,
@@ -449,7 +444,6 @@ fn card_row(decks: &Decks, deck: &Deck, path: &str, raw: &Card) -> Result<Librar
     });
     let dangling = raw.link().is_some() && target.is_none();
     let shown = target.as_ref().map_or(raw, |(_, card)| card);
-    let updated = deck.repo().log_path(path)?;
     Ok(LibraryCard {
         deck: deck.id().to_owned(),
         path: path.to_owned(),
@@ -458,8 +452,6 @@ fn card_row(decks: &Decks, deck: &Deck, path: &str, raw: &Card) -> Result<Librar
         pinned: shown.pinned(),
         link: target.map(|(at, _)| at),
         dangling,
-        updated_at: updated.as_ref().map(|commit| commit.at),
-        updated_by: updated.map(|commit| commit.author),
         snippet: None,
     })
 }

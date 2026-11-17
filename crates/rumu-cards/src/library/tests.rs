@@ -27,7 +27,7 @@ fn test_decks() -> (tempfile::TempDir, Decks, Deck, Deck) {
 }
 
 #[test]
-fn create_lists_keys_and_records_the_user() {
+fn create_lists_keys_in_path_order() {
     let (_dir, decks, main, _other) = test_decks();
     let saved = save(
         &decks,
@@ -43,14 +43,12 @@ fn create_lists_keys_and_records_the_user() {
     assert_eq!(saved.card.path, "notes/a");
     assert!(saved.card.pinned);
     assert_eq!(saved.card.keywords, ["k"]);
-    assert_eq!(saved.card.updated_by.as_deref(), Some("user"));
 
     // A new deck starts with its charter, `about`.
     let rows = cards(&decks, Some(&main)).unwrap();
     assert_eq!(rows.len(), 2);
     assert_eq!(rows[0].path, "about");
     assert_eq!(rows[1].path, "notes/a");
-    assert_eq!(rows[1].updated_by.as_deref(), Some("user"));
 }
 
 #[test]
