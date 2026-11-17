@@ -19,7 +19,7 @@ use std::collections::HashSet;
 use std::fs;
 use std::path::{Path, PathBuf};
 use std::sync::atomic::{AtomicU64, Ordering};
-use std::time::{Duration, SystemTime};
+use std::time::{Duration, Instant, SystemTime};
 
 use rumu_core::{Attachment, IoError};
 use sha2::{Digest, Sha256};
@@ -105,10 +105,19 @@ impl Blobs {
         let bytes = match fs::read(&copy) {
             Ok(bytes) => bytes,
             Err(_) => {
-                let bytes = normalize::for_model(&self.get(&a.hash)?)?;
+                let start = Instant::now();
+                let stored = self.get(&a.hash)?;
+                let image = normalize::for_model(&stored)?;
                 fs::create_dir_all(&dir).map_err(IoError::at("creating blob dir", &dir))?;
-                write_new(&copy, &bytes)?;
-                bytes
+                write_new(&copy, &image.bytes)?;
+                debug!(
+                    blob = %a.hash,
+                    from = %format_args!("{}×{} {} B", a.width, a.height, stored.len()),
+                    to = %format_args!("{}×{} {} B", image.width, image.height, image.bytes.len()),
+                    ms = start.elapsed().as_millis() as u64,
+                    "derived the model copy of an image"
+                );
+                image.bytes
             }
         };
         Ok(("image/jpeg".to_owned(), bytes))

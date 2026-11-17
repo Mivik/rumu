@@ -56,7 +56,7 @@ use rumu_core::{
 };
 use rumu_kernel::{Budget, Delta, Llm, LlmError, LlmResponse, OnDelta};
 use serde_json::{Value, json};
-use tracing::warn;
+use tracing::{info, warn};
 
 pub use catalog::Catalog;
 pub use list::list_models;
@@ -570,6 +570,7 @@ impl Llm for GenaiLlm {
             // only reads them.
             let images: Vec<Attachment> = nodes
                 .iter()
+                .filter(|n| projects(&n.body))
                 .filter_map(|n| match &n.body {
                     NodeBody::User { content } | NodeBody::ToolResult { content, .. } => {
                         Some(content)
@@ -578,14 +579,24 @@ impl Llm for GenaiLlm {
                 })
                 .flat_map(|c| c.attachments.iter().cloned())
                 .collect();
-            let _ = tokio::task::spawn_blocking(move || {
+            let count = images.len();
+            let bytes = tokio::task::spawn_blocking(move || {
+                let mut bytes = 0;
                 for a in &images {
-                    if let Err(e) = blobs.for_model(a) {
-                        warn!(blob = %a.hash, error = %e, "image unavailable to the model");
+                    match blobs.for_model(a) {
+                        Ok((_, b)) => bytes += b.len(),
+                        Err(e) => {
+                            warn!(blob = %a.hash, error = %e, "image unavailable to the model")
+                        }
                     }
                 }
+                bytes
             })
-            .await;
+            .await
+            .unwrap_or_default();
+            if count > 0 {
+                info!(images = count, bytes, "request images");
+            }
         }
         let blobs = self.blobs.as_ref();
         match target

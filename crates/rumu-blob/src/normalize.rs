@@ -78,7 +78,7 @@ pub(crate) fn normalize(bytes: &[u8]) -> Result<Normalized> {
 }
 
 /// The JPEG the model sees of a stored image.
-pub(crate) fn for_model(stored: &[u8]) -> Result<Vec<u8>> {
+pub(crate) fn for_model(stored: &[u8]) -> Result<Normalized> {
     let format = accepted_format(stored).ok_or(Error::Unsupported)?;
     let mut img = decode(stored, format)?;
     let (w, h) = (f64::from(img.width()), f64::from(img.height()));
@@ -103,7 +103,12 @@ pub(crate) fn for_model(stored: &[u8]) -> Result<Vec<u8>> {
     JpegEncoder::new_with_quality(&mut out, MODEL_JPEG_QUALITY)
         .encode_image(&rgb)
         .map_err(|e| Error::Encode(e.to_string()))?;
-    Ok(out.into_inner())
+    Ok(Normalized {
+        bytes: out.into_inner(),
+        mime: "image/jpeg",
+        width: rgb.width(),
+        height: rgb.height(),
+    })
 }
 
 /// Decode with bomb limits, applying EXIF orientation.
