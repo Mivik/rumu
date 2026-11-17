@@ -32,6 +32,7 @@ import ActivityRun from './ActivityRun.vue'
 import ArtifactCard from './ArtifactCard.vue'
 import BranchSwitcher from './BranchSwitcher.vue'
 import ContextPills from './ContextPills.vue'
+import StreamText from './StreamText.vue'
 import UsageHud from './UsageHud.vue'
 
 const props = withDefaults(defineProps<{ group: TimelineGroup; live?: boolean; prompt?: Node | null }>(), {
@@ -47,8 +48,6 @@ const activeDelta = view.delta
 function bodyOf(n: Node): AssistantBody {
   return n.body as AssistantBody
 }
-
-const streamText = computed(() => (props.live ? (activeDelta.value?.text ?? '') : ''))
 
 /** Before the first token there is no body yet: the cat plus "working…". */
 const hasBody = computed(() => props.group.items.length > 0 || props.group.assistants.length > 0)
@@ -100,8 +99,7 @@ const answerText = computed(() =>
   props.group.items
     .map((item) => {
       if (item.kind !== 'text') return ''
-      if (item.node) return textOf(item.node)
-      return item.streaming ? streamText.value : ''
+      return item.node ? textOf(item.node) : ''
     })
     .filter(Boolean)
     .join('\n\n'),
@@ -230,12 +228,7 @@ const bare = computed(() => !items.value.length && !props.group.assistants.lengt
         <Icon name="brain" :size="12" />
         <span>{{ t('chat.assistant.reasoningReset') }}</span>
       </div>
-      <div
-        v-else-if="item.streaming"
-        v-enter="'enter-fade'"
-        class="md streaming-caret"
-        v-html="renderMarkdown(streamText, { image: (a) => pathImage(a) })"
-      />
+      <StreamText v-else-if="item.streaming" v-enter="'enter-fade'" />
       <div
         v-else-if="item.node"
         :data-path-node="item.node.id"

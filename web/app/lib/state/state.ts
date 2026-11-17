@@ -84,6 +84,11 @@ export interface LightboxImage {
 export interface DeltaBuffer {
   text: string
   reasoning: string
+  /** Whether any reasoning / answer text has arrived. The timeline reads
+   * these, not the text: reading the text would rebuild the whole timeline
+   * — and with it every turn in the conversation — on every delta. */
+  hasReasoning: boolean
+  hasText: boolean
   /** Live thinking clock: when the first reasoning delta landed, and the
    * measured span once the first text delta arrives (null until then). */
   reasonStart?: number

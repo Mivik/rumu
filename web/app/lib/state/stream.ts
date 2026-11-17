@@ -10,12 +10,14 @@ function fold(buf: DeltaBuffer, p: LlmDeltaPush): void {
   if (p.reasoning) {
     buf.reasonStart ??= Date.now()
     buf.reasoning = (buf.reasoning + p.reasoning).slice(-MAX_DELTA_CHARS)
+    buf.hasReasoning = true
   }
   if (p.text) {
     if (buf.reasonStart !== undefined && buf.reasonMs === undefined) {
       buf.reasonMs = Date.now() - buf.reasonStart
     }
     buf.text = (buf.text + p.text).slice(-MAX_DELTA_CHARS)
+    buf.hasText = true
   }
 }
 
@@ -25,7 +27,7 @@ function fold(buf: DeltaBuffer, p: LlmDeltaPush): void {
 export function applyDelta(p: LlmDeltaPush): void {
   let buf = state.deltas[p.branch]
   if (!buf) {
-    buf = { text: '', reasoning: '', seq: 0 }
+    buf = { text: '', reasoning: '', hasReasoning: false, hasText: false, seq: 0 }
     if (p.seq > 1) buf.early = []
     state.deltas[p.branch] = buf
   }
@@ -35,7 +37,13 @@ export function applyDelta(p: LlmDeltaPush): void {
 }
 
 function fromSnapshot(live: LiveTurn, early: LlmDeltaPush[]): DeltaBuffer {
-  const buf: DeltaBuffer = { text: live.text, reasoning: live.reasoning, seq: live.seq }
+  const buf: DeltaBuffer = {
+    text: live.text,
+    reasoning: live.reasoning,
+    hasReasoning: !!live.reasoning,
+    hasText: !!live.text,
+    seq: live.seq,
+  }
   // The thinking clock restarts at the join; a reply already under way
   // means thinking ended at some unknown time before it.
   if (live.reasoning) buf.reasonStart = Date.now()

@@ -312,8 +312,8 @@ export function buildTimeline(nodes: Node[], calls: CallsOnPath, branch: BranchI
     )
     if (running.length) pushActivity(live, { kind: 'running', calls: running })
   }
-  if (live && delta?.reasoning) pushActivity(live, { kind: 'thought', node: null, streaming: true })
-  if (live && delta?.text) live.items.push({ kind: 'text', node: null, streaming: true })
+  if (live && delta?.hasReasoning) pushActivity(live, { kind: 'thought', node: null, streaming: true })
+  if (live && delta?.hasText) live.items.push({ kind: 'text', node: null, streaming: true })
   // No user prompt on the path yet (a brand-new session mid-request):
   // nothing to hang the group under, so leave the timeline alone.
   return out
