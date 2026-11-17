@@ -10,21 +10,18 @@
 // what you are reading stays put, and growth fills that blank before it moves
 // the page. While you follow the end, though, the end is what you read: a
 // fold closing under it takes its blank along, so the reply stays in view
-// instead of leaving you staring at the blank it left. Its floor rises three ways: a prompt you just sent opens near the
-// top of the sheet, the reply growing down into the blank below it rather
-// than pinning your eye to the sliver above the composer; while a turn runs
-// (and is not waiting on a decision), LIVE_ROOM stays free under the reply, so
+// instead of leaving you staring at the blank it left. While a turn runs (and
+// is not waiting on a decision), LIVE_ROOM stays free under the reply, so
 // whatever shows up next (a tall preview, a tool's output) lands in view;
-// otherwise the column's own height. Between turns the page is only the
-// column, or what the sent prompt needs to stay at the top: when a turn ends
-// the blank it held eases away, and a fold opened and closed gives back what
-// it added. Any size change
+// otherwise the floor is the column's own height. Between turns the page is
+// only the column: when a turn ends the blank it held eases away, and a fold
+// opened and closed gives back what it added. Any size change
 // of the column or the scroller — not only new tokens — re-pins the end while
 // you follow it, after the blank has absorbed what it can: a composer that
 // grows (a decision unfolding) eats into the blank, not the page, and gets it
-// back when it shrinks. Only a prompt that arrives while a turn is starting
-// (one you just sent) anchors — a session switch still lands at the end of the
-// conversation, and a branch switch keeps your place in it.
+// back when it shrinks. A prompt you just sent eases the view to the end — a
+// session switch still lands there at once, and a branch switch keeps your
+// place.
 //
 // The thread is the rail down the sheet's right edge (TimelineRail), which
 // owns its measurement and drawing. This file owns the scroll state and
@@ -160,14 +157,12 @@ watch(scrollEl, (el) => {
 
 // ---- the page below the timeline ----
 
-/** Distance from the scroller's top edge to the freshly sent prompt. */
-const ANCHOR_GAP = 28
 /** Blank kept under the reply while a turn runs, px. */
 const LIVE_ROOM = 120
 /** Where the page ends, in column px: the column plus the spacer reach it. */
 let floor = 0
-/** A just-sent prompt (node id) whose blank page is not laid out yet. */
-let anchorPending: string | null = null
+/** A prompt was just sent and the view has not eased to it yet. */
+let sentPending = false
 /** The smooth settle onto a just-sent prompt is still running: following
  *  the end must not cut it short. */
 let settlingUntil = 0
@@ -177,8 +172,6 @@ let viewHeight = 0
 /** Blank the scroller took back when it shrank (the composer growing — a
  *  decision unfolding, the tasks panel), owed back when it grows again. */
 let lent = 0
-/** The prompt sent in this view; its page stays open under it between turns. */
-let sentId: string | null = null
 /** The turn just ended: the blank it held eases away instead of snapping. */
 let turnEnded = false
 const SETTLE_MS = 260
@@ -204,24 +197,11 @@ watch(
     const sent = !!id && id !== seenPrompt && isBusy.value
     seenPrompt = id
     if (!sent) return
-    anchorPending = id
-    sentId = id
+    sentPending = true
     nearBottom.value = true
   },
   { flush: 'pre' },
 )
-
-/**
- * The floor that puts a prompt ANCHOR_GAP under the scroller's top, or null
- * while it is not rendered. offsetTop is layout: the entrance animations may
- * still be running, and transforms don't move it.
- */
-function promptFloor(sc: HTMLElement, inner: HTMLElement, id: string): number | null {
-  const prompt = inner.querySelector<HTMLElement>(`[data-node-id="${CSS.escape(id)}"]`)
-  if (!prompt) return null
-  const pad = parseFloat(getComputedStyle(sc).paddingBottom) || 0
-  return prompt.offsetTop + sc.clientHeight - ANCHOR_GAP - pad
-}
 
 /** Set the floor, size the spacer to reach it, and keep the end pinned while
  *  following. */
@@ -232,39 +212,29 @@ function layoutTail(): void {
   if (!sc || !inner || !spacer) return
   const height = inner.offsetHeight
   const shown = spacer.offsetHeight
-  // The page the sent prompt needs. Measured fresh, so a composer resize is
-  // already accounted for.
-  const page = sentId ? promptFloor(sc, inner, sentId) : null
-  let anchored = false
+  const sent = sentPending && isBusy.value
+  sentPending = false
   if (!isBusy.value) {
-    // Between turns: the column, or the page the sent prompt needs.
-    floor = Math.max(height, page ?? 0)
-    anchorPending = null
+    // Between turns: just the column.
+    floor = height
     lent = 0
   } else {
-    if (anchorPending && page !== null) {
-      floor = Math.max(floor, page)
-      anchorPending = null
-      anchored = true
-    }
     // A turn held up on a decision writes nothing until it is answered.
     const live = !state.decisions.some((d) => d.session === state.sessionId)
     floor = Math.max(floor, height + (live ? LIVE_ROOM : 0))
     // While you follow the end, a resize of the scroller comes out of the
     // blank first, so the page under you stays put instead of riding up.
     const delta = sc.clientHeight - viewHeight
-    if (viewHeight && delta && nearBottom.value && !anchored) {
+    if (viewHeight && delta && nearBottom.value && !sent) {
       const shift = delta < 0 ? -Math.min(-delta, floor - height) : Math.min(delta, lent)
       floor += shift
       lent -= shift
     }
     // Following the end, a shrink above it doesn't leave its blank behind;
     // otherwise the blank only has to reach the bottom of the view.
-    if (!anchored) {
-      const cs = getComputedStyle(sc)
-      const view = sc.scrollTop + sc.clientHeight - parseFloat(cs.paddingTop) - parseFloat(cs.paddingBottom)
-      floor = Math.min(floor, Math.max(page ?? 0, height + LIVE_ROOM, nearBottom.value ? 0 : view))
-    }
+    const cs = getComputedStyle(sc)
+    const view = sc.scrollTop + sc.clientHeight - parseFloat(cs.paddingTop) - parseFloat(cs.paddingBottom)
+    floor = Math.min(floor, Math.max(height + LIVE_ROOM, nearBottom.value ? 0 : view))
   }
   viewHeight = sc.clientHeight
   const tail = floor - height
@@ -283,7 +253,7 @@ function layoutTail(): void {
       )
   }
   turnEnded = false
-  if (anchored) {
+  if (sent) {
     settlingUntil = performance.now() + 600
     scrollToEnd(true)
   } else if (nearBottom.value && performance.now() >= settlingUntil) {
@@ -316,15 +286,14 @@ watch(
 )
 
 // A different view renders all at once: that render is "history" (no entrance
-// motion), the blank-page anchor is dropped, and this path's prompt counts as
+// motion), a pending send settle is dropped, and this path's prompt counts as
 // already seen. Anything mounted afterwards is live.
 function resetView(): void {
   timelineLive.value = false
-  anchorPending = null
+  sentPending = false
   floor = 0
   lent = 0
   laidEnd = 0
-  sentId = null
   turnEnded = false
   seenPrompt = lastPromptId.value
   void nextTick(() => {
@@ -352,7 +321,7 @@ watch(
 // as history — an instant swap, no fade, no jump.
 watch(() => state.activeBranch, resetView, { flush: 'pre' })
 
-/** Node id for data-node-id (entry keys and the anchored-prompt measurement). */
+/** Node id for data-node-id (entry keys). */
 function dataId(e: TimelineEntry): string {
   if (e.kind === 'user') return e.node.id
   if (e.kind === 'context') return e.nodes[0]?.id ?? ''
