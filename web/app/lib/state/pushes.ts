@@ -109,10 +109,7 @@ function onNodeAppended(p: NodeAppendedPush): void {
     state.taskDetail = null
   }
   // The finalized Assistant node replaces the streaming buffer.
-  if (node.body.type === 'assistant') {
-    delete state.deltas[branch]
-    delete state.streamMarks[branch]
-  }
+  if (node.body.type === 'assistant') delete state.deltas[branch]
   // A finished tool result replaces its live output.
   if (node.body.type === 'tool_result') {
     delete state.toolProgress[`${branch}:${node.body.call_id}`]
@@ -209,7 +206,6 @@ function onTurnStarted(p: TurnPush): void {
 function onTurnDone(p: TurnPush): void {
   state.busy[p.branch] = false
   delete state.deltas[p.branch]
-  delete state.streamMarks[p.branch]
   delete state.retrying[p.branch]
   delete state.compacting[p.branch]
 }
@@ -217,7 +213,6 @@ function onTurnDone(p: TurnPush): void {
 function onTurnError(p: TurnErrorPush): void {
   state.busy[p.branch] = false
   delete state.deltas[p.branch]
-  delete state.streamMarks[p.branch]
   delete state.retrying[p.branch]
   delete state.compacting[p.branch]
   // A hook refused the prompt before the turn started: nothing was recorded

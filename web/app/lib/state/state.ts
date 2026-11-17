@@ -84,6 +84,11 @@ export interface LightboxImage {
 export interface DeltaBuffer {
   text: string
   reasoning: string
+  /** Whether any reasoning / answer text has arrived. The timeline reads
+   * these, not the text: reading the text would rebuild the whole timeline
+   * — and with it every turn in the conversation — on every delta. */
+  hasReasoning: boolean
+  hasText: boolean
   /** Live thinking clock: when the first reasoning delta landed, and the
    * measured span once the first text delta arrives (null until then). */
   reasonStart?: number
@@ -160,11 +165,6 @@ const initial = {
 
   /** Streaming buffers keyed by branch; cleared when the Assistant node is appended. */
   deltas: {} as Record<BranchId, DeltaBuffer>,
-  /** Which parts of a live stream have appeared, keyed by branch. The timeline
-   * needs to know *that* reasoning / answer text started, not the text itself:
-   * reading the buffer would rebuild the whole timeline — and with it every
-   * turn in the conversation — on every single delta. */
-  streamMarks: {} as Record<BranchId, { reasoning: boolean; text: boolean }>,
   /** Agent-loop-running flag keyed by branch (turn.started .. turn.done/error). */
   busy: {} as Record<BranchId, boolean>,
   /** Prompts accepted while a branch was busy, until their user node lands. */
