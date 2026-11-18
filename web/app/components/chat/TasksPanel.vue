@@ -3,9 +3,17 @@
 // top edge: one task shows itself; more fold into a count that opens the
 // list. A row opens its sub-agent's transcript or the task's output beside
 // the chat (TaskOutputPanel).
-import { computed, onBeforeUnmount, onMounted, ref } from 'vue'
+import { computed, onBeforeUnmount, onMounted, ref, watch } from 'vue'
 import { t } from '../../i18n'
-import { killTask, openTaskDetail, runningTasks, state, stopAll, taskChild } from '../../lib/store'
+import {
+  killTask,
+  nestedRunningCount,
+  openTaskDetail,
+  runningTasks,
+  state,
+  stopAllTasks,
+  taskChild,
+} from '../../lib/store'
 import { taskElapsed, taskLabel } from '../../lib/tasks'
 import { toolIcon } from '../../lib/toolIcon'
 import type { TaskInfo } from '../../lib/types'
@@ -20,8 +28,21 @@ onMounted(() => {
 onBeforeUnmount(() => clearInterval(timer))
 
 const expanded = ref(false)
-const folds = computed(() => runningTasks.value.length > 1)
+/** Rows for the branch's own tasks; its sub-agents' only add to the count. */
+const total = computed(() => runningTasks.value.length + nestedRunningCount.value)
+/** The count row (with "stop all") shows once one row can't cover it all. */
+const folds = computed(() => total.value > 1 || nestedRunningCount.value > 0)
 const showRows = computed(() => !folds.value || expanded.value)
+
+/** "stop all" asks once before cancelling; the ask goes when the count row does. */
+const confirming = ref(false)
+watch(folds, (on) => {
+  if (!on) confirming.value = false
+})
+function confirmStopAll(): void {
+  confirming.value = false
+  void stopAllTasks()
+}
 
 function isOpen(tk: TaskInfo): boolean {
   if (tk.kind.type !== 'agent') return state.taskDetail === tk.id
@@ -33,7 +54,7 @@ function isOpen(tk: TaskInfo): boolean {
 <template>
   <!-- every part grows out of the composer's edge: 0fr ↔ 1fr rows -->
   <Transition name="fold">
-    <div v-if="runningTasks.length" class="fold mx-auto w-full max-w-[var(--col-max)] px-5">
+    <div v-if="total" class="fold mx-auto w-full max-w-[var(--col-max)] px-5">
       <div>
         <div class="tasks-tab">
           <Transition name="fold">
@@ -43,28 +64,52 @@ function isOpen(tk: TaskInfo): boolean {
                   <button
                     type="button"
                     class="flex min-w-0 flex-1 items-center gap-2"
+                    :disabled="!runningTasks.length"
                     @click="expanded = !expanded"
                   >
                     <span class="flex size-4 flex-none items-center justify-center">
                       <span class="dot-live dot-task size-1.5 rounded-full bg-pine" />
                     </span>
                     <span class="flex-1 truncate text-left">
-                      {{ t('tools.tasks.running', { count: runningTasks.length }) }}
+                      {{ t('tools.tasks.running', { count: total }) }}
+                      <span v-if="nestedRunningCount" class="text-ink-3">
+                        · {{ t('tools.tasks.nested', { count: nestedRunningCount }) }}
+                      </span>
                     </span>
                     <Icon
+                      v-if="runningTasks.length"
                       name="down"
                       :size="14"
                       class="text-ink-3 transition-[rotate] duration-300 ease-soft"
                       :class="{ 'rotate-180': showRows }"
                     />
                   </button>
-                  <!-- takes the sub-agents' tasks down too, which no row shows -->
+                  <!-- background tasks only, the sub-agents' included (no row
+                       shows those); the reply goes on -->
+                  <template v-if="confirming">
+                    <button
+                      type="button"
+                      class="flex-none rounded-control px-1 text-micro text-ink-2 transition-colors hover:text-ink"
+                      @click="confirming = false"
+                    >
+                      {{ t('common.cancel') }}
+                    </button>
+                    <button
+                      type="button"
+                      class="flex-none rounded-control px-1 text-micro font-semibold text-danger transition-colors hover:underline"
+                      :title="t('tools.tasks.stopAllAria')"
+                      @click="confirmStopAll"
+                    >
+                      {{ t('tools.tasks.stopAllConfirm', { count: total }) }}
+                    </button>
+                  </template>
                   <button
+                    v-else
                     type="button"
                     class="flex-none rounded-control px-1 text-micro text-ink-3 transition-colors hover:text-danger"
                     :title="t('tools.tasks.stopAllAria')"
                     :aria-label="t('tools.tasks.stopAllAria')"
-                    @click="stopAll()"
+                    @click="confirming = true"
                   >
                     {{ t('tools.tasks.stopAll') }}
                   </button>

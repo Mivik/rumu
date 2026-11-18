@@ -638,10 +638,11 @@ impl Kernel {
         Ok(())
     }
 
-    /// Abort-time cleanup: cancel every running task owned by `branch` or one
-    /// of its sub-agent descendants. Their completion notes are still written,
+    /// Cancel every running task owned by `branch` or one of its sub-agent
+    /// descendants, leaving the branch's own reply alone (`task.kill_all`, and
+    /// half of [`Kernel::abort`]). Their completion notes are still written,
     /// with `wake: false`.
-    pub(crate) fn abort_tasks(&self, branch: &BranchId) {
+    pub fn abort_tasks(&self, branch: &BranchId) {
         let subtree = self.branch_subtree(branch).unwrap_or_else(|_| {
             let mut set = std::collections::HashSet::new();
             set.insert(branch.clone());

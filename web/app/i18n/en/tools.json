@@ -77,10 +77,12 @@
   },
   "tasks": {
     "running": "{count} background task running | {count} background tasks running",
+    "nested": "{count} in sub-agents",
     "kill": "kill {id}",
     "killAria": "kill task {id}",
     "stopAll": "stop all",
-    "stopAllAria": "stop this branch's reply and every task it started",
+    "stopAllAria": "stop every background task here, sub-agents' included; the reply keeps going",
+    "stopAllConfirm": "stop {count}?",
     "close": "Close task output"
   },
   "status": {

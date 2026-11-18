@@ -555,15 +555,15 @@ export async function stopTurn(): Promise<void> {
   }
 }
 
-/** `abort`: stop the reply and cancel every background task the branch (or a
- *  sub-agent below it) started — the task tab's "stop all". */
-export async function stopAll(): Promise<void> {
+/** `task.kill_all`: cancel every background task the branch (or a sub-agent
+ *  below it) started, leaving its reply running — the task tab's "stop all". */
+export async function stopAllTasks(): Promise<void> {
   const branch = state.activeBranch
   if (!branch) return
   try {
-    await rumu.request('abort', { branch })
+    await rumu.request('task.kill_all', { branch })
   } catch (err) {
-    toast('error', t('errors.abort'), (err as Error).message)
+    toast('error', t('errors.killTasks'), (err as Error).message)
   }
 }
 

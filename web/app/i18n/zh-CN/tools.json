@@ -77,10 +77,12 @@
   },
   "tasks": {
     "running": "{count} 个后台任务运行中",
+    "nested": "其中 {count} 个在子代理里",
     "kill": "终止 {id}",
     "killAria": "终止任务 {id}",
     "stopAll": "全部停止",
-    "stopAllAria": "停止这个分支的回复和它的全部后台任务",
+    "stopAllAria": "停止这里的全部后台任务（含子代理的），回复不受影响",
+    "stopAllConfirm": "停止 {count} 个？",
     "close": "关闭任务输出"
   },
   "status": {

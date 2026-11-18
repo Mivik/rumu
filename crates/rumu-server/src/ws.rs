@@ -1089,6 +1089,14 @@ async fn dispatch(state: &AppState, method: &str, p: &Value) -> Result<Value> {
             Ok(json!({ "task": kernel.kill_task(&id).await? }))
         }
 
+        // Cancel every background task of a branch and its sub-agents (the
+        // task tab's "stop all"); the branch's reply keeps going.
+        "task.kill_all" => {
+            let branch: BranchId = str_param(p, "branch")?.into();
+            kernel.abort_tasks(&branch);
+            Ok(json!({}))
+        }
+
         // The cards a branch sees (its mount table, `deck.mount` included), or
         // without a `branch` what an assistant deck sees by default:
         // `/cards/self` plus its `deck.yaml` mounts.

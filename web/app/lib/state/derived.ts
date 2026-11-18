@@ -104,6 +104,22 @@ export const branchTasks = computed<TaskInfo[]>(() => {
 /** Still-running tasks of the active branch. */
 export const runningTasks = computed(() => branchTasks.value.filter((t) => t.status === 'running'))
 
+/** How many tasks the active branch's sub-agents (at any depth) are still
+ *  running: no row shows them, but "stop all" takes them down too. */
+export const nestedRunningCount = computed(() => {
+  const root = state.activeBranch
+  if (!root) return 0
+  const below = (id: BranchId): boolean => {
+    for (let b = state.branches[id], guard = 0; b && guard++ < 1000;) {
+      if (b.kind.type !== 'agent') return false
+      if (b.kind.parent_branch === root) return true
+      b = state.branches[b.kind.parent_branch]
+    }
+    return false
+  }
+  return Object.values(state.tasks).filter((t) => t.status === 'running' && below(t.branch)).length
+})
+
 export interface SiblingAlternative {
   /** Branch to activate when it is picked. */
   branch: BranchId
