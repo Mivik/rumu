@@ -144,22 +144,11 @@ to download, write it to a file (usually in \
 with no network: inline its scripts, styles and images. To put an image in your reply itself, \
 write `![alt](<address>)` with the address of one already in the conversation: a `show`n file, \
 or an attachment's `@scratch:.inbox/…` copy; any other address shows as a link.\n\n\
-`@rumu` holds rumu's own data (no bash):\n\
-- `@rumu:/cards/<mount>/<path>`: cards of the decks mounted on this branch (`/cards/self` is \
-yours). `read` gives an editable view (YAML frontmatter, then the body); a write is refused if \
-the card changed since your read — re-read and merge. Card edits survive a rewind.\n\
-- `@rumu:/workspaces[/<name>]`: the workspace registry.\n\
-- `@rumu:/decks[/<name>]`: every deck you may see, and one's configuration as YAML (an \
-assistant's model, MCP servers, skills and mounts; a project's seal and ordered `workspaces`, \
-the first its default); read it before writing it, and write a new name to create one. \
-`invoke` `deck.mount` (`args: {at: \"user\"}`) on one mounts it at `/cards/<at>` — at \
-`project`, a project deck moves the session into that project — and `deck.unmount` unmounts it \
-(a project deck: leaves the project). Only mounted decks feed the catalog, recall, list, search \
-and notices.\n\
-- `@rumu:/history`: the decks' change timeline.\n\
-- `@rumu:/sessions/<session>/<node>` and `.../<from>..<to>`: past conversations, read-only \
-(yours and the mounted decks'; `@rumu:/sessions/by-assistant/<deck id>` lists one assistant's). \
-`search(query, scope: \"@rumu:/sessions\")` searches them.";
+`@rumu` holds rumu's own data as paths (no bash): `list @rumu:/` shows what is there, and \
+`list` on any of its paths says what it holds, what may be written and what asks the user, and \
+the actions `invoke` runs on it. Its cards (`@rumu:/cards/<mount>/<path>`) are your memory: \
+`read` gives an editable view (YAML frontmatter, then the body); a write is refused if the card \
+changed since your read — re-read and merge. Card edits survive a rewind.";
 
 // ---------------------------------------------------------------------------
 // Tool arguments (the single source of truth for parsing and schemas)
@@ -291,10 +280,8 @@ they do not apply to images); a trailing `#L<n>` / `#L<a>-L<b>` anchor sets them
             ToolSpec {
                 name: "write".into(),
                 description: "Create or overwrite a file (its directory must already exist; \
-rejected on read-only workspaces). Same `path` addressing as `read`; for cards the \
-content is the editable view — frontmatter + body. With `from`, moves that card to `path` \
-(the destination must not exist). Writing to a deck other than your own asks the user unless \
-they already allowed it."
+rejected on read-only workspaces). Same `path` addressing as `read`. In `@rumu`, `list` a path \
+for what may be written there; `from` moves a card or renames a deck."
                     .into(),
                 schema: tool_schema::<WriteArgs>(),
                 background: false,
@@ -315,9 +302,8 @@ workspaces."
             ToolSpec {
                 name: "delete".into(),
                 description: "Delete a file (not a directory: use `bash` for those; \
-rejected on read-only workspaces), a card (read it first; pinned cards are the user's to \
-delete) or an `@rumu:/workspaces/<name>` entry (asks the user). Same `path` addressing as \
-`read`; a rewind restores a deleted file."
+rejected on read-only workspaces), or what `@rumu` lets you delete (a card, after reading it). \
+Same `path` addressing as `read`; a rewind restores a deleted file."
                     .into(),
                 schema: tool_schema::<DeleteArgs>(),
                 background: false,
@@ -328,8 +314,8 @@ delete) or an `@rumu:/workspaces/<name>` entry (asks the user). Same `path` addr
                 name: "list".into(),
                 description: "List a directory's entries, one per line (directories \
 get a trailing `/`). Omitted `path` = the default workspace's root; `proj:` / \
-`@rumu:` (nothing after the colon) = that workspace's root. On the `@rumu` \
-workspace, lists cards."
+`@rumu:` (nothing after the colon) = that workspace's root. In `@rumu`, it also says what a \
+path holds, then its `files:` and `actions:`."
                     .into(),
                 schema: tool_schema::<ListArgs>(),
                 background: false,
@@ -370,13 +356,11 @@ version."
             },
             ToolSpec {
                 name: "search".into(),
-                description: "Search cards (default), past conversations or MCP tools by text. \
-All are relevance-ranked and match any term. `scope` narrows it: `@rumu:/cards/<mount>/<prefix>` \
-for a mounted deck's cards, `@rumu:/sessions` for all past conversations you can see (yours and \
-mounted assistants'), `@rumu:/sessions/by-assistant/<deck id>` for one assistant's, \
-`@rumu:/sessions/<session>` for one. Cards and conversations return addresses with short \
-snippets, never full text — follow up with `read`. `@rumu:/mcp[/<server>]` searches the \
-session's MCP tools (its servers' actions); each hit shows its input schema, ready for `invoke`."
+                description: "Search by text, relevance-ranked (any term matches): the \
+mounted decks' cards by default, or the `@rumu` subtree `scope` names — past conversations \
+(`@rumu:/sessions[/<session>]`) or MCP tools (`@rumu:/mcp[/<server>]`). Each hit is marked \
+`card`, `session` or `action`; cards and conversations come as addresses with short snippets \
+(`read` them), tools with their input schemas."
                     .into(),
                 schema: tool_schema::<SearchArgs>(),
                 background: false,
@@ -386,9 +370,8 @@ session's MCP tools (its servers' actions); each hit shows its input schema, rea
             ToolSpec {
                 name: "invoke".into(),
                 description: "Run an action on an `@rumu` object: `action` is its full name \
-and `path` the object (`task.kill` on `@rumu:/tasks/<id>`, `workspace.use` on \
-`@rumu:/workspaces/<name>`); `list` an object to see its actions and their arguments. An MCP \
-tool is an action of its server: `action` is `<server>/<tool>` (`list @rumu:/mcp/<server>`), \
+and `path` the object (`task.kill` on `@rumu:/tasks/<id>`); `list` an object for its actions \
+and their arguments. An MCP tool is an action of its server: `action` is `<server>/<tool>`, \
 with no `path`."
                     .into(),
                 schema: tool_schema::<InvokeArgs>(),
