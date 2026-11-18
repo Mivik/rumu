@@ -131,13 +131,16 @@ impl Kernel {
             return Ok(());
         }
         let content = rewritten(&ev, content);
+        // The node's id is fixed now: `prompt.cancel` takes it back by id
+        // until the running turn's next safe point writes it.
+        let node = NodeId::new();
         self.push(
             "prompt.queued",
-            json!({ "branch": branch, "text": content.text }),
+            json!({ "branch": branch, "node": node, "text": content.text }),
         );
         self.deliver(
             branch,
-            NodeId::new(),
+            node,
             NodeBody::User { content },
             Some((SYSTEM_SOURCE, true)),
         )
@@ -146,6 +149,35 @@ impl Kernel {
         // wake path starts a new turn; while busy it is a no-op.
         self.request_wake(branch, Some(SYSTEM_SOURCE), true, true);
         Ok(())
+    }
+
+    /// `prompt.cancel` WS method: take back a steering prompt still queued on
+    /// `branch`, returning its content; [`Error::NotQueued`] once it has been
+    /// written. The wake it asked for goes with it unless another queued
+    /// item still wants one, so the running turn's end starts no turn for it.
+    pub fn cancel_queued(&self, branch: &BranchId, node: &NodeId) -> Result<Content> {
+        let mut inner = self.inner.lock().unwrap();
+        let queue = inner.queue.get_mut(branch).ok_or(Error::NotQueued)?;
+        let i = queue
+            .iter()
+            .position(|q| q.id == *node && matches!(q.body, NodeBody::User { .. }))
+            .ok_or(Error::NotQueued)?;
+        let NodeBody::User { content } = queue.remove(i).body else {
+            unreachable!("matched a user body above");
+        };
+        let wakes = queue.iter().any(|q| q.wake);
+        let user = queue
+            .iter()
+            .any(|q| q.wake && matches!(q.body, NodeBody::User { .. }));
+        if queue.is_empty() {
+            inner.queue.remove(branch);
+        }
+        if !wakes {
+            inner.wake_pending.remove(branch);
+        } else if let Some(pending) = inner.wake_pending.get_mut(branch) {
+            pending.user = user;
+        }
+        Ok(content)
     }
 
     fn reset_storm(&self, branch: &BranchId) {

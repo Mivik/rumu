@@ -4281,6 +4281,61 @@ async fn steering_prompt_while_busy_is_seen_by_the_running_turn() {
     assert_eq!(users, ["first", "steer"]);
 }
 
+/// A queued steering prompt taken back before the safe point is never
+/// written and wakes nothing; once written it can no longer be cancelled.
+#[tokio::test]
+async fn cancelled_steering_prompt_is_never_written() {
+    let plugin = Arc::new(plugin_with(
+        "calc",
+        &["nap"],
+        vec![],
+        noop_hooks(),
+        noop_tools(),
+    ));
+    let (kernel, llm, _s, branch) = setup(
+        vec![plugin],
+        vec![
+            LlmResponse::calls(vec![ToolCall::new("c1", "nap", json!({"ms": 250}))]),
+            LlmResponse::text("first done"),
+        ],
+    )
+    .await;
+    let mut rx = kernel.tap_pushes();
+
+    kernel.prompt(&branch, "first").await.unwrap();
+    wait_push(
+        &mut rx,
+        |v| v["method"] == "node.appended" && v["params"]["node"]["body"]["type"] == "assistant",
+        "assistant node",
+    )
+    .await;
+    kernel.prompt(&branch, "steer").await.unwrap();
+    let queued = wait_push(&mut rx, |v| v["method"] == "prompt.queued", "prompt.queued").await;
+    let node = NodeId::from(queued["params"]["node"].as_str().unwrap());
+    let content = kernel.cancel_queued(&branch, &node).unwrap();
+    assert_eq!(content.text, "steer");
+    assert!(matches!(
+        kernel.cancel_queued(&branch, &node),
+        Err(rumu_kernel::Error::NotQueued)
+    ));
+
+    let (done, _) = collect_turn(&mut rx, &branch.0).await;
+    assert_eq!(done["method"], "turn.done");
+    tokio::time::sleep(Duration::from_millis(100)).await;
+    let projections = llm.projections();
+    assert_eq!(
+        projections.len(),
+        2,
+        "no wake turn for the cancelled prompt"
+    );
+    let (nodes, _) = kernel.branch_path(&branch).unwrap();
+    assert!(
+        !nodes
+            .iter()
+            .any(|n| matches!(&n.body, NodeBody::User { content } if content.text == "steer"))
+    );
+}
+
 /// A gated fake LLM: signals each call and waits for a permit, so a test can
 /// inject a prompt exactly while the final call of a turn is in flight.
 struct GatedLlm {

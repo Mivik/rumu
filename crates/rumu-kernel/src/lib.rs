@@ -137,6 +137,8 @@ pub(crate) struct RegisteredHook {
 pub(crate) struct Queued {
     pub id: NodeId,
     pub body: NodeBody,
+    /// Delivered as a wake item (see [`Kernel::cancel_queued`]).
+    pub wake: bool,
 }
 
 /// Wake state for one branch: whether a queued wake item has not yet been
@@ -1106,6 +1108,7 @@ impl Kernel {
                 inner.queue.entry(branch.clone()).or_default().push(Queued {
                     id: id.clone(),
                     body,
+                    wake: wake.is_some(),
                 });
                 if let Some((source, user)) = wake {
                     Self::mark_wake_locked(&mut inner, branch, Some(source), user, true);

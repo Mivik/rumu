@@ -73,6 +73,11 @@ pub enum Error {
     #[error("retry: no recorded failure to retry")]
     NothingToRetry,
 
+    /// `prompt.cancel` named a prompt no longer queued: it has been written
+    /// for the model to see.
+    #[error("the prompt is no longer queued")]
+    NotQueued,
+
     /// `activate` or `side` was given a branch that is not a main line (a
     /// sub-agent's or a side question's).
     #[error("branch {0} is not a main line")]

@@ -948,6 +948,15 @@ async fn dispatch(state: &AppState, method: &str, p: &Value) -> Result<Value> {
             Ok(json!({}))
         }
 
+        // Take back a steering prompt (`prompt.queued`) the running turn has
+        // not written yet; its content comes back for the composer.
+        "prompt.cancel" => {
+            let branch: BranchId = str_param(p, "branch")?.into();
+            let node: NodeId = str_param(p, "node")?.into();
+            let content = kernel.cancel_queued(&branch, &node)?;
+            Ok(json!({ "content": content }))
+        }
+
         // Resolves once nothing more happens on the branch until it is
         // prompted (see `Kernel::is_idle`), right after a `branch.idle` push.
         "branch.wait_idle" => {
