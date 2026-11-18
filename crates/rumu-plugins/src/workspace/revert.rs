@@ -1,16 +1,17 @@
 //! Reverting the file changes made since a user message. The `write`/`edit`
 //! results on the way carry their patches ([`FilePatch`]), so undoing them is
-//! applying those patches backwards — nothing is snapshotted. A file is only
-//! put back while what is on disk still holds what those patches wrote (lines
-//! elsewhere may have moved); when anything else changed those lines since —
-//! the user, `bash`, another session — it is left alone. Files no patch names
+//! applying those patches backwards — nothing is snapshotted. Each change is
+//! undone on its own, with fuzz: whatever else changed in the file since —
+//! the user, `bash`, another session — stays, even right beside it. Only when
+//! the lines a change wrote were changed again since does the file conflict,
+//! and then it is left alone whole. Files no patch names
 //! (written by `bash`, or past the diff caps) are never touched. A revert
 //! leaves a [`FilesReverted`] marker; the writes it undid are not undone
 //! twice.
 
 use std::collections::HashMap;
 
-use rumu_cards::diff::Hunk;
+use rumu_cards::diff::{CONTEXT, Hunk};
 use rumu_core::{
     FileRef, FilesReverted, Node, NodeBody, PathState, RUMU_WORKSPACE, Timestamp, Utf8TypedPathBuf,
     Workspace, normalize_abs, resolve_state,
@@ -31,7 +32,7 @@ pub enum RevertAction {
     Restore,
     /// The changes created the file: remove it.
     Delete,
-    /// Something else changed what the patches wrote since: left alone.
+    /// The lines the patches wrote were changed again since: left alone.
     Changed,
     /// No full patch was recorded (past the diff caps, not text), or the
     /// workspace is gone or read-only: left alone.
@@ -401,61 +402,129 @@ fn unwind(now: Option<String>, changes: &[&Change]) -> Option<Option<String>> {
     Some(cur)
 }
 
-/// Apply `hunks` (old → new) backwards to `text`, or `None` when a hunk's new
-/// side is not found in it. Each hunk is looked for at its recorded line
-/// first, then at the nearest place it matches whole.
+/// Apply `hunks` (old → new) backwards to `text`, or `None` when a change
+/// conflicts with what is there now. Each change (a run of removed/added
+/// lines, with the context around it) is undone on its own, the way `patch`
+/// applies with fuzz: looked for at its recorded line, then at the nearest
+/// place it matches, with context lines that differ now dropped one by one
+/// from the ends (those lines keep what they hold now). Only the lines the
+/// change added must still be there as written.
 fn unapply(text: &str, hunks: &[Hunk]) -> Option<String> {
     let mut lines: Vec<String> = text.split_inclusive('\n').map(str::to_owned).collect();
-    // Last hunk first: the earlier ones' recorded lines stay put.
-    for h in hunks.iter().rev() {
-        let (old, new) = sides(h);
-        let at = find(&lines, &new, h.new_start.saturating_sub(1) as usize)?;
-        lines.splice(at..at + new.len(), old);
+    let mut pieces: Vec<Piece> = hunks.iter().flat_map(pieces).collect();
+    // Last first: the earlier ones' recorded lines stay put.
+    pieces.sort_by_key(|p| std::cmp::Reverse(p.at));
+    for p in &pieces {
+        undo_piece(&mut lines, p)?;
     }
     Some(lines.concat())
 }
 
-/// A hunk's old and new lines, each with its `\n` unless the
+/// One change of a hunk: `lead` context lines, the removed (`old`) or
+/// added (`new`) lines, `tail` context lines; `at` is where its new side
+/// started (0-based).
+struct Piece {
+    old: Vec<String>,
+    new: Vec<String>,
+    lead: usize,
+    tail: usize,
+    at: usize,
+}
+
+/// A hunk's lines as `(sign, line)`, each line with its `\n` unless the
 /// "No newline at end of file" note follows it.
-fn sides(h: &Hunk) -> (Vec<String>, Vec<String>) {
-    let (mut old, mut new) = (Vec::<String>::new(), Vec::<String>::new());
-    let mut last = ' ';
+fn entries(h: &Hunk) -> Vec<(char, String)> {
+    let mut out: Vec<(char, String)> = Vec::new();
     for l in &h.lines {
         let mut chars = l.chars();
-        let sign = chars.next().unwrap_or(' ');
-        if sign == '\\' {
-            let strip = |side: &mut Vec<String>| {
-                if let Some(s) = side.last_mut() {
-                    s.pop();
+        match chars.next().unwrap_or(' ') {
+            '\\' => {
+                if let Some((_, last)) = out.last_mut() {
+                    last.pop();
                 }
-            };
-            if last != '+' {
-                strip(&mut old);
             }
-            if last != '-' {
-                strip(&mut new);
-            }
+            sign => out.push((sign, format!("{}\n", chars.as_str()))),
+        }
+    }
+    out
+}
+
+/// Split a hunk into its changes, each with up to [`CONTEXT`] context lines
+/// on either side.
+fn pieces(h: &Hunk) -> Vec<Piece> {
+    let es = entries(h);
+    let mut out = Vec::new();
+    let mut i = 0;
+    // New-side lines before `i`.
+    let mut new_pos = h.new_start.saturating_sub(1) as usize;
+    while i < es.len() {
+        if es[i].0 == ' ' {
+            new_pos += 1;
+            i += 1;
             continue;
         }
-        let line = format!("{}\n", chars.as_str());
-        match sign {
-            '-' => old.push(line),
-            '+' => new.push(line),
-            _ => {
-                old.push(line.clone());
-                new.push(line);
+        let lead_from = (0..i)
+            .rev()
+            .take_while(|&j| es[j].0 == ' ')
+            .take(CONTEXT as usize)
+            .last()
+            .unwrap_or(i);
+        let mut end = i;
+        while end < es.len() && es[end].0 != ' ' {
+            end += 1;
+        }
+        let tail_to = (end..es.len())
+            .take_while(|&j| es[j].0 == ' ')
+            .take(CONTEXT as usize)
+            .last()
+            .map_or(end, |j| j + 1);
+        let side = |keep: char| -> Vec<String> {
+            es[lead_from..tail_to]
+                .iter()
+                .filter(|(s, _)| *s == ' ' || *s == keep)
+                .map(|(_, l)| l.clone())
+                .collect()
+        };
+        let added = es[i..end].iter().filter(|(s, _)| *s == '+').count();
+        out.push(Piece {
+            old: side('-'),
+            new: side('+'),
+            lead: i - lead_from,
+            tail: tail_to - end,
+            at: new_pos - (i - lead_from),
+        });
+        new_pos += added;
+        i = end;
+    }
+    out
+}
+
+/// Undo one change in `lines`, or `None` when it conflicts.
+fn undo_piece(lines: &mut Vec<String>, p: &Piece) -> Option<()> {
+    // Fewest context lines dropped first, from either end.
+    for fuzz in 0..=p.lead + p.tail {
+        for lead in fuzz.saturating_sub(p.tail)..=fuzz.min(p.lead) {
+            let tail = fuzz - lead;
+            let new = &p.new[lead..p.new.len() - tail];
+            // A change that only removed lines needs a line to anchor it.
+            if new.is_empty() && !p.new.is_empty() {
+                continue;
+            }
+            if let Some(at) = find(lines, new, p.at + lead) {
+                let old = p.old[lead..p.old.len() - tail].to_vec();
+                lines.splice(at..at + new.len(), old);
+                return Some(());
             }
         }
-        last = sign;
     }
-    (old, new)
+    None
 }
 
 /// Where `block` sits in `lines`: at `expect` when it matches there, else the
 /// nearest match.
 fn find(lines: &[String], block: &[String], expect: usize) -> Option<usize> {
     if block.is_empty() {
-        // Only an emptied file has a hunk with no new lines.
+        // Only an emptied file has a change with no new lines at all.
         return lines.is_empty().then_some(0);
     }
     let fits = |i: usize| lines.get(i..i + block.len()) == Some(block);
@@ -529,6 +598,42 @@ mod tests {
         let old = "1\n2\n3\n";
         let new = "1\ntwo\n3\n";
         assert_eq!(undo(old, new, "1\nTWO\n3\n"), None);
+    }
+
+    #[test]
+    fn context_changed_since_is_kept() {
+        let old = "1\n2\n3\n4\n5\n";
+        let new = "1\n2\nthree\n4\n5\n";
+        // The lines right around the change were edited since: kept.
+        assert_eq!(
+            undo(old, new, "1\nTWO\nthree\nFOUR\n5\n").as_deref(),
+            Some("1\nTWO\n3\nFOUR\n5\n")
+        );
+    }
+
+    #[test]
+    fn changes_of_one_hunk_undo_on_their_own() {
+        let old = "a\nb\nc\nd\ne\nf\n";
+        let new = "A\nb\nc\nd\ne\nF\n";
+        assert_eq!(hunks(old, new).len(), 1, "one hunk, two changes");
+        // A line between the two changes was edited since.
+        assert_eq!(
+            undo(old, new, "A\nb\nC\nd\ne\nF\n").as_deref(),
+            Some("a\nb\nC\nd\ne\nf\n")
+        );
+    }
+
+    #[test]
+    fn a_removal_is_put_back_beside_a_surviving_neighbour() {
+        let old = "1\n2\ngone\n3\n4\n";
+        let new = "1\n2\n3\n4\n";
+        // The line before the removal changed since; the one after still anchors it.
+        assert_eq!(
+            undo(old, new, "1\nTWO\n3\n4\n").as_deref(),
+            Some("1\nTWO\ngone\n3\n4\n")
+        );
+        // Both neighbours changed: nothing tells where it went.
+        assert_eq!(undo("x\ngone\ny\n", "x\ny\n", "X\nY\n"), None);
     }
 
     fn change(kind: PatchKind, hunks: Option<Vec<Hunk>>, content: Option<&str>) -> Change {
