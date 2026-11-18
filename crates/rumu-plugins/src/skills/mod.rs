@@ -375,26 +375,15 @@ pub fn rules(decks: &Decks, state: &PathState) -> Vec<String> {
         .unwrap_or_default()
 }
 
-/// Whether `abs` is under `@rumu:/skills`.
-pub fn is_skills_path(abs: &Utf8UnixPath) -> bool {
-    abs.as_str() == "/skills" || abs.starts_with("/skills/")
-}
-
-/// The enabled skill `abs` is in and the path under it; `None` for the root.
+/// The enabled skill `name` and the path `sub` under it (`abs` names them in
+/// errors).
 fn locate(
     skills: &Skills,
     rules: &[String],
     abs: &Utf8UnixPath,
-) -> ToolResult<Option<(Skill, PathBuf)>> {
-    let rest = abs
-        .as_str()
-        .strip_prefix("/skills")
-        .unwrap_or_default()
-        .trim_matches('/');
-    if rest.is_empty() {
-        return Ok(None);
-    }
-    let (name, sub) = rest.split_once('/').unwrap_or((rest, ""));
+    name: &str,
+    sub: &str,
+) -> ToolResult<(Skill, PathBuf)> {
     if sub.split('/').any(|c| c == "..") {
         return Err(ToolError::model(format!(
             "`{RUMU_WORKSPACE}:{abs}` leaves its skill"
@@ -410,22 +399,31 @@ fn locate(
             ))
         })?;
     let path = skill.dir.join(sub);
-    Ok(Some((skill, path)))
+    Ok((skill, path))
 }
 
-/// `list` under `@rumu:/skills`: the session's skills, or a skill's files.
-pub fn list(skills: &Skills, rules: &[String], abs: &Utf8UnixPath) -> ToolResult<ToolOutput> {
-    let Some((skill, path)) = locate(skills, rules, abs)? else {
-        let enabled = skills.enabled(rules);
-        if enabled.is_empty() {
-            return Ok("This session has no skills.".into());
-        }
-        let mut out = String::new();
-        for s in enabled {
-            let _ = writeln!(out, "{}/ — {}", s.name, one_line(&s.description));
-        }
-        return Ok(out.into());
-    };
+/// `list @rumu:/skills`: the session's skills.
+pub fn list_skills(skills: &Skills, rules: &[String]) -> ToolOutput {
+    let enabled = skills.enabled(rules);
+    if enabled.is_empty() {
+        return "This session has no skills.".into();
+    }
+    let mut out = String::new();
+    for s in enabled {
+        let _ = writeln!(out, "{}/ — {}", s.name, one_line(&s.description));
+    }
+    out.into()
+}
+
+/// `list @rumu:/skills/<name>[/<sub>]`: a skill's files.
+pub fn list(
+    skills: &Skills,
+    rules: &[String],
+    abs: &Utf8UnixPath,
+    name: &str,
+    sub: &str,
+) -> ToolResult<ToolOutput> {
+    let (skill, path) = locate(skills, rules, abs, name, sub)?;
     if path.is_file() {
         let rel = path.strip_prefix(&skill.dir).unwrap_or(&path);
         return Ok(format!("{}\n", rel.display()).into());
@@ -436,12 +434,16 @@ pub fn list(skills: &Skills, rules: &[String], abs: &Utf8UnixPath) -> ToolResult
     Ok(files(&path).into())
 }
 
-/// `read` under `@rumu:/skills`: a file; a skill is its `SKILL.md` and a list
-/// of its other files; a directory lists.
-pub fn read(skills: &Skills, rules: &[String], abs: &Utf8UnixPath) -> ToolResult<ToolOutput> {
-    let Some((skill, path)) = locate(skills, rules, abs)? else {
-        return list(skills, rules, abs);
-    };
+/// `read @rumu:/skills/<name>[/<sub>]`: a file; a skill is its `SKILL.md`
+/// and a list of its other files; a directory lists.
+pub fn read(
+    skills: &Skills,
+    rules: &[String],
+    abs: &Utf8UnixPath,
+    name: &str,
+    sub: &str,
+) -> ToolResult<ToolOutput> {
+    let (skill, path) = locate(skills, rules, abs, name, sub)?;
     if path == skill.dir {
         let text = read_text(&path.join(SKILL_FILE))?;
         let others: Vec<String> = files_of(&path)

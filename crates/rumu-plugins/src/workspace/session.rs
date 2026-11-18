@@ -20,17 +20,18 @@
 use std::cmp::Reverse;
 use std::collections::HashSet;
 
+use async_trait::async_trait;
 use rumu_cards::json_quote;
 use rumu_cards::recall::{self, Doc};
 use rumu_core::{
     Branch, BranchKind, Cx, Node, NodeBody, PathState, RUMU_WORKSPACE, SessionId, SessionInfo,
-    ToolCall, ToolError, ToolOutput, ToolResult, Utf8UnixPath,
+    ToolCall, ToolError, ToolOutput, ToolResult,
 };
 use serde_json::Value;
 
 use super::WorkspacePlugin;
 use super::time::iso_local;
-use super::tools::{slice_lines, unknown_rumu_path};
+use super::vfs::{self, At, Out, bad_scope};
 
 /// The `@rumu` result prefix.
 const WS: &str = RUMU_WORKSPACE;
@@ -70,82 +71,89 @@ fn can_see(state: &PathState, info: &SessionInfo) -> bool {
 /// The directory of per-assistant session listings.
 const BY_ASSISTANT: &str = "by-assistant";
 
-/// What a `@rumu:/sessions…` path names.
-enum SessionPath<'a> {
-    /// `/sessions`: every visible session.
-    All,
-    /// `/sessions/by-assistant`: the assistants whose sessions are visible.
-    Assistants,
-    /// `/sessions/by-assistant/<deck id>`: one assistant's sessions.
-    Assistant(&'a str),
-    /// `/sessions/<session>[/<node or range>]` (`what` is empty for the
-    /// session itself).
-    Session { sid: &'a str, what: &'a str },
-}
+/// `/sessions` and `/sessions/by-assistant/<deck id>`: one line per visible
+/// session (or one assistant's), most recently updated first. The session
+/// this call runs in is marked `(current)`.
+pub(super) struct Sessions;
 
-/// Parse a `/sessions…` path; `None` when it names nothing.
-fn session_path(abs: &Utf8UnixPath) -> Option<SessionPath<'_>> {
-    let rest = abs.strip_prefix("/sessions").ok()?.as_str();
-    if rest.is_empty() {
-        return Some(SessionPath::All);
-    }
-    let (head, tail) = rest.split_once('/').unwrap_or((rest, ""));
-    if head != BY_ASSISTANT {
-        return Some(SessionPath::Session {
-            sid: head,
-            what: tail,
-        });
-    }
-    match tail {
-        "" => Some(SessionPath::Assistants),
-        id if !id.contains('/') => Some(SessionPath::Assistant(id)),
-        _ => None,
-    }
-}
-
-/// The sessions this path may see, optionally only `only`'s (an assistant
-/// deck id, which must have some).
-fn visible_sessions(cx: &Cx, only: Option<&str>) -> ToolResult<Vec<SessionInfo>> {
-    let state = cx.state()?;
-    let mut sessions = cx.history().sessions()?;
-    sessions.retain(|s| can_see(&state, s));
-    if let Some(id) = only {
-        sessions.retain(|s| s.assistant == id);
+#[async_trait]
+impl vfs::Node for Sessions {
+    async fn list(&self, at: &At<'_>) -> Out {
+        let mut sessions = visible_sessions(at.cx, at.opt("id"))?;
+        sessions.sort_by_key(|s| Reverse(s.updated_at));
         if sessions.is_empty() {
-            return Err(ToolError::model(format!(
-                "assistant `{id}` has no visible sessions; \
-                 `@rumu:/sessions/by-assistant` lists those that do"
-            )));
+            return Ok("no sessions yet".into());
         }
+        let mut lines = Vec::with_capacity(sessions.len());
+        for s in &sessions {
+            let current = if s.id == at.cx.session {
+                "  (current)"
+            } else {
+                ""
+            };
+            lines.push(format!(
+                "{WS}:/sessions/{}  {}  \"{}\"{current}{}",
+                s.id,
+                iso_local(s.updated_at),
+                s.title,
+                at.p.session_owner(s, at.cx)?
+            ));
+        }
+        Ok(lines.join("\n").into())
     }
-    Ok(sessions)
+
+    async fn search(&self, at: &At<'_>, query: &str, limit: Option<usize>) -> Out {
+        let limit = limit.unwrap_or(10);
+        at.p.session_search(query, at.opt("id"), "", limit, at.cx)
+            .await
+    }
 }
 
-impl WorkspacePlugin {
-    /// `list` under `/sessions`: like `read` (below a session, the overview).
-    pub(super) async fn session_list(&self, abs: &Utf8UnixPath, cx: &Cx) -> ToolResult<ToolOutput> {
-        self.session_read(abs, None, None, cx).await
-    }
+/// `/sessions/by-assistant`: one line per assistant with visible sessions,
+/// this path's own first.
+pub(super) struct ByAssistant;
 
-    pub(super) async fn session_read(
-        &self,
-        abs: &Utf8UnixPath,
-        offset: Option<u64>,
-        limit: Option<u64>,
-        cx: &Cx,
-    ) -> ToolResult<ToolOutput> {
-        let (sid, what) = match session_path(abs) {
-            Some(SessionPath::All) => return self.session_listing(None, cx).await,
-            Some(SessionPath::Assistant(id)) => return self.session_listing(Some(id), cx).await,
-            Some(SessionPath::Assistants) => return self.assistant_listing(cx).await,
-            Some(SessionPath::Session { sid, what }) => (sid, what),
-            None => return Err(unknown_rumu_path(abs)),
-        };
-        let (info, nodes, branches) = match cx.history().session_tree(&SessionId::from(sid)) {
+#[async_trait]
+impl vfs::Node for ByAssistant {
+    async fn list(&self, at: &At<'_>) -> Out {
+        let own = at.state.assistant.clone();
+        let mut ids: Vec<String> = visible_sessions(at.cx, None)?
+            .into_iter()
+            .map(|s| s.assistant)
+            .collect();
+        ids.sort_by_key(|id| (*id != own, id.clone()));
+        ids.dedup();
+        if ids.is_empty() {
+            return Ok("no sessions yet".into());
+        }
+        let lines: Vec<String> = ids
+            .iter()
+            .map(|id| {
+                let name = at.p.decks().get(id).map(|d| d.meta.name);
+                let you = if *id == own { " (you)" } else { "" };
+                format!(
+                    "{WS}:/sessions/{BY_ASSISTANT}/{id}  {}{you}",
+                    name.unwrap_or_default()
+                )
+            })
+            .collect();
+        Ok(lines.join("\n").into())
+    }
+}
+
+/// `/sessions/<session>[/<node or range>]`: the session overview, one node,
+/// or a range `<a>..<b>` of nodes.
+pub(super) struct Session;
+
+#[async_trait]
+impl vfs::Node for Session {
+    async fn list(&self, at: &At<'_>) -> Out {
+        let (sid, what) = (at.param("sid"), at.param("what"));
+        let (info, nodes, branches) = match at.cx.history().session_tree(&SessionId::from(sid)) {
             Ok(t) => t,
             Err(e) => return Err(ToolError::model(format!("no session `{sid}`: {e}"))),
         };
-        if !can_see(cx.state()?.as_ref(), &info) {
+        if !can_see(at.state, &info) {
             return Err(ToolError::model(format!("no session `{sid}`")));
         }
         let text = match what {
@@ -179,13 +187,37 @@ impl WorkspacePlugin {
                 SessionView::new(sid, &nodes).render(&[n], false)
             }
         };
-        let text = match slice_lines(text, offset, limit) {
-            Ok(t) => t,
-            Err(e) => return Err(ToolError::model(e)),
-        };
         Ok(text.into())
     }
 
+    async fn search(&self, at: &At<'_>, query: &str, limit: Option<usize>) -> Out {
+        if at.opt("what").is_some() {
+            return Err(bad_scope());
+        }
+        let (sid, limit) = (at.param("sid"), limit.unwrap_or(10));
+        at.p.session_search(query, None, sid, limit, at.cx).await
+    }
+}
+
+/// The sessions this path may see, optionally only `only`'s (an assistant
+/// deck id, which must have some).
+fn visible_sessions(cx: &Cx, only: Option<&str>) -> ToolResult<Vec<SessionInfo>> {
+    let state = cx.state()?;
+    let mut sessions = cx.history().sessions()?;
+    sessions.retain(|s| can_see(&state, s));
+    if let Some(id) = only {
+        sessions.retain(|s| s.assistant == id);
+        if sessions.is_empty() {
+            return Err(ToolError::model(format!(
+                "assistant `{id}` has no visible sessions; \
+                 `@rumu:/sessions/by-assistant` lists those that do"
+            )));
+        }
+    }
+    Ok(sessions)
+}
+
+impl WorkspacePlugin {
     /// The ` by <assistant>` suffix of a session line, for another assistant
     /// deck's session (as catalog lines name another author).
     fn session_owner(&self, info: &SessionInfo, cx: &Cx) -> ToolResult<String> {
@@ -199,61 +231,6 @@ impl WorkspacePlugin {
         Ok(format!("  by {name}"))
     }
 
-    /// `list /sessions/by-assistant`: one line per assistant with visible
-    /// sessions, this path's own first.
-    async fn assistant_listing(&self, cx: &Cx) -> ToolResult<ToolOutput> {
-        let own = cx.state()?.assistant.clone();
-        let mut ids: Vec<String> = visible_sessions(cx, None)?
-            .into_iter()
-            .map(|s| s.assistant)
-            .collect();
-        ids.sort_by_key(|id| (*id != own, id.clone()));
-        ids.dedup();
-        if ids.is_empty() {
-            return Ok("no sessions yet".into());
-        }
-        let lines: Vec<String> = ids
-            .iter()
-            .map(|id| {
-                let name = self
-                    .decks()
-                    .get(id)
-                    .map(|d| d.meta.name)
-                    .unwrap_or_default();
-                let you = if *id == own { " (you)" } else { "" };
-                format!("{WS}:/sessions/{BY_ASSISTANT}/{id}  {name}{you}")
-            })
-            .collect();
-        Ok(lines.join("\n").into())
-    }
-
-    /// `list /sessions[/by-assistant/<id>]`: one line per session, most
-    /// recently updated first. The session this call runs in is marked
-    /// `(current)`.
-    async fn session_listing(&self, assistant: Option<&str>, cx: &Cx) -> ToolResult<ToolOutput> {
-        let mut sessions = visible_sessions(cx, assistant)?;
-        sessions.sort_by_key(|s| Reverse(s.updated_at));
-        if sessions.is_empty() {
-            return Ok("no sessions yet".into());
-        }
-        let mut lines = Vec::with_capacity(sessions.len());
-        for s in &sessions {
-            let current = if s.id == cx.session {
-                "  (current)"
-            } else {
-                ""
-            };
-            lines.push(format!(
-                "{WS}:/sessions/{}  {}  \"{}\"{current}{}",
-                s.id,
-                iso_local(s.updated_at),
-                s.title,
-                self.session_owner(s, cx)?
-            ));
-        }
-        Ok(lines.join("\n").into())
-    }
-
     /// The session half of `search`: BM25-ranked nodes over user text,
     /// assistant text + tool-call args, tool-result text and note text. Any
     /// query term matches (OR); equal scores are newest first by `at`, and
@@ -261,21 +238,11 @@ impl WorkspacePlugin {
     pub(super) async fn session_search(
         &self,
         query: &str,
-        abs: &Utf8UnixPath,
+        assistant: Option<&str>,
+        only: &str,
         limit: usize,
         cx: &Cx,
     ) -> ToolResult<ToolOutput> {
-        let (assistant, only) = match session_path(abs) {
-            Some(SessionPath::All) => (None, ""),
-            Some(SessionPath::Assistant(id)) => (Some(id), ""),
-            Some(SessionPath::Session { sid, what: "" }) => (None, sid),
-            _ => {
-                return Err(ToolError::model(format!(
-                    "search: `{WS}:{abs}` is not a sessions scope; use `{WS}:/sessions`, \
-                     `{WS}:/sessions/{BY_ASSISTANT}/<assistant>` or `{WS}:/sessions/<session>`"
-                )));
-            }
-        };
         // Snippet terms need the ranker's tokenization, not whitespace: a
         // spaceless CJK query would otherwise never print a snippet.
         let terms: Vec<String> = recall::tokens(query);

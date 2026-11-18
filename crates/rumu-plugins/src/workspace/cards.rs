@@ -2,16 +2,117 @@
 //! cards of the branch's mounted decks, with read-before-write (CAS) backed
 //! by git history.
 
+use async_trait::async_trait;
 use rumu_cards::deck::Action;
 use rumu_cards::usage::CardOp;
 use rumu_cards::{Cards, card, usage};
 use rumu_core::{Cx, Effect, ToolError, ToolOutput, ToolResult};
+use serde_json::json;
 
 use super::WorkspacePlugin;
 use super::patch;
 use super::time::iso_local;
-use super::tools::{card_load_err, invalid_card_ref, no_card_err, slice_lines};
+use super::tools::{
+    card_load_err, invalid_card_ref, no_card_err, replace_occurrences, slice_lines,
+};
+use super::vfs::{At, Node, Out};
 use crate::approve::{approve, deck_name};
+
+/// `/cards`: the mount points.
+pub(super) struct CardsDir;
+
+#[async_trait]
+impl Node for CardsDir {
+    async fn list(&self, at: &At<'_>) -> Out {
+        at.p.card_list("", at.cx).await
+    }
+
+    fn holds_files(&self) -> bool {
+        true
+    }
+
+    async fn search(&self, at: &At<'_>, query: &str, limit: Option<usize>) -> Out {
+        search_cards(at, "", query, limit)
+    }
+}
+
+/// `/cards/<mount>/<path>[.md]`: a card; for `list` and `search`, a prefix.
+pub(super) struct Card;
+
+impl Card {
+    /// The card path (a trailing `.md` is the same card).
+    fn path<'a>(at: &'a At<'_>) -> &'a str {
+        let path = at.param("path");
+        path.strip_suffix(".md").unwrap_or(path)
+    }
+}
+
+#[async_trait]
+impl Node for Card {
+    async fn list(&self, at: &At<'_>) -> Out {
+        at.p.card_list(at.param("path"), at.cx).await
+    }
+
+    async fn read(&self, at: &At<'_>, offset: Option<u64>, limit: Option<u64>) -> Out {
+        at.p.card_read(Self::path(at), offset, limit, at.cx).await
+    }
+
+    async fn write(&self, at: &At<'_>, content: &str, from: Option<&str>) -> Out {
+        let path = Self::path(at);
+        at.p.card_write(path, content, CardOp::Write, from, at.cx)
+            .await
+    }
+
+    /// Edit = string replace on the card's view, then the write path. The
+    /// read-freshness check comes first: a stale read is the more
+    /// fundamental problem than a non-matching string.
+    async fn edit(&self, at: &At<'_>, old: &str, new: &str, all: bool) -> Out {
+        let (path, cx) = (Self::path(at), at.cx);
+        let cards = at.p.cards(cx)?;
+        if let Some(err) = invalid_card_ref(&cards, path) {
+            return Err(err);
+        }
+        let existing = match cards.raw(path) {
+            Ok(Some(c)) => c,
+            Ok(None) => return Err(no_card_err(path, &[])),
+            Err(e) => return Err(card_load_err(path, e)),
+        };
+        if existing.link().is_some() {
+            return Err(ToolError::model(format!(
+                "card `{}` is a link; write its target instead",
+                rumu_cards::card_uri(path)
+            )));
+        }
+        if let Some(err) = at.p.ensure_fresh_read(&cards, path, &existing, cx) {
+            return Err(err);
+        }
+        let view = card::view_of(&existing);
+        let (new_view, n) = replace_occurrences(&view, old, new, all).map_err(ToolError::model)?;
+        let mut out =
+            at.p.card_write(path, &new_view, CardOp::Edit, None, cx)
+                .await?;
+        if out.is_error {
+            return Ok(out);
+        }
+        // Keep the write's diff payload; only the text is edit-specific.
+        out.content.text = format!(
+            "edited card `{}` ({n} replacement{})",
+            rumu_cards::card_uri(path),
+            if n == 1 { "" } else { "s" }
+        );
+        Ok(out)
+    }
+
+    async fn search(&self, at: &At<'_>, query: &str, limit: Option<usize>) -> Out {
+        search_cards(at, at.param("path"), query, limit)
+    }
+}
+
+/// `search` over the mounted cards under `prefix`.
+fn search_cards(at: &At<'_>, prefix: &str, query: &str, limit: Option<usize>) -> Out {
+    let args = json!({ "prefix": prefix, "limit": limit.unwrap_or(10) });
+    rumu_cards::search_text(&at.p.cards(at.cx)?, query, &args)
+}
 
 /// The git author of a tool write: the assistant deck, session, and the
 /// assistant node that asked for the call.

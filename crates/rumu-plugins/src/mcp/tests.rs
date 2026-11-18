@@ -1,7 +1,7 @@
 use std::collections::BTreeMap;
 use std::sync::Arc;
 
-use rumu_core::{McpServerSettings, McpStatus, Plugin, Utf8UnixPath};
+use rumu_core::{McpServerSettings, McpStatus, Plugin};
 use serde_json::json;
 
 use super::*;
@@ -53,10 +53,6 @@ fn all(servers: &[&str]) -> rumu_core::McpUse {
         .collect()
 }
 
-fn path(p: &str) -> &Utf8UnixPath {
-    Utf8UnixPath::new(p)
-}
-
 #[tokio::test]
 async fn connects_and_reports_status() {
     let home = tempfile::tempdir().unwrap();
@@ -79,20 +75,16 @@ async fn lists_reads_and_searches_the_bound_servers() {
         return;
     };
     let st = all(&["fake", "broken", "gone"]);
-    let root = list(&hub, &st, path("/tools")).await.unwrap().content.text;
+    let root = list_servers(&hub, &st).await.content.text;
     assert!(root.contains("fake/ — 3 tools"), "{root}");
     assert!(root.contains("broken/ — unavailable"), "{root}");
     assert!(root.contains("gone/ — not configured"), "{root}");
 
-    let tools = list(&hub, &st, path("/tools/fake"))
-        .await
-        .unwrap()
-        .content
-        .text;
+    let tools = list_tools(&hub, &st, "fake").await.unwrap().content.text;
     assert!(tools.contains("list_issues — List the open issues of a GitHub repository."));
     assert!(!tools.contains("Paged by 30"));
 
-    let tool = read(&hub, &st, path("/tools/fake/echo"))
+    let tool = read_tool(&hub, &st, "fake", "echo")
         .await
         .unwrap()
         .content
@@ -102,7 +94,7 @@ async fn lists_reads_and_searches_the_bound_servers() {
         "{tool}"
     );
 
-    let hits = search(&hub, &st, path("/tools"), "github issues", 5)
+    let hits = search(&hub, &st, None, "github issues", 5)
         .await
         .unwrap()
         .content
@@ -115,9 +107,7 @@ async fn lists_reads_and_searches_the_bound_servers() {
 
     // A server the session does not have is neither listed nor readable.
     let other = all(&["broken"]);
-    let err = read(&hub, &other, path("/tools/fake/echo"))
-        .await
-        .unwrap_err();
+    let err = read_tool(&hub, &other, "fake", "echo").await.unwrap_err();
     assert!(
         err.to_string()
             .contains("no MCP server `fake` in this session"),
@@ -284,21 +274,27 @@ async fn rules_narrow_a_servers_tools() {
 
     // All but one: new tools would be in too.
     let st = rules(&["*", "!fail"]);
-    assert!(text(list(&hub, &st, path("/tools")).await).contains("fake/ — 2 tools"));
-    let tools = text(list(&hub, &st, path("/tools/fake")).await);
+    assert!(
+        list_servers(&hub, &st)
+            .await
+            .content
+            .text
+            .contains("fake/ — 2 tools")
+    );
+    let tools = text(list_tools(&hub, &st, "fake").await);
     assert!(tools.contains("echo") && !tools.contains("fail"), "{tools}");
-    let err = read(&hub, &st, path("/tools/fake/fail")).await.unwrap_err();
+    let err = read_tool(&hub, &st, "fake", "fail").await.unwrap_err();
     assert!(
         err.to_string().contains("its tools: `echo`, `list_issues`"),
         "{err}"
     );
-    let hits = text(search(&hub, &st, path("/tools"), "always fails", 5).await);
+    let hits = text(search(&hub, &st, None, "always fails", 5).await);
     assert!(!hits.contains("fake/fail"), "{hits}");
 
     // Only the one named.
     let st = rules(&["echo"]);
     assert_eq!(
-        text(list(&hub, &st, path("/tools/fake")).await),
+        text(list_tools(&hub, &st, "fake").await),
         "echo — Echo the given text back.\n"
     );
     let decks = assistant_decks(home.path());

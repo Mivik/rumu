@@ -10,47 +10,42 @@
 //! A deleted card keeps its old path here: `<path>` is looked up in the
 //! history of the deck mounted there. Only mounted decks are shown.
 
+use async_trait::async_trait;
 use rumu_cards::git::Commit;
 use rumu_cards::{Cards, card};
-use rumu_core::{Cx, ToolError, ToolOutput, ToolResult, Utf8UnixPath};
+use rumu_core::{ToolError, ToolOutput, ToolResult};
 
-use super::WorkspacePlugin;
 use super::time::iso_local;
 use super::tools::slice_lines;
+use super::vfs::{At, Node, Out};
 
 const TIMELINE_LIMIT: usize = 100;
 
-impl WorkspacePlugin {
-    pub(super) async fn history_list(&self, abs: &Utf8UnixPath, cx: &Cx) -> ToolResult<ToolOutput> {
-        let cards = self.cards(cx)?;
-        let rest = history_rest(abs);
-        if rest.is_empty() {
-            return self.history_timeline(&cards).map(Into::into);
-        }
-        if let Some(path) = rest.strip_prefix("cards/") {
-            let (deck, path) = card_at(&cards, path)?;
-            return versions(&cards, &deck, &path).map(Into::into);
-        }
-        Err(ToolError::model(
-            "history: use `@rumu:/history` or `@rumu:/history/cards/<path>`",
-        ))
+/// `/history`: the timeline of the mounted decks.
+pub(super) struct HistoryRoot;
+
+#[async_trait]
+impl Node for HistoryRoot {
+    async fn list(&self, at: &At<'_>) -> Out {
+        timeline(&at.p.cards(at.cx)?).map(Into::into)
+    }
+}
+
+/// `/history/cards/<path>`: a card path's versions; `<path>@<commit>` reads
+/// one.
+pub(super) struct CardHistory;
+
+#[async_trait]
+impl Node for CardHistory {
+    async fn list(&self, at: &At<'_>) -> Out {
+        let cards = at.p.cards(at.cx)?;
+        let (deck, path) = card_at(&cards, at.param("path"))?;
+        versions(&cards, &deck, &path).map(Into::into)
     }
 
-    pub(super) async fn history_read(
-        &self,
-        abs: &Utf8UnixPath,
-        offset: Option<u64>,
-        limit: Option<u64>,
-        cx: &Cx,
-    ) -> ToolResult<ToolOutput> {
-        let cards = self.cards(cx)?;
-        let rest = history_rest(abs);
-        let Some(rest) = rest.strip_prefix("cards/") else {
-            return Err(ToolError::model(
-                "history read: use `@rumu:/history/cards/<path>@<commit>`",
-            ));
-        };
-        let Some((path, rev)) = rest.rsplit_once('@') else {
+    async fn read(&self, at: &At<'_>, offset: Option<u64>, limit: Option<u64>) -> Out {
+        let cards = at.p.cards(at.cx)?;
+        let Some((path, rev)) = at.param("path").rsplit_once('@') else {
             return Err(ToolError::model(
                 "history read: use `@rumu:/history/cards/<path>@<commit>`",
             ));
@@ -67,34 +62,33 @@ impl WorkspacePlugin {
             )));
         };
         let text = render_version(&cards, &deck, &path, &commit)?;
-        match slice_lines(text, offset, limit) {
-            Ok(text) => Ok(ToolOutput::ok(text)),
-            Err(e) => Err(ToolError::model(e)),
-        }
+        slice_lines(text, offset, limit)
+            .map(ToolOutput::ok)
+            .map_err(ToolError::model)
     }
+}
 
-    /// `list /history`: the timeline of the mounted decks, newest first.
-    fn history_timeline(&self, cards: &Cards) -> ToolResult<String> {
-        let mut rows: Vec<(i64, String)> = Vec::new();
-        for mounted in cards.mounts() {
-            for commit in mounted.deck.commits(TIMELINE_LIMIT).map_err(deck_err)? {
-                if !commit.touches_cards() {
-                    continue;
-                }
-                rows.push((commit.at, timeline_line(cards, &mounted.deck, &commit)));
+/// `list /history`: the timeline of the mounted decks, newest first.
+fn timeline(cards: &Cards) -> ToolResult<String> {
+    let mut rows: Vec<(i64, String)> = Vec::new();
+    for mounted in cards.mounts() {
+        for commit in mounted.deck.commits(TIMELINE_LIMIT).map_err(deck_err)? {
+            if !commit.touches_cards() {
+                continue;
             }
+            rows.push((commit.at, timeline_line(cards, &mounted.deck, &commit)));
         }
-        rows.sort_by_key(|r| std::cmp::Reverse(r.0));
-        rows.truncate(TIMELINE_LIMIT);
-        if rows.is_empty() {
-            return Ok("no card history in the mounted decks".into());
-        }
-        Ok(rows
-            .into_iter()
-            .map(|(_, line)| line)
-            .collect::<Vec<_>>()
-            .join("\n"))
     }
+    rows.sort_by_key(|r| std::cmp::Reverse(r.0));
+    rows.truncate(TIMELINE_LIMIT);
+    if rows.is_empty() {
+        return Ok("no card history in the mounted decks".into());
+    }
+    Ok(rows
+        .into_iter()
+        .map(|(_, line)| line)
+        .collect::<Vec<_>>()
+        .join("\n"))
 }
 
 /// One path's versions in one deck, newest first.
@@ -112,13 +106,6 @@ fn versions(cards: &Cards, deck: &rumu_cards::Deck, path: &str) -> ToolResult<St
         .map(|(_, line)| line)
         .collect::<Vec<_>>()
         .join("\n"))
-}
-
-fn history_rest(abs: &Utf8UnixPath) -> &str {
-    abs.strip_prefix("/history")
-        .map(Utf8UnixPath::as_str)
-        .unwrap_or("")
-        .trim_matches('/')
 }
 
 /// The deck and deck-local path behind a public card path. The path must have

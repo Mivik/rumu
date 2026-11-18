@@ -3273,6 +3273,7 @@ dependencies = [
  "base64 0.23.1",
  "image",
  "jiff 1.0.0",
+ "matchit",
  "process-wrap",
  "regex",
  "rmcp",

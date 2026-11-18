@@ -8,6 +8,7 @@
 //! Creating a registry entry needs no approval; changing an existing one asks
 //! the user (`workspace`), since other projects may mount it.
 
+use async_trait::async_trait;
 use rumu_cards::deck::Action;
 use rumu_core::{
     Content, Cx, PathState, Structured, ToolError, ToolOutput, ToolResult, Utf8UnixPath,
@@ -19,7 +20,8 @@ use crate::approve::{approve, deck_name};
 use crate::workspaces::{entry_yaml, parse_entry, set_project_workspaces, upsert_workspace};
 
 use super::WorkspacePlugin;
-use super::tools::{replace_occurrences, slice_lines, unknown_rumu_path};
+use super::tools::replace_occurrences;
+use super::vfs::{At, Node, Out};
 
 /// Payload of the read marker on `@rumu:/project/workspaces` (v1): the
 /// content hash the last read returned. A write must be based on it.
@@ -33,189 +35,143 @@ impl Structured for ProjectWorkspacesRead {
     const V: u32 = 1;
 }
 
-/// What a `/workspaces…` or `/project…` path names.
-enum ConfigPath<'a> {
-    Workspaces,
-    Entry(&'a str),
-    Project,
-    ProjectWorkspaces,
-}
+/// `/workspaces`: the registry, one line per workspace: the default `*`,
+/// name, machine label, root, rw/ro, and `(mounted)` for the project's.
+pub(super) struct WorkspacesDir;
 
-fn config_path(abs: &Utf8UnixPath) -> Option<ConfigPath<'_>> {
-    let path = abs.as_str().trim_end_matches('/');
-    match path {
-        "/workspaces" => return Some(ConfigPath::Workspaces),
-        "/project" => return Some(ConfigPath::Project),
-        "/project/workspaces" => return Some(ConfigPath::ProjectWorkspaces),
-        _ => {}
-    }
-    let name = path.strip_prefix("/workspaces/")?;
-    (!name.is_empty() && !name.contains('/')).then_some(ConfigPath::Entry(name))
-}
-
-/// Whether a path belongs to this virtual subtree.
-pub(super) fn is_config_path(abs: &Utf8UnixPath) -> bool {
-    abs.as_str() == "/workspaces"
-        || abs.starts_with("/workspaces/")
-        || abs.as_str() == "/project"
-        || abs.starts_with("/project/")
-}
-
-impl WorkspacePlugin {
-    /// `list` under `/workspaces…` and `/project…`.
-    pub(super) async fn config_list(&self, abs: &Utf8UnixPath, cx: &Cx) -> ToolResult<ToolOutput> {
-        let state = cx.state()?;
-        match config_path(abs) {
-            Some(ConfigPath::Workspaces) => Ok(self.workspace_listing(&state).into()),
-            Some(ConfigPath::Entry(name)) => self.entry_read(name, None, None),
-            Some(ConfigPath::Project) => {
-                self.project_names(&state)?;
-                Ok("workspaces\n".into())
-            }
-            Some(ConfigPath::ProjectWorkspaces) => self.project_text(&state),
-            None => Err(unknown_rumu_path(abs)),
-        }
-    }
-
-    /// `read` under `/workspaces…` and `/project…`. Reading the project's
-    /// list records the content hash a later write must be based on.
-    pub(super) async fn config_read(
-        &self,
-        abs: &Utf8UnixPath,
-        offset: Option<u64>,
-        limit: Option<u64>,
-        cx: &Cx,
-    ) -> ToolResult<ToolOutput> {
-        let state = cx.state()?;
-        match config_path(abs) {
-            Some(ConfigPath::Workspaces) => Ok(self.workspace_listing(&state).into()),
-            Some(ConfigPath::Entry(name)) => self.entry_read(name, offset, limit),
-            Some(ConfigPath::Project) => {
-                self.project_names(&state)?;
-                Ok("workspaces\n".into())
-            }
-            Some(ConfigPath::ProjectWorkspaces) => {
-                let out = self.project_text(&state)?;
-                let marker = read_marker(&out.content.text);
-                Ok(out.with_effect(marker))
-            }
-            None => Err(unknown_rumu_path(abs)),
-        }
-    }
-
-    /// `write` under `/workspaces…` and `/project…`.
-    pub(super) async fn config_write(
-        &self,
-        state: &PathState,
-        abs: &Utf8UnixPath,
-        content: &str,
-        from: Option<&str>,
-        cx: &Cx,
-    ) -> ToolResult<ToolOutput> {
-        if from.is_some() {
-            return Err(ToolError::model(
-                "`from` applies to cards, not configuration",
-            ));
-        }
-        match config_path(abs) {
-            Some(ConfigPath::Entry(name)) => self.entry_write(state, name, content, cx).await,
-            Some(ConfigPath::ProjectWorkspaces) => self.project_write(state, content, cx).await,
-            Some(ConfigPath::Workspaces | ConfigPath::Project) => Err(ToolError::model(format!(
-                "`@rumu:{abs}` is a directory; write a file under it"
-            ))),
-            None => Err(unknown_rumu_path(abs)),
-        }
-    }
-
-    /// `edit` under `/workspaces…` and `/project…`: replace on the current
-    /// text, then take the write path.
-    pub(super) async fn config_edit(
-        &self,
-        state: &PathState,
-        abs: &Utf8UnixPath,
-        old: &str,
-        new: &str,
-        all: bool,
-        cx: &Cx,
-    ) -> ToolResult<ToolOutput> {
-        let (text, project) = match config_path(abs) {
-            Some(ConfigPath::Entry(name)) => {
-                let Some(ws) = self.workspaces.get(name) else {
-                    return Err(no_workspace(name));
-                };
-                (
-                    entry_yaml(&ws).map_err(|e| ToolError::model(e.to_string()))?,
-                    false,
-                )
-            }
-            Some(ConfigPath::ProjectWorkspaces) => (self.project_text(state)?.content.text, true),
-            Some(ConfigPath::Workspaces | ConfigPath::Project) => {
-                return Err(ToolError::model(format!(
-                    "`@rumu:{abs}` is a directory; edit a file under it"
-                )));
-            }
-            None => return Err(unknown_rumu_path(abs)),
-        };
-        let (new_text, n) = replace_occurrences(&text, old, new, all)
-            .map_err(|e| ToolError::model(e.to_string()))?;
-        if project {
-            // Edit applies to the current text; it is not the stale-write
-            // check `write` has.
-            let after = self.project_apply(state, &new_text)?;
-            return Ok(ToolOutput::ok(format!(
-                "edited `@rumu:{abs}` ({n} replacement{}):\n{after}",
-                if n == 1 { "" } else { "s" }
-            ))
-            .with_effect(read_marker(&after)));
-        }
-        let mut out = self.config_write(state, abs, &new_text, None, cx).await?;
-        if !out.is_error {
-            out.content.text = format!(
-                "edited `@rumu:{abs}` ({n} replacement{})",
-                if n == 1 { "" } else { "s" }
-            );
-        }
-        Ok(out)
-    }
-
-    /// One line per registered workspace: the default `*`, name, machine
-    /// label, root, rw/ro, and `(mounted)` for the project's.
-    fn workspace_listing(&self, state: &PathState) -> String {
-        let list = self.workspaces.list();
+#[async_trait]
+impl Node for WorkspacesDir {
+    async fn list(&self, at: &At<'_>) -> Out {
+        let list = at.p.workspaces.list();
         if list.is_empty() {
-            return "(no workspaces)".to_owned();
+            return Ok("(no workspaces)".into());
         }
-        list.iter()
+        let lines: Vec<String> = list
+            .iter()
             .map(|ws| {
-                let star = if state.default_workspace.as_deref() == Some(ws.name.as_str()) {
+                let star = if at.state.default_workspace.as_deref() == Some(ws.name.as_str()) {
                     "* "
                 } else {
                     "  "
                 };
                 let rw = if ws.read_only { "ro" } else { "rw" };
                 let mut line = format!("{star}{} {} {} {rw}", ws.name, ws.label(), ws.root);
-                if state.mounted.iter().any(|n| n == &ws.name) {
+                if at.state.mounted.iter().any(|n| n == &ws.name) {
                     line.push_str("  (mounted)");
                 }
                 line
             })
-            .collect::<Vec<_>>()
-            .join("\n")
+            .collect();
+        Ok(lines.join("\n").into())
     }
 
+    fn holds_files(&self) -> bool {
+        true
+    }
+}
+
+/// `/workspaces/<name>`: one registry entry.
+pub(super) struct Entry;
+
+#[async_trait]
+impl Node for Entry {
+    async fn list(&self, at: &At<'_>) -> Out {
+        Ok(at.p.entry_text(at.param("name"))?.into())
+    }
+
+    async fn write(&self, at: &At<'_>, content: &str, from: Option<&str>) -> Out {
+        no_from(from)?;
+        let name = at.param("name");
+        at.p.entry_write(at.state, name, content, at.cx).await
+    }
+
+    /// Replace on the current text, then take the write path.
+    async fn edit(&self, at: &At<'_>, old: &str, new: &str, all: bool) -> Out {
+        let name = at.param("name");
+        let text = at.p.entry_text(name)?;
+        let (new_text, n) = replace_occurrences(&text, old, new, all)
+            .map_err(|e| ToolError::model(e.to_string()))?;
+        let mut out = at.p.entry_write(at.state, name, &new_text, at.cx).await?;
+        if !out.is_error {
+            out.content.text = edited(at.abs, n);
+        }
+        Ok(out)
+    }
+}
+
+/// `/project`: the session's project (only `workspaces` under it).
+pub(super) struct ProjectDir;
+
+#[async_trait]
+impl Node for ProjectDir {
+    async fn list(&self, at: &At<'_>) -> Out {
+        at.p.project_names(at.state)?;
+        Ok("workspaces\n".into())
+    }
+
+    fn holds_files(&self) -> bool {
+        true
+    }
+}
+
+/// `/project/workspaces`: the project's ordered workspace list. Reading it
+/// records the content hash a later write must be based on.
+pub(super) struct ProjectWorkspaces;
+
+#[async_trait]
+impl Node for ProjectWorkspaces {
+    async fn list(&self, at: &At<'_>) -> Out {
+        at.p.project_text(at.state)
+    }
+
+    async fn read(&self, at: &At<'_>, _: Option<u64>, _: Option<u64>) -> Out {
+        let out = at.p.project_text(at.state)?;
+        let marker = read_marker(&out.content.text);
+        Ok(out.with_effect(marker))
+    }
+
+    async fn write(&self, at: &At<'_>, content: &str, from: Option<&str>) -> Out {
+        no_from(from)?;
+        at.p.project_write(at.state, content, at.cx).await
+    }
+
+    /// Edit applies to the current text; it is not the stale-write check
+    /// `write` has.
+    async fn edit(&self, at: &At<'_>, old: &str, new: &str, all: bool) -> Out {
+        let text = at.p.project_text(at.state)?.content.text;
+        let (new_text, n) = replace_occurrences(&text, old, new, all)
+            .map_err(|e| ToolError::model(e.to_string()))?;
+        let after = at.p.project_apply(at.state, &new_text)?;
+        Ok(ToolOutput::ok(format!("{}:\n{after}", edited(at.abs, n)))
+            .with_effect(read_marker(&after)))
+    }
+}
+
+/// Configuration is written whole: `from` (a move) is for cards.
+fn no_from(from: Option<&str>) -> ToolResult<()> {
+    match from {
+        Some(_) => Err(ToolError::model(
+            "`from` applies to cards, not configuration",
+        )),
+        None => Ok(()),
+    }
+}
+
+/// The result line of an edit.
+fn edited(abs: &Utf8UnixPath, n: usize) -> String {
+    format!(
+        "edited `@rumu:{abs}` ({n} replacement{})",
+        if n == 1 { "" } else { "s" }
+    )
+}
+
+impl WorkspacePlugin {
     /// The YAML of one registry entry.
-    fn entry_read(
-        &self,
-        name: &str,
-        offset: Option<u64>,
-        limit: Option<u64>,
-    ) -> ToolResult<ToolOutput> {
+    fn entry_text(&self, name: &str) -> ToolResult<String> {
         let Some(ws) = self.workspaces.get(name) else {
             return Err(no_workspace(name));
         };
-        let text = entry_yaml(&ws).map_err(|e| ToolError::model(e.to_string()))?;
-        let text = slice_lines(text, offset, limit).map_err(|e| ToolError::model(e.to_string()))?;
-        Ok(text.into())
+        entry_yaml(&ws).map_err(|e| ToolError::model(e.to_string()))
     }
 
     /// The session's project and its mounted workspaces, in order.

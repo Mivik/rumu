@@ -8,52 +8,26 @@
 //! Tasks are runtime-only: a kernel restart loses running tasks, and their
 //! old transcript entries remain ordinary notes/results.
 
-use rumu_core::{
-    Cx, OUTPUT_LIMIT, RUMU_WORKSPACE, TaskId, TaskInfo, ToolError, ToolOutput, ToolResult,
-    Utf8UnixPath,
-};
+use async_trait::async_trait;
+use rumu_core::{OUTPUT_LIMIT, RUMU_WORKSPACE, TaskId, TaskInfo, ToolError, ToolOutput};
 
-use super::WorkspacePlugin;
 use super::time::iso_local;
-use super::tools::{slice_lines, unknown_rumu_path};
+use super::tools::slice_lines;
+use super::vfs::{At, Node, Out};
 
 /// The `@rumu` result prefix.
 const WS: &str = RUMU_WORKSPACE;
 
-impl WorkspacePlugin {
-    pub(super) async fn task_read(
-        &self,
-        abs: &Utf8UnixPath,
-        offset: Option<u64>,
-        limit: Option<u64>,
-        cx: &Cx,
-    ) -> ToolResult<ToolOutput> {
-        if abs.as_str() == "/tasks" {
-            return self.task_listing(cx);
-        }
-        let id = abs
-            .strip_prefix("/tasks")
-            .ok()
-            .map(Utf8UnixPath::as_str)
-            .unwrap_or("");
-        if id.is_empty() || id.contains('/') {
-            return Err(unknown_rumu_path(abs));
-        }
-        let id = TaskId::from(id);
-        let Some((info, output)) = cx.history().task(&id)? else {
-            return Err(ToolError::model(format!("no task `{id}`")));
-        };
-        let text = match slice_lines(task_view(&info, &output), offset, limit) {
-            Ok(t) => t,
-            Err(e) => return Err(ToolError::model(e)),
-        };
-        Ok(ToolOutput::ok(capped_view(text)))
-    }
+/// `/tasks`: every task of the current session.
+pub(super) struct Tasks;
 
-    fn task_listing(&self, cx: &Cx) -> ToolResult<ToolOutput> {
-        let tasks = cx.history().tasks(&cx.session)?;
+#[async_trait]
+impl Node for Tasks {
+    async fn list(&self, at: &At<'_>) -> Out {
+        let session = &at.cx.session;
+        let tasks = at.cx.history().tasks(session)?;
         if tasks.is_empty() {
-            return Ok(format!("no tasks in session {}", cx.session).into());
+            return Ok(format!("no tasks in session {session}").into());
         }
         let lines: Vec<String> = tasks
             .iter()
@@ -67,7 +41,26 @@ impl WorkspacePlugin {
                 )
             })
             .collect();
-        Ok(format!("tasks ({}):\n{}", cx.session, lines.join("\n")).into())
+        Ok(format!("tasks ({session}):\n{}", lines.join("\n")).into())
+    }
+}
+
+/// `/tasks/<id>`: one task's status and buffered output.
+pub(super) struct Task;
+
+#[async_trait]
+impl Node for Task {
+    async fn list(&self, at: &At<'_>) -> Out {
+        self.read(at, None, None).await
+    }
+
+    async fn read(&self, at: &At<'_>, offset: Option<u64>, limit: Option<u64>) -> Out {
+        let id = TaskId::from(at.param("id"));
+        let Some((info, output)) = at.cx.history().task(&id)? else {
+            return Err(ToolError::model(format!("no task `{id}`")));
+        };
+        let text = slice_lines(task_view(&info, &output), offset, limit);
+        Ok(ToolOutput::ok(capped_view(text.map_err(ToolError::model)?)))
     }
 }
 

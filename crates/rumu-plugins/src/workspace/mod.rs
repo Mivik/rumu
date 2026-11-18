@@ -15,7 +15,8 @@
 //! reach the whole machine anyway. `read_only` means the file tools refuse
 //! writes and `bash` is disabled, nothing more.
 //!
-//! Layout: [`tools`] (the model-facing tools), [`cards`] (`@rumu:/cards`),
+//! Layout: [`tools`] (the model-facing tools), [`vfs`] (the `@rumu` path
+//! table), [`cards`] (`@rumu:/cards`),
 //! [`session`] (`@rumu:/sessions`), [`agents`] (AGENTS.md injection),
 //! [`backend`] (local + ssh primitives), [`patch`] (the UI diff payload of
 //! `write`/`edit`).
@@ -32,6 +33,7 @@ mod session;
 mod task;
 mod time;
 mod tools;
+mod vfs;
 mod watch;
 
 #[cfg(test)]

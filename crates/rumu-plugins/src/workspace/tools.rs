@@ -1,24 +1,23 @@
 //! The model-facing tools: schemas, `<ws>:<path>` target resolution and the
-//! implementations over the workspace backends. The `@rumu`
-//! virtual workspace (`/cards`, `/history`, `/sessions`) is routed from here
-//! into [`cards`] (and, for `/sessions`, `session`).
+//! implementations over the workspace backends. Paths in the `@rumu`
+//! virtual workspace are routed to their nodes by [`super::vfs`].
 
 use std::time::Duration;
 
-use rumu_cards::usage::CardOp;
-use rumu_cards::{Cards, card};
+use rumu_cards::Cards;
 use rumu_core::{
     Artifact, ArtifactKind, Effect, INVOKE_OUTPUT_LIMIT, Manifest, PathState, Progress,
     RUMU_WORKSPACE, SCRATCH_WORKSPACE, Structured, ToolError, ToolOutput, ToolResult,
-    ToolResultExt, ToolSpec, Utf8TypedPathBuf, Utf8UnixPath, Utf8UnixPathBuf, Workspace,
-    WorkspaceUse, parse_args, resolve_state, tool_schema, truncate_middle,
+    ToolResultExt, ToolSpec, Utf8TypedPathBuf, Utf8UnixPathBuf, Workspace, WorkspaceUse,
+    parse_args, resolve_state, tool_schema, truncate_middle,
 };
 use schemars::JsonSchema;
 use serde::Deserialize;
-use serde_json::{Value, json};
+use serde_json::Value;
 
 use super::backend::{Backend, BackendError, ExecOutput, is_not_found, probe_uname};
 use super::patch;
+use super::vfs::bad_scope;
 use super::watch::WatchArgs;
 use super::{WorkspacePlugin, usable_ctl_dir};
 use crate::Result;
@@ -480,22 +479,6 @@ pub(super) fn card_load_err(public: &str, source: impl std::fmt::Display) -> Too
     ))
 }
 
-/// `unknown path ...`.
-pub(super) fn unknown_rumu_path(abs: &Utf8UnixPath) -> ToolError {
-    ToolError::model(format!(
-        "unknown path `{RUMU_WORKSPACE}:{abs}` (roots: /cards, /history, /sessions, /skills, /tasks, /tools)"
-    ))
-}
-
-/// The `search` scope refusal.
-fn bad_scope() -> ToolError {
-    ToolError::model(format!(
-        "`scope` must address the `{RUMU_WORKSPACE}` workspace: \
-         `{RUMU_WORKSPACE}:/cards/<prefix>`, `{RUMU_WORKSPACE}:/sessions[/<session>]` or \
-         `{RUMU_WORKSPACE}:/tools[/<server>]`"
-    ))
-}
-
 /// What `show` records: a workspace file's bytes put in the blob store,
 /// titled by its file name. Errors are messages about the file.
 async fn snapshot(
@@ -737,7 +720,10 @@ impl WorkspacePlugin {
                     }
                 }
             }
-            Target::Rumu { abs } => self.rumu_read(&abs, offset, limit, cx).await,
+            Target::Rumu { abs } => {
+                let (node, at) = self.route(&abs, state, cx)?;
+                node.read(&at, offset, limit).await
+            }
         }
     }
 
@@ -858,16 +844,8 @@ impl WorkspacePlugin {
                 }
             }
             Target::Rumu { abs } => {
-                if super::registry::is_config_path(&abs) {
-                    return self
-                        .config_write(state, &abs, &args.content, args.from.as_deref(), cx)
-                        .await;
-                }
-                let Some(path) = card_ref_of(&abs) else {
-                    return Err(self.rumu_write_refused(&abs));
-                };
-                self.card_write(path, &args.content, CardOp::Write, args.from.as_deref(), cx)
-                    .await
+                let (node, at) = self.route(&abs, state, cx)?;
+                node.write(&at, &args.content, args.from.as_deref()).await
             }
         }
     }
@@ -927,65 +905,10 @@ impl WorkspacePlugin {
                 }
             }
             Target::Rumu { abs } => {
-                if super::registry::is_config_path(&abs) {
-                    return self
-                        .config_edit(
-                            state,
-                            &abs,
-                            &args.old_string,
-                            &args.new_string,
-                            args.replace_all.unwrap_or(false),
-                            cx,
-                        )
-                        .await;
-                }
-                // Edit = string replace on the view, then the write path. The
-                // read-freshness check comes first: a stale read is the more
-                // fundamental problem than a non-matching string.
-                let Some(path) = card_ref_of(&abs) else {
-                    return Err(self.rumu_write_refused(&abs));
-                };
-                let cards = self.cards(cx)?;
-                if let Some(err) = invalid_card_ref(&cards, path) {
-                    return Err(err);
-                }
-                let existing = match cards.raw(path) {
-                    Ok(Some(c)) => c,
-                    Ok(None) => return Err(no_card_err(path, &[])),
-                    Err(e) => return Err(card_load_err(path, e)),
-                };
-                if existing.link().is_some() {
-                    return Err(ToolError::model(format!(
-                        "card `{}` is a link; write its target instead",
-                        rumu_cards::card_uri(path)
-                    )));
-                }
-                if let Some(err) = self.ensure_fresh_read(&cards, path, &existing, cx) {
-                    return Err(err);
-                }
-                let view = card::view_of(&existing);
-                let (new_view, n) = match replace_occurrences(
-                    &view,
-                    &args.old_string,
-                    &args.new_string,
-                    args.replace_all.unwrap_or(false),
-                ) {
-                    Ok(x) => x,
-                    Err(e) => return Err(ToolError::model(e)),
-                };
-                let mut out = self
-                    .card_write(path, &new_view, CardOp::Edit, None, cx)
-                    .await?;
-                if out.is_error {
-                    return Ok(out);
-                }
-                // Keep the write's diff payload; only the text is edit-specific.
-                out.content.text = format!(
-                    "edited card `{}` ({n} replacement{})",
-                    rumu_cards::card_uri(path),
-                    if n == 1 { "" } else { "s" }
-                );
-                Ok(out)
+                let (node, at) = self.route(&abs, state, cx)?;
+                let all = args.replace_all.unwrap_or(false);
+                node.edit(&at, &args.old_string, &args.new_string, all)
+                    .await
             }
         }
     }
@@ -1024,7 +947,10 @@ impl WorkspacePlugin {
                     }
                 }
             }
-            Target::Rumu { abs } => self.rumu_list(&abs, cx).await,
+            Target::Rumu { abs } => {
+                let (node, at) = self.route(&abs, state, cx)?;
+                node.list(&at).await
+            }
         }
     }
 
@@ -1198,105 +1124,11 @@ fn display(ws: &Workspace, abs: &Utf8TypedPathBuf) -> String {
     rumu_core::display(&ws.name, ws.root.to_path(), abs.to_path())
 }
 
-/// The card path a `/cards/<mount>/<path>[.md]` address names, if it is one.
-pub(super) fn card_ref_of(abs: &Utf8UnixPath) -> Option<&str> {
-    let path = abs.strip_prefix("/cards").ok()?.as_str();
-    let path = path.trim_start_matches('/');
-    let path = path.strip_suffix(".md").unwrap_or(path);
-    (!path.is_empty()).then_some(path)
-}
-
 // ---------------------------------------------------------------------------
-// the `@rumu` virtual filesystem
+// the `@rumu` virtual filesystem (routed by `vfs`)
 // ---------------------------------------------------------------------------
 
 impl WorkspacePlugin {
-    /// `read` inside the `@rumu` workspace. Rendered text is sliced by
-    /// `offset`/`limit`; the tool boundary caps the model-facing text.
-    async fn rumu_read(
-        &self,
-        abs: &Utf8UnixPath,
-        offset: Option<u64>,
-        limit: Option<u64>,
-        cx: &Cx,
-    ) -> ToolResult<ToolOutput> {
-        if super::registry::is_config_path(abs) {
-            return self.config_read(abs, offset, limit, cx).await;
-        }
-        if abs.starts_with("/history") {
-            return self.history_read(abs, offset, limit, cx).await;
-        }
-        if let Some(path) = card_ref_of(abs) {
-            return self.card_read(path, offset, limit, cx).await;
-        }
-        if abs.starts_with("/sessions") {
-            return self.session_read(abs, offset, limit, cx).await;
-        }
-        if abs.starts_with("/tasks") {
-            return self.task_read(abs, offset, limit, cx).await;
-        }
-        if crate::mcp::is_tools_path(abs) {
-            let out = crate::mcp::read(&self.mcp(), &self.servers(cx)?, abs).await?;
-            return slice_lines(out.content.text, offset, limit)
-                .map(ToolOutput::ok)
-                .map_err(ToolError::model);
-        }
-        if crate::skills::is_skills_path(abs) {
-            let out = crate::skills::read(&self.skills(), &self.skill_rules(cx)?, abs)?;
-            return slice_lines(out.content.text, offset, limit)
-                .map(ToolOutput::ok)
-                .map_err(ToolError::model);
-        }
-        Err(unknown_rumu_path(abs))
-    }
-
-    /// The refusal for writes outside `/cards/<mount>/<path>`: `/sessions` is
-    /// read-only, everything else is unknown.
-    fn rumu_write_refused(&self, abs: &Utf8UnixPath) -> ToolError {
-        if abs.starts_with("/sessions") {
-            ToolError::model("`@rumu:/sessions` is read-only")
-        } else if abs.starts_with("/history") {
-            ToolError::model("`@rumu:/history` is read-only")
-        } else {
-            unknown_rumu_path(abs)
-        }
-    }
-
-    /// `list` inside the `@rumu` workspace.
-    async fn rumu_list(&self, abs: &Utf8UnixPath, cx: &Cx) -> ToolResult<ToolOutput> {
-        if super::registry::is_config_path(abs) {
-            return self.config_list(abs, cx).await;
-        }
-        match abs.as_str() {
-            "/" => {
-                let mut roots =
-                    "cards/\nhistory/\nsessions/\nskills/\ntasks/\ntools/\nworkspaces/".to_owned();
-                if cx.state()?.project.is_some() {
-                    roots.push_str("\nproject/");
-                }
-                Ok(roots.into())
-            }
-            "/cards" => self.card_list("", cx).await,
-            _ if abs.starts_with("/cards") => {
-                let prefix = abs
-                    .strip_prefix("/cards")
-                    .map(Utf8UnixPath::as_str)
-                    .unwrap_or("");
-                self.card_list(prefix, cx).await
-            }
-            _ if abs.starts_with("/history") => self.history_list(abs, cx).await,
-            _ if abs.starts_with("/sessions") => self.session_list(abs, cx).await,
-            _ if abs.starts_with("/tasks") => self.task_read(abs, None, None, cx).await,
-            _ if crate::mcp::is_tools_path(abs) => {
-                crate::mcp::list(&self.mcp(), &self.servers(cx)?, abs).await
-            }
-            _ if crate::skills::is_skills_path(abs) => {
-                crate::skills::list(&self.skills(), &self.skill_rules(cx)?, abs)
-            }
-            _ => Err(unknown_rumu_path(abs)),
-        }
-    }
-
     /// The `search` tool: cards by default, past conversations with
     /// `scope: "@rumu:/sessions[/<session>]"`. Read-only — no `card_use`
     /// markers.
@@ -1322,32 +1154,7 @@ impl WorkspacePlugin {
         let Utf8TypedPathBuf::Unix(abs) = abs else {
             return Err(bad_scope());
         };
-        if crate::mcp::is_tools_path(&abs) {
-            let limit = limit.unwrap_or(crate::mcp::SEARCH_LIMIT);
-            return crate::mcp::search(
-                &self.mcp(),
-                &crate::mcp::servers(&self.decks, state),
-                &abs,
-                &args.query,
-                limit,
-            )
-            .await;
-        }
-        let limit = limit.unwrap_or(10);
-        if abs.starts_with("/sessions") {
-            return self.session_search(&args.query, &abs, limit, cx).await;
-        }
-        if abs.starts_with("/cards") {
-            let prefix = abs
-                .strip_prefix("/cards")
-                .map(Utf8UnixPath::as_str)
-                .unwrap_or("");
-            return rumu_cards::search_text(
-                &self.cards(cx)?,
-                &args.query,
-                &json!({ "prefix": prefix, "limit": limit }),
-            );
-        }
-        Err(bad_scope())
+        let (node, at) = self.route(&abs, state, cx).map_err(|_| bad_scope())?;
+        node.search(&at, &args.query, limit).await
     }
 }

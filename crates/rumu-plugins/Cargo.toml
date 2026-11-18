@@ -16,6 +16,7 @@ rmcp.workspace = true
 base64.workspace = true
 async-trait.workspace = true
 jiff.workspace = true
+matchit.workspace = true
 process-wrap.workspace = true
 regex.workspace = true
 schemars.workspace = true

@@ -21,7 +21,7 @@ use rumu_cards::recall::{Doc, rank_docs};
 use rumu_core::{
     Content, Cx, Decision, Event, HookOutput, HookSpec, Manifest, McpStatus, McpUse, PathState,
     Plugin, RUMU_WORKSPACE, SCRATCH_WORKSPACE, Structured, ToolError, ToolOutput, ToolResult,
-    ToolResultExt, ToolSpec, Utf8UnixPath, parse_args, rules_enable, tool_schema,
+    ToolResultExt, ToolSpec, parse_args, rules_enable, tool_schema,
 };
 use schemars::JsonSchema;
 use serde::{Deserialize, Serialize};
@@ -389,75 +389,40 @@ fn render(out: &mut String, server: &str, tool: &Tool, pretty: bool) {
     let _ = writeln!(out, "Input schema: {schema}");
 }
 
-/// What a `/tools…` path names.
-enum ToolsPath<'a> {
-    Root,
-    Server(&'a str),
-    Tool(&'a str, &'a str),
-}
-
-fn tools_path(abs: &Utf8UnixPath) -> Option<ToolsPath<'_>> {
-    let rest = abs.as_str().strip_prefix("/tools")?.trim_end_matches('/');
-    if rest.is_empty() {
-        return Some(ToolsPath::Root);
+/// `list @rumu:/tools`: the session's servers.
+pub async fn list_servers(hub: &McpHub, mcp: &McpUse) -> ToolOutput {
+    if mcp.is_empty() {
+        return "This session has no MCP servers.".into();
     }
-    let rest = rest.strip_prefix('/')?;
-    Some(match rest.split_once('/') {
-        Some((server, tool)) => ToolsPath::Tool(server, tool),
-        None => ToolsPath::Server(rest),
-    })
-}
-
-/// Whether `abs` is under `@rumu:/tools`.
-pub fn is_tools_path(abs: &Utf8UnixPath) -> bool {
-    abs.as_str() == "/tools" || abs.starts_with("/tools/")
-}
-
-fn bad_path(abs: &Utf8UnixPath) -> ToolError {
-    ToolError::model(format!(
-        "`{RUMU_WORKSPACE}:{abs}` is not `{RUMU_WORKSPACE}:/tools[/<server>[/<tool>]]`"
-    ))
-}
-
-/// `list` under `@rumu:/tools`: the session's servers, or one's tools.
-pub async fn list(hub: &McpHub, mcp: &McpUse, abs: &Utf8UnixPath) -> ToolResult<ToolOutput> {
-    match tools_path(abs).ok_or_else(|| bad_path(abs))? {
-        ToolsPath::Root => {
-            if mcp.is_empty() {
-                return Ok("This session has no MCP servers.".into());
-            }
-            let mut out = String::new();
-            for (name, rules) in mcp {
-                let status = match hub.server(name) {
-                    Some(s) => status_line(&enabled(s.ready().await, rules)),
-                    None => "not configured".into(),
-                };
-                let _ = writeln!(out, "{name}/ — {status}");
-            }
-            Ok(out.into())
-        }
-        ToolsPath::Server(name) => {
-            let (_, snap) = bound(hub, mcp, name).await?;
-            let mut out = String::new();
-            for tool in snap.tools.iter() {
-                let _ = writeln!(out, "{} — {}", tool.name, first_line(tool));
-            }
-            Ok(out.into())
-        }
-        ToolsPath::Tool(name, tool) => read_tool(hub, mcp, name, tool).await,
+    let mut out = String::new();
+    for (name, rules) in mcp {
+        let status = match hub.server(name) {
+            Some(s) => status_line(&enabled(s.ready().await, rules)),
+            None => "not configured".into(),
+        };
+        let _ = writeln!(out, "{name}/ — {status}");
     }
+    out.into()
 }
 
-/// `read` under `@rumu:/tools`: one tool's description and input schema; a
-/// server or the root lists.
-pub async fn read(hub: &McpHub, mcp: &McpUse, abs: &Utf8UnixPath) -> ToolResult<ToolOutput> {
-    match tools_path(abs) {
-        Some(ToolsPath::Tool(name, tool)) => read_tool(hub, mcp, name, tool).await,
-        _ => list(hub, mcp, abs).await,
+/// `list @rumu:/tools/<server>`: one server's tools.
+pub async fn list_tools(hub: &McpHub, mcp: &McpUse, name: &str) -> ToolResult<ToolOutput> {
+    let (_, snap) = bound(hub, mcp, name).await?;
+    let mut out = String::new();
+    for tool in snap.tools.iter() {
+        let _ = writeln!(out, "{} — {}", tool.name, first_line(tool));
     }
+    Ok(out.into())
 }
 
-async fn read_tool(hub: &McpHub, mcp: &McpUse, name: &str, tool: &str) -> ToolResult<ToolOutput> {
+/// `read @rumu:/tools/<server>/<tool>`: one tool's description and input
+/// schema.
+pub async fn read_tool(
+    hub: &McpHub,
+    mcp: &McpUse,
+    name: &str,
+    tool: &str,
+) -> ToolResult<ToolOutput> {
     let (_, snap) = bound(hub, mcp, name).await?;
     let tool = snap.tools.iter().find(|t| t.name == tool).ok_or_else(|| {
         ToolError::model(format!(
@@ -475,18 +440,13 @@ async fn read_tool(hub: &McpHub, mcp: &McpUse, name: &str, tool: &str) -> ToolRe
 pub async fn search(
     hub: &McpHub,
     mcp: &McpUse,
-    abs: &Utf8UnixPath,
+    server: Option<&str>,
     query: &str,
     limit: usize,
 ) -> ToolResult<ToolOutput> {
-    let servers: Vec<&str> = match tools_path(abs) {
-        Some(ToolsPath::Root) => mcp.keys().map(String::as_str).collect(),
-        Some(ToolsPath::Server(name)) => vec![name],
-        _ => {
-            return Err(ToolError::model(format!(
-                "search: the tools scope is `{RUMU_WORKSPACE}:/tools[/<server>]`"
-            )));
-        }
+    let servers: Vec<&str> = match server {
+        None => mcp.keys().map(String::as_str).collect(),
+        Some(name) => vec![name],
     };
     if query.trim().is_empty() {
         return Err(ToolError::model("search: empty query"));
@@ -496,9 +456,7 @@ pub async fn search(
         // A server that is down is skipped; scoping to it says why.
         match bound(hub, mcp, name).await {
             Ok((_, snap)) => tools.extend(snap.tools.iter().map(|t| (name.to_owned(), t.clone()))),
-            Err(e) if tools_path(abs).is_some_and(|p| matches!(p, ToolsPath::Server(_))) => {
-                return Err(e);
-            }
+            Err(e) if server.is_some() => return Err(e),
             Err(_) => {}
         }
     }

@@ -116,14 +116,14 @@ fn lists_and_reads_the_enabled_skills() {
     let text = |out: ToolResult<ToolOutput>| out.unwrap().content.text;
 
     assert_eq!(
-        text(list(&skills, &st, path("/skills"))),
+        list_skills(&skills, &st).content.text,
         "pdf/ — Work with PDFs.\n"
     );
     assert_eq!(
-        text(list(&skills, &st, path("/skills/pdf"))),
+        text(list(&skills, &st, path("/skills/pdf"), "pdf", "")),
         "SKILL.md\nscripts/extract.py\n"
     );
-    let read_skill = text(read(&skills, &st, path("/skills/pdf")));
+    let read_skill = text(read(&skills, &st, path("/skills/pdf"), "pdf", ""));
     assert!(read_skill.starts_with("---\nname: pdf\n"), "{read_skill}");
     assert!(
         read_skill.ends_with(
@@ -131,19 +131,23 @@ fn lists_and_reads_the_enabled_skills() {
         ),
         "{read_skill}"
     );
+    let at = path("/skills/pdf/scripts/extract.py");
     assert_eq!(
-        text(read(&skills, &st, path("/skills/pdf/scripts/extract.py"))),
+        text(read(&skills, &st, at, "pdf", "scripts/extract.py")),
         "print('text')\n"
     );
 
     let err = |out: ToolResult<ToolOutput>| out.unwrap_err().to_string();
     assert!(
-        err(read(&skills, &st, path("/skills/notes"))).contains("no skill `notes` in this session")
+        err(read(&skills, &st, path("/skills/notes"), "notes", ""))
+            .contains("no skill `notes` in this session")
     );
-    assert!(err(read(&skills, &st, path("/skills/pdf/../../x"))).contains("leaves its skill"));
-    assert!(err(read(&skills, &st, path("/skills/pdf/nope.md"))).contains("does not exist"));
+    let at = path("/skills/pdf/../../x");
+    assert!(err(read(&skills, &st, at, "pdf", "../../x")).contains("leaves its skill"));
+    let at = path("/skills/pdf/nope.md");
+    assert!(err(read(&skills, &st, at, "pdf", "nope.md")).contains("does not exist"));
     assert_eq!(
-        text(list(&skills, &state(&[]), path("/skills"))),
+        list_skills(&skills, &state(&[])).content.text,
         "This session has no skills."
     );
 }
