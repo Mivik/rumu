@@ -17,7 +17,7 @@
 
 import DOMPurify from 'dompurify'
 import hljs from 'highlight.js/lib/core'
-import { marked, type Token } from 'marked'
+import { marked, Tokenizer, type Token } from 'marked'
 import markedCjkFriendly from 'marked-cjk-friendly'
 import { shallowRef } from 'vue'
 import { t } from '../i18n'
@@ -277,11 +277,16 @@ const EXTERNAL_SCHEMES = new Set([
 const RUMU_PREFIX = `${INTERNAL_WORKSPACE}:`
 const SCRATCH_PREFIX = `${SCRATCH_WORKSPACE}:`
 
+/** Full-width brackets and sentence punctuation. Chinese prose puts them
+ * straight after a path or URL (`见 @scratch:a.md，2026-11-13）`,
+ * `https://example.com/（示例）`), with no space to end the token, so they
+ * have to stop it mid-line. */
+const CJK_PUNCT = '，、。；：！？（）【】「」『』《》〈〉…“”‘’'
+const CJK_PUNCT_RE = new RegExp(`[${CJK_PUNCT}]`)
+
 /** Where an address ends rather than continues: brackets and sentence
- * punctuation of both widths. Chinese prose puts `，` straight after a path
- * (`见 @scratch:a.md，2026-11-13）`), with no space to end the token, so these
- * have to stop it mid-line. `.` is not here — `a.md` needs it. */
-const ADDRESS_END = '\\s<>()[\\]`"\'，、。；：！？（）【】「」『』《》〈〉…“”‘’,;:!?'
+ * punctuation of both widths. `.` is not here — `a.md` needs it. */
+const ADDRESS_END = `\\s<>()[\\]\`"'${CJK_PUNCT},;:!?`
 
 /** A whole workspace address (`@rumu:`, `@scratch:`), as bare text or alone
  * in inline code: the text up to the next end mark, without a trailing `.`
@@ -313,6 +318,15 @@ function markInLink(tokens: Token[] | undefined): void {
 }
 
 marked.use({
+  // GFM autolinks run to the next space, swallowing `（百度）` in
+  // `https://www.baidu.com/（百度）`: end them at CJK punctuation instead.
+  tokenizer: {
+    url(src) {
+      const token = Tokenizer.prototype.url.call(this, src)
+      const cut = token?.raw.search(CJK_PUNCT_RE) ?? -1
+      return cut > 0 ? Tokenizer.prototype.url.call(this, src.slice(0, cut)) : token
+    },
+  },
   walkTokens: (token) => {
     if (token.type === 'link') markInLink(token.tokens)
   },
