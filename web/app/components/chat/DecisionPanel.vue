@@ -66,7 +66,7 @@ const countdown = computed(() => {
   if (at === undefined) return null
   const secs = Math.max(0, Math.ceil((at - now.value) / 1000))
   return secs >= 60
-    ? t('chat.ask.expiresMin', { n: Math.ceil(secs / 60) })
+    ? t('chat.ask.expiresMin', { n: Math.floor(secs / 60) })
     : t('chat.ask.expiresSec', { n: secs })
 })
 
