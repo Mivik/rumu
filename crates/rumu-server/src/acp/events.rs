@@ -310,6 +310,11 @@ fn title(call: &ToolCall) -> String {
         "search" => format!("Search {}", line(arg("query"))),
         "bash" => line(arg("command")),
         "agent" => format!("Agent: {}", line(arg("task"))),
+        // An action: its full name, and the object it acts on.
+        "invoke" => match arg("path") {
+            "" => arg("action").to_owned(),
+            path => format!("{} {path}", arg("action")),
+        },
         name => name.to_owned(),
     }
 }

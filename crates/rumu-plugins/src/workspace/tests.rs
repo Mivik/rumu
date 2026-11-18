@@ -1420,7 +1420,7 @@ async fn rumu_workspace_edges() {
     let out = plugin.call_tool("list", json!({}), &cx).await.unwrap();
     assert_eq!(
         out.content.text,
-        "cards/\nhistory/\nsessions/\nskills/\ntasks/\ntools/\nworkspaces/"
+        "cards/\nhistory/\nsessions/\nskills/\ntasks/\nmcp/\nworkspaces/"
     );
 
     // Unknown paths name the roots.

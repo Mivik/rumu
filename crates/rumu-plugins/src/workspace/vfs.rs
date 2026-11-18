@@ -47,9 +47,8 @@ const ROUTES: &[(&str, &dyn Node)] = &[
     ("/skills/{name}/{*rest}", &SkillFiles),
     ("/tasks", &Tasks),
     ("/tasks/{id}", &Task),
-    ("/tools", &Tools),
-    ("/tools/{server}", &Tools),
-    ("/tools/{server}/{tool}", &Tools),
+    ("/mcp", &Mcp),
+    ("/mcp/{server}", &Mcp),
     ("/workspaces", &WorkspacesDir),
     ("/workspaces/{name}", &Entry),
     ("/project", &ProjectDir),
@@ -416,7 +415,7 @@ pub(super) fn bad_scope() -> ToolError {
     ToolError::model(format!(
         "`scope` must address the `{RUMU_WORKSPACE}` workspace: \
          `{RUMU_WORKSPACE}:/cards/<prefix>`, `{RUMU_WORKSPACE}:/sessions[/<session>]` or \
-         `{RUMU_WORKSPACE}:/tools[/<server>]`"
+         `{RUMU_WORKSPACE}:/mcp[/<server>]`"
     ))
 }
 
@@ -435,25 +434,33 @@ impl Node for Root {
     }
 }
 
-/// `/tools[/<server>[/<tool>]]`: the session's MCP servers, one server's
-/// tools, or one tool's description and input schema.
-struct Tools;
+/// `/mcp[/<server>]`: the session's MCP servers, or one: its tools are its
+/// actions (`<server>/<tool>`, run by `invoke` without a `path`); `read`
+/// gives its instructions and their input schemas.
+struct Mcp;
 
 #[async_trait]
-impl Node for Tools {
+impl Node for Mcp {
     async fn list(&self, at: &At<'_>) -> Out {
         let (hub, servers) = (at.p.mcp(), at.p.servers(at.cx)?);
-        match (at.opt("server"), at.opt("tool")) {
-            (None, _) => Ok(crate::mcp::list_servers(&hub, &servers).await),
-            (Some(server), None) => crate::mcp::list_tools(&hub, &servers, server).await,
-            (Some(server), Some(tool)) => crate::mcp::read_tool(&hub, &servers, server, tool).await,
+        match at.opt("server") {
+            None => Ok(crate::mcp::list_servers(&hub, &servers).await),
+            Some(server) => crate::mcp::list_server(&hub, &servers, server).await,
         }
     }
 
+    async fn read(&self, at: &At<'_>, offset: Option<u64>, limit: Option<u64>) -> Out {
+        let (hub, servers) = (at.p.mcp(), at.p.servers(at.cx)?);
+        let out = match at.opt("server") {
+            None => crate::mcp::list_servers(&hub, &servers).await,
+            Some(server) => crate::mcp::read_server(&hub, &servers, server).await?,
+        };
+        slice_lines(out.content.text, offset, limit)
+            .map(ToolOutput::ok)
+            .map_err(ToolError::model)
+    }
+
     async fn search(&self, at: &At<'_>, query: &str, limit: Option<usize>) -> Out {
-        if at.opt("tool").is_some() {
-            return Err(bad_scope());
-        }
         let limit = limit.unwrap_or(crate::mcp::SEARCH_LIMIT);
         let servers = crate::mcp::servers(at.p.decks(), at.state);
         crate::mcp::search(&at.p.mcp(), &servers, at.opt("server"), query, limit).await
@@ -504,7 +511,7 @@ mod tests {
         assert_eq!(params("/cards/self/notes/x.md"), "path=self/notes/x.md");
         assert!(ROUTER.at("/sessions/s1/a/b").is_err());
         assert!(ROUTER.at("/history/cards").is_err());
-        let roots = "cards history sessions skills tasks tools workspaces project";
+        let roots = "cards history sessions skills tasks mcp workspaces project";
         assert_eq!(ROOTS.join(" "), roots);
     }
 

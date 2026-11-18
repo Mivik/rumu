@@ -1,8 +1,9 @@
 //! MCP: servers registered in `settings.yaml` (see [`McpHub`]), bound to
-//! assistants by name. Their tools stay out of the model's tool list: the
-//! model finds them under `@rumu:/tools` (`list`, `read`, `search`, served
-//! by the workspace plugin through the functions here) and calls them with
-//! `call_tool`. See `docs/mcp.md`.
+//! assistants by name. Their tools stay out of the model's tool list: each
+//! server is an object under `@rumu:/mcp` whose actions are its tools
+//! (`<server>/<tool>`). The model finds them with `list`, `read` and
+//! `search` there and runs one with `invoke`, all served by the workspace
+//! plugin through the functions here. See `docs/mcp.md`.
 
 mod hub;
 
@@ -11,7 +12,7 @@ mod tests;
 
 use std::fmt::Write as _;
 use std::path::PathBuf;
-use std::sync::{Arc, OnceLock};
+use std::sync::Arc;
 
 use async_trait::async_trait;
 use base64::Engine as _;
@@ -21,18 +22,19 @@ use rumu_cards::recall::{Doc, rank_docs};
 use rumu_core::{
     Content, Cx, Decision, Event, HookOutput, HookSpec, Manifest, McpStatus, McpUse, PathState,
     Plugin, RUMU_WORKSPACE, SCRATCH_WORKSPACE, Structured, ToolError, ToolOutput, ToolResult,
-    ToolResultExt, ToolSpec, parse_args, rules_enable, tool_schema,
+    rules_enable,
 };
-use schemars::JsonSchema;
 use serde::{Deserialize, Serialize};
 use serde_json::{Value, json};
+
+use crate::workspace::vfs::{actions_section, signature};
 
 pub use hub::{McpHub, Server, Snapshot};
 
 /// A server's `instructions` in the first-call note are cut to this many
 /// characters.
 const INSTRUCTIONS_LIMIT: usize = 2_000;
-/// Default `search` hits under `@rumu:/tools`: each prints its schema.
+/// Default `search` hits under `@rumu:/mcp`: each prints its schema.
 pub const SEARCH_LIMIT: usize = 5;
 const INTRO_HOOK: &str = "mcp-intro";
 
@@ -48,40 +50,16 @@ impl Structured for McpIntro {
     const V: u32 = 1;
 }
 
-#[derive(Debug, Deserialize, JsonSchema)]
-#[serde(deny_unknown_fields)]
-struct CallToolArgs {
-    /// `<server>/<tool>`, as listed under `@rumu:/tools`
-    tool: String,
-    /// the tool's arguments, per its input schema
-    #[serde(default)]
-    args: Option<JsonObject>,
-}
-
-/// The `call_tool` tool and the server-list note.
+/// The server-list note. The servers' tools run through `invoke` (the
+/// workspace plugin, with [`call`]).
 pub struct McpPlugin {
     hub: Arc<McpHub>,
     decks: Decks,
-    home: PathBuf,
-    blobs: OnceLock<rumu_blob::Blobs>,
 }
 
 impl McpPlugin {
-    pub fn new(home: &std::path::Path, hub: Arc<McpHub>, decks: Decks) -> Self {
-        Self {
-            hub,
-            decks,
-            home: home.to_owned(),
-            blobs: OnceLock::new(),
-        }
-    }
-
-    fn blobs(&self) -> rumu_blob::Result<rumu_blob::Blobs> {
-        if let Some(b) = self.blobs.get() {
-            return Ok(b.clone());
-        }
-        let opened = rumu_blob::Blobs::in_home(&self.home)?;
-        Ok(self.blobs.get_or_init(|| opened).clone())
+    pub fn new(hub: Arc<McpHub>, decks: Decks) -> Self {
+        Self { hub, decks }
     }
 }
 
@@ -91,19 +69,7 @@ impl Plugin for McpPlugin {
         Manifest {
             name: "mcp".into(),
             instructions: None,
-            tools: vec![ToolSpec {
-                name: "call_tool".into(),
-                description: format!(
-                    "Call a tool of an MCP server bound to this session. These tools are not in \
-your tool list: find them with `search` (scope `{RUMU_WORKSPACE}:/tools`, whose hits show each \
-input schema) or `list {RUMU_WORKSPACE}:/tools/<server>`, and read one's input schema with \
-`read {RUMU_WORKSPACE}:/tools/<server>/<tool>` before calling it."
-                ),
-                schema: tool_schema::<CallToolArgs>(),
-                background: true,
-                output_schema: None,
-                parallel: false,
-            }],
+            tools: vec![],
             hooks: vec![HookSpec {
                 id: INTRO_HOOK.into(),
                 matcher: json!({ "event": "llm.pre" }),
@@ -141,122 +107,118 @@ input schema) or `list {RUMU_WORKSPACE}:/tools/<server>`, and read one's input s
             decision: Decision::Pass,
         })
     }
-
-    async fn call_tool(&self, name: &str, args: Value, cx: &Cx) -> rumu_core::Result<ToolOutput> {
-        match name {
-            "call_tool" => self.call(&args, cx).await.finish(),
-            other => Ok(ToolOutput::err(format!(
-                "plugin `mcp` has no tool `{other}`"
-            ))),
-        }
-    }
 }
 
-impl McpPlugin {
-    async fn call(&self, args: &Value, cx: &Cx) -> ToolResult<ToolOutput> {
-        let args: CallToolArgs = parse_args("call_tool", args)?;
-        let state = cx.state()?;
-        let mcp = servers(&self.decks, &state);
-        let (name, tool) = args
-            .tool
-            .split_once('/')
-            .ok_or_else(|| ToolError::model("call_tool: `tool` is `<server>/<tool>`"))?;
-        let (server, snap) = bound(&self.hub, &mcp, name).await?;
-        if !snap.tools.iter().any(|t| t.name == tool) {
-            return Err(ToolError::model(format!(
-                "call_tool: `{name}` has no tool `{tool}`; its tools: {}",
-                names(&snap.tools)
-            )));
-        }
-        let result = server
-            .call(tool, args.args.unwrap_or_default())
-            .await
-            .map_err(|e| ToolError::model(format!("call_tool {}: {e}", args.tool)))?;
-        let scratch = state
-            .workspaces
-            .iter()
-            .find(|w| w.name == SCRATCH_WORKSPACE)
-            .map(|w| PathBuf::from(w.root.as_str()));
-        self.output(&result, scratch).await
-    }
+/// `invoke` of `<name>/<tool>`: run the tool of one of the session's
+/// servers (`mcp`) and turn its result into a tool output. A call the server
+/// refuses comes back with the tool's input schema.
+pub async fn call(
+    hub: &McpHub,
+    mcp: &McpUse,
+    state: &PathState,
+    blobs: impl Fn() -> rumu_blob::Result<rumu_blob::Blobs>,
+    name: &str,
+    tool: &str,
+    args: JsonObject,
+) -> ToolResult<ToolOutput> {
+    let (server, snap) = bound(hub, mcp, name).await?;
+    let Some(spec) = snap.tools.iter().find(|t| t.name == tool) else {
+        return Err(ToolError::model(format!(
+            "`{name}` has no tool `{tool}`; its tools: {}",
+            names(&snap.tools)
+        )));
+    };
+    let result = server.call(tool, args).await.map_err(|e| {
+        let schema = Value::Object((*spec.input_schema).clone());
+        ToolError::model(format!("{name}/{tool}: {e}; its arguments: {schema}"))
+    })?;
+    let scratch = state
+        .workspaces
+        .iter()
+        .find(|w| w.name == SCRATCH_WORKSPACE)
+        .map(|w| PathBuf::from(w.root.as_str()));
+    output(&result, scratch, blobs).await
+}
 
-    /// A `tools/call` result as a tool output: text blocks joined, images
-    /// attached — and copied into `scratch` (the session's `@scratch` root)
-    /// like a prompt's, the text naming the file — other media named.
-    async fn output(&self, result: &Value, scratch: Option<PathBuf>) -> ToolResult<ToolOutput> {
-        let mut parts: Vec<String> = Vec::new();
-        let mut images = Vec::new();
-        for block in result["content"].as_array().into_iter().flatten() {
-            match block["type"].as_str().unwrap_or("") {
-                "text" => parts.push(block["text"].as_str().unwrap_or("").to_owned()),
-                "image" => {
-                    let data = block["data"].as_str().unwrap_or("");
-                    let bytes = base64::engine::general_purpose::STANDARD
-                        .decode(data)
-                        .map_err(|e| ToolError::model(format!("call_tool: bad image data: {e}")))?;
-                    let blobs = self.blobs().map_err(|e| {
-                        ToolError::model(format!("call_tool: storing an image: {e}"))
-                    })?;
-                    let root = scratch.clone();
-                    let (attachment, file) =
-                        tokio::task::spawn_blocking(move || -> rumu_blob::Result<_> {
-                            let a = blobs.ingest_image(&bytes, None)?;
-                            let file = a.scratch_path();
-                            if let Some(root) = root {
-                                blobs.copy_to(&a.hash, &root.join(&file))?;
-                            }
-                            Ok((a, file))
-                        })
-                        .await
-                        .map_err(|e| ToolError::model(format!("call_tool: {e}")))?
-                        .map_err(|e| ToolError::model(format!("call_tool: an image: {e}")))?;
-                    images.push(attachment);
-                    if scratch.is_some() {
-                        parts.push(format!(
-                            "[image {} saved as {SCRATCH_WORKSPACE}:{file}]",
-                            images.len()
-                        ));
-                    }
+/// A `tools/call` result as a tool output: text blocks joined, images
+/// attached — and copied into `scratch` (the session's `@scratch` root)
+/// like a prompt's, the text naming the file — other media named.
+async fn output(
+    result: &Value,
+    scratch: Option<PathBuf>,
+    blobs: impl Fn() -> rumu_blob::Result<rumu_blob::Blobs>,
+) -> ToolResult<ToolOutput> {
+    let mut parts: Vec<String> = Vec::new();
+    let mut images = Vec::new();
+    for block in result["content"].as_array().into_iter().flatten() {
+        match block["type"].as_str().unwrap_or("") {
+            "text" => parts.push(block["text"].as_str().unwrap_or("").to_owned()),
+            "image" => {
+                let data = block["data"].as_str().unwrap_or("");
+                let bytes = base64::engine::general_purpose::STANDARD
+                    .decode(data)
+                    .map_err(|e| ToolError::model(format!("bad image data: {e}")))?;
+                let blobs =
+                    blobs().map_err(|e| ToolError::model(format!("storing an image: {e}")))?;
+                let root = scratch.clone();
+                let (attachment, file) =
+                    tokio::task::spawn_blocking(move || -> rumu_blob::Result<_> {
+                        let a = blobs.ingest_image(&bytes, None)?;
+                        let file = a.scratch_path();
+                        if let Some(root) = root {
+                            blobs.copy_to(&a.hash, &root.join(&file))?;
+                        }
+                        Ok((a, file))
+                    })
+                    .await
+                    .map_err(|e| ToolError::model(e.to_string()))?
+                    .map_err(|e| ToolError::model(format!("an image: {e}")))?;
+                images.push(attachment);
+                if scratch.is_some() {
+                    parts.push(format!(
+                        "[image {} saved as {SCRATCH_WORKSPACE}:{file}]",
+                        images.len()
+                    ));
                 }
-                "audio" => parts.push(format!(
-                    "[audio ({}) omitted]",
-                    block["mimeType"].as_str().unwrap_or("?")
-                )),
-                "resource" => {
-                    let r = &block["resource"];
-                    match r["text"].as_str() {
-                        Some(text) => parts.push(text.to_owned()),
-                        None => parts.push(format!(
-                            "[resource {} ({}) omitted]",
-                            r["uri"].as_str().unwrap_or("?"),
-                            r["mimeType"].as_str().unwrap_or("binary")
-                        )),
-                    }
-                }
-                "resource_link" => parts.push(format!(
-                    "[resource link: {}{}]",
-                    block["uri"].as_str().unwrap_or("?"),
-                    block["name"]
-                        .as_str()
-                        .map(|n| format!(" ({n})"))
-                        .unwrap_or_default()
-                )),
-                other => parts.push(format!("[{other} content omitted]")),
             }
+            "audio" => parts.push(format!(
+                "[audio ({}) omitted]",
+                block["mimeType"].as_str().unwrap_or("?")
+            )),
+            "resource" => {
+                let r = &block["resource"];
+                match r["text"].as_str() {
+                    Some(text) => parts.push(text.to_owned()),
+                    None => parts.push(format!(
+                        "[resource {} ({}) omitted]",
+                        r["uri"].as_str().unwrap_or("?"),
+                        r["mimeType"].as_str().unwrap_or("binary")
+                    )),
+                }
+            }
+            "resource_link" => parts.push(format!(
+                "[resource link: {}{}]",
+                block["uri"].as_str().unwrap_or("?"),
+                block["name"]
+                    .as_str()
+                    .map(|n| format!(" ({n})"))
+                    .unwrap_or_default()
+            )),
+            other => parts.push(format!("[{other} content omitted]")),
         }
-        if parts.is_empty()
-            && let Some(structured) = result.get("structuredContent")
-        {
-            parts.push(serde_json::to_string_pretty(structured).unwrap_or_default());
-        }
-        let text = parts.join("\n");
-        let out = if result["isError"].as_bool().unwrap_or(false) {
-            ToolOutput::err(text)
-        } else {
-            ToolOutput::ok(text)
-        };
-        Ok(out.with_attachments(images))
     }
+    if parts.is_empty()
+        && let Some(structured) = result.get("structuredContent")
+    {
+        parts.push(serde_json::to_string_pretty(structured).unwrap_or_default());
+    }
+    let text = parts.join("\n");
+    let out = if result["isError"].as_bool().unwrap_or(false) {
+        ToolOutput::err(text)
+    } else {
+        ToolOutput::ok(text)
+    };
+    Ok(out.with_attachments(images))
 }
 
 /// The servers of the session's assistant and the rules enabling their tools,
@@ -273,9 +235,10 @@ pub fn servers(decks: &Decks, state: &PathState) -> McpUse {
 /// instructions.
 async fn intro(hub: &McpHub, mcp: &McpUse) -> String {
     let mut text = format!(
-        "MCP servers of this session. Their tools are not in your tool list: find them with \
-`search` (scope `{RUMU_WORKSPACE}:/tools`) or `list {RUMU_WORKSPACE}:/tools/<server>`, and call \
-them with `call_tool`."
+        "MCP servers of this session. Their tools are not in your tool list: they are the actions \
+of `{RUMU_WORKSPACE}:/mcp/<server>` — find them with `search` (scope `{RUMU_WORKSPACE}:/mcp`) or \
+`list {RUMU_WORKSPACE}:/mcp/<server>`, and run one with `invoke` (`action: \"<server>/<tool>\"`, \
+no `path`)."
     );
     for (name, rules) in mcp {
         let _ = write!(text, "\n- `{name}`: ");
@@ -365,9 +328,9 @@ fn first_line(tool: &Tool) -> &str {
         .unwrap_or("")
 }
 
-/// `read`'s and `search`'s view of one tool.
+/// `read`'s and `search`'s view of one tool: an action of its server.
 fn render(out: &mut String, server: &str, tool: &Tool, pretty: bool) {
-    let _ = writeln!(out, "## {server}/{}", tool.name);
+    let _ = writeln!(out, "## action {server}/{}", tool.name);
     if let Some(title) = &tool.title {
         let _ = writeln!(out, "{title}");
     }
@@ -389,7 +352,7 @@ fn render(out: &mut String, server: &str, tool: &Tool, pretty: bool) {
     let _ = writeln!(out, "Input schema: {schema}");
 }
 
-/// `list @rumu:/tools`: the session's servers.
+/// `list @rumu:/mcp`: the session's servers.
 pub async fn list_servers(hub: &McpHub, mcp: &McpUse) -> ToolOutput {
     if mcp.is_empty() {
         return "This session has no MCP servers.".into();
@@ -405,37 +368,45 @@ pub async fn list_servers(hub: &McpHub, mcp: &McpUse) -> ToolOutput {
     out.into()
 }
 
-/// `list @rumu:/tools/<server>`: one server's tools.
-pub async fn list_tools(hub: &McpHub, mcp: &McpUse, name: &str) -> ToolResult<ToolOutput> {
+/// `list @rumu:/mcp/<server>`: its status, then its tools as its actions
+/// (`<server>/<tool>(…)` and a line each).
+pub async fn list_server(hub: &McpHub, mcp: &McpUse, name: &str) -> ToolResult<ToolOutput> {
     let (_, snap) = bound(hub, mcp, name).await?;
-    let mut out = String::new();
+    let lines = snap.tools.iter().map(|tool| {
+        let schema = Value::Object((*tool.input_schema).clone());
+        let sig = signature(&format!("{name}/{}", tool.name), &schema);
+        (sig, first_line(tool).to_owned())
+    });
+    Ok(format!(
+        "MCP server `{name}`: {}; `read` it for its instructions and each tool's input schema. \
+         Run a tool with `invoke` (no `path`).\n\n{}",
+        status_line(&snap),
+        actions_section(lines)
+    )
+    .into())
+}
+
+/// `read @rumu:/mcp/<server>`: its instructions, then each tool with its
+/// description and input schema.
+pub async fn read_server(hub: &McpHub, mcp: &McpUse, name: &str) -> ToolResult<ToolOutput> {
+    let (_, snap) = bound(hub, mcp, name).await?;
+    let mut out = format!("MCP server `{name}`: {}\n", status_line(&snap));
+    if let Some(i) = snap
+        .instructions
+        .as_deref()
+        .map(str::trim)
+        .filter(|i| !i.is_empty())
+    {
+        let _ = writeln!(out, "\n{i}");
+    }
     for tool in snap.tools.iter() {
-        let _ = writeln!(out, "{} — {}", tool.name, first_line(tool));
+        out.push('\n');
+        render(&mut out, name, tool, true);
     }
     Ok(out.into())
 }
 
-/// `read @rumu:/tools/<server>/<tool>`: one tool's description and input
-/// schema.
-pub async fn read_tool(
-    hub: &McpHub,
-    mcp: &McpUse,
-    name: &str,
-    tool: &str,
-) -> ToolResult<ToolOutput> {
-    let (_, snap) = bound(hub, mcp, name).await?;
-    let tool = snap.tools.iter().find(|t| t.name == tool).ok_or_else(|| {
-        ToolError::model(format!(
-            "`{name}` has no tool `{tool}`; its tools: {}",
-            names(&snap.tools)
-        ))
-    })?;
-    let mut out = String::new();
-    render(&mut out, name, tool, true);
-    Ok(out.into())
-}
-
-/// `search` with a `@rumu:/tools[/<server>]` scope: BM25 over the tools'
+/// `search` with a `@rumu:/mcp[/<server>]` scope: BM25 over the tools'
 /// names, titles and descriptions; each hit prints like `read`.
 pub async fn search(
     hub: &McpHub,

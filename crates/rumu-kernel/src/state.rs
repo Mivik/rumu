@@ -166,7 +166,7 @@ mod tests {
                 source: "memory".into(),
                 content: rumu_core::Content::text("t"),
             }),
-            // The latest workspace_use marker is the default.
+            // The latest `workspace.use` marker is the default.
             node(NodeBody::Note {
                 source: "system".into(),
                 content: rumu_core::Content::marker(&rumu_core::WorkspaceUse { name: "a".into() }),

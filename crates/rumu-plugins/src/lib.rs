@@ -8,7 +8,8 @@
 //!   actions
 //! - [`CodePlugin`] — the `code` tool: model-written JavaScript that composes
 //!   the other tools through `Cx::invoke` (hybrid mode)
-//! - [`McpPlugin`] — `call_tool` over the MCP servers of [`McpHub`]
+//! - [`McpPlugin`] — the note listing the session's MCP servers of
+//!   [`McpHub`] (their tools run through `invoke`)
 //! - [`SkillsPlugin`] — the first-call note listing the [`Skills`] enabled
 //! - [`StdioPlugin`] — host side of the external plugin protocol
 //!
@@ -74,7 +75,7 @@ pub async fn load_all(
                 .with_skills(skills.clone()),
         ),
         Arc::new(AskPlugin::new(decks.clone())),
-        Arc::new(McpPlugin::new(home, mcp, decks.clone())),
+        Arc::new(McpPlugin::new(mcp, decks.clone())),
         Arc::new(SkillsPlugin::new(skills, decks)),
     ];
     for spec in config.external_specs(home)? {

@@ -80,18 +80,25 @@ async fn lists_reads_and_searches_the_bound_servers() {
     assert!(root.contains("broken/ — unavailable"), "{root}");
     assert!(root.contains("gone/ — not configured"), "{root}");
 
-    let tools = list_tools(&hub, &st, "fake").await.unwrap().content.text;
-    assert!(tools.contains("list_issues — List the open issues of a GitHub repository."));
+    // A server lists its tools as its actions.
+    let tools = list_server(&hub, &st, "fake").await.unwrap().content.text;
+    assert!(tools.starts_with("MCP server `fake`: 3 tools;"), "{tools}");
+    assert!(
+        tools.contains("\n\nactions:\n  fake/echo(text: string) — Echo the given text back.\n"),
+        "{tools}"
+    );
+    assert!(tools.contains("list_issues"), "{tools}");
     assert!(!tools.contains("Paged by 30"));
 
-    let tool = read_tool(&hub, &st, "fake", "echo")
-        .await
-        .unwrap()
-        .content
-        .text;
+    // Reading it gives its instructions and every tool's input schema.
+    let server = read_server(&hub, &st, "fake").await.unwrap().content.text;
     assert!(
-        tool.starts_with("## fake/echo\nEcho the given text back.\nInput schema: {"),
-        "{tool}"
+        server.starts_with("MCP server `fake`: 3 tools\n\nEcho things.\n"),
+        "{server}"
+    );
+    assert!(
+        server.contains("## action fake/echo\nEcho the given text back.\nInput schema: {"),
+        "{server}"
     );
 
     let hits = search(&hub, &st, None, "github issues", 5)
@@ -100,14 +107,14 @@ async fn lists_reads_and_searches_the_bound_servers() {
         .content
         .text;
     assert!(
-        hits.starts_with("## fake/list_issues\nList issues\n"),
+        hits.starts_with("## action fake/list_issues\nList issues\n"),
         "{hits}"
     );
     assert!(!hits.contains("fake/echo"));
 
     // A server the session does not have is neither listed nor readable.
     let other = all(&["broken"]);
-    let err = read_tool(&hub, &other, "fake", "echo").await.unwrap_err();
+    let err = read_server(&hub, &other, "fake").await.unwrap_err();
     assert!(
         err.to_string()
             .contains("no MCP server `fake` in this session"),
@@ -115,37 +122,42 @@ async fn lists_reads_and_searches_the_bound_servers() {
     );
 }
 
+/// The workspace plugin's `invoke` with `<server>/<tool>`.
+fn invoker(home: &std::path::Path, hub: Arc<McpHub>, decks: Decks) -> crate::WorkspacePlugin {
+    crate::WorkspacePlugin::new(home, decks, Default::default()).with_mcp(hub)
+}
+
 #[tokio::test]
-async fn call_tool_returns_text_errors_and_structured_content() {
+async fn invoke_returns_text_errors_and_structured_content() {
     let home = tempfile::tempdir().unwrap();
     let Some(hub) = hub(home.path()).await else {
         return;
     };
     let decks = assistant_decks(home.path());
     set_assistant(&decks, all(&["fake"]), &[]);
-    let plugin = McpPlugin::new(home.path(), hub, decks);
+    let plugin = invoker(home.path(), hub, decks);
     let fake = FakeRuntime::arc();
     let cx = fake.cx();
-    let call = |args| plugin.call_tool("call_tool", args, &cx);
+    let call = |args| plugin.call_tool("invoke", args, &cx);
 
-    let out = call(json!({ "tool": "fake/echo", "args": { "text": "hi" } }))
+    let out = call(json!({ "action": "fake/echo", "args": { "text": "hi" } }))
         .await
         .unwrap();
     assert!(!out.is_error);
     assert_eq!(out.content.text, "hi");
 
-    let out = call(json!({ "tool": "fake/fail" })).await.unwrap();
+    let out = call(json!({ "action": "fake/fail" })).await.unwrap();
     assert!(out.is_error);
     assert_eq!(out.content.text, "boom");
 
-    let out = call(json!({ "tool": "fake/list_issues" })).await.unwrap();
+    let out = call(json!({ "action": "fake/list_issues" })).await.unwrap();
     assert!(
         out.content.text.contains("\"issues\""),
         "{}",
         out.content.text
     );
 
-    let out = call(json!({ "tool": "fake/nope" })).await.unwrap();
+    let out = call(json!({ "action": "fake/nope" })).await.unwrap();
     assert!(out.is_error);
     assert!(
         out.content
@@ -153,8 +165,22 @@ async fn call_tool_returns_text_errors_and_structured_content() {
             .contains("its tools: `echo`, `list_issues`, `fail`")
     );
 
-    let out = call(json!({ "tool": "broken/x" })).await.unwrap();
+    let out = call(json!({ "action": "broken/x" })).await.unwrap();
     assert!(out.is_error && out.content.text.contains("no MCP server `broken`"));
+
+    // An MCP tool is its server's action: it takes no `path`.
+    let out = call(json!({ "action": "fake/echo", "path": "@rumu:/mcp/fake" }))
+        .await
+        .unwrap();
+    assert!(
+        out.is_error
+            && out
+                .content
+                .text
+                .contains("is an MCP tool: it takes no `path`"),
+        "{}",
+        out.content.text
+    );
 }
 
 /// An image block is attached and copied into `@scratch:.inbox/attachments/`,
@@ -163,15 +189,14 @@ async fn call_tool_returns_text_errors_and_structured_content() {
 async fn an_image_result_lands_in_the_scratch_inbox() {
     const DOT_PNG: &str = "iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAYAAAAfFcSJAAAADUlEQVR42mNk+M9QDwADhgGAWjR9awAAAABJRU5ErkJggg==";
     let home = tempfile::tempdir().unwrap();
-    let decks = assistant_decks(home.path());
-    let plugin = McpPlugin::new(home.path(), McpHub::new(home.path()), decks);
+    let blobs = || rumu_blob::Blobs::in_home(home.path());
     let result = json!({ "content": [
         { "type": "text", "text": "a dot" },
         { "type": "image", "mimeType": "image/png", "data": DOT_PNG },
     ] });
     let scratch = home.path().join("scratch/s1");
 
-    let out = plugin.output(&result, Some(scratch.clone())).await.unwrap();
+    let out = output(&result, Some(scratch.clone()), blobs).await.unwrap();
     let [image] = &out.content.attachments[..] else {
         panic!("one attachment: {:?}", out.content.attachments)
     };
@@ -182,7 +207,7 @@ async fn an_image_result_lands_in_the_scratch_inbox() {
     );
     assert!(scratch.join(&file).is_file());
 
-    let out = plugin.output(&result, None).await.unwrap();
+    let out = output(&result, None, blobs).await.unwrap();
     assert_eq!(out.content.text, "a dot");
     assert_eq!(out.content.attachments.len(), 1);
 }
@@ -223,7 +248,7 @@ async fn intro_note_follows_the_assistants_servers() {
         return;
     };
     let decks = assistant_decks(home.path());
-    let plugin = McpPlugin::new(home.path(), hub, decks.clone());
+    let plugin = McpPlugin::new(hub, decks.clone());
     let fake = FakeRuntime::arc();
     let event = rumu_core::Event {
         kind: "llm.pre".into(),
@@ -281,30 +306,30 @@ async fn rules_narrow_a_servers_tools() {
             .text
             .contains("fake/ — 2 tools")
     );
-    let tools = text(list_tools(&hub, &st, "fake").await);
-    assert!(tools.contains("echo") && !tools.contains("fail"), "{tools}");
-    let err = read_tool(&hub, &st, "fake", "fail").await.unwrap_err();
+    let tools = text(list_server(&hub, &st, "fake").await);
     assert!(
-        err.to_string().contains("its tools: `echo`, `list_issues`"),
-        "{err}"
+        tools.contains("fake/echo") && !tools.contains("fail"),
+        "{tools}"
     );
+    let server = text(read_server(&hub, &st, "fake").await);
+    assert!(!server.contains("fake/fail"), "{server}");
     let hits = text(search(&hub, &st, None, "always fails", 5).await);
     assert!(!hits.contains("fake/fail"), "{hits}");
 
     // Only the one named.
     let st = rules(&["echo"]);
-    assert_eq!(
-        text(list_tools(&hub, &st, "fake").await),
-        "echo — Echo the given text back.\n"
+    assert!(
+        text(list_server(&hub, &st, "fake").await)
+            .ends_with("actions:\n  fake/echo(text: string) — Echo the given text back."),
     );
     let decks = assistant_decks(home.path());
     set_assistant(&decks, st, &[]);
-    let plugin = McpPlugin::new(home.path(), hub, decks);
+    let plugin = invoker(home.path(), hub, decks);
     let fake = FakeRuntime::arc();
     let out = plugin
         .call_tool(
-            "call_tool",
-            json!({ "tool": "fake/list_issues" }),
+            "invoke",
+            json!({ "action": "fake/list_issues" }),
             &fake.cx(),
         )
         .await

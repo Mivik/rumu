@@ -246,7 +246,7 @@ struct ShowArgs {
 struct SearchArgs {
     /// search terms
     query: String,
-    /// `@rumu:/cards/<prefix>`, `@rumu:/sessions[/<session>]` or `@rumu:/tools[/<server>]`
+    /// `@rumu:/cards/<prefix>`, `@rumu:/sessions[/<session>]` or `@rumu:/mcp[/<server>]`
     scope: Option<String>,
     /// max hits (default 10; 5 for tools)
     limit: Option<u64>,
@@ -388,8 +388,8 @@ All are relevance-ranked and match any term. `scope` narrows it: `@rumu:/cards/<
 for a mounted deck's cards, `@rumu:/sessions` for all past conversations you can see (yours and \
 mounted assistants'), `@rumu:/sessions/by-assistant/<deck id>` for one assistant's, \
 `@rumu:/sessions/<session>` for one. Cards and conversations return addresses with short \
-snippets, never full text — follow up with `read`. `@rumu:/tools[/<server>]` searches the \
-session's MCP tools; each hit shows its input schema, ready for `call_tool`."
+snippets, never full text — follow up with `read`. `@rumu:/mcp[/<server>]` searches the \
+session's MCP tools (its servers' actions); each hit shows its input schema, ready for `invoke`."
                     .into(),
                 schema: tool_schema::<SearchArgs>(),
                 background: false,
@@ -417,7 +417,9 @@ notices."
                 name: "invoke".into(),
                 description: "Run an action on an `@rumu` object: `action` is its full name \
 and `path` the object (`task.kill` on `@rumu:/tasks/<id>`, `workspace.use` on \
-`@rumu:/workspaces/<name>`). `list` an object to see its actions and their arguments."
+`@rumu:/workspaces/<name>`); `list` an object to see its actions and their arguments. An MCP \
+tool is an action of its server: `action` is `<server>/<tool>` (`list @rumu:/mcp/<server>`), \
+with no `path`."
                     .into(),
                 schema: tool_schema::<InvokeArgs>(),
                 background: true,
@@ -1111,8 +1113,8 @@ impl WorkspacePlugin {
         }
     }
 
-    /// `invoke`: an action of an `@rumu` object, checked against the actions
-    /// its node declares.
+    /// `invoke`: an MCP tool, or an action of an `@rumu` object checked
+    /// against the actions its node declares.
     async fn tool_invoke(
         &self,
         state: &PathState,
@@ -1120,7 +1122,19 @@ impl WorkspacePlugin {
         cx: &Cx,
     ) -> ToolResult<ToolOutput> {
         let args: InvokeArgs = parse_args("invoke", args)?;
-        let params = Value::Object(args.args.unwrap_or_default());
+        let params = args.args.unwrap_or_default();
+        if let Some((server, tool)) = args.action.split_once('/') {
+            if args.path.is_some() {
+                return Err(ToolError::model(format!(
+                    "`{}` is an MCP tool: it takes no `path`",
+                    args.action
+                )));
+            }
+            let mcp = crate::mcp::servers(&self.decks, state);
+            let blobs = || self.blobs();
+            return crate::mcp::call(&self.mcp(), &mcp, state, blobs, server, tool, params).await;
+        }
+        let params = Value::Object(params);
         let Some(path) = args.path else {
             return Err(super::vfs::needs_path(&args.action));
         };

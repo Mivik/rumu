@@ -33,7 +33,7 @@ mod session;
 mod task;
 mod time;
 mod tools;
-mod vfs;
+pub(crate) mod vfs;
 mod watch;
 
 #[cfg(test)]
@@ -75,7 +75,7 @@ pub struct WorkspacePlugin {
     // `label:root` keys of workspaces with neither AGENTS.md nor
     // CLAUDE.md — the ssh probe is not free, so misses are remembered.
     agents_missing: Mutex<std::collections::HashSet<String>>,
-    /// The MCP servers behind `@rumu:/tools`.
+    /// The MCP servers behind `@rumu:/mcp` (and `invoke` of their tools).
     mcp: Option<std::sync::Arc<crate::McpHub>>,
     /// The skills behind `@rumu:/skills`.
     skills: Option<std::sync::Arc<crate::Skills>>,
@@ -102,7 +102,7 @@ impl WorkspacePlugin {
         }
     }
 
-    /// Serve `@rumu:/tools` from `hub`.
+    /// Serve `@rumu:/mcp` from `hub`.
     pub fn with_mcp(mut self, hub: std::sync::Arc<crate::McpHub>) -> Self {
         self.mcp = Some(hub);
         self
