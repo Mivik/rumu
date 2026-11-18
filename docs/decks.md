@@ -63,21 +63,22 @@ The first-call note states these rules.
   through the session's mount table: mounted on the path, the session's own
   deck, or listed in its assistant's `deck.yaml` mounts. Only the user puts it
   there (creating a session in its project, dragging a session into it, or
-  editing the assistant's mounts). A private deck is skipped in `card_mount`'s
-  listing, and mounting it by id is refused exactly like an unknown id, before
-  any approval (an "always allow" grant does not help). `ask` to a private
+  editing the assistant's mounts). A private deck is skipped in
+  `list @rumu:/decks`, and naming it there is refused exactly like an unknown
+  deck, before any approval (an "always allow" grant does not help). `ask` to a private
   assistant likewise fails as unknown, and the first-call note does not name
   it.
 - **Private links.** A link into a private deck from a different deck neither
   resolves nor can be created: it shows as dangling and writing it is refused.
   Links within the private deck itself are ordinary links.
-- Everything refers to a deck by id: grants, session roots, mounts, links, and
-  the model's `card_mount` and `ask` arguments (`card_mount` with no arguments
-  lists the ids). Names are for display only and are never looked up.
-  Renaming a deck changes `name` and nothing else.
-- Decks are created by the user in the web UI. An assistant creates only
-  project decks, with the user's approval (see [Projects](projects.md)). A new
-  deck starts with a blank charter (see [Cards](#cards)).
+- What rumu stores refers to a deck by id: grants, session roots, mounts and
+  links. Names are unique, and the model names decks by name in
+  `@rumu:/decks/<name>` (its mounts and `allow_ask` included); rumu turns
+  them into ids. Renaming a deck changes `name` and nothing else.
+- Decks are created by the user in the web UI, or by an assistant writing a
+  new `@rumu:/decks/<name>` with the user's approval (see
+  [Agent configuration](#agent-configuration)). A new deck starts with a blank
+  charter (see [Cards](#cards)).
 - A home with no decks at all starts with three: `user` (the user), `world`
   (facts and methods that are neither about the user nor tied to one
   project), and the default assistant `default`, which mounts the other two
@@ -111,8 +112,8 @@ The first-call note states these rules.
   may write its deck, so an assistant can maintain its own persona.
 - **Charter.** The pinned `about.md` says what belongs in the deck and what
   does not. Its `description` (or, without one, its first body line) is the
-  deck's one-line summary, shown wherever decks are listed: `card_mount` with
-  no arguments, the other assistants in the first-call note, and the library.
+  deck's one-line summary, shown wherever decks are listed: `list
+  @rumu:/decks`, the other assistants in the first-call note, and the library.
   `deck.yaml` has no description of its own, so the model can keep the
   charter current like any other card.
 - **Links.** A link card has `link: @rumu:/cards/<path>` in its frontmatter. The
@@ -153,11 +154,14 @@ The first-call note states these rules.
   at `/cards/self` and the mounts listed in its `deck.yaml`.
 - Mounting makes a deck readable. It has no mode: writing is approved
   separately, per deck (see [Approvals](#approvals)).
-- `card_mount` manages mounts:
-  - With no arguments, it lists decks: name, id, mount point if mounted,
+- The model manages mounts through `@rumu:/decks`:
+  - `list @rumu:/decks` lists decks: name, kind, mount point if mounted,
     whether mounting or writing it would ask the user, and its summary.
-  - With `deck` and `at`, it mounts a deck (`mount` approval).
-  - With `at` alone, it unmounts.
+  - `invoke { action: "deck.mount", path: "@rumu:/decks/<name>", args: { at
+    } }` mounts a deck at `/cards/<at>` (`mount` approval).
+  - `deck.unmount` on a deck unmounts it from wherever it is mounted.
+  - No web method shares these names; the web's `session.move` writes the
+    same marker for `/cards/project`.
 - The mount table is branch state on the node path, so forks and sub-agents
   inherit it, the session's project included. Mount points must not overlap:
   neither may be a prefix of the other. `/cards/self` can be neither mounted
@@ -177,7 +181,7 @@ The first-call note states these rules.
 
 - Each mounted deck has its own catalog. The first model call of a path that
   has no catalog yet gets one note per mounted deck (the session's own deck and
-  its `deck.yaml` mounts). `card_mount` returns the mounted deck's catalog in
+  its `deck.yaml` mounts). `deck.mount` returns the mounted deck's catalog in
   its result. A catalog is frozen: later changes to the deck do not rewrite it
   (update notices cover the cards in use).
 - A catalog lists the deck's 30 cards with the highest use score, in path
@@ -201,7 +205,7 @@ The first-call note states these rules.
 ## Approvals
 
 An assistant acting on a deck other than its own asks the user first
-(`decision.requested`), unless a grant already covers it. There are five
+(`decision.requested`), unless a grant already covers it. There are six
 actions:
 
 | action   | what                                            | granted up front by                    |
@@ -210,7 +214,8 @@ actions:
 | `write`  | write, move into or out of, or delete its cards | a `deck.yaml` mount with `write: true` |
 | `ask`    | ask the assistant deck a question               | `allow_ask` in the asked deck          |
 | `link`   | link one of its cards from another deck         | nothing                                |
-| `create` | create a [project](projects.md) deck            | nothing                                |
+| `create` | create a deck through `@rumu:/decks`           | nothing                                |
+| `configure` | change a deck's configuration (see below)   | nothing                                |
 
 - An assistant may do anything with its own deck and with the session's
   project deck.
@@ -225,6 +230,51 @@ actions:
 - A write request shows the deck, the path, the source of a move and the
   content. A move across decks is approved for both decks.
 - A session answering an `ask` cannot write cards at all.
+
+## Agent configuration
+
+`@rumu:/decks/<name>` is a deck's `deck.yaml` as the model reads and writes
+it, by kind. The web edits the same fields (`assistant.upsert`,
+`project.update`), through the same functions, and every change is pushed as
+`decks.updated`.
+
+```yaml
+kind: assistant            # read-only once created
+model: { model: provider/model-id, effort: high }   # or an alias's name
+mcp: { search: ['*'] }
+skills: ['*']
+mounts:
+- { deck: notes, at: /cards/notes, write: true }
+allow_ask: [scout]         # assistants, by name
+```
+
+A project has `icon`, `private` and `workspaces` (ordered, the first its
+default); a plain deck has `private`; an assistant also has its mascot,
+`cat`. Pinned cards (persona, charter) are cards, not fields.
+
+- A write must follow a read of the deck as it is now (like a card); a field
+  left out keeps its value; `edit` replaces text in the current one.
+- Writing a new name with `kind:` creates a deck; `write` with `from`
+  renames one. Deleting a deck is the user's, in the web UI.
+- Decks the session may not see (private ones) are left out of `mounts` and
+  `allow_ask` on a read, and kept on a write.
+
+| change                                                      | approval                    |
+|-------------------------------------------------------------|-----------------------------|
+| create a deck                                               | `create` (target `*`)       |
+| `mounts` or `allow_ask` of any deck, its own included       | asked every time, once only |
+| its own assistant's `model`, `skills`, `cat`                | none                        |
+| its own assistant's `mcp`                                   | `configure`                 |
+| the session's project's `workspaces`, `icon`, name          | none                        |
+| `private` of any deck                                       | `configure`                 |
+| anything of another deck                                    | `configure`                 |
+
+- `mounts` and `allow_ask` are themselves grants, so no earlier answer
+  covers a change to them and the user is offered only "allow once".
+- `configure` is not implied for the assistant's own deck: its MCP servers
+  are tools it would give itself.
+- Creating a deck lets the creating session mount it and write it without
+  asking again.
 
 ## Writing
 
@@ -319,7 +369,7 @@ options:
    permits it, the user is asked (`decision.requested`).
 3. B answers in a new session of its own, with its default mounts and its own
    deck, and cannot write cards there. The root records `asked_by: <A's id>`; `ask`
-   and `card_mount` are refused on that session. `to` must be an assistant
+   is refused on that session. `to` must be an assistant
    deck's id; the first-call note lists the other assistants with their ids.
 4. The answer returns to A as the tool result. Nothing is saved automatically.
 

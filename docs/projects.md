@@ -100,7 +100,8 @@ workspace is in shows in its path, not in a field:
 
 ```
 @rumu:/workspaces/<name>      every visible workspace (the registry)
-@rumu:/project/workspaces     the session's project's mounted workspaces
+@rumu:/decks/<name>           a deck's configuration; a project's has its
+                              mounted workspaces (`workspaces:`)
 ```
 
 - `list @rumu:/workspaces` lists the workspaces: the project's first, then
@@ -117,11 +118,12 @@ workspace is in shows in its path, not in a field:
   A local `root` must be an existing directory. Changing an existing entry
   asks the user (`workspace`), since other projects may mount it, and so does
   `delete`, which also unmounts it from every project.
-- `@rumu:/project/workspaces` is an ordered YAML list of registered names,
-  the first being the project's default. Writing it mounts, unmounts and
-  reorders. Like a card, it must be read before it is written, so two
-  sessions of the project cannot overwrite each other's change. It exists
-  only in a session with a project.
+- A project's `workspaces:` in `@rumu:/decks/<name>` is an ordered list of
+  registered names, the first being the project's default. Writing it mounts,
+  unmounts and reorders. Like a card, the deck must be read before it is
+  written, so two sessions of the project cannot overwrite each other's
+  change. (Its other fields and the other kinds of deck: see
+  [Decks](decks.md#agent-configuration).)
 - Mounting is a property of the project, not of the workspace, so it is not
   kept under `@rumu:/workspaces`. The registry listing only shows it.
 - `invoke { action: "workspace.use", path: "@rumu:/workspaces/<name>" }` sets
@@ -129,12 +131,15 @@ workspace is in shows in its path, not in a field:
   and `@rumu` have entries there for this alone (they cannot be written or
   deleted). It is the web's `branch.use_workspace`: the same `workspace.use`
   marker.
-- `card_mount(deck, at: "project")` moves the session into a project, and
-  `card_mount(at: "project")` leaves it. `card_mount()` marks project decks
-  in its listing.
-- `card_mount(create: <name>, at: "project")` creates a project deck with a
-  blank charter and moves the session into it (`create` is accepted only
-  there). The assistant then writes the charter and mounts workspaces.
+- `invoke { action: "deck.mount", path: "@rumu:/decks/<name>", args: { at:
+  "project" } }` moves the session into a project, and `deck.unmount` on
+  its deck leaves it. `list @rumu:/decks` names each deck's kind. No web
+  method is called `deck.mount` or `deck.unmount`: the web moves a session
+  with `session.move`, which writes the same marker.
+- Writing `kind: project` (and, optionally, `workspaces:`) to a new
+  `@rumu:/decks/<name>` creates a project deck with a blank charter; the
+  assistant then writes the charter and mounts it with `deck.mount`, which
+  does not ask again in that session.
 - An action's full name that is also the name of a web (WebSocket) method
   names the same operation, as `task.kill` (cancel a background task) does;
   the model's may only reach its own branch's objects, and asks where the
@@ -146,16 +151,16 @@ workspace is in shows in its path, not in a field:
 | change a registered workspace                 | `workspace`         |
 | delete a registered workspace                 | `workspace`         |
 | mount, unmount or reorder the project's ones  | none                |
+| the same in another project                   | `configure`         |
 | write the session's project deck              | none                |
 | leave the project                             | none                |
 | move into an existing project                 | `mount` of its deck |
 | create a project                              | `create`            |
 
-- `create` and `workspace` are approval actions like those in
+- `create`, `configure` and `workspace` are approval actions like those in
   [Approvals](decks.md#approvals). "Always allow" is stored by target:
   `{ "workspace": { <assistant deck id>: [<workspace name>, …] } }`, and
   `create`, which has none, with `*`.
-- Mounting workspaces in another project is the user's, in the web UI.
 
 ## Web UI
 
@@ -165,7 +170,7 @@ workspace is in shows in its path, not in a field:
   the default one.
 - Each project row has actions to start a session in it and to open its
   settings. Dragging a session to another group moves it: the same marker as
-  `card_mount`, with no approval.
+  `deck.mount`, with no approval.
 - The projects page is a grid of project cards: a contour band drawn from
   the id under the seal, the name, the workspaces (left out when the only one
   shares the project's name), the latest activity and a new-session action.
