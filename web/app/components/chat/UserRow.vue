@@ -110,13 +110,14 @@ const reverting = ref(false)
         class="flex max-w-[85%] min-w-0 flex-col items-end gap-1.5 rounded-sheet outline-offset-4 transition-[outline-color] sm:max-w-[70%]"
         :class="editing ? 'outline-2 outline-brand/50' : 'outline-transparent'"
       >
-        <div v-if="images.length" class="flex flex-wrap justify-end gap-1.5">
+        <div v-if="images.length" class="flex flex-wrap items-end justify-end gap-1.5">
           <ImageThumb
             v-for="(a, i) in images"
             :key="`${a.hash}:${i}`"
             :attachment="a"
             :max-h="120"
             :max-w="200"
+            :tile="images.length > 1"
           />
         </div>
         <div

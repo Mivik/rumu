@@ -234,13 +234,14 @@ function liveTaskOutput(id: string | null): string {
         </div>
         <div v-if="v.attachments.length">
           <div class="mb-1 text-micro font-semibold text-ink-3">{{ t('tools.detail.images') }}</div>
-          <div class="flex flex-wrap gap-2">
+          <div class="flex flex-wrap items-start gap-2">
             <ImageThumb
               v-for="(a, i) in v.attachments"
               :key="`${a.hash}:${i}`"
               :attachment="a"
               :max-h="160"
               :max-w="240"
+              :tile="v.attachments.length > 1"
             />
           </div>
         </div>
