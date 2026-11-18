@@ -98,7 +98,7 @@ function configure(close: () => void): void {
         </button>
         <div
           v-if="efforts.length > 1"
-          class="sticky -bottom-3 -mx-3 -mb-3 flex items-center gap-2.5 border-t border-line-soft bg-surface px-3 pt-2 pb-3"
+          class="sticky -bottom-3 -mx-3 -mb-3 flex flex-wrap items-center gap-x-2.5 gap-y-1.5 border-t border-line-soft bg-surface px-3 pt-2 pb-3"
         >
           <span class="flex flex-none items-center gap-1 text-meta font-semibold text-ink-3">
             <Icon name="brain" :size="13" />

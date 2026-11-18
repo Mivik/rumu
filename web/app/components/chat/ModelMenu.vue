@@ -168,8 +168,12 @@ async function togglePin(m: ModelInfo): Promise<void> {
           </button>
           <button
             type="button"
-            class="icon-btn mr-1.5 size-5"
-            :class="m.pinned ? '' : 'opacity-0 group-hover:opacity-100 focus-visible:opacity-100'"
+            class="icon-btn relative mr-1.5 size-5 before:absolute before:-inset-1.5"
+            :class="
+              m.pinned
+                ? ''
+                : 'pointer-fine:opacity-0 pointer-fine:group-hover:opacity-100 pointer-fine:focus-visible:opacity-100'
+            "
             :title="m.pinned ? t('settings.unpin') : t('settings.pin')"
             :aria-label="m.pinned ? t('settings.unpin') : t('settings.pin')"
             :aria-pressed="m.pinned"
