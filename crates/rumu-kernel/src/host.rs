@@ -1,6 +1,7 @@
 //! `impl Runtime` — kernel services exposed to plugins through [`Cx`].
 
 use std::sync::Arc;
+use std::time::Duration;
 
 use async_trait::async_trait;
 use rumu_core::{
@@ -62,8 +63,14 @@ impl Runtime for KernelRuntime {
             .map_err(Into::into)
     }
 
-    async fn decide(&self, branch: &BranchId, call_id: &str, request: Value) -> Result<Value> {
-        Ok(self.0.decide(branch, call_id, request).await?)
+    async fn decide(
+        &self,
+        branch: &BranchId,
+        call_id: &str,
+        request: Value,
+        timeout: Option<Duration>,
+    ) -> Result<Option<Value>> {
+        Ok(self.0.decide(branch, call_id, request, timeout).await?)
     }
 
     async fn delegate(&self, branch: &BranchId, delegation: Delegation) -> Result<DelegationReply> {

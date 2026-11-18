@@ -1,4 +1,5 @@
 use std::sync::{Arc, OnceLock};
+use std::time::Duration;
 
 use crate::{
     Attachment, Branch, BranchId, Content, Error, Event, Index, Node, PathState, Result, SessionId,
@@ -451,7 +452,13 @@ pub trait Runtime: History {
     fn cancel_invokes(&self, _branch: &BranchId, _parent_call: &str) {}
     /// Put `request` to the user on behalf of the tool call `call_id` and
     /// wait for the answer (see [`Cx::decide`]).
-    async fn decide(&self, _branch: &BranchId, _call_id: &str, _request: Value) -> Result<Value> {
+    async fn decide(
+        &self,
+        _branch: &BranchId,
+        _call_id: &str,
+        _request: Value,
+        _timeout: Option<Duration>,
+    ) -> Result<Option<Value>> {
         Err(Error::msg("this host cannot ask the user"))
     }
     /// Run `delegation` as a session of its own (see [`Cx::delegate`]).
@@ -637,12 +644,16 @@ impl Cx {
 
     /// Put `request` to the user and wait for the answer: a `decision.requested`
     /// push the client answers with `decision.answer`. Aborting the turn
-    /// cancels the wait (an error). Only available within a tool call.
-    pub async fn decide(&self, request: Value) -> Result<Value> {
+    /// cancels the wait (an error). With a `timeout`, `None` when it runs out
+    /// before the user starts on it (`decision.hold`). Only available within
+    /// a tool call.
+    pub async fn decide(&self, request: Value, timeout: Option<Duration>) -> Result<Option<Value>> {
         let Some(call) = &self.call else {
             return Err(Error::NoCallContext);
         };
-        self.runtime.decide(&self.branch, &call.id, request).await
+        self.runtime
+            .decide(&self.branch, &call.id, request, timeout)
+            .await
     }
 
     /// Run a session of its own (another assistant doing a task) and wait for

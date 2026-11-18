@@ -113,6 +113,15 @@ export function refreshCards(): Promise<void> {
   return cardsRefresh
 }
 
+/** Stop the clock of a decision the user has started on, so it waits for
+ * them; a no-op for one without a clock. */
+export function holdDecision(id: string): void {
+  const d = state.decisions.find((x) => x.id === id)
+  if (d?.expires_at === undefined) return
+  state.decisions = state.decisions.map((x) => (x.id === id ? { ...x, expires_at: undefined } : x))
+  rumu.request('decision.hold', { id }).catch(() => {})
+}
+
 /** Answer the oldest pending question. An "always" grant changes what the
  * assistant roster reports, so the assistants are re-read. */
 export async function answerDecision(id: string, answer: DecisionAnswer): Promise<void> {

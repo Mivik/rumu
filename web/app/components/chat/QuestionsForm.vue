@@ -6,9 +6,10 @@
 // is one more box to tick; for a single choice it sits under the options as a
 // note sent along with the option picked (or alone, when none fits).
 // Picking an option of a single-choice question moves on to the next one.
+// The first touch holds the questions, so they no longer run out on the user.
 import { computed, nextTick, reactive, ref } from 'vue'
 import { t } from '../../i18n'
-import { answerDecision } from '../../lib/store'
+import { answerDecision, holdDecision } from '../../lib/store'
 import type { QuestionsRequest } from '../../lib/types'
 import Icon from '../ui/Icon.vue'
 
@@ -47,6 +48,7 @@ function answered(i: number): boolean {
 const complete = computed(() => drafts.every((_, i) => answered(i)))
 
 function pick(label: string): void {
+  holdDecision(props.id)
   const d = draft.value
   if (question.value.multiple) {
     const at = d.selected.indexOf(label)
@@ -60,6 +62,7 @@ function pick(label: string): void {
 
 /** Typing ticks the box of several choices; emptying it unticks it. */
 function onCustomInput(e: Event): void {
+  holdDecision(props.id)
   draft.value.useCustom = (e.target as HTMLInputElement).value.trim() !== ''
 }
 
@@ -70,6 +73,7 @@ function toggleCustom(): void {
 }
 
 function go(i: number): void {
+  holdDecision(props.id)
   const typing = document.activeElement === customEl.value
   index.value = i
   // One input serves every question, so a caret in it would stay put: send it

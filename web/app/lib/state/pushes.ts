@@ -299,6 +299,10 @@ export function startApp(): void {
     const d = p as unknown as PendingDecision
     if (!state.decisions.some((x) => x.id === d.id)) state.decisions.push(d)
   })
+  rumu.onPush('decision.held', (p) => {
+    const { id } = p as unknown as DecisionResolvedPush
+    state.decisions = state.decisions.map((d) => (d.id === id ? { ...d, expires_at: undefined } : d))
+  })
   rumu.onPush('decision.resolved', (p) => {
     const { id } = p as unknown as DecisionResolvedPush
     state.decisions = state.decisions.filter((d) => d.id !== id)

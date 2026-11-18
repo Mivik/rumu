@@ -382,13 +382,22 @@ impl History for FakeRuntime {
 
 #[async_trait]
 impl Runtime for FakeRuntime {
-    async fn decide(&self, _branch: &BranchId, _call_id: &str, request: Value) -> Result<Value> {
+    /// Answers from `answers`, in order; a `null` one stands for a timeout.
+    async fn decide(
+        &self,
+        _branch: &BranchId,
+        _call_id: &str,
+        request: Value,
+        _timeout: Option<std::time::Duration>,
+    ) -> Result<Option<Value>> {
         self.decisions.lock().unwrap().push(request);
-        self.answers
+        let answer = self
+            .answers
             .lock()
             .unwrap()
             .pop_front()
-            .ok_or_else(|| rumu_core::Error::msg("this host cannot ask the user"))
+            .ok_or_else(|| rumu_core::Error::msg("this host cannot ask the user"))?;
+        Ok(Some(answer).filter(|a| !a.is_null()))
     }
 
     fn path(&self, _branch: &BranchId) -> Result<Arc<[Node]>> {

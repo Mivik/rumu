@@ -132,6 +132,8 @@
     "multiple": "Choose any",
     "custom": "Something else…",
     "note": "Add a note, or answer in your own words…",
+    "expiresMin": "Skips in {n} min",
+    "expiresSec": "Skips in {n}s",
     "answer": "Type your answer…",
     "skip": "Skip",
     "next": "Next",

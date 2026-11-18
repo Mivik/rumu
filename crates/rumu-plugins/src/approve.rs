@@ -47,11 +47,14 @@ pub(crate) async fn approve(
     if allowed(decks, &state, &session, action, to) {
         return Ok(true);
     }
+    // No timeout: going on without the user is never an approval.
     let answer = cx
-        .decide(request)
+        .decide(request, None)
         .await
         .map_err(|e| ToolError::model(e.to_string()))?;
-    let answer: Answer = serde_json::from_value(answer).unwrap_or_default();
+    let answer: Answer = answer
+        .and_then(|a| serde_json::from_value(a).ok())
+        .unwrap_or_default();
     if answer.allow {
         decks.remember(action, answer.scope, &session, &state.assistant, to);
     }

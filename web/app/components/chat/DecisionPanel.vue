@@ -17,6 +17,9 @@
 // The title row folds the panel down to itself: the request stays pending
 // (and answers already typed stay put), while the conversation above gets
 // the room back. A request that arrives afterwards unfolds it again.
+//
+// Questions with a clock show how long until they are withdrawn; the clock
+// stops once the user starts on them (QuestionsForm holds them).
 import { computed, onBeforeUnmount, onMounted, ref, shallowRef, watch } from 'vue'
 import { t } from '../../i18n'
 import { catOf } from '../../lib/assistantFace'
@@ -35,11 +38,36 @@ const current = computed(() => pending.value[0] ?? null)
 const shown = shallowRef<PendingDecision | null>(current.value)
 /** Folded down to the title row. */
 const folded = ref(false)
-watch(current, (d) => {
+watch(current, (d, prev) => {
   if (d) {
     shown.value = d
-    folded.value = false
+    // A hold replaces the request object; that is no new request.
+    if (d.id !== prev?.id) folded.value = false
   }
+})
+
+/** Ticks while the current request has a clock. */
+const now = ref(Date.now())
+let clock: ReturnType<typeof setInterval> | undefined
+watch(
+  () => current.value?.expires_at,
+  (at) => {
+    clearInterval(clock)
+    now.value = Date.now()
+    clock = at === undefined ? undefined : setInterval(() => (now.value = Date.now()), 1000)
+  },
+  { immediate: true },
+)
+onBeforeUnmount(() => clearInterval(clock))
+
+/** "Skips in …" for the shown request, while its clock runs. */
+const countdown = computed(() => {
+  const at = shown.value?.expires_at
+  if (at === undefined) return null
+  const secs = Math.max(0, Math.ceil((at - now.value) / 1000))
+  return secs >= 60
+    ? t('chat.ask.expiresMin', { n: Math.ceil(secs / 60) })
+    : t('chat.ask.expiresSec', { n: secs })
 })
 
 /** Title, quoted detail (if any) and hint for the shown request. */
@@ -169,6 +197,9 @@ onBeforeUnmount(() => window.removeEventListener('keydown', onKey, true))
             <RumuCat state="waiting" :cat="cat" :size="34" :paper="false" class="-my-1 flex-none" />
             <span class="min-w-0 flex-1 text-message font-semibold text-ink" :class="{ truncate: folded }">
               {{ view.title }}
+            </span>
+            <span v-if="countdown" class="flex-none text-micro text-ink-3 tabular-nums">
+              {{ countdown }}
             </span>
             <span v-if="pending.length > 1" class="flex-none text-micro text-ink-3 tabular-nums">
               1 / {{ pending.length }}

@@ -182,6 +182,8 @@ export interface PendingDecision {
   branch: BranchId
   call_id: string
   request: DecisionRequest
+  /** When it is withdrawn unanswered (ms since the epoch), unless held. */
+  expires_at?: number
 }
 
 /** What a tool call asks the user to approve. Names are for display; the

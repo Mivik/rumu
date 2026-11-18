@@ -4,9 +4,13 @@
 //! A decision is runtime-only: a `decision.requested` push the client answers
 //! with `decision.answer` (by id), resolved with a `decision.resolved` push.
 //! It dies with the turn: aborting the branch's loop cancels the wait, and a
-//! restart loses it like any other in-flight call.
+//! restart loses it like any other in-flight call. One given a timeout also
+//! ends unanswered when it runs out — its params carry the deadline
+//! (`expires_at`) — unless the client holds it (`decision.hold`, once the
+//! user starts on it), which stops the clock.
 
 use std::sync::Arc;
+use std::time::Duration;
 
 use rumu_core::{BranchId, Content, Delegation, DelegationReply, SessionRoot};
 use serde_json::{Value, json};
@@ -20,6 +24,8 @@ pub(crate) struct PendingDecision {
     /// The `decision.requested` params, replayed by `decision.list`.
     pub params: Value,
     answer: oneshot::Sender<Value>,
+    /// Stops the clock of a decision with a timeout; taken by a hold.
+    hold: Option<oneshot::Sender<()>>,
 }
 
 /// Retires a decision however its wait ends: answered, cancelled or dropped.
@@ -49,33 +55,40 @@ impl Kernel {
             .unwrap_or_default()
     }
 
-    /// Put `request` to the user and wait for the answer, or for the
-    /// branch's loop to be aborted.
+    /// Put `request` to the user and wait for the answer, for `timeout` to
+    /// run out unless held (`None`), or for the branch's loop to be aborted.
     pub(crate) async fn decide(
         self: &Arc<Self>,
         branch: &BranchId,
         call_id: &str,
         request: Value,
-    ) -> Result<Value> {
+        timeout: Option<Duration>,
+    ) -> Result<Option<Value>> {
         let token = self.loop_token(branch);
         let session = self.session_of(branch)?;
         let (tx, rx) = oneshot::channel();
+        let (hold_tx, hold_rx) = oneshot::channel();
         let id = {
             let mut inner = self.inner.lock().unwrap();
             inner.decision_seq += 1;
             let id = format!("decision-{}", inner.decision_seq);
-            let params = json!({
+            let mut params = json!({
                 "id": id,
                 "session": session,
                 "branch": branch,
                 "call_id": call_id,
                 "request": request,
             });
+            if let Some(timeout) = timeout {
+                let ms = i64::try_from(timeout.as_millis()).unwrap_or(i64::MAX);
+                params["expires_at"] = json!(rumu_core::now().saturating_add(ms));
+            }
             inner.decisions.insert(
                 id.clone(),
                 PendingDecision {
                     params: params.clone(),
                     answer: tx,
+                    hold: timeout.map(|_| hold_tx),
                 },
             );
             self.push("decision.requested", params);
@@ -87,11 +100,41 @@ impl Kernel {
             kernel: self.clone(),
             id,
         };
+        let expire = async {
+            let Some(timeout) = timeout else {
+                return std::future::pending().await;
+            };
+            tokio::select! {
+                () = tokio::time::sleep(timeout) => {}
+                // Held: the clock stops for good.
+                _ = hold_rx => std::future::pending().await,
+            }
+        };
         tokio::select! {
             biased;
             _ = token.cancelled() => Err(Error::DecisionCancelled),
-            answer = rx => answer.map_err(|_| Error::DecisionCancelled),
+            answer = rx => answer.map(Some).map_err(|_| Error::DecisionCancelled),
+            () = expire => Ok(None),
         }
+    }
+
+    /// `decision.hold`: stop the clock of a decision the user has started on,
+    /// so it waits for their answer. A no-op for one without a timeout.
+    pub fn hold_decision(&self, id: &str) -> Result<()> {
+        let mut inner = self.inner.lock().unwrap();
+        let pending = inner
+            .decisions
+            .get_mut(id)
+            .ok_or_else(|| Error::UnknownDecision(id.to_owned()))?;
+        if let Some(hold) = pending.hold.take() {
+            let _ = hold.send(());
+            if let Some(params) = pending.params.as_object_mut() {
+                params.remove("expires_at");
+            }
+            drop(inner);
+            self.push("decision.held", json!({ "id": id }));
+        }
+        Ok(())
     }
 
     /// `decision.answer`: hand the user's answer to the waiting call.

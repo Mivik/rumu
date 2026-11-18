@@ -5,6 +5,9 @@
 //! to choose from, through a decision (`kind: "questions"`). Another deck gets
 //! a task, with the user's approval (see [`crate::approve`]), done in a session
 //! of its own; `allow_ask` in its `deck.yaml` grants it up front.
+//!
+//! Questions are withdrawn after a while (`timeout`) so that a user away from
+//! the screen does not stall the turn, unless the user has started on them.
 
 use async_trait::async_trait;
 use rumu_cards::deck::{Action, DeckMount};
@@ -75,7 +78,13 @@ pub fn assistant_of(decks: &Decks, deck: &Deck) -> Assistant {
 struct AskArgs {
     /// up to four questions
     questions: Vec<Question>,
+    /// seconds to wait before going on without an answer, default 600; 0 waits until they answer. Once the user starts answering, it waits for them
+    #[serde(default)]
+    timeout: Option<u64>,
 }
+
+/// How long `ask` waits for the user by default.
+const ASK_TIMEOUT: u64 = 600;
 
 /// `delegate` arguments: an `agent` call with `mode: "session"`.
 #[derive(Debug, Deserialize, JsonSchema)]
@@ -249,7 +258,11 @@ impl AskPlugin {
                 state.assistant
             )));
         };
-        self.ask_user(from, args.questions, cx).await
+        let timeout = match args.timeout.unwrap_or(ASK_TIMEOUT) {
+            0 => None,
+            secs => Some(std::time::Duration::from_secs(secs)),
+        };
+        self.ask_user(from, args.questions, timeout, cx).await
     }
 
     /// `agent` with `mode: "session"`: an assistant (yourself by default;
@@ -371,6 +384,7 @@ impl AskPlugin {
         &self,
         from: Deck,
         questions: Vec<Question>,
+        timeout: Option<std::time::Duration>,
         cx: &Cx,
     ) -> ToolResult<ToolOutput> {
         let questions = user_questions(questions)?;
@@ -380,10 +394,18 @@ impl AskPlugin {
             "from_id": from.id(),
             "questions": questions,
         });
-        let reply = cx
-            .decide(request)
+        let Some(reply) = cx
+            .decide(request, timeout)
             .await
-            .map_err(|e| ToolError::model(format!("ask: {e}")))?;
+            .map_err(|e| ToolError::model(format!("ask: {e}")))?
+        else {
+            let mins = timeout.map_or(0, |t| t.as_secs().div_ceil(60));
+            return Ok(ToolOutput::ok(format!(
+                "The user did not answer within {mins} min, so the questions were withdrawn. \
+                 Where a wrong guess is cheap to undo, go on with your best judgment and say what \
+                 you assumed; where it is not, stop and leave the question for when they are back."
+            )));
+        };
         let reply: Reply = serde_json::from_value(reply).unwrap_or_default();
         match reply.answers {
             Some(answers) if answers.len() == questions.len() => {
@@ -407,7 +429,7 @@ impl rumu_core::Plugin for AskPlugin {
 answers. Use it when you need a decision or a fact only the user has, not to ask leave for an \
 action. Offer `options` when the likely answers are known (a short label, with a description \
 when the label needs one; put a recommended option first); the user can always answer in their \
-own words instead. To have another assistant do something, use `agent` with mode \"session\" and `assistant`.\n\n\
+own words instead. If nobody answers within `timeout`, you get told and go on without them. To have another assistant do something, use `agent` with mode \"session\" and `assistant`.\n\n\
 Answers are not saved: if one will matter later, write it into a card yourself."
                         .into(),
                     schema: tool_schema::<AskArgs>(),
@@ -503,6 +525,24 @@ mod tests {
         let out = plugin.call_tool("ask", args, &host.cx()).await.unwrap();
         assert!(
             out.is_error && out.content.text.contains("dismissed"),
+            "{}",
+            out.content.text
+        );
+    }
+
+    #[tokio::test]
+    async fn the_model_hears_when_nobody_answered() {
+        let home = tempfile::tempdir().unwrap();
+        let plugin = plugin(home.path());
+        let host = FakeRuntime::arc();
+        host.answers
+            .lock()
+            .unwrap()
+            .push_back(serde_json::Value::Null);
+        let args = json!({ "questions": [{ "question": "Ship it?" }] });
+        let out = plugin.call_tool("ask", args, &host.cx()).await.unwrap();
+        assert!(
+            !out.is_error && out.content.text.contains("did not answer within 10 min"),
             "{}",
             out.content.text
         );

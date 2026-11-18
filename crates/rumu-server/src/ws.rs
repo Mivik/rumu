@@ -833,6 +833,12 @@ async fn dispatch(state: &AppState, method: &str, p: &Value) -> Result<Value> {
             Ok(json!({}))
         }
 
+        // The user started on a decision: stop its clock.
+        "decision.hold" => {
+            kernel.hold_decision(str_param(p, "id")?)?;
+            Ok(json!({}))
+        }
+
         "session.tree" => {
             let session: SessionId = str_param(p, "session")?.into();
             let (session, nodes, branches) = kernel.session_tree(&session)?;

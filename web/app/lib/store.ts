@@ -102,6 +102,7 @@ export {
   forkSession,
   forgetSession,
   goHome,
+  holdDecision,
   showStats,
   showView,
   killTask,

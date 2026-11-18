@@ -5632,3 +5632,88 @@ async fn side_question_refuses_tool_calls() {
     assert!(result_text(&nodes, "c2").1 && result_text(&nodes, "c3").1);
     assert_eq!(body_kinds(&nodes).last().unwrap(), "tool_result");
 }
+
+// ---------- decisions with a timeout ----------
+
+/// Puts a question to the user with a one-minute timeout and reports how it
+/// ended.
+struct Asker;
+
+#[async_trait]
+impl Plugin for Asker {
+    fn manifest(&self) -> Manifest {
+        Manifest {
+            name: "asker".into(),
+            instructions: None,
+            tools: vec![tool_spec("ask_now")],
+            hooks: vec![],
+        }
+    }
+
+    async fn call_tool(&self, _name: &str, _args: Value, cx: &Cx) -> rumu_core::Result<ToolOutput> {
+        let answer = cx
+            .decide(json!({ "kind": "test" }), Some(Duration::from_secs(60)))
+            .await?;
+        Ok(ToolOutput::ok(match answer {
+            Some(a) => format!("answered {a}"),
+            None => "timed out".into(),
+        }))
+    }
+}
+
+async fn asking() -> (Arc<Kernel>, BranchId, PushRx, String) {
+    let (kernel, _, _, branch) = setup(
+        vec![Arc::new(Asker)],
+        vec![
+            LlmResponse::calls([ToolCall::new("c1", "ask_now", json!({}))]),
+            LlmResponse::text("done"),
+        ],
+    )
+    .await;
+    let mut rx = kernel.tap_pushes();
+    kernel.prompt(&branch, "go").await.unwrap();
+    let id = loop {
+        let v = rx.recv().await.unwrap();
+        if v["method"] == "decision.requested" {
+            assert!(v["params"]["expires_at"].as_i64().is_some(), "{v}");
+            break v["params"]["id"].as_str().unwrap().to_owned();
+        }
+    };
+    (kernel, branch, rx, id)
+}
+
+fn tool_result(kernel: &Kernel, branch: &BranchId) -> String {
+    let (nodes, _) = kernel.branch_path(branch).unwrap();
+    nodes
+        .iter()
+        .find_map(|n| match &n.body {
+            NodeBody::ToolResult { content, .. } => Some(content.text.clone()),
+            _ => None,
+        })
+        .unwrap()
+}
+
+#[tokio::test(start_paused = true)]
+async fn an_unanswered_decision_runs_out() {
+    let (kernel, branch, mut rx, _) = asking().await;
+    let (done, seen) = collect_turn(&mut rx, &branch.0).await;
+    assert_eq!(done["method"], "turn.done", "{done}");
+    assert!(seen.iter().any(|v| v["method"] == "decision.resolved"));
+    assert!(kernel.decisions().is_empty());
+    assert_eq!(tool_result(&kernel, &branch), "timed out");
+}
+
+#[tokio::test(start_paused = true)]
+async fn a_held_decision_waits_for_the_answer() {
+    let (kernel, branch, mut rx, id) = asking().await;
+    kernel.hold_decision(&id).unwrap();
+    let held = rx.recv().await.unwrap();
+    assert_eq!(held["method"], "decision.held", "{held}");
+    assert!(kernel.decisions()[0].get("expires_at").is_none());
+    tokio::time::sleep(Duration::from_secs(600)).await;
+    assert_eq!(kernel.decisions().len(), 1, "no clock once held");
+    kernel.answer_decision(&id, json!("yes")).unwrap();
+    let (done, _) = collect_turn(&mut rx, &branch.0).await;
+    assert_eq!(done["method"], "turn.done", "{done}");
+    assert_eq!(tool_result(&kernel, &branch), "answered \"yes\"");
+}
