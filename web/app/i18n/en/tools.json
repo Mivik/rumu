@@ -70,6 +70,7 @@
   },
   "diff": {
     "moreLines": "{count} more line | {count} more lines",
+    "moreChars": "… {count} more character | … {count} more characters",
     "showAll": "Show all · {count} more line | Show all · {count} more lines",
     "otherHunks": "Other changes:",
     "unavailable": "diff unavailable — file too large or not text"

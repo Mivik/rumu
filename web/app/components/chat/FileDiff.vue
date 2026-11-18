@@ -27,6 +27,10 @@ const props = withDefaults(
 )
 
 const MAX_ROWS = 500
+/** A longer line shows this much and how much is left: one minified line
+ *  (a JSON dump, a bundle) runs to hundreds of KB — tens of thousands of
+ *  highlighted spans on one unwrapped line, seconds of layout. */
+const MAX_LINE = 1000
 /** A clipped diff this long or shorter (context and gaps included) shows whole. */
 const FULL_ROWS = 40
 /** What a longer one shows before its fade. */
@@ -87,9 +91,13 @@ const limit = computed(() => (clipped.value ? CLIP_ROWS : MAX_ROWS))
  * highlightLine) re-highlights them once a lazily loaded grammar lands. */
 const shown = computed(() => {
   const lang = langForPath(props.path)
-  return rows.value
-    .slice(0, limit.value)
-    .map((r) => (r.kind === 'line' ? { ...r, html: highlightLine(r.text, lang) } : r))
+  return rows.value.slice(0, limit.value).map((r) => {
+    if (r.kind !== 'line') return r
+    if (r.text.length <= MAX_LINE) return { ...r, html: highlightLine(r.text, lang), cut: 0 }
+    // don't split a surrogate pair
+    const end = /[\uD800-\uDBFF]/.test(r.text[MAX_LINE - 1]!) ? MAX_LINE - 1 : MAX_LINE
+    return { ...r, html: highlightLine(r.text.slice(0, end), lang), cut: r.text.length - end }
+  })
 })
 const hidden = computed(() => rows.value.length - shown.value.length)
 
@@ -148,6 +156,7 @@ function rowClass(row: Row): string {
         <span v-if="gutters.new" class="fdiff-num">{{ row.new ?? '' }}</span>
         <span class="fdiff-sign">{{ row.sign === ' ' ? '' : row.sign }}</span>
         <span class="fdiff-code" v-html="row.html"></span>
+        <span v-if="row.cut" class="fdiff-cut">{{ t('tools.diff.moreChars', { count: row.cut }) }}</span>
       </template>
       <span v-else-if="row.kind === 'gap'" class="fdiff-gap">⋯</span>
       <span v-else class="fdiff-note">{{ row.text }}</span>
@@ -212,6 +221,14 @@ function rowClass(row: Row): string {
 .fdiff-code {
   flex: none;
   padding-right: 12px;
+}
+
+/* where an over-long line stops */
+.fdiff-cut {
+  flex: none;
+  padding-right: 12px;
+  color: var(--ink-3);
+  user-select: none;
 }
 
 .fdiff-row.is-add {

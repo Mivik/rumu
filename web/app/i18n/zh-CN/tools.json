@@ -70,6 +70,7 @@
   },
   "diff": {
     "moreLines": "其余 {count} 行",
+    "moreChars": "… 其余 {count} 字符",
     "showAll": "展开其余 {count} 行",
     "otherHunks": "其余改动：",
     "unavailable": "差异不可用 — 文件过大或非文本"
