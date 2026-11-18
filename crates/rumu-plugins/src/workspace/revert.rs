@@ -12,8 +12,8 @@ use std::collections::HashMap;
 
 use rumu_cards::diff::Hunk;
 use rumu_core::{
-    FileRef, FilesReverted, Node, NodeBody, PathState, Timestamp, Utf8TypedPathBuf, Workspace,
-    normalize_abs,
+    FileRef, FilesReverted, Node, NodeBody, PathState, RUMU_WORKSPACE, Timestamp, Utf8TypedPathBuf,
+    Workspace, normalize_abs, resolve_state,
 };
 use serde::{Deserialize, Serialize};
 use serde_json::Value;
@@ -131,18 +131,35 @@ pub async fn revert_files(
     (plan, done)
 }
 
-/// The note telling the model what happened: the files put back since the
-/// prompt beginning `prompt`, and those still holding its changes.
-pub fn revert_note(prompt: &str, plan: &RevertPlan, done: &[RevertFile]) -> String {
+/// The note telling the model what happened: the conversation rewound to
+/// before the prompt beginning `prompt` (`rewound`) or not, the files put
+/// back since it, and those still holding its changes. `None` when there is
+/// nothing to tell: no file was touched since.
+pub fn revert_note(
+    prompt: &str,
+    rewound: bool,
+    plan: &RevertPlan,
+    done: &[RevertFile],
+) -> Option<String> {
+    if plan.files.is_empty() && plan.commands.is_empty() {
+        return None;
+    }
     let snippet: String = prompt.chars().take(80).collect();
     let ellipsis = if snippet.len() < prompt.len() {
         "…"
     } else {
         ""
     };
-    let mut out = format!(
-        "The user reverted the file changes made since their message \"{snippet}{ellipsis}\":"
-    );
+    let mut out = if rewound {
+        format!(
+            "The user rewound the conversation to before their message \"{snippet}{ellipsis}\". \
+             Of the file changes made after it:"
+        )
+    } else {
+        format!(
+            "The user reverted the file changes made since their message \"{snippet}{ellipsis}\":"
+        )
+    };
     let ok = |a: RevertAction| {
         done.iter()
             .filter(move |f| f.error.is_none() && f.action == a)
@@ -172,12 +189,12 @@ pub fn revert_note(prompt: &str, plan: &RevertPlan, done: &[RevertFile]) -> Stri
     if !plan.commands.is_empty() {
         out.push_str("\nWhatever the bash commands since then changed was not undone.");
     }
-    out
+    Some(out)
 }
 
 /// Plan every file the recorded writes in `nodes` touched.
 async fn plan(state: &PathState, nodes: &[Node]) -> (Vec<Planned>, Vec<String>) {
-    let (changes, commands) = changes_of(nodes);
+    let (changes, commands) = changes_of(state, nodes);
     let mut order: Vec<&FileRef> = Vec::new();
     let mut by_file: HashMap<&FileRef, Vec<&Change>> = HashMap::new();
     for c in &changes {
@@ -200,7 +217,7 @@ async fn plan(state: &PathState, nodes: &[Node]) -> (Vec<Planned>, Vec<String>) 
 
 /// The recorded writes in `nodes` that no revert among them undid, oldest
 /// first, and the `bash` commands.
-fn changes_of(nodes: &[Node]) -> (Vec<Change>, Vec<String>) {
+fn changes_of(state: &PathState, nodes: &[Node]) -> (Vec<Change>, Vec<String>) {
     let mut calls: HashMap<&str, (&str, &Value)> = HashMap::new();
     let mut changes = Vec::new();
     let mut commands = Vec::new();
@@ -211,12 +228,7 @@ fn changes_of(nodes: &[Node]) -> (Vec<Change>, Vec<String>) {
         match &n.body {
             NodeBody::Note { content, .. } => {
                 if let Some(m) = content.decode::<FilesReverted>() {
-                    // A revert from before `nodes` undid all before it.
-                    let since = nodes
-                        .iter()
-                        .find(|x| x.id == m.from)
-                        .map_or(Timestamp::MIN, |x| x.at);
-                    reverts.push((since, n.at, m.files));
+                    reverts.push((m.since, n.at, m.files));
                 }
             }
             NodeBody::Assistant { tool_calls, .. } => {
@@ -246,7 +258,12 @@ fn changes_of(nodes: &[Node]) -> (Vec<Change>, Vec<String>) {
                 let Some(patch) = content.decode::<FilePatch>() else {
                     continue;
                 };
-                let Some(file) = patch.file else { continue };
+                // Writes from before patches named their file: the path as
+                // the branch resolves it now (a wrong guess fails the
+                // strict match, so it is left alone).
+                let Some(file) = patch.file.or_else(|| file_of(state, args)) else {
+                    continue;
+                };
                 let content = (patch.kind == PatchKind::Create)
                     .then(|| {
                         args.get("content")
@@ -272,6 +289,16 @@ fn changes_of(nodes: &[Node]) -> (Vec<Change>, Vec<String>) {
     });
     changes.sort_by_key(|c| c.at);
     (changes, commands)
+}
+
+/// The real-workspace file a `write`/`edit` call's `path` names.
+fn file_of(state: &PathState, args: &Value) -> Option<FileRef> {
+    let raw = args.get("path").and_then(Value::as_str)?;
+    let addr = resolve_state(state, raw).ok()?;
+    (addr.ws != RUMU_WORKSPACE).then(|| FileRef {
+        ws: addr.ws,
+        path: addr.abs.to_string(),
+    })
 }
 
 /// Plan one file from its writes (oldest first); `None` when reverting it

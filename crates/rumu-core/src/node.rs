@@ -534,12 +534,12 @@ pub struct FileRef {
 }
 
 /// Payload of the `workspace.revert` marker (v1): the user reverted the
-/// file changes made since the user message `from`; `files` are the ones
-/// put back.
+/// file changes made since `since` (the time of the user message they
+/// rewound to); `files` are the ones put back.
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, ts_rs::TS)]
 #[ts(export)]
 pub struct FilesReverted {
-    pub from: NodeId,
+    pub since: Timestamp,
     pub files: Vec<FileRef>,
 }
 

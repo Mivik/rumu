@@ -26,7 +26,8 @@ import type { ModelUse } from '../generated/ModelUse'
 import type { FileRef } from '../generated/FileRef'
 import type { RevertFile } from '../generated/RevertFile'
 import type { RevertPlan } from '../generated/RevertPlan'
-import { dropDraft, landingWritten, pruneDrafts } from './drafts'
+import { activeDraft, dropDraft, landingWritten, pruneDrafts, storedImage } from './drafts'
+import { typedText } from '../attachments'
 import { currentPick, models } from './models'
 import { isUnseen } from './derived'
 import { state } from './state'
@@ -478,18 +479,51 @@ export async function revertPlan(node: NodeId): Promise<RevertPlan | null> {
   }
 }
 
-/** Revert `files` of that plan (`branch.revert`): the files reverted, the
- *  failed ones carrying `error`; null when the request failed. */
-export async function revertFiles(node: NodeId, files: FileRef[]): Promise<RevertFile[] | null> {
+/**
+ * Rewind to the user message `node` on the active branch
+ * (`branch.rewind`): revert `files` of its plan, and with `conversation`
+ * fork a branch from just before the message and open it, the message put
+ * back into an empty composer. Returns the files reverted, the failed ones
+ * carrying `error`; null when the request failed.
+ */
+export async function rewindTo(
+  node: Node,
+  files: FileRef[],
+  conversation: boolean,
+): Promise<RevertFile[] | null> {
   const branch = state.activeBranch
   if (!branch) return null
   try {
-    const res = await rumu.request<{ files: RevertFile[] }>('branch.revert', { branch, node, files })
+    const res = await rumu.request<{ files: RevertFile[]; branch: Branch | null }>('branch.rewind', {
+      branch,
+      node: node.id,
+      files,
+      conversation,
+    })
+    if (res.branch) {
+      await resyncTree()
+      state.activeBranch = res.branch.id
+      if (state.session) state.session.active_branch = res.branch.id
+      await loadPath(res.branch.id)
+      putBack(node)
+    }
     return res.files
   } catch (err) {
     toast('error', t('errors.revert'), (err as Error).message)
     return null
   }
+}
+
+/** A rewound message back in the composer, unless something is written
+ *  there already. */
+function putBack(node: Node): void {
+  if (node.body.type !== 'user') return
+  const draft = activeDraft.value
+  if (draft.text.trim() || draft.images.length) return
+  const images = node.body.content.attachments ?? []
+  draft.text = typedText(node.body.content.text, images.length)
+  draft.images = images.map((a) => storedImage(a))
+  requestComposerFocus()
 }
 
 /** `branch.compact`: summarize the active branch's older context now, the

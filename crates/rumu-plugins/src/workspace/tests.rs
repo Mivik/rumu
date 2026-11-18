@@ -337,8 +337,9 @@ async fn write_and_edit_carry_the_ui_patch() {
 }
 
 /// Reverting a span puts back what its `write`/`edit` calls changed: a
-/// created file is removed, an edited one restored, and one changed by hand
-/// since is left alone.
+/// created file is removed, an edited one restored (an older patch naming no
+/// file found by its call's path), and one changed by hand since is left
+/// alone.
 #[tokio::test]
 async fn revert_undoes_the_recorded_writes() {
     let dir = tempfile::tempdir().unwrap();
@@ -392,9 +393,14 @@ async fn revert_undoes_the_recorded_writes() {
         },
     ));
     for (i, (id, name, args)) in calls.iter().enumerate() {
-        let out = plugin.call_tool(name, args.clone(), &cx).await.unwrap();
+        let mut out = plugin.call_tool(name, args.clone(), &cx).await.unwrap();
         assert!(!out.is_error, "{name}: {}", out.content.text);
         flush_output(&host, id, &out);
+        // A patch from before they named their file: found by its path.
+        if *id == "e1" {
+            let data = out.content.data.as_mut().unwrap();
+            assert!(data.data.as_object_mut().unwrap().remove("file").is_some());
+        }
         nodes.push(sess_node(
             "s",
             &format!("r{i}"),
@@ -449,7 +455,7 @@ async fn revert_undoes_the_recorded_writes() {
         "c1\nmine\n"
     );
 
-    let note = revert_note("do it", &plan, &done);
+    let note = revert_note("do it", false, &plan, &done).unwrap();
     assert!(note.contains("restored: proj:b.txt"), "{note}");
     assert!(note.contains("deleted: proj:a.txt"), "{note}");
     assert!(note.contains("left as they are: proj:c.txt"), "{note}");
@@ -458,7 +464,7 @@ async fn revert_undoes_the_recorded_writes() {
     // Recorded, the revert is not planned again: only the file changed by
     // hand is left.
     let marker = rumu_core::FilesReverted {
-        from: "u".into(),
+        since: 1,
         files: done
             .iter()
             .map(|f| rumu_core::FileRef {

@@ -990,19 +990,39 @@ async fn dispatch(state: &AppState, method: &str, p: &Value) -> Result<Value> {
             Ok(json!(rumu_plugins::revert_plan(&path_state, &nodes).await))
         }
 
-        // Revert the picked `files` ({ws, path}) of that plan, planned
-        // afresh, and tell the model on `branch`. Refused while it works.
-        "branch.revert" => {
+        // Rewind to the user message `node` on `branch`: revert the picked
+        // `files` ({ws, path}) of its plan, planned afresh, and with
+        // `conversation` fork a branch from just before the message (the
+        // edit's fork; the branch left stays a variant). The model is told on
+        // the branch that goes on. Refused while `branch` works.
+        "branch.rewind" => {
             let branch: BranchId = str_param(p, "branch")?.into();
             let node: NodeId = str_param(p, "node")?.into();
             let files: Vec<rumu_core::FileRef> =
                 parse_params(p.get("files").unwrap_or(&Value::Null))?;
+            let conversation = p.get("conversation").and_then(Value::as_bool) == Some(true);
             if !kernel.is_idle(&branch)? {
                 return Err(ServerError::InvalidParams(
                     "the branch is still working".into(),
                 ));
             }
             let nodes = kernel.nodes_since(&branch, &node)?;
+            let Some((first, rumu_core::NodeBody::User { content })) =
+                nodes.first().map(|n| (n, &n.body))
+            else {
+                return Err(ServerError::InvalidParams(format!(
+                    "`{node}` is not a user message"
+                )));
+            };
+            let forked = match (conversation, &first.parent) {
+                (true, Some(before)) => Some(kernel.fork(before).await?),
+                (true, None) => {
+                    return Err(ServerError::InvalidParams(
+                        "the first message has nothing before it".into(),
+                    ));
+                }
+                (false, _) => None,
+            };
             let (_, path_state) = kernel.branch_path(&branch)?;
             let (plan, done) = rumu_plugins::revert_files(&path_state, &nodes, &files).await;
             let reverted: Vec<rumu_core::FileRef> = done
@@ -1013,19 +1033,16 @@ async fn dispatch(state: &AppState, method: &str, p: &Value) -> Result<Value> {
                     path: f.path.clone(),
                 })
                 .collect();
-            if !reverted.is_empty() {
-                let prompt = match nodes.first().map(|n| &n.body) {
-                    Some(rumu_core::NodeBody::User { content }) => content.text.as_str(),
-                    _ => "",
-                };
-                let text = rumu_plugins::revert_note(prompt, &plan, &done);
+            let text = rumu_plugins::revert_note(&content.text, forked.is_some(), &plan, &done);
+            if let Some(text) = text.filter(|_| forked.is_some() || !reverted.is_empty()) {
                 let marker = rumu_core::FilesReverted {
-                    from: node,
+                    since: first.at,
                     files: reverted,
                 };
-                kernel.record_revert(&branch, text, &marker).await?;
+                let on = forked.as_ref().map_or(&branch, |b| &b.id);
+                kernel.record_revert(on, text, &marker).await?;
             }
-            Ok(json!({ "files": done }))
+            Ok(json!({ "files": done, "branch": forked }))
         }
 
         "branch.retry" => {

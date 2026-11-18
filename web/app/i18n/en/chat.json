@@ -59,11 +59,21 @@
     "copied": "Copied message",
     "fold": "Show less",
     "unfold": "Show all",
-    "revertTitle": "Revert file changes since here"
+    "revertTitle": "Rewind to here"
   },
   "revert": {
-    "title": "Revert file changes",
-    "hint": "Restores the files write / edit wrote since this message",
+    "title": "Rewind to before this message",
+    "modes": {
+      "both": "Conversation and files",
+      "conversation": "Conversation only",
+      "files": "Files only"
+    },
+    "hints": {
+      "both": "Forks from before this message and reverts the files write / edit wrote since; the message goes back into the composer",
+      "conversation": "Forks from before this message, leaving the files as they are; the message goes back into the composer, the old conversation stays a variant",
+      "files": "Keeps the conversation and reverts the files write / edit wrote since"
+    },
+    "rewind": "Rewind",
     "loading": "Loading…",
     "empty": "No file changes to revert",
     "restore": "restore",

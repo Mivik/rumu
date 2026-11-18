@@ -56,7 +56,11 @@ defineProps<{ notice: Notice }>()
       {{ t('cards.notes.task', { id: notice.id, status: taskStatusWord(notice.status) }) }}
     </button>
     <span v-else-if="notice.kind === 'revert'" class="min-w-0 truncate" :title="notice.text">
-      {{ t('cards.notes.revert', { count: notice.files.length }) }}
+      {{
+        notice.files.length
+          ? t('cards.notes.revert', { count: notice.files.length })
+          : t('cards.notes.revertNone')
+      }}
     </span>
     <span v-else-if="notice.kind === 'note'" class="min-w-0 whitespace-pre-wrap">{{ notice.text }}</span>
   </div>

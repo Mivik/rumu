@@ -50,27 +50,6 @@ export function callsOf(nodes: Node[]): Map<string, { call: ToolCallLike; node: 
 }
 
 export const callsOnPath = computed(() => callsOf(pathNodes.value))
-
-/** The user messages on the active path followed by a file write (a
- *  `write`/`edit` result naming its file) or a sub-agent (whose writes
- *  count too): those whose changes can be reverted. */
-export const revertibleFrom = computed<Set<NodeId>>(() => {
-  const out = new Set<NodeId>()
-  let after = false
-  const nodes = pathNodes.value
-  for (let i = nodes.length - 1; i >= 0; i--) {
-    const b = nodes[i]!.body
-    if (b.type === 'tool_result') {
-      const d = b.content.data
-      if (d?.tag === 'workspace.file_patch' && (d.data as { file?: unknown }).file) after = true
-    } else if (b.type === 'assistant') {
-      if (b.tool_calls.some((c) => c.name === 'agent')) after = true
-    } else if (b.type === 'user' && after) {
-      out.add(nodes[i]!.id)
-    }
-  }
-  return out
-})
 type ToolCallLike = { call_id: string; name: string; args: unknown }
 
 export const activeDelta = computed<DeltaBuffer | null>(() =>

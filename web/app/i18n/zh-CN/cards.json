@@ -20,7 +20,8 @@
     "cardBefore": "卡片",
     "cardAfter": "已变更",
     "task": "后台任务 {id}：{status}",
-    "revert": "撤销 {count} 个文件的改动"
+    "revert": "撤销 {count} 个文件的改动",
+    "revertNone": "文件改动保持不动"
   },
   "drawer": {
     "label": "知识卡片",

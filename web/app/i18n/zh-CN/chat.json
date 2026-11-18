@@ -59,11 +59,21 @@
     "copied": "已复制消息",
     "fold": "收起",
     "unfold": "展开全文",
-    "revertTitle": "撤销此后的文件改动"
+    "revertTitle": "回退到此处"
   },
   "revert": {
-    "title": "撤销文件改动",
-    "hint": "还原自此消息起由 write / edit 写入的文件",
+    "title": "回退到此消息之前",
+    "modes": {
+      "both": "对话和文件",
+      "conversation": "仅对话",
+      "files": "仅文件"
+    },
+    "hints": {
+      "both": "从此消息之前分叉，并撤销此后 write / edit 写入的文件；消息放回输入框",
+      "conversation": "从此消息之前分叉，文件保持不动；消息放回输入框，原对话可从消息变体找回",
+      "files": "保留对话，撤销此后 write / edit 写入的文件"
+    },
+    "rewind": "回退",
     "loading": "读取中…",
     "empty": "暂无可撤销的文件改动",
     "restore": "还原",
