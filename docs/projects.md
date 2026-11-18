@@ -92,18 +92,21 @@ The session's project is the assistant's to manage, like its own deck: its
 cards and its workspaces.
 
 Configuration is in the `@rumu` workspace and is changed with the file
-tools. What changes the branch (mounting a deck, the default workspace)
-stays a tool. Which set a workspace is in shows in its path, not in a field:
+tools. What can be done to one of its objects beyond reading and writing it
+is one of the object's actions, run with `invoke { action, path, args? }`:
+`action` is the full name (`<type>.<action>`, unique), `path` the object, and
+`list` on an object shows its actions with their arguments. Which set a
+workspace is in shows in its path, not in a field:
 
 ```
 @rumu:/workspaces/<name>      every visible workspace (the registry)
 @rumu:/project/workspaces     the session's project's mounted workspaces
 ```
 
-- `list @rumu:/workspaces` lists the registry: each workspace with its
-  location, marked when it is mounted in the session's project or is the
-  default. `read @rumu:/workspaces/<name>` returns its entry, `write`
-  creates one:
+- `list @rumu:/workspaces` lists the workspaces: the project's first, then
+  the rest of the registry, then `@rumu`; each with its location, marked when
+  it is mounted in the session's project or is the default. `read
+  @rumu:/workspaces/<name>` returns its entry, `write` creates one:
 
   ```yaml
   root: ~/src/tokio
@@ -121,15 +124,21 @@ stays a tool. Which set a workspace is in shows in its path, not in a field:
   only in a session with a project.
 - Mounting is a property of the project, not of the workspace, so it is not
   kept under `@rumu:/workspaces`. The registry listing only shows it.
-- `workspace_use(name?)` sets the branch's default and lists the workspaces,
-  the project's first. `name` may be any registered workspace, `@scratch`, or
-  `@rumu`.
+- `invoke { action: "workspace.use", path: "@rumu:/workspaces/<name>" }` sets
+  the branch's default and lists the workspaces as they then are. `@scratch`
+  and `@rumu` have entries there for this alone (they cannot be written or
+  deleted). It is the web's `branch.use_workspace`: the same `workspace.use`
+  marker.
 - `card_mount(deck, at: "project")` moves the session into a project, and
   `card_mount(at: "project")` leaves it. `card_mount()` marks project decks
   in its listing.
 - `card_mount(create: <name>, at: "project")` creates a project deck with a
   blank charter and moves the session into it (`create` is accepted only
   there). The assistant then writes the charter and mounts workspaces.
+- An action's full name that is also the name of a web (WebSocket) method
+  names the same operation, as `task.kill` (cancel a background task) does;
+  the model's may only reach its own branch's objects, and asks where the
+  web does not. An operation that differs gets another name.
 
 | what                                          | approval            |
 |-----------------------------------------------|---------------------|

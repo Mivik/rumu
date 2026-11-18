@@ -2,8 +2,8 @@
 
 rumu is an MCP client. The user registers MCP servers in Settings, and an
 assistant uses the servers bound to it. Their tools are not in the model's
-tool list: the model finds them through the `@rumu` workspace and calls them
-with one tool, `call_tool`.
+tool list: each server is an object of the `@rumu` workspace whose actions are
+its tools, which the model finds there and runs with `invoke`.
 
 ## Prior art
 
@@ -13,9 +13,9 @@ harnesses' own docs.
 | Question | Common answer | Taken here |
 | --- | --- | --- |
 | Where servers are defined | Globally (Codex, OpenCode, Cline); some also inline per agent (Claude Code, Gemini CLI, Copilot) | Globally, per user; an assistant names the ones it uses |
-| Many tools | Deferred: names first, schemas on demand (Claude Code `ToolSearch`, OpenAI `tool_search`) | Always deferred, through `@rumu:/tools` |
-| Loading a found tool | Provider-native: the schema is injected into the conversation and the tool called by name | Not portable across providers, so one generic `call_tool` |
-| Tool naming | `mcp__<server>__<tool>` (Claude Code), `<server>_<tool>` (OpenCode) | `<server>/<tool>`, as in its path |
+| Many tools | Deferred: names first, schemas on demand (Claude Code `ToolSearch`, OpenAI `tool_search`) | Always deferred, through `@rumu:/mcp` |
+| Loading a found tool | Provider-native: the schema is injected into the conversation and the tool called by name | Not portable across providers, so the generic `invoke` |
+| Tool naming | `mcp__<server>__<tool>` (Claude Code), `<server>_<tool>` (OpenCode) | `<server>/<tool>`, the action's full name |
 | Approval | Per tool or per server, varies | None: binding a server to an assistant authorizes it |
 | Narrowing a server's tools | Allow and deny lists per server (Codex `enabled_tools`/`disabled_tools`) | Rules per binding, as for models |
 
@@ -80,19 +80,23 @@ harnesses' own docs.
   listing them: name, status, tool count, and the server's own
   `instructions` (capped). When the assistant's set of servers changes, the
   next model call gets the list again, or a note that none is left.
-- `@rumu:/tools` holds the session's servers:
-  - `list @rumu:/tools`: each server with its status and tool count.
-  - `list @rumu:/tools/<server>`: one line per tool, its name and the first
-    line of its description.
-  - `read @rumu:/tools/<server>/<tool>`: its description and input schema.
-  - `search` with `scope: "@rumu:/tools[/<server>]"`: BM25 over tool names,
-    titles and descriptions. Each hit prints like `read`, so the model can
-    call it right away; the default limit is 5.
-- `call_tool { tool: "<server>/<tool>", args }` calls it. The result's text
-  and images come back as the tool result, `isError` as an error; each image
-  is also copied to `@scratch:.inbox/attachments/` like a prompt's, the text
-  naming the file. An unknown
-  name is refused with the server's tool names. It can run in the
-  background, and `code` scripts reach it as `rumu.call_tool`.
+- `@rumu:/mcp` holds the session's servers. A server is an object and its
+  tools are its actions, named `<server>/<tool>` (a tool is not a path):
+  - `list @rumu:/mcp`: each server with its status and tool count.
+  - `list @rumu:/mcp/<server>`: its status, then its tools under
+    `actions:`, one line each: the signature (`fake/echo(text: string)`)
+    and the first line of its description.
+  - `read @rumu:/mcp/<server>`: its `instructions`, then each tool's
+    description and input schema.
+  - `search` with `scope: "@rumu:/mcp[/<server>]"`: BM25 over tool names,
+    titles and descriptions. Each hit is an action and prints its schema, so
+    the model can run it right away; the default limit is 5.
+- `invoke { action: "<server>/<tool>", args }` runs it (no `path`: the
+  name says the server). The result's text and images come back as the tool
+  result, `isError` as an error; each image is also copied to
+  `@scratch:.inbox/attachments/` like a prompt's, the text naming the file.
+  An unknown name is refused with the server's tool names, a call the server
+  refuses with the tool's input schema. It can run in the background, and
+  `code` scripts reach it as `rumu.invoke`.
 - Servers outside the session's list, and tools its rules leave out, are
   neither listed nor callable; a server's tool count is of the enabled ones.
