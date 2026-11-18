@@ -6,7 +6,8 @@
 //! Every file tool takes one `path`, optionally qualified as
 //! `<workspace>:<path>` (rumu-core `addr`); the `@rumu` workspace is a
 //! virtual filesystem holding rumu's own data: cards of the decks mounted on
-//! this branch (`@rumu:/cards/<mount>/<path>`, `card_mount`), their history
+//! this branch (`@rumu:/cards/<mount>/<path>`, mounted with `deck.mount` on
+//! `@rumu:/decks/<name>`), their history
 //! (`@rumu:/history`), and, read-only, past conversations
 //! (`@rumu:/sessions/...`).
 //!
@@ -63,8 +64,8 @@ pub struct WorkspacePlugin {
     /// The deck registry behind `@rumu:/cards`.
     decks: Decks,
     /// The workspace registry and project lists behind `@rumu:/workspaces`
-    /// and `@rumu:/project/workspaces` (the kernel merges the same handle
-    /// into every path state).
+    /// and the projects' `workspaces:` in `@rumu:/decks` (the kernel merges
+    /// the same handle into every path state).
     workspaces: Workspaces,
     /// The blob store behind image reads (`<home>/blobs`), opened lazily on
     /// the first one — most plugin instances never read an image.

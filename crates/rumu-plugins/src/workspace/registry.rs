@@ -4,9 +4,8 @@
 //!   rest of the registry, then `@scratch` and `@rumu`);
 //!   `@rumu:/workspaces/<name>` reads and writes one registry entry
 //!   (`{root, ssh?, read_only?}`), and its `workspace.use` makes it the
-//!   branch's default (`@scratch` and `@rumu` have entries for that alone);
-//! - `@rumu:/project/workspaces` is the session's project's ordered workspace
-//!   list (the first is its default), read-before-write like a card.
+//!   branch's default (`@scratch` and `@rumu` have entries for that alone).
+//!   A project's own list is `workspaces:` in `@rumu:/decks/<name>`.
 //!
 //! Creating a registry entry needs no approval; changing or deleting an
 //! existing one asks the user (`workspace`), since other projects may mount
@@ -15,32 +14,17 @@
 use async_trait::async_trait;
 use rumu_cards::deck::Action;
 use rumu_core::{
-    Content, Cx, PathState, RUMU_WORKSPACE, SCRATCH_WORKSPACE, Structured, ToolError, ToolOutput,
-    ToolResult, Utf8UnixPath,
+    Cx, PathState, RUMU_WORKSPACE, SCRATCH_WORKSPACE, ToolError, ToolOutput, ToolResult,
+    Utf8UnixPath,
 };
-use serde::{Deserialize, Serialize};
 use serde_json::{Value, json};
 
 use crate::approve::{approve, deck_name};
-use crate::workspaces::{
-    entry_yaml, parse_entry, remove_workspace, set_project_workspaces, upsert_workspace,
-};
+use crate::workspaces::{entry_yaml, parse_entry, remove_workspace, upsert_workspace};
 
 use super::WorkspacePlugin;
 use super::tools::replace_occurrences;
 use super::vfs::{ActionSpec, Approval, At, NoArgs, Node, Out};
-
-/// Payload of the read marker on `@rumu:/project/workspaces` (v1): the
-/// content hash the last read returned. A write must be based on it.
-#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
-pub(crate) struct ProjectWorkspacesRead {
-    pub hash: String,
-}
-
-impl Structured for ProjectWorkspacesRead {
-    const TAG: &'static str = "project.workspaces.read";
-    const V: u32 = 1;
-}
 
 /// `/workspaces`: one line per workspace: the default `*`, name, machine
 /// label, root, rw/ro, and `(mounted)` for the project's.
@@ -133,54 +117,6 @@ fn fixed(name: &str) -> ToolResult<&str> {
     Ok(name)
 }
 
-/// `/project`: the session's project (only `workspaces` under it).
-pub(super) struct ProjectDir;
-
-#[async_trait]
-impl Node for ProjectDir {
-    async fn list(&self, at: &At<'_>) -> Out {
-        at.p.project_names(at.state)?;
-        Ok("workspaces\n".into())
-    }
-
-    fn holds_files(&self) -> bool {
-        true
-    }
-}
-
-/// `/project/workspaces`: the project's ordered workspace list. Reading it
-/// records the content hash a later write must be based on.
-pub(super) struct ProjectWorkspaces;
-
-#[async_trait]
-impl Node for ProjectWorkspaces {
-    async fn list(&self, at: &At<'_>) -> Out {
-        at.p.project_text(at.state)
-    }
-
-    async fn read(&self, at: &At<'_>, _: Option<u64>, _: Option<u64>) -> Out {
-        let out = at.p.project_text(at.state)?;
-        let marker = read_marker(&out.content.text);
-        Ok(out.with_effect(marker))
-    }
-
-    async fn write(&self, at: &At<'_>, content: &str, from: Option<&str>) -> Out {
-        no_from(from)?;
-        at.p.project_write(at.state, content, at.cx).await
-    }
-
-    /// Edit applies to the current text; it is not the stale-write check
-    /// `write` has.
-    async fn edit(&self, at: &At<'_>, old: &str, new: &str, all: bool) -> Out {
-        let text = at.p.project_text(at.state)?.content.text;
-        let (new_text, n) = replace_occurrences(&text, old, new, all)
-            .map_err(|e| ToolError::model(e.to_string()))?;
-        let after = at.p.project_apply(at.state, &new_text)?;
-        Ok(ToolOutput::ok(format!("{}:\n{after}", edited(at.abs, n)))
-            .with_effect(read_marker(&after)))
-    }
-}
-
 /// Configuration is written whole: `from` (a move) is for cards.
 fn no_from(from: Option<&str>) -> ToolResult<()> {
     match from {
@@ -206,35 +142,6 @@ impl WorkspacePlugin {
             return Err(no_workspace(name));
         };
         entry_yaml(&ws).map_err(|e| ToolError::model(e.to_string()))
-    }
-
-    /// The session's project and its mounted workspaces, in order.
-    fn project_names(&self, state: &PathState) -> ToolResult<(String, Vec<String>)> {
-        let Some(project) = state.project.clone() else {
-            return Err(ToolError::model(
-                "this session is in no project; `@rumu:/project/workspaces` exists only in one \
-                 (`card_mount(deck, at: \"project\")`)",
-            ));
-        };
-        let names = self.workspaces.project(&project);
-        Ok((project, names))
-    }
-
-    /// The project's list as YAML (`- name` lines); empty when none.
-    fn project_text(&self, state: &PathState) -> ToolResult<ToolOutput> {
-        let (_, names) = self.project_names(state)?;
-        Ok(project_yaml(&names).into())
-    }
-
-    /// Parse `content` as the project's new list and save it.
-    fn project_apply(&self, state: &PathState, content: &str) -> ToolResult<String> {
-        let (project, _) = self.project_names(state)?;
-        let names: Option<Vec<String>> = rumu_cards::yaml::from_str(content)
-            .map_err(|e| ToolError::model(format!("workspaces list does not parse: {e}")))?;
-        let names = names.unwrap_or_default();
-        set_project_workspaces(&self.home, &self.workspaces, &project, names.clone())
-            .map_err(|e| ToolError::model(e.to_string()))?;
-        Ok(project_yaml(&names))
     }
 
     /// Create or change one registry entry. A change asks the user; identical
@@ -303,41 +210,6 @@ impl WorkspacePlugin {
             "deleted `@rumu:/workspaces/{name}`; no project mounts it any more"
         )))
     }
-
-    /// Replace the project's list, after the read-before-write check.
-    async fn project_write(
-        &self,
-        state: &PathState,
-        content: &str,
-        cx: &Cx,
-    ) -> ToolResult<ToolOutput> {
-        let current = self.project_text(state)?.content.text;
-        let hash = rumu_cards::card::view_rev_of(&current);
-        let seen = cx.index()?.latest::<ProjectWorkspacesRead>();
-        if seen.map(|e| e.value.hash) != Some(hash) {
-            return Err(ToolError::model(format!(
-                "`@rumu:/project/workspaces` changed since you read it; read it again first. \
-                 Current list:\n{current}"
-            )));
-        }
-        let after = self.project_apply(state, content)?;
-        Ok(
-            ToolOutput::ok(format!("wrote `@rumu:/project/workspaces`:\n{after}"))
-                .with_effect(read_marker(&after)),
-        )
-    }
-}
-
-/// The read marker for the list `text`: the base of the next write (a write
-/// of one's own is as good as a read).
-fn read_marker(text: &str) -> Content {
-    Content::marker(&ProjectWorkspacesRead {
-        hash: rumu_cards::card::view_rev_of(text),
-    })
-}
-
-fn project_yaml(names: &[String]) -> String {
-    serde_saphyr::to_string(&names.to_vec()).unwrap_or_else(|_| "[]\n".to_owned())
 }
 
 fn no_workspace(name: &str) -> ToolError {

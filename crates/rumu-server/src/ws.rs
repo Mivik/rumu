@@ -1080,7 +1080,7 @@ async fn dispatch(state: &AppState, method: &str, p: &Value) -> Result<Value> {
             Ok(json!({ "task": kernel.kill_task(&id).await? }))
         }
 
-        // The cards a branch sees (its mount table, `card_mount` included), or
+        // The cards a branch sees (its mount table, `deck.mount` included), or
         // without a `branch` what an assistant deck sees by default:
         // `/cards/self` plus its `deck.yaml` mounts.
         "card.list" => {

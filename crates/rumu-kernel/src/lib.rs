@@ -805,7 +805,7 @@ impl Kernel {
 
     /// The user moves the session into a project (`mount`, a project deck
     /// at `/cards/project`) or out of it (`None`): the marker a model's
-    /// `card_mount` writes, then the project's first workspace (or `@scratch`)
+    /// `deck.mount` writes, then the project's first workspace (or `@scratch`)
     /// as the default, with `text` telling the model. Recorded on the active
     /// branch; queued while a turn runs.
     pub async fn move_project(

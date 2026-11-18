@@ -237,7 +237,10 @@ impl WorkspacePlugin {
     pub(super) async fn card_list(&self, prefix: &str, cx: &Cx) -> ToolResult<ToolOutput> {
         let cards = self.cards(cx)?;
         if cards.is_empty() {
-            return Ok("no decks mounted; use card_mount to mount one".into());
+            return Ok(
+                "no decks mounted; `invoke deck.mount` on a `@rumu:/decks/<name>` mounts one"
+                    .into(),
+            );
         }
         rumu_cards::list_text(&cards, prefix, super::tools::LIST_LIMIT)
     }

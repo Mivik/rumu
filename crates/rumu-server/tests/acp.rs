@@ -381,7 +381,7 @@ async fn an_unknown_permission_answer_is_a_refusal() {
     let script = r#"
 turns:
   - tool_calls:
-      - {call_id: c1, name: card_mount, args: {at: project, create: elsewhere}}
+      - {call_id: c1, name: write, args: {path: "@rumu:/decks/elsewhere", content: "kind: project\n"}}
   - text: "ok."
 "#;
     let answers = Answers {

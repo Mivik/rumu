@@ -1,140 +1,69 @@
-//! `card_mount`: the branch's card mount table.
+//! The branch's card mount table, changed by the `deck.mount` and
+//! `deck.unmount` actions of `@rumu:/decks/<name>`.
 //!
 //! Mounts are branch state (a note marker on the path), so forks and
 //! sub-agents inherit them. Mounting makes a deck readable; writes to it are
 //! approved separately (see [`crate::approve`]). The mount result carries the
 //! mounted deck's pinned cards and catalog; the unmount result says the deck
-//! is no longer readable/writable. Decks are named by id (the listing shows
-//! them).
+//! is no longer readable/writable.
 //!
 //! `/cards/project` is the session's project: only project decks mount
 //! there, mounting one moves the session into it (replacing another), and
 //! unmounting it leaves the project. A project deck mounted elsewhere is just
 //! a read mount.
 
-use rumu_cards::Cards;
 use rumu_cards::cards::{SELF_MOUNT, mount_points_overlap, normalize_mount_point};
-use rumu_cards::deck::{Action, Deck, valid_deck_name};
+use rumu_cards::deck::{Action, Deck};
 use rumu_core::{
-    CardMount, CardUnmount, Content, Cx, PROJECT_MOUNT, PathState, SCRATCH_WORKSPACE, ToolError,
-    ToolOutput, ToolResult, WorkspaceUse,
+    CardMount, CardUnmount, Content, Cx, PROJECT_MOUNT, PathState, RUMU_WORKSPACE,
+    SCRATCH_WORKSPACE, ToolError, ToolOutput, ToolResult, WorkspaceUse,
 };
-use serde_json::{Value, json};
+use serde_json::json;
 
-use crate::approve::{allowed, approve, deck_name};
-use crate::workspaces::create_project;
+use crate::approve::{approve, deck_name};
 
 use super::WorkspacePlugin;
-use super::tools::parse_mount_args;
 
 impl WorkspacePlugin {
-    pub(super) async fn tool_card_mount(
-        &self,
-        state: &PathState,
-        args: &Value,
-        cx: &Cx,
-    ) -> ToolResult<ToolOutput> {
-        let args = parse_mount_args(args)?;
-        let cards = Cards::new(self.decks(), &state.mounts);
-        match (
-            args.deck.as_deref(),
-            args.at.as_deref(),
-            args.create.as_deref(),
-        ) {
-            (None, None, None) => Ok(self.mount_listing(state, &cards, cx).into()),
-            (None, None, Some(_)) => Err(ToolError::model(
-                "card_mount: `create` needs `at: \"project\"`",
-            )),
-            (Some(_), _, Some(_)) => Err(ToolError::model(
-                "card_mount: `create` cannot be combined with `deck`",
-            )),
-            (Some(_), None, None) => Err(ToolError::model(
-                "card_mount: mounting a deck needs `at` (for example `/cards/user`)",
-            )),
-            (None, Some(at), None) => self.unmount(state, at),
-            (Some(deck), Some(at), None) => self.mount(state, deck, at, cx).await,
-            (None, Some(at), Some(name)) => self.create_and_mount(state, name, at, cx).await,
-        }
-    }
-
-    fn mount_listing(&self, state: &PathState, cards: &Cards, cx: &Cx) -> String {
-        let session = cx.session.to_string();
-        let mut lines = Vec::new();
-        for deck in self.decks().list() {
-            if !self
-                .decks()
-                .visible(deck.id(), &state.assistant, &state.mounts)
-            {
-                continue;
-            }
-            let mounted = cards
-                .mounts()
-                .iter()
-                .find(|m| m.deck.id() == deck.id())
-                .map(|m| m.mount.at.clone());
-            let allowed = |action| allowed(self.decks(), state, &session, action, deck.id());
-            let asks: Vec<&str> = [(Action::Mount, "mount"), (Action::Write, "write")]
-                .into_iter()
-                .filter(|(action, _)| !allowed(*action))
-                .map(|(_, name)| name)
-                .collect();
-            lines.push(format!(
-                "{} ({})  {}{}{}{}",
-                deck.meta.name,
-                deck.meta.id,
-                mounted
-                    .map(|m| format!("at {m}"))
-                    .unwrap_or_else(|| "not mounted".into()),
-                if deck.meta.assistant {
-                    "  assistant"
-                } else if deck.project() {
-                    "  project"
-                } else {
-                    ""
-                },
-                if asks.is_empty() {
-                    String::new()
-                } else {
-                    format!("  asks the user to {}", asks.join(", "))
-                },
-                deck.summary()
-                    .map(|s| format!("  — {s}"))
-                    .unwrap_or_default(),
-            ));
-        }
-        if lines.is_empty() {
-            "no decks".into()
-        } else {
-            lines.join("\n")
-        }
-    }
-
-    fn unmount(&self, state: &PathState, at: &str) -> ToolResult<ToolOutput> {
-        let at = normalize_mount_point(at).map_err(ToolError::model)?;
-        if at == SELF_MOUNT {
+    /// `deck.unmount`: take `deck` off every point it is mounted at.
+    pub(super) fn unmount_deck(&self, state: &PathState, deck: &Deck) -> ToolResult<ToolOutput> {
+        let points: Vec<String> = state
+            .mounts
+            .iter()
+            .filter(|m| m.deck == deck.meta.id)
+            .map(|m| m.at.clone())
+            .collect();
+        if points.is_empty() {
             return Err(ToolError::model(format!(
-                "`{SELF_MOUNT}` is this session's own deck and stays mounted"
+                "`{}` is not mounted",
+                deck.meta.name
             )));
         }
-        if !state.mounts.iter().any(|m| m.at == at) {
-            return Err(ToolError::model(format!("`{at}` is not mounted")));
+        if points.iter().any(|at| at == SELF_MOUNT) {
+            return Err(ToolError::model(format!(
+                "`{}` is this session's own deck (`{SELF_MOUNT}`) and stays mounted",
+                deck.meta.name
+            )));
         }
-        let mut effects = vec![Content::marker(&CardUnmount { at: at.clone() })];
-        let text = if at == PROJECT_MOUNT {
+        let mut effects: Vec<Content> = points
+            .iter()
+            .map(|at| Content::marker(&CardUnmount { at: at.clone() }))
+            .collect();
+        let shown: Vec<String> = points.iter().map(|at| format!("`{at}`")).collect();
+        let mut text = format!(
+            "`{}` is unmounted from {}. Content loaded from it earlier is no longer readable, \
+             writable or updated.",
+            deck.meta.name,
+            shown.join(", ")
+        );
+        if points.iter().any(|at| at == PROJECT_MOUNT) {
             effects.push(Content::marker(&WorkspaceUse {
                 name: SCRATCH_WORKSPACE.into(),
             }));
-            format!(
-                "`{PROJECT_MOUNT}` is unmounted; this session leaves its project and `{SCRATCH_WORKSPACE}` \
-                 is the default workspace. Content loaded from it earlier is no longer readable, \
-                 writable or updated."
-            )
-        } else {
-            format!(
-                "`{at}` is unmounted. Content loaded from it earlier is no longer readable, \
-                 writable or updated."
-            )
-        };
+            text.push_str(&format!(
+                " This session leaves its project; `{SCRATCH_WORKSPACE}` is the default workspace."
+            ));
+        }
         Ok(ToolOutput::ok(text).with_effects(effects))
     }
 
@@ -164,30 +93,24 @@ impl WorkspacePlugin {
         Ok(())
     }
 
-    async fn mount(
+    /// `deck.mount`: mount `deck` at `at` (`project` moves the session into
+    /// it), asking the user unless a grant covers it.
+    pub(super) async fn mount_deck(
         &self,
         state: &PathState,
-        deck_id: &str,
+        deck: &Deck,
         at: &str,
         cx: &Cx,
     ) -> ToolResult<ToolOutput> {
         let at = normalize_mount_point(at).map_err(ToolError::model)?;
-        let visible = self
-            .decks()
-            .visible(deck_id, &state.assistant, &state.mounts);
-        let Some(deck) = self.decks().get(deck_id).filter(|_| visible) else {
-            return Err(ToolError::model(format!(
-                "no deck with id `{deck_id}` (`card_mount` with no arguments lists the decks)"
-            )));
-        };
         if at == SELF_MOUNT {
             return Err(ToolError::model(format!(
                 "`{SELF_MOUNT}` is this session's own deck and is always mounted"
             )));
         }
-        self.check_mount_point(state, &deck, &at)?;
+        self.check_mount_point(state, deck, &at)?;
         let request = json!({
-            "kind": "card_mount",
+            "kind": "deck_mount",
             "from": deck_name(self.decks(), &state.assistant),
             "from_id": state.assistant,
             "deck": deck.meta.name,
@@ -196,63 +119,14 @@ impl WorkspacePlugin {
         });
         if !approve(self.decks(), cx, Action::Mount, deck.id(), request)
             .await
-            .map_err(|e| ToolError::model(format!("card_mount: {e}")))?
+            .map_err(|e| ToolError::model(format!("deck.mount: {e}")))?
         {
             return Err(ToolError::model(format!(
                 "the user declined to mount `{}` at `{at}`",
                 deck.meta.name
             )));
         }
-        Ok(self.mounted_output(&deck, &at, &state.assistant))
-    }
-
-    /// `card_mount(create: <name>, at: "project")`: create a blank project
-    /// deck (with the user's approval) and move into it.
-    async fn create_and_mount(
-        &self,
-        state: &PathState,
-        name: &str,
-        at: &str,
-        cx: &Cx,
-    ) -> ToolResult<ToolOutput> {
-        let at = normalize_mount_point(at).map_err(ToolError::model)?;
-        if at != PROJECT_MOUNT {
-            return Err(ToolError::model(
-                "card_mount: `create` needs `at: \"project\"`",
-            ));
-        }
-        if !valid_deck_name(name) {
-            return Err(ToolError::model(format!(
-                "invalid project name `{name}` (1-{} characters, no control characters)",
-                rumu_cards::deck::DECK_NAME_MAX
-            )));
-        }
-        let request = json!({
-            "kind": "project_create",
-            "from": deck_name(self.decks(), &state.assistant),
-            "from_id": state.assistant,
-            "name": name,
-        });
-        if !approve(self.decks(), cx, Action::Create, "*", request)
-            .await
-            .map_err(|e| ToolError::model(format!("card_mount: {e}")))?
-        {
-            return Err(ToolError::model(format!(
-                "the user declined to create project `{name}`"
-            )));
-        }
-        let deck = create_project(
-            &self.home,
-            self.decks(),
-            &self.workspaces,
-            name,
-            Vec::new(),
-            None,
-            false,
-        )
-        .map_err(|e| ToolError::model(format!("creating project `{name}`: {e}")))?;
-        self.check_mount_point(state, &deck, &at)?;
-        Ok(self.mounted_output(&deck, &at, &state.assistant))
+        Ok(self.mounted_output(deck, &at, &state.assistant))
     }
 
     /// The mount result and its markers: the `CardMount` marker, then (for a
@@ -263,10 +137,11 @@ impl WorkspacePlugin {
         if at == PROJECT_MOUNT {
             let names = self.workspaces.project(deck.id());
             if names.is_empty() {
-                text.push_str(
+                text.push_str(&format!(
                     "\nIt mounts no workspace; `@scratch` is now the default workspace. Add some \
-                     through `@rumu:/project/workspaces`.",
-                );
+                     to `workspaces:` in `{RUMU_WORKSPACE}:/decks/{}`.",
+                    deck.meta.name
+                ));
             } else {
                 text.push_str(&format!(
                     "\nIts workspaces: {}; `{}` is now the default workspace.",

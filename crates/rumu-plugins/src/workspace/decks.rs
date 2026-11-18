@@ -10,7 +10,10 @@
 //! - `write` changes it after a read (a field left out keeps its value),
 //!   `edit` replaces text in the current one, `write` to a new name creates
 //!   a deck (`kind:` says which), and `write` with `from` renames one.
-//!   Deleting a deck is the user's, in the web UI.
+//!   Deleting a deck is the user's, in the web UI;
+//! - its actions `deck.mount { at }` and `deck.unmount` change this
+//!   branch's mount table (`super::mount`); mounting a project deck at
+//!   `project` moves the session into it, unmounting it leaves.
 //!
 //! The web edits the same fields through `assistant.upsert` and
 //! `project.update`, and both go through [`crate::decks`].
@@ -22,8 +25,9 @@ use rumu_core::{
     Content, McpUse, ModelUse, PathState, RUMU_WORKSPACE, Structured, ToolError, ToolOutput,
     ToolResult,
 };
+use schemars::JsonSchema;
 use serde::{Deserialize, Deserializer, Serialize};
-use serde_json::json;
+use serde_json::{Value, json};
 
 use crate::approve::{allowed, approve, confirm, deck_name};
 use crate::decks::{ProjectChange, save_assistant, update_project};
@@ -31,7 +35,7 @@ use crate::workspaces::create_project;
 
 use super::WorkspacePlugin;
 use super::tools::replace_occurrences;
-use super::vfs::{At, Node, Out};
+use super::vfs::{ActionSpec, Approval, At, NoArgs, Node, Out};
 
 /// Payload of the read marker on a configuration file (v1): its path and
 /// the content hash the last read returned. A write must be based on it.
@@ -732,4 +736,45 @@ impl Node for DeckFile {
             at.abs
         )))
     }
+
+    fn actions(&self) -> &'static [ActionSpec] {
+        &[
+            ActionSpec {
+                name: "deck.mount",
+                about: "mount it at `/cards/<at>` for this branch; a project deck at `project` \
+                        moves the session into that project",
+                args: rumu_core::tool_schema::<MountArgs>,
+                approval: Approval::Asks(Action::Mount),
+            },
+            ActionSpec {
+                name: "deck.unmount",
+                about: "unmount it from this branch (a project deck: leave the project)",
+                args: rumu_core::tool_schema::<NoArgs>,
+                approval: Approval::Never,
+            },
+        ]
+    }
+
+    async fn invoke(&self, at: &At<'_>, spec: &ActionSpec, args: Value) -> Out {
+        let deck = at.p.named(at.state, at.param("name"))?;
+        match spec.name {
+            "deck.mount" => {
+                let MountArgs { at: point } = spec.parse(args)?;
+                at.p.mount_deck(at.state, &deck, &point, at.cx).await
+            }
+            _ => {
+                let NoArgs {} = spec.parse(args)?;
+                at.p.unmount_deck(at.state, &deck)
+            }
+        }
+    }
+}
+
+/// `deck.mount` arguments.
+#[derive(Deserialize, JsonSchema)]
+#[serde(deny_unknown_fields)]
+struct MountArgs {
+    /// mount point under `/cards` (`user` for `/cards/user`; `project` moves
+    /// the session into a project deck)
+    at: String,
 }

@@ -22,7 +22,7 @@ use super::WorkspacePlugin;
 use super::cards::{Card, CardsDir};
 use super::decks::{DeckFile, DecksDir};
 use super::history::{CardHistory, HistoryRoot};
-use super::registry::{Entry, ProjectDir, ProjectWorkspaces, WorkspacesDir};
+use super::registry::{Entry, WorkspacesDir};
 use super::session::{ByAssistant, Session, Sessions};
 use super::task::{Task, Tasks};
 use super::tools::slice_lines;
@@ -31,7 +31,7 @@ use super::tools::slice_lines;
 pub(super) type Out = ToolResult<ToolOutput>;
 
 /// Every `@rumu` path. The roots come in the order `list @rumu:/` names
-/// them; `/project` is last, as it exists only in a session with a project.
+/// them.
 const ROUTES: &[(&str, &dyn Node)] = &[
     ("/", &Root),
     ("/cards", &CardsDir),
@@ -54,8 +54,6 @@ const ROUTES: &[(&str, &dyn Node)] = &[
     ("/mcp/{server}", &Mcp),
     ("/workspaces", &WorkspacesDir),
     ("/workspaces/{name}", &Entry),
-    ("/project", &ProjectDir),
-    ("/project/workspaces", &ProjectWorkspaces),
 ];
 
 static ROUTER: LazyLock<Router<&'static dyn Node>> = LazyLock::new(|| {
@@ -98,10 +96,6 @@ pub(super) enum Approval {
     Never,
     /// Asks for this deck action unless a grant covers it; the node's
     /// `invoke` puts the question through `approve`.
-    #[expect(
-        dead_code,
-        reason = "`deck.mount` (the /decks step) is the first to ask"
-    )]
     Asks(rumu_cards::deck::Action),
 }
 
@@ -134,8 +128,11 @@ impl ActionSpec {
     /// Its line under `actions:`.
     fn line(&self) -> (String, String) {
         let mut about = self.about.to_owned();
-        if let Approval::Asks(_) = self.approval {
-            about.push_str(" (asks the user)");
+        if let Approval::Asks(action) = self.approval {
+            let action = format!("{action:?}").to_lowercase();
+            about.push_str(&format!(
+                " (asks the user: `{action}`, unless a grant covers it)"
+            ));
         }
         (signature(self.name, &(self.args)()), about)
     }
@@ -422,17 +419,13 @@ pub(super) fn bad_scope() -> ToolError {
     ))
 }
 
-/// `/`: the roots (`project/` only in a session with a project).
+/// `/`: the roots.
 struct Root;
 
 #[async_trait]
 impl Node for Root {
-    async fn list(&self, at: &At<'_>) -> Out {
-        let roots: Vec<String> = ROOTS
-            .iter()
-            .filter(|r| **r != "project" || at.state.project.is_some())
-            .map(|r| format!("{r}/"))
-            .collect();
+    async fn list(&self, _at: &At<'_>) -> Out {
+        let roots: Vec<String> = ROOTS.iter().map(|r| format!("{r}/")).collect();
         Ok(roots.join("\n").into())
     }
 }
@@ -514,7 +507,7 @@ mod tests {
         assert_eq!(params("/cards/self/notes/x.md"), "path=self/notes/x.md");
         assert!(ROUTER.at("/sessions/s1/a/b").is_err());
         assert!(ROUTER.at("/history/cards").is_err());
-        let roots = "cards decks history sessions skills tasks mcp workspaces project";
+        let roots = "cards decks history sessions skills tasks mcp workspaces";
         assert_eq!(ROOTS.join(" "), roots);
     }
 
@@ -526,7 +519,12 @@ mod tests {
             .collect();
         assert_eq!(
             all,
-            ["task.kill /tasks/{id}", "workspace.use /workspaces/{name}"]
+            [
+                "deck.mount /decks/{name}",
+                "deck.unmount /decks/{name}",
+                "task.kill /tasks/{id}",
+                "workspace.use /workspaces/{name}"
+            ]
         );
         assert_eq!(shown_route("/cards/{*path}"), "@rumu:/cards/<path>");
     }

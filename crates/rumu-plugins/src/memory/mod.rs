@@ -174,8 +174,13 @@ impl MemoryPlugin {
         match state.project.as_deref() {
             Some(project) => {
                 let name = self.decks.get(project).map_or_else(
-                    || project.to_owned(),
-                    |d| format!("`{}` (deck id {})", d.meta.name, d.id()),
+                    || format!("`{project}`"),
+                    |d| {
+                        format!(
+                            "`{}` (`{RUMU_WORKSPACE}:/decks/{}`)",
+                            d.meta.name, d.meta.name
+                        )
+                    },
                 );
                 text.push_str(&format!(
                     "\nProject: {name}, mounted at `{RUMU_WORKSPACE}:{PROJECT_MOUNT}`."
@@ -237,6 +242,11 @@ impl MemoryPlugin {
                 ));
             }
         }
+        text.push_str(&format!(
+            "\n`list {RUMU_WORKSPACE}:/decks` lists every deck; `invoke` `deck.mount` (`args: {{at: \
+             \"<point>\"}}`) or `deck.unmount` on `{RUMU_WORKSPACE}:/decks/<name>` mounts or \
+             unmounts one (`at: \"project\"` moves the session into a project deck)."
+        ));
         text.push_str(
             "\n\nPlacement rules:\n\
 1. Put a card in the mounted deck whose charter (its pinned `about` card) fits what the card is \

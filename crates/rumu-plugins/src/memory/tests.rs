@@ -622,7 +622,7 @@ async fn assistant_intro_names_the_project_and_its_workspaces() {
         .unwrap();
     let text = &out.effects[0].text;
     assert!(
-        text.contains(&format!("Project: `proj` (deck id {PROJECT})")),
+        text.contains("Project: `proj` (`@rumu:/decks/proj`)"),
         "{text}"
     );
     assert!(text.contains("@rumu:/cards/project"), "{text}");

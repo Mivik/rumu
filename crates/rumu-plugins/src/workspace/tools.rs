@@ -148,14 +148,18 @@ or an attachment's `@scratch:.inbox/…` copy; any other address shows as a link
 - `@rumu:/cards/<mount>/<path>`: cards of the decks mounted on this branch (`/cards/self` is \
 yours). `read` gives an editable view (YAML frontmatter, then the body); a write is refused if \
 the card changed since your read — re-read and merge. Card edits survive a rewind.\n\
-- `@rumu:/workspaces[/<name>]`: the workspace registry; `@rumu:/project/workspaces`: the \
-project's ordered list (read it before writing).\n\
+- `@rumu:/workspaces[/<name>]`: the workspace registry.\n\
+- `@rumu:/decks[/<name>]`: every deck you may see, and one's configuration as YAML (an \
+assistant's model, MCP servers, skills and mounts; a project's seal and ordered `workspaces`, \
+the first its default); read it before writing it, and write a new name to create one. \
+`invoke` `deck.mount` (`args: {at: \"user\"}`) on one mounts it at `/cards/<at>` — at \
+`project`, a project deck moves the session into that project — and `deck.unmount` unmounts it \
+(a project deck: leaves the project). Only mounted decks feed the catalog, recall, list, search \
+and notices.\n\
 - `@rumu:/history`: the decks' change timeline.\n\
 - `@rumu:/sessions/<session>/<node>` and `.../<from>..<to>`: past conversations, read-only \
 (yours and the mounted decks'; `@rumu:/sessions/by-assistant/<deck id>` lists one assistant's). \
-`search(query, scope: \"@rumu:/sessions\")` searches them.\n\
-`card_mount` mounts and unmounts decks; mounting a project deck at `/cards/project` moves the \
-session into that project (`card_mount(create: <name>, at: \"project\")` creates one).";
+`search(query, scope: \"@rumu:/sessions\")` searches them.";
 
 // ---------------------------------------------------------------------------
 // Tool arguments (the single source of truth for parsing and schemas)
@@ -263,23 +267,6 @@ struct InvokeArgs {
     path: Option<String>,
     /// its arguments, per its schema
     args: Option<serde_json::Map<String, Value>>,
-}
-
-#[derive(Debug, Deserialize, JsonSchema)]
-#[serde(deny_unknown_fields)]
-pub(super) struct CardMountArgs {
-    /// deck id (from the listing); omit to list decks
-    pub(super) deck: Option<String>,
-    /// mount point under `/cards` (`/cards/user`); with no `deck`, unmounts it
-    pub(super) at: Option<String>,
-    /// create a project deck with this name and mount it at `/cards/project`
-    /// (only with `at: "project"`, never with `deck`)
-    pub(super) create: Option<String>,
-}
-
-/// Parse `card_mount` arguments.
-pub(super) fn parse_mount_args(args: &Value) -> ToolResult<CardMountArgs> {
-    parse_args("card_mount", args)
 }
 
 /// The plugin manifest.
@@ -397,23 +384,6 @@ session's MCP tools (its servers' actions); each hit shows its input schema, rea
                 parallel: true,
             },
             ToolSpec {
-                name: "card_mount".into(),
-                description: "Manage the branch's card mounts. Without arguments, list decks \
-(name, id, mount point, whether it is an assistant or a project, and whether mounting or \
-writing it asks the user). With `deck` and `at`, mount it at `/cards/<at>` (the user approves \
-unless they already allowed it); only project decks mount at `/cards/project`, and mounting one \
-there moves the session into that project. With `at` alone, unmount (`at: \"project\"` leaves \
-the project). With `create` and `at: \"project\"`, create a project deck and move into it. Mount \
-points must not overlap. The registry is `@rumu:/workspaces`; the session project's list is \
-`@rumu:/project/workspaces`. Only mounted decks feed the catalog, recall, list, search and \
-notices."
-                    .into(),
-                schema: tool_schema::<CardMountArgs>(),
-                background: false,
-                output_schema: None,
-                parallel: false,
-            },
-            ToolSpec {
                 name: "invoke".into(),
                 description: "Run an action on an `@rumu` object: `action` is its full name \
 and `path` the object (`task.kill` on `@rumu:/tasks/<id>`, `workspace.use` on \
@@ -481,7 +451,8 @@ pub(super) fn invalid_card_ref(cards: &Cards, public: &str) -> Option<ToolError>
         "card `{}` is not under a mounted deck ({})",
         rumu_cards::card_uri(public),
         if mounts.is_empty() {
-            "nothing is mounted; use card_mount".to_owned()
+            "nothing is mounted; `invoke deck.mount` on a `@rumu:/decks/<name>` mounts one"
+                .to_owned()
         } else {
             mounts.join(", ")
         }
@@ -711,7 +682,6 @@ pub(super) async fn call(
         "list" => p.tool_list(state, &args, cx).await.finish(),
         "bash" => p.tool_bash(state, &args, cx).await.finish(),
         "invoke" => p.tool_invoke(state, &args, cx).await.finish(),
-        "card_mount" => p.tool_card_mount(state, &args, cx).await.finish(),
         "search" => p.tool_search(state, &args, cx).await.finish(),
         "show" => p.tool_show(state, &args).await.finish(),
         _ => Ok(ToolOutput::err(format!(

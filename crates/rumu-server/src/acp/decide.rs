@@ -16,12 +16,11 @@ use super::Rumu;
 
 /// The approval kinds rumu asks about (`rumu_plugins::approve`).
 const APPROVALS: &[&str] = &[
-    "card_mount",
+    "deck_mount",
     "card_write",
     "card_delete",
     "card_link",
     "ask",
-    "project_create",
     "deck_create",
     "deck_change",
     "workspace_change",
@@ -67,7 +66,7 @@ pub(super) async fn answer(
 async fn approval(cx: &ConnectionTo<Client>, session: &str, call: &str, request: &Value) -> Value {
     let field = |key: &str| request.get(key).and_then(Value::as_str).unwrap_or_default();
     let title = match field("kind") {
-        "card_mount" => format!("Mount deck `{}` at `{}`", field("deck"), field("at")),
+        "deck_mount" => format!("Mount deck `{}` at `{}`", field("deck"), field("at")),
         "card_write" => format!("Write card `{}` in deck `{}`", field("path"), field("deck")),
         "card_delete" => format!(
             "Delete card `{}` from deck `{}`",
@@ -76,7 +75,6 @@ async fn approval(cx: &ConnectionTo<Client>, session: &str, call: &str, request:
         ),
         "card_link" => format!("Link `{}` from deck `{}`", field("target"), field("to")),
         "ask" => format!("Hand a task to `{}`: {}", field("to"), field("task")),
-        "project_create" => format!("Create project `{}`", field("name")),
         "deck_create" => format!("Create {} `{}`", field("deck_kind"), field("name")),
         "deck_change" => format!("Change deck `{}`", field("deck")),
         "workspace_change" => format!("Change workspace `{}`", field("name")),

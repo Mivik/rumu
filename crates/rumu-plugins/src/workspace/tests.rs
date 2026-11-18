@@ -64,6 +64,16 @@ fn flush_output(host: &std::sync::Arc<FakeRuntime>, call_id: &str, out: &ToolOut
     host.apply_output(call_id, out);
 }
 
+/// `invoke` arguments mounting the deck named `deck` at `at`.
+fn mount(deck: &str, at: &str) -> Value {
+    json!({ "action": "deck.mount", "path": format!("@rumu:/decks/{deck}"), "args": { "at": at } })
+}
+
+/// `invoke` arguments unmounting the deck named `deck`.
+fn unmount(deck: &str) -> Value {
+    json!({ "action": "deck.unmount", "path": format!("@rumu:/decks/{deck}") })
+}
+
 /// A workspace plugin over the temp home's decks, with an empty workspace
 /// registry (tests that need one use [`deck_plugin_with`]).
 fn deck_plugin(home: &Path) -> WorkspacePlugin {
@@ -3868,7 +3878,9 @@ async fn invoke_runs_declared_actions_and_explains_the_rest() {
         invoke(json!({ "action": "task.pause", "path": "@rumu:/tasks/t1" }))
             .await
             .unwrap(),
-        "no action `task.pause`; `@rumu:/tasks/t1` has `task.kill`; rumu's actions: `task.kill` on `@rumu:/tasks/<id>`",
+        "no action `task.pause`; `@rumu:/tasks/t1` has `task.kill`; rumu's actions: \
+         `deck.mount` on `@rumu:/decks/<name>`, `deck.unmount` on `@rumu:/decks/<name>`, \
+         `task.kill` on `@rumu:/tasks/<id>`",
     );
     // Arguments the action does not take come back with its schema.
     refused(
@@ -4044,11 +4056,7 @@ async fn mounts_need_a_grant_and_must_not_overlap() {
 
     // No grant: mounting goes through the user, and this host cannot ask.
     let out = plugin
-        .call_tool(
-            "card_mount",
-            json!({ "deck": extra, "at": "/cards/extra" }),
-            &cx,
-        )
+        .call_tool("invoke", mount("extra", "/cards/extra"), &cx)
         .await
         .unwrap();
     assert!(
@@ -4066,11 +4074,7 @@ async fn mounts_need_a_grant_and_must_not_overlap() {
         &extra,
     );
     let out = plugin
-        .call_tool(
-            "card_mount",
-            json!({ "deck": extra, "at": "/cards/extra" }),
-            &cx,
-        )
+        .call_tool("invoke", mount("extra", "/cards/extra"), &cx)
         .await
         .unwrap();
     assert!(!out.is_error, "{}", out.content.text);
@@ -4098,11 +4102,7 @@ async fn mounts_need_a_grant_and_must_not_overlap() {
 
     // A mount point may not overlap an existing one.
     let out = plugin
-        .call_tool(
-            "card_mount",
-            json!({ "deck": extra, "at": "/cards/extra/deep" }),
-            &cx,
-        )
+        .call_tool("invoke", mount("extra", "/cards/extra/deep"), &cx)
         .await
         .unwrap();
     assert!(
@@ -4124,7 +4124,7 @@ async fn mounts_need_a_grant_and_must_not_overlap() {
 
     // Unmounting says the content is no longer available.
     let out = plugin
-        .call_tool("card_mount", json!({ "at": "/cards/extra" }), &cx)
+        .call_tool("invoke", unmount("extra"), &cx)
         .await
         .unwrap();
     assert!(!out.is_error, "{}", out.content.text);
@@ -5199,199 +5199,11 @@ async fn workspace_entries_are_deleted_with_approval() {
         .unwrap();
     assert!(out.is_error, "{}", out.content.text);
     let out = plugin
-        .call_tool(
-            "delete",
-            json!({ "path": "@rumu:/project/workspaces" }),
-            &cx,
-        )
+        .call_tool("delete", json!({ "path": "@rumu:/tasks" }), &cx)
         .await
         .unwrap();
     assert!(
         out.is_error && out.content.text.contains("cannot be deleted"),
-        "{}",
-        out.content.text
-    );
-}
-
-#[tokio::test]
-async fn project_workspaces_are_read_before_write() {
-    let (_home, plugin, host, cx, registry) = project_setup();
-
-    // The root lists the project directory when the session is in one.
-    let out = plugin
-        .call_tool("list", json!({ "path": "@rumu:/" }), &cx)
-        .await
-        .unwrap();
-    assert!(
-        out.content.text.contains("workspaces/"),
-        "{}",
-        out.content.text
-    );
-    assert!(
-        out.content.text.contains("project/"),
-        "{}",
-        out.content.text
-    );
-
-    // Reading returns the ordered list and records its content hash.
-    let out = plugin
-        .call_tool("read", json!({ "path": "@rumu:/project/workspaces" }), &cx)
-        .await
-        .unwrap();
-    assert_eq!(out.content.text, "- app\n- proj\n");
-    assert_eq!(
-        out.effects[0].data.as_ref().unwrap().tag,
-        "project.workspaces.read"
-    );
-    flush_output(&host, "call-1", &out);
-
-    // A write based on that read reorders the project's workspaces.
-    let out = plugin
-        .call_tool(
-            "write",
-            json!({
-                "path": "@rumu:/project/workspaces",
-                "content": "- proj\n- app\n",
-            }),
-            &cx,
-        )
-        .await
-        .unwrap();
-    assert!(!out.is_error, "{}", out.content.text);
-    assert_eq!(
-        registry.project(PROJECT_ID),
-        vec!["proj".to_owned(), "app".to_owned()]
-    );
-    // The write is the base of the next one, like a read.
-    assert_eq!(
-        out.effects[0].data.as_ref().unwrap().tag,
-        "project.workspaces.read"
-    );
-
-    // Without that marker (another session's change, say) the old read is
-    // stale: the refusal returns the current list.
-    let out = plugin
-        .call_tool(
-            "write",
-            json!({
-                "path": "@rumu:/project/workspaces",
-                "content": "- app\n- proj\n",
-            }),
-            &cx,
-        )
-        .await
-        .unwrap();
-    assert!(
-        out.is_error && out.content.text.contains("changed since you read it"),
-        "{}",
-        out.content.text
-    );
-    assert!(
-        out.content.text.contains("- proj\n- app"),
-        "{}",
-        out.content.text
-    );
-    assert_eq!(
-        registry.project(PROJECT_ID),
-        vec!["proj".to_owned(), "app".to_owned()]
-    );
-
-    // A fresh read makes a write valid again.
-    let fresh = host.cx();
-    let out = plugin
-        .call_tool(
-            "read",
-            json!({ "path": "@rumu:/project/workspaces" }),
-            &fresh,
-        )
-        .await
-        .unwrap();
-    flush_output(&host, "call-1", &out);
-    let fresh = host.cx();
-    let out = plugin
-        .call_tool(
-            "write",
-            json!({
-                "path": "@rumu:/project/workspaces",
-                "content": "- app\n- proj\n",
-            }),
-            &fresh,
-        )
-        .await
-        .unwrap();
-    assert!(!out.is_error, "{}", out.content.text);
-
-    // `edit` applies to the current text, with no read required.
-    let fresh = host.cx();
-    let out = plugin
-        .call_tool(
-            "edit",
-            json!({
-                "path": "@rumu:/project/workspaces",
-                "old_string": "- app\n- proj",
-                "new_string": "- proj\n- app",
-            }),
-            &fresh,
-        )
-        .await
-        .unwrap();
-    assert!(!out.is_error, "{}", out.content.text);
-    assert_eq!(
-        registry.project(PROJECT_ID),
-        vec!["proj".to_owned(), "app".to_owned()]
-    );
-
-    // Unknown names are refused, and no approval is involved.
-    let fresh = host.cx();
-    let out = plugin
-        .call_tool(
-            "write",
-            json!({
-                "path": "@rumu:/project/workspaces",
-                "content": "- ghost\n",
-            }),
-            &fresh,
-        )
-        .await
-        .unwrap();
-    assert!(out.is_error, "{}", out.content.text);
-    assert!(host.decisions.lock().unwrap().is_empty());
-}
-
-#[tokio::test]
-async fn project_config_needs_a_project() {
-    let home = card_home();
-    let (plugin, _host, cx) = card_plugin_for(home.path());
-    for tool in ["read", "list"] {
-        let out = plugin
-            .call_tool(tool, json!({ "path": "@rumu:/project/workspaces" }), &cx)
-            .await
-            .unwrap();
-        assert!(
-            out.is_error && out.content.text.contains("in no project"),
-            "{tool}: {}",
-            out.content.text
-        );
-    }
-    let out = plugin
-        .call_tool(
-            "write",
-            json!({ "path": "@rumu:/project/workspaces", "content": "[]" }),
-            &cx,
-        )
-        .await
-        .unwrap();
-    assert!(
-        out.is_error && out.content.text.contains("in no project"),
-        "{}",
-        out.content.text
-    );
-    let out = plugin
-        .call_tool("list", json!({ "path": "@rumu:/" }), &cx)
-        .await
-        .unwrap();
-    assert!(
-        !out.content.text.contains("project/"),
         "{}",
         out.content.text
     );
@@ -5582,37 +5394,42 @@ fn mount_setup() -> (
 }
 
 #[tokio::test]
-async fn card_mount_moves_between_projects_and_creates_one() {
+async fn deck_mount_moves_between_projects() {
     use rumu_cards::deck::{Action, Scope};
 
-    let (_home, plugin, host, cx, registry) = mount_setup();
+    let (_home, plugin, host, cx, _registry) = mount_setup();
     let main = crate::testutil::TEST_ASSISTANT;
 
-    // The listing marks project decks like assistants.
+    // The deck listing names each deck's kind.
     let out = plugin
-        .call_tool("card_mount", json!({}), &cx)
+        .call_tool("list", json!({ "path": "@rumu:/decks" }), &cx)
         .await
         .unwrap();
     let proj_line = out
         .content
         .text
         .lines()
-        .find(|l| l.starts_with("proj ("))
+        .find(|l| l.starts_with("proj  "))
         .unwrap_or_else(|| panic!("{}", out.content.text));
-    assert!(proj_line.contains("  project"), "{proj_line}");
+    assert!(proj_line.contains("  project  "), "{proj_line}");
+
+    // A deck lists its actions, the mount saying that it asks.
+    let out = plugin
+        .call_tool("list", json!({ "path": "@rumu:/decks/proj" }), &cx)
+        .await
+        .unwrap();
     assert!(
-        out.content.text.lines().any(|l| l.contains("assistant")),
+        out.content.text.contains("deck.mount(at: string)")
+            && out.content.text.contains("asks the user: `mount`")
+            && out.content.text.contains("deck.unmount()"),
         "{}",
         out.content.text
     );
 
-    // Only project decks mount at `/cards/project`.
+    // Only project decks mount at `/cards/project`, and the session's own
+    // deck neither moves nor unmounts.
     let out = plugin
-        .call_tool(
-            "card_mount",
-            json!({ "deck": main, "at": "/cards/project" }),
-            &cx,
-        )
+        .call_tool("invoke", mount("main", "/cards/project"), &cx)
         .await
         .unwrap();
     assert!(
@@ -5620,6 +5437,37 @@ async fn card_mount_moves_between_projects_and_creates_one() {
         "{}",
         out.content.text
     );
+    let out = plugin
+        .call_tool("invoke", unmount("main"), &cx)
+        .await
+        .unwrap();
+    assert!(
+        out.is_error && out.content.text.contains("stays mounted"),
+        "{}",
+        out.content.text
+    );
+
+    // A mount asks the user unless a grant covers it, with a `deck_mount`
+    // request.
+    host.answers
+        .lock()
+        .unwrap()
+        .push_back(json!({ "allow": false }));
+    let out = plugin
+        .call_tool("invoke", mount("proj", "project"), &cx)
+        .await
+        .unwrap();
+    assert!(
+        out.is_error && out.content.text.contains("declined to mount"),
+        "{}",
+        out.content.text
+    );
+    {
+        let decisions = host.decisions.lock().unwrap();
+        assert_eq!(decisions.len(), 1, "{decisions:?}");
+        assert_eq!(decisions[0]["kind"], "deck_mount");
+        assert_eq!(decisions[0]["deck"], "proj");
+    }
 
     // A project mount carries the workspaces, default first, and a
     // `WorkspaceUse` marker for its first one.
@@ -5627,11 +5475,7 @@ async fn card_mount_moves_between_projects_and_creates_one() {
         .decks()
         .remember(Action::Mount, Scope::Always, "", main, PROJECT_ID);
     let out = plugin
-        .call_tool(
-            "card_mount",
-            json!({ "deck": PROJECT_ID, "at": "project" }),
-            &cx,
-        )
+        .call_tool("invoke", mount("proj", "project"), &cx)
         .await
         .unwrap();
     assert!(!out.is_error, "{}", out.content.text);
@@ -5642,9 +5486,9 @@ async fn card_mount_moves_between_projects_and_creates_one() {
         "{}",
         out.content.text
     );
-    let mount: rumu_core::CardMount = out.effects[0].decode().unwrap();
-    assert_eq!(mount.deck, PROJECT_ID);
-    assert_eq!(mount.at, rumu_core::PROJECT_MOUNT);
+    let marker: rumu_core::CardMount = out.effects[0].decode().unwrap();
+    assert_eq!(marker.deck, PROJECT_ID);
+    assert_eq!(marker.at, rumu_core::PROJECT_MOUNT);
     let use_: WorkspaceUse = out.effects[1].decode().unwrap();
     assert_eq!(use_.name, "app");
     host.state
@@ -5656,35 +5500,48 @@ async fn card_mount_moves_between_projects_and_creates_one() {
             at: rumu_core::PROJECT_MOUNT.into(),
         });
 
-    // Mounting another project there replaces it instead of refusing.
+    // Mounting another project there replaces it instead of refusing; one
+    // with no workspace says where to add them.
     plugin
         .decks()
         .remember(Action::Mount, Scope::Always, "", main, PROJECT2_ID);
     let out = plugin
-        .call_tool(
-            "card_mount",
-            json!({ "deck": PROJECT2_ID, "at": "project" }),
-            &cx,
-        )
+        .call_tool("invoke", mount("proj2", "project"), &cx)
         .await
         .unwrap();
     assert!(!out.is_error, "{}", out.content.text);
-    let mount: rumu_core::CardMount = out.effects[0].decode().unwrap();
-    assert_eq!(mount.deck, PROJECT2_ID);
+    assert!(
+        out.content.text.contains("`@rumu:/decks/proj2`"),
+        "{}",
+        out.content.text
+    );
+    let marker: rumu_core::CardMount = out.effects[0].decode().unwrap();
+    assert_eq!(marker.deck, PROJECT2_ID);
     let use_: WorkspaceUse = out.effects[1].decode().unwrap();
     assert_eq!(use_.name, SCRATCH_WORKSPACE, "it mounts no workspace");
-    host.state
-        .lock()
-        .unwrap()
-        .mounts
-        .push(rumu_core::CardMount {
+    {
+        let mut state = host.state.lock().unwrap();
+        state.mounts.retain(|m| m.at != rumu_core::PROJECT_MOUNT);
+        state.mounts.push(rumu_core::CardMount {
             deck: PROJECT2_ID.into(),
             at: rumu_core::PROJECT_MOUNT.into(),
         });
+    }
+
+    // A deck that is not mounted cannot be unmounted.
+    let out = plugin
+        .call_tool("invoke", unmount("proj"), &cx)
+        .await
+        .unwrap();
+    assert!(
+        out.is_error && out.content.text.contains("is not mounted"),
+        "{}",
+        out.content.text
+    );
 
     // Unmounting the project leaves it and resets the default to `@scratch`.
     let out = plugin
-        .call_tool("card_mount", json!({ "at": "project" }), &cx)
+        .call_tool("invoke", unmount("proj2"), &cx)
         .await
         .unwrap();
     assert!(!out.is_error, "{}", out.content.text);
@@ -5693,71 +5550,8 @@ async fn card_mount_moves_between_projects_and_creates_one() {
         "{}",
         out.content.text
     );
-    let unmount: rumu_core::CardUnmount = out.effects[0].decode().unwrap();
-    assert_eq!(unmount.at, rumu_core::PROJECT_MOUNT);
-    let use_: WorkspaceUse = out.effects[1].decode().unwrap();
-    assert_eq!(use_.name, SCRATCH_WORKSPACE);
-
-    // `create` is only valid with `at: "project"`, never with a deck.
-    for (args, needle) in [
-        (
-            json!({ "deck": main, "create": "fresh", "at": "project" }),
-            "cannot be combined",
-        ),
-        (json!({ "create": "fresh" }), "needs `at"),
-        (
-            json!({ "create": "fresh", "at": "/cards/user" }),
-            "needs `at",
-        ),
-        (
-            json!({ "create": " ", "at": "project" }),
-            "invalid project name",
-        ),
-    ] {
-        let out = plugin.call_tool("card_mount", args, &cx).await.unwrap();
-        assert!(
-            out.is_error && out.content.text.contains(needle),
-            "{}",
-            out.content.text
-        );
-    }
-
-    // Creating a project asks (`create`, target `*`) and moves into it.
-    host.answers
-        .lock()
-        .unwrap()
-        .push_back(json!({ "allow": true }));
-    let out = plugin
-        .call_tool(
-            "card_mount",
-            json!({ "create": "fresh", "at": "project" }),
-            &cx,
-        )
-        .await
-        .unwrap();
-    assert!(!out.is_error, "{}", out.content.text);
-    assert!(
-        out.content.text.contains("mounts no workspace"),
-        "{}",
-        out.content.text
-    );
-    {
-        let decisions = host.decisions.lock().unwrap();
-        assert_eq!(decisions.len(), 1, "{decisions:?}");
-        assert_eq!(decisions[0]["kind"], "project_create");
-        assert_eq!(decisions[0]["name"], "fresh");
-        assert_eq!(decisions[0]["from_id"], main);
-    }
-    let fresh = plugin
-        .decks()
-        .list()
-        .into_iter()
-        .find(|d| d.meta.name == "fresh")
-        .expect("the project deck was created");
-    assert!(fresh.project());
-    assert!(registry.project(fresh.id()).is_empty());
-    let mount: rumu_core::CardMount = out.effects[0].decode().unwrap();
-    assert_eq!(mount.deck, fresh.id());
+    let marker: rumu_core::CardUnmount = out.effects[0].decode().unwrap();
+    assert_eq!(marker.at, rumu_core::PROJECT_MOUNT);
     let use_: WorkspaceUse = out.effects[1].decode().unwrap();
     assert_eq!(use_.name, SCRATCH_WORKSPACE);
 }
@@ -5787,17 +5581,16 @@ async fn the_sessions_project_deck_is_writable_without_approval() {
             .contains("new")
     );
 
-    // The mount listing says nothing is approved automatically for mount,
-    // but writing it does not ask.
+    // The deck listing says mounting it asks, but writing it does not.
     let out = plugin
-        .call_tool("card_mount", json!({}), &cx)
+        .call_tool("list", json!({ "path": "@rumu:/decks" }), &cx)
         .await
         .unwrap();
     let proj_line = out
         .content
         .text
         .lines()
-        .find(|l| l.starts_with("proj ("))
+        .find(|l| l.starts_with("proj  "))
         .unwrap_or_else(|| panic!("{}", out.content.text));
     assert!(proj_line.contains("asks the user to mount"), "{proj_line}");
     assert!(!proj_line.contains("write"), "{proj_line}");
@@ -5819,9 +5612,9 @@ fn hidden_deck(home: &Path) -> rumu_cards::Deck {
     )
 }
 
-/// A private deck is absent from the listing and cannot be mounted by id,
-/// even with an always-allow grant: the refusal looks like an unknown id and
-/// asks the user nothing.
+/// A private deck is absent from the listing and cannot be mounted by name,
+/// even with an always-allow grant: the refusal looks like an unknown deck
+/// and asks the user nothing.
 #[tokio::test]
 async fn private_decks_are_unlisted_and_unmountable() {
     let home = card_home();
@@ -5832,15 +5625,11 @@ async fn private_decks_are_unlisted_and_unmountable() {
     let cx = host.cx();
 
     let out = plugin
-        .call_tool("card_mount", json!({}), &cx)
+        .call_tool("list", json!({ "path": "@rumu:/decks" }), &cx)
         .await
         .unwrap();
     assert!(!out.is_error, "{}", out.content.text);
-    assert!(
-        !out.content.text.contains("hidden") && !out.content.text.contains(&hidden.meta.id),
-        "{}",
-        out.content.text
-    );
+    assert!(!out.content.text.contains("hidden"), "{}", out.content.text);
 
     decks.remember(
         rumu_cards::deck::Action::Mount,
@@ -5850,15 +5639,11 @@ async fn private_decks_are_unlisted_and_unmountable() {
         &hidden.meta.id,
     );
     let out = plugin
-        .call_tool(
-            "card_mount",
-            json!({ "deck": hidden.meta.id, "at": "/cards/hidden" }),
-            &cx,
-        )
+        .call_tool("invoke", mount("hidden", "/cards/hidden"), &cx)
         .await
         .unwrap();
     assert!(
-        out.is_error && out.content.text.contains("no deck with id"),
+        out.is_error && out.content.text.contains("no deck `hidden`"),
         "{}",
         out.content.text
     );
@@ -5877,11 +5662,11 @@ async fn private_decks_are_unlisted_and_unmountable() {
             at: "/cards/hidden".into(),
         });
     let out = plugin
-        .call_tool("card_mount", json!({}), &cx)
+        .call_tool("list", json!({ "path": "@rumu:/decks" }), &cx)
         .await
         .unwrap();
     assert!(
-        out.content.text.contains("hidden") && out.content.text.contains(&hidden.meta.id),
+        out.content.text.lines().any(|l| l.starts_with("hidden  ")),
         "{}",
         out.content.text
     );
@@ -5915,11 +5700,11 @@ async fn private_decks_are_visible_through_the_assistant_mounts() {
     };
     let cx = host.cx();
     let out = plugin
-        .call_tool("card_mount", json!({}), &cx)
+        .call_tool("list", json!({ "path": "@rumu:/decks" }), &cx)
         .await
         .unwrap();
     assert!(
-        out.content.text.contains("hidden") && out.content.text.contains(&hidden.meta.id),
+        out.content.text.lines().any(|l| l.starts_with("hidden  ")),
         "{}",
         out.content.text
     );

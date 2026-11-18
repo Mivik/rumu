@@ -835,7 +835,7 @@ pub struct PathState {
     /// session's root.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub delegated_by: Option<String>,
-    /// The branch's card mount table (root defaults + `card_mount` markers).
+    /// The branch's card mount table (root defaults + `deck.mount` markers).
     #[serde(default)]
     pub mounts: Vec<CardMount>,
     /// The last `model.use` marker: unset (or after a `model.reset`) runs
