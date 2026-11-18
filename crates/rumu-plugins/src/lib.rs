@@ -4,7 +4,8 @@
 //!   (decks and cards themselves live in rumu-cards)
 //! - [`WorkspacePlugin`] — the `read`/`write`/`edit`/`list`/`bash` file tools
 //!   over workspaces (local dirs + ssh), the `@rumu` virtual workspace
-//!   (`@rumu:/cards`, `@rumu:/sessions`) and `workspace_use`
+//!   (`@rumu:/cards`, `@rumu:/sessions`, …) and `invoke` for its objects'
+//!   actions
 //! - [`CodePlugin`] — the `code` tool: model-written JavaScript that composes
 //!   the other tools through `Cx::invoke` (hybrid mode)
 //! - [`McpPlugin`] — `call_tool` over the MCP servers of [`McpHub`]

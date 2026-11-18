@@ -8,7 +8,7 @@
 //! with `silence`, a stretch without events is one. The batch still pending
 //! when the watch ends is
 //! not posted: it is the task's result, so the kernel's completion note
-//! carries it once. Dropping the run (`task_kill`, an abort) drops the
+//! carries it once. Dropping the run (`task.kill`, an abort) drops the
 //! batching with it, so nothing is posted afterwards.
 
 use std::collections::{HashMap, VecDeque};
@@ -1219,7 +1219,7 @@ mod tests {
         );
     }
 
-    /// Once the run is dropped (`task_kill`), nothing more is posted.
+    /// Once the run is dropped (`task.kill`), nothing more is posted.
     #[tokio::test]
     async fn watch_posts_nothing_after_the_task_is_killed() {
         let dir = tempfile::tempdir().unwrap();

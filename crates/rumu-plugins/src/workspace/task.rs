@@ -3,17 +3,18 @@
 //!
 //! - `read /tasks` — every task of the current session;
 //! - `read /tasks/<id>` — one task's status plus its buffered output, pageable
-//!   with `offset` / `limit`.
+//!   with `offset` / `limit`; `task.kill` cancels it.
 //!
 //! Tasks are runtime-only: a kernel restart loses running tasks, and their
 //! old transcript entries remain ordinary notes/results.
 
 use async_trait::async_trait;
 use rumu_core::{OUTPUT_LIMIT, RUMU_WORKSPACE, TaskId, TaskInfo, ToolError, ToolOutput};
+use serde_json::Value;
 
 use super::time::iso_local;
 use super::tools::slice_lines;
-use super::vfs::{At, Node, Out};
+use super::vfs::{ActionSpec, Approval, At, NoArgs, Node, Out};
 
 /// The `@rumu` result prefix.
 const WS: &str = RUMU_WORKSPACE;
@@ -61,6 +62,28 @@ impl Node for Task {
         };
         let text = slice_lines(task_view(&info, &output), offset, limit);
         Ok(ToolOutput::ok(capped_view(text.map_err(ToolError::model)?)))
+    }
+
+    fn actions(&self) -> &'static [ActionSpec] {
+        &[ActionSpec {
+            name: "task.kill",
+            about: "cancel it (a command's whole process tree) and report how it ended",
+            args: rumu_core::tool_schema::<NoArgs>,
+            approval: Approval::Never,
+        }]
+    }
+
+    /// `task.kill`: the kernel cancels it if this branch or one of its
+    /// sub-agents owns it — the same cancellation as the web's `task.kill`.
+    async fn invoke(&self, at: &At<'_>, spec: &ActionSpec, args: Value) -> Out {
+        let NoArgs {} = spec.parse(args)?;
+        let id = TaskId::from(at.param("id"));
+        let info = at
+            .cx
+            .kill_task(&id)
+            .await
+            .map_err(|e| ToolError::model(e.to_string()))?;
+        Ok(format!("task {id}: {}", info.status.label()).into())
     }
 }
 

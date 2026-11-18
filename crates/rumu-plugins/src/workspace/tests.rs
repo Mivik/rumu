@@ -1,5 +1,5 @@
 //! Tests for the workspace plugin: `<ws>:<path>` resolution, the file/bash
-//! tools over local backends (absolute paths included), `workspace_use`, the
+//! tools over local backends (absolute paths included), `invoke`, the
 //! `@rumu` virtual workspace (`/cards` reads/writes with validation and
 //! read-before-write, `/sessions` views, `/tasks` reads, unknown roots), AGENTS.md
 //! injection and the config.yaml loader. The ssh backend's command construction
@@ -95,7 +95,7 @@ async fn address_resolution_errors() {
     let plugin = deck_plugin(home.path());
     let host = FakeRuntime::arc();
 
-    // No default workspace: the error points at `workspace_use()`.
+    // No default workspace: the error points at `workspace.use`.
     *host.state.lock().unwrap() = state_with(vec![], None);
     let cx = host.cx();
     let out = plugin
@@ -103,7 +103,7 @@ async fn address_resolution_errors() {
         .await
         .unwrap();
     assert!(
-        out.is_error && out.content.text.contains("workspace_use()"),
+        out.is_error && out.content.text.contains("`workspace.use`"),
         "{}",
         out.content.text
     );
@@ -1125,7 +1125,7 @@ async fn bash_runs_in_the_scratch_workspace_and_creates_it() {
     );
 }
 
-// ---------- workspace_use ----------
+// ---------- workspace.use ----------
 
 #[tokio::test]
 async fn workspace_use_lists_and_switches() {
@@ -1141,9 +1141,9 @@ async fn workspace_use_lists_and_switches() {
     *host.state.lock().unwrap() = state_with(vec![ws("proj", "/p/rumu"), prod], Some("proj"));
     let cx = host.cx();
 
-    // Without `name`: just the listing, and no marker is written.
+    // The listing, with no marker written.
     let out = plugin
-        .call_tool("workspace_use", json!({}), &cx)
+        .call_tool("list", json!({ "path": "@rumu:/workspaces" }), &cx)
         .await
         .unwrap();
     assert!(!out.is_error, "{}", out.content.text);
@@ -1165,11 +1165,10 @@ async fn workspace_use_lists_and_switches() {
     );
     assert!(out.effects.is_empty(), "no marker");
 
-    // With `name`: the marker is returned, the listing reflects the default.
-    let out = plugin
-        .call_tool("workspace_use", json!({ "name": "prod" }), &cx)
-        .await
-        .unwrap();
+    // `workspace.use`: the marker is returned, the listing reflects the
+    // default.
+    let use_ = |name: &str| json!({ "action": "workspace.use", "path": format!("@rumu:/workspaces/{name}") });
+    let out = plugin.call_tool("invoke", use_("prod"), &cx).await.unwrap();
     assert!(!out.is_error, "{}", out.content.text);
     assert!(
         out.content.text.starts_with("default workspace set"),
@@ -1195,7 +1194,7 @@ async fn workspace_use_lists_and_switches() {
 
     // `@rumu` is a valid target too (and becomes the starred line).
     let out = plugin
-        .call_tool("workspace_use", json!({ "name": "@rumu" }), &cx)
+        .call_tool("invoke", use_("@rumu"), &cx)
         .await
         .unwrap();
     assert!(!out.is_error, "{}", out.content.text);
@@ -1209,7 +1208,7 @@ async fn workspace_use_lists_and_switches() {
 
     // Unknown names error with the available list.
     let out = plugin
-        .call_tool("workspace_use", json!({ "name": "ghost" }), &cx)
+        .call_tool("invoke", use_("ghost"), &cx)
         .await
         .unwrap();
     assert!(
@@ -3796,6 +3795,147 @@ async fn task_read_renders_status_and_output() {
         .unwrap();
     assert!(!listing.is_error, "{}", listing.content.text);
     assert!(listing.content.text.contains("@rumu:/tasks/t1"));
+
+    // `list` adds the task's actions; `read` does not.
+    let listed = plugin
+        .call_tool("list", json!({ "path": "@rumu:/tasks/t1" }), &cx)
+        .await
+        .unwrap();
+    assert!(
+        listed.content.text.ends_with("\n\nactions:\n  task.kill() — cancel it (a command's whole process tree) and report how it ended"),
+        "{}",
+        listed.content.text
+    );
+    assert!(!out.content.text.contains("actions:"));
+}
+
+/// `invoke` runs an object's action, checked against what its node declares.
+#[tokio::test]
+async fn invoke_runs_declared_actions_and_explains_the_rest() {
+    use rumu_core::{TaskId, TaskInfo, TaskKind, TaskStatus};
+    let home = tempfile::tempdir().unwrap();
+    let plugin = deck_plugin(home.path());
+    let host = FakeRuntime::arc();
+    let cx = host.cx();
+    let info = TaskInfo {
+        id: TaskId::from("t1"),
+        session: cx.session.clone(),
+        branch: cx.branch.clone(),
+        call_id: "c1".into(),
+        kind: TaskKind::Tool {
+            name: "bash".into(),
+            args_summary: "sleep 9".into(),
+        },
+        summary: "sleep 9".into(),
+        status: TaskStatus::Running,
+        started_at: 1,
+        ended_at: None,
+        truncated: false,
+        is_error: false,
+        result: None,
+        data: None,
+    };
+    host.tasks.lock().unwrap().push((info, String::new()));
+    let invoke = |args: Value| plugin.call_tool("invoke", args, &cx);
+
+    let out = invoke(json!({ "action": "task.kill", "path": "@rumu:/tasks/t1" }))
+        .await
+        .unwrap();
+    assert!(!out.is_error, "{}", out.content.text);
+    assert_eq!(out.content.text, "task t1: cancelled");
+
+    let refused = |out: ToolOutput, wants: &str| {
+        assert!(
+            out.is_error && out.content.text.contains(wants),
+            "wanted {wants:?} in {}",
+            out.content.text
+        );
+    };
+    // No path: it says what the action acts on.
+    refused(
+        invoke(json!({ "action": "task.kill" })).await.unwrap(),
+        "`task.kill` needs `path`: the `@rumu:/tasks/<id>` it acts on",
+    );
+    // The wrong object: what it acts on, and what this one has.
+    refused(
+        invoke(json!({ "action": "task.kill", "path": "@rumu:/workspaces/@rumu" }))
+            .await
+            .unwrap(),
+        "`task.kill` acts on `@rumu:/tasks/<id>`; `@rumu:/workspaces/@rumu` has `workspace.use`",
+    );
+    // An unknown action lists rumu's.
+    refused(
+        invoke(json!({ "action": "task.pause", "path": "@rumu:/tasks/t1" }))
+            .await
+            .unwrap(),
+        "no action `task.pause`; `@rumu:/tasks/t1` has `task.kill`; rumu's actions: `task.kill` on `@rumu:/tasks/<id>`",
+    );
+    // Arguments the action does not take come back with its schema.
+    refused(
+        invoke(
+            json!({ "action": "task.kill", "path": "@rumu:/tasks/t1", "args": { "now": true } }),
+        )
+        .await
+        .unwrap(),
+        "task.kill: invalid arguments: unknown field `now`",
+    );
+    // `path` names an `@rumu` object.
+    *host.state.lock().unwrap() = state_with(vec![ws("proj", "/p")], Some("proj"));
+    refused(
+        invoke(json!({ "action": "task.kill", "path": "t1" }))
+            .await
+            .unwrap(),
+        "`path` is the `@rumu` object an action acts on",
+    );
+}
+
+/// `@scratch` and `@rumu` have entries to be used, not changed.
+#[tokio::test]
+async fn builtin_workspace_entries_are_only_used() {
+    let home = tempfile::tempdir().unwrap();
+    let plugin = deck_plugin(home.path());
+    let host = FakeRuntime::arc();
+    let scratch = ws(rumu_core::SCRATCH_WORKSPACE, "/scratch/s1");
+    *host.state.lock().unwrap() = state_with(vec![scratch], Some("@rumu"));
+    let cx = host.cx();
+    let out = plugin
+        .call_tool("read", json!({ "path": "@rumu:/workspaces/@scratch" }), &cx)
+        .await
+        .unwrap();
+    assert!(
+        out.content.text.contains("root: /scratch/s1"),
+        "{}",
+        out.content.text
+    );
+    for (tool, args) in [
+        (
+            "write",
+            json!({ "path": "@rumu:/workspaces/@scratch", "content": "root: /x\n" }),
+        ),
+        ("delete", json!({ "path": "@rumu:/workspaces/@rumu" })),
+    ] {
+        let out = plugin.call_tool(tool, args, &cx).await.unwrap();
+        assert!(
+            out.is_error && out.content.text.contains("is not in the registry"),
+            "{tool}: {}",
+            out.content.text
+        );
+    }
+    let out = plugin
+        .call_tool(
+            "invoke",
+            json!({ "action": "workspace.use", "path": "@rumu:/workspaces/@scratch" }),
+            &cx,
+        )
+        .await
+        .unwrap();
+    assert!(!out.is_error, "{}", out.content.text);
+    let starred = out.content.text.lines().find(|l| l.starts_with('*'));
+    assert!(
+        starred.is_some_and(|l| l.starts_with("* @scratch")),
+        "{}",
+        out.content.text
+    );
 }
 
 // ---------- decks, mounts and history ----------
@@ -4805,23 +4945,25 @@ fn project_setup() -> (
 async fn workspace_registry_reads_and_writes() {
     let (home, plugin, host, cx, registry) = project_setup();
 
-    // The registry listing: every workspace, location, ro, mounted and default.
+    // The listing: every workspace, location, ro, mounted and default, the
+    // project's first.
     let out = plugin
         .call_tool("list", json!({ "path": "@rumu:/workspaces" }), &cx)
         .await
         .unwrap();
     assert!(!out.is_error, "{}", out.content.text);
     let lines: Vec<&str> = out.content.text.lines().collect();
-    assert_eq!(lines.len(), 3, "{}", out.content.text);
+    assert_eq!(lines.len(), 4, "{}", out.content.text);
     assert!(lines[0].starts_with("* app local "), "{}", lines[0]);
     assert!(lines[0].ends_with(" ro  (mounted)"), "{}", lines[0]);
+    assert!(lines[1].starts_with("  proj local "), "{}", lines[1]);
+    assert!(lines[1].ends_with(" rw  (mounted)"), "{}", lines[1]);
     assert!(
-        lines[1].starts_with("  ci ssh:gw.example /srv/ci rw"),
+        lines[2].starts_with("  ci ssh:gw.example /srv/ci rw"),
         "{}",
-        lines[1]
+        lines[2]
     );
-    assert!(lines[2].starts_with("  proj local "), "{}", lines[2]);
-    assert!(lines[2].ends_with(" rw  (mounted)"), "{}", lines[2]);
+    assert!(lines[3].starts_with("  @rumu "), "{}", lines[3]);
     assert!(!out.content.text.contains("attached"));
 
     // Reading an entry returns its YAML; unknown names are refused.
@@ -5256,10 +5398,10 @@ async fn project_config_needs_a_project() {
 }
 
 #[tokio::test]
-async fn workspace_use_lists_the_projects_workspaces_first() {
+async fn workspaces_list_the_projects_workspaces_first() {
     let (_home, plugin, _host, cx, _registry) = project_setup();
     let out = plugin
-        .call_tool("workspace_use", json!({}), &cx)
+        .call_tool("list", json!({ "path": "@rumu:/workspaces" }), &cx)
         .await
         .unwrap();
     let lines: Vec<&str> = out.content.text.lines().collect();

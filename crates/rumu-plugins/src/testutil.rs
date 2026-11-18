@@ -404,6 +404,17 @@ impl Runtime for FakeRuntime {
         Ok(self.nodes.lock().unwrap().clone().into())
     }
 
+    /// Marks the task cancelled (any branch owns any task here).
+    async fn kill_task(&self, _branch: &BranchId, id: &TaskId) -> Result<TaskInfo> {
+        let mut tasks = self.tasks.lock().unwrap();
+        let (info, _) = tasks
+            .iter_mut()
+            .find(|(t, _)| &t.id == id)
+            .ok_or_else(|| Error::msg(format!("no task `{id}`")))?;
+        info.status = rumu_core::TaskStatus::Cancelled;
+        Ok(info.clone())
+    }
+
     fn state(&self, _branch: &BranchId) -> Result<Arc<PathState>> {
         Ok(Arc::new(self.state.lock().unwrap().clone()))
     }

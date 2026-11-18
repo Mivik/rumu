@@ -4,7 +4,7 @@
 //! Host→plugin requests (`initialize`, `hook`, `tool/call`) are correlated via a
 //! pending-map of oneshot channels. `initialize` and `hook` time out after 30s;
 //! `tool/call` has no transport timeout — the kernel cancels it by dropping the
-//! request future (abort / `task_kill`), so a tool may run as long as it needs.
+//! request future (abort / `task.kill`), so a tool may run as long as it needs.
 //! Plugin→host requests (`host/path`, `host/state`, `host/index`, `host/post`,
 //! `host/progress`) arrive on the same stdout stream *while* a host→plugin
 //! request is in flight, so the reader task dispatches them on spawned tasks of

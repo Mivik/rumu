@@ -131,7 +131,8 @@ name from the path:\n\
 workspace\n\
 Name files the same way when you mention them to the user. \
 `bash` runs in the default workspace's root (or `workspace`'s), so relative paths match the file \
-tools. `workspace_use(name)` changes the default; `workspace_use()` lists workspaces. Read-only \
+tools. `list @rumu:/workspaces` lists the workspaces; `invoke` `workspace.use` on one \
+(`path: \"@rumu:/workspaces/<name>\"`) makes it the default. Read-only \
 workspaces refuse writes and bash.\n\n\
 `@scratch` is this session's throwaway workspace on this machine, shared with its branches and \
 sub-agents and deleted with the session. Use it for scripts, downloads, clones and generated \
@@ -253,9 +254,15 @@ struct SearchArgs {
 
 #[derive(Debug, Deserialize, JsonSchema)]
 #[serde(deny_unknown_fields)]
-struct WorkspaceUseArgs {
-    /// workspace name (any registered workspace, `@scratch`, or `@rumu`)
-    name: Option<String>,
+struct InvokeArgs {
+    /// the action's full name: `<type>.<action>` for one of rumu's
+    /// (`task.kill`), `<server>/<tool>` for an MCP tool
+    action: String,
+    /// the `@rumu` object it acts on (`@rumu:/tasks/<id>`); none for an MCP
+    /// tool
+    path: Option<String>,
+    /// its arguments, per its schema
+    args: Option<serde_json::Map<String, Value>>,
 }
 
 #[derive(Debug, Deserialize, JsonSchema)]
@@ -350,7 +357,7 @@ stdout+stderr (truncated to ~20k chars) and the exit code. Default timeout 60s (
 600s). Disabled on read-only workspaces and on the `@rumu` workspace. Give every call a \
 `description` (5-10 words, active voice): the transcript shows it as the call's summary. \
 `watch` (with `background: true`) delivers new output lines (with `every`: lines changed \
-between reruns) as notes that wake you, until the command exits, `until` matches, `task_kill` \
+between reruns) as notes that wake you, until the command exits, `until` matches, `task.kill` \
 or its lifetime ends. Prefer `match`/`until` \
 to piping into grep (pipes buffer lines), and make `match` cover failures too (Traceback, \
 Error, Killed): silence is not success. Use `tail`, not `| tail`, to keep only the end of \
@@ -407,14 +414,13 @@ notices."
                 parallel: false,
             },
             ToolSpec {
-                name: "workspace_use".into(),
-                description: "Set the default workspace for subsequent tool calls \
-(branch state; forks inherit it) and return the workspace listing (the project's mounted \
-workspaces first, then the others). Without `name`, just list workspaces. `name` may be any \
-registered workspace, `@scratch`, or `@rumu`."
+                name: "invoke".into(),
+                description: "Run an action on an `@rumu` object: `action` is its full name \
+and `path` the object (`task.kill` on `@rumu:/tasks/<id>`, `workspace.use` on \
+`@rumu:/workspaces/<name>`). `list` an object to see its actions and their arguments."
                     .into(),
-                schema: tool_schema::<WorkspaceUseArgs>(),
-                background: false,
+                schema: tool_schema::<InvokeArgs>(),
+                background: true,
                 output_schema: None,
                 parallel: false,
             },
@@ -580,7 +586,8 @@ fn target_of(state: &PathState, raw: &str) -> ToolResult<Target> {
 fn bash_target(state: &PathState, raw: Option<&str>) -> ToolResult<Workspace> {
     let raw = raw.or(state.default_workspace.as_deref()).ok_or_else(|| {
         ToolError::model(
-            "no default workspace is set — call `workspace_use()` to list workspaces and pick one",
+            "no default workspace is set — `list @rumu:/workspaces` lists them; `invoke` \
+             `workspace.use` on one to pick it",
         )
     })?;
     if raw == RUMU_WORKSPACE {
@@ -701,7 +708,7 @@ pub(super) async fn call(
         "delete" => p.tool_delete(state, &args, cx).await.finish(),
         "list" => p.tool_list(state, &args, cx).await.finish(),
         "bash" => p.tool_bash(state, &args, cx).await.finish(),
-        "workspace_use" => p.tool_use(state, &args, cx).await.finish(),
+        "invoke" => p.tool_invoke(state, &args, cx).await.finish(),
         "card_mount" => p.tool_card_mount(state, &args, cx).await.finish(),
         "search" => p.tool_search(state, &args, cx).await.finish(),
         "show" => p.tool_show(state, &args).await.finish(),
@@ -1019,7 +1026,7 @@ impl WorkspacePlugin {
             }
             Target::Rumu { abs } => {
                 let (node, at) = self.route(&abs, state, cx)?;
-                node.list(&at).await
+                super::vfs::list_node(node, &at).await
             }
         }
     }
@@ -1043,7 +1050,7 @@ impl WorkspacePlugin {
         // Stream every chunk to the UI (tool.progress) / the task buffer
         // (task.progress), and to the watch. Background bash without `watch`
         // has no timeout of its own: it ends when the command exits,
-        // `task_kill`s it, or its owner aborts.
+        // kills it (`task.kill`), or its owner aborts.
         let mut on_chunk = |chunk: &str| {
             cx.progress(Progress::Append(chunk.to_owned()));
             if let Some(watch) = &watch {
@@ -1104,24 +1111,54 @@ impl WorkspacePlugin {
         }
     }
 
-    async fn tool_use(&self, state: &PathState, args: &Value, cx: &Cx) -> ToolResult<ToolOutput> {
-        let args: WorkspaceUseArgs = parse_args("workspace_use", args)?;
-        let Some(name) = args.name else {
-            // Listing only: no marker is written.
-            return Ok(self.listing(state).await.into());
+    /// `invoke`: an action of an `@rumu` object, checked against the actions
+    /// its node declares.
+    async fn tool_invoke(
+        &self,
+        state: &PathState,
+        args: &Value,
+        cx: &Cx,
+    ) -> ToolResult<ToolOutput> {
+        let args: InvokeArgs = parse_args("invoke", args)?;
+        let params = Value::Object(args.args.unwrap_or_default());
+        let Some(path) = args.path else {
+            return Err(super::vfs::needs_path(&args.action));
         };
+        let Target::Rumu { abs } = target_of(state, &path)? else {
+            return Err(ToolError::model(format!(
+                "`path` is the `{RUMU_WORKSPACE}` object an action acts on (`{RUMU_WORKSPACE}:/tasks/<id>`)"
+            )));
+        };
+        let (node, at) = self.route(&abs, state, cx)?;
+        let Some(spec) = node.actions().iter().find(|a| a.name == args.action) else {
+            return Err(super::vfs::not_here(&args.action, &abs, node));
+        };
+        node.invoke(&at, spec, params).await
+    }
+
+    /// `workspace.use`: make `name` the branch's default workspace (the
+    /// `workspace.use` marker the web's `branch.use_workspace` writes too)
+    /// and list the workspaces as they then are.
+    pub(super) async fn use_workspace(
+        &self,
+        state: &PathState,
+        name: &str,
+        cx: &Cx,
+    ) -> ToolResult<ToolOutput> {
         if name != RUMU_WORKSPACE && !state.workspaces.iter().any(|w| w.name == name) {
-            return Err(ToolError::model(unknown_workspace(state, &name)));
+            return Err(ToolError::model(unknown_workspace(state, name)));
         }
         let mut effects = Vec::new();
         if let Some(ws) = state.workspaces.iter().find(|w| w.name == name).cloned() {
             effects.extend(self.maybe_inject_agents(cx, &ws).await);
         }
-        effects.push(Effect::marker(&WorkspaceUse { name: name.clone() }));
+        effects.push(Effect::marker(&WorkspaceUse {
+            name: name.to_owned(),
+        }));
         // The marker lands at the next safe point; report the listing as if
         // the new default were already in effect.
         let mut after = state.clone();
-        after.default_workspace = Some(name.clone());
+        after.default_workspace = Some(name.to_owned());
         Ok(ToolOutput::ok(format!(
             "default workspace set; workspaces:\n{}",
             self.listing(&after).await
@@ -1131,7 +1168,7 @@ impl WorkspacePlugin {
 
     /// One line per workspace: the project's mounted ones first (marked),
     /// then the others, then the `@rumu` line. The default is marked `*`.
-    async fn listing(&self, state: &PathState) -> String {
+    pub(super) async fn listing(&self, state: &PathState) -> String {
         let mut ordered: Vec<&Workspace> = Vec::new();
         for name in &state.mounted {
             if let Some(ws) = state.workspaces.iter().find(|w| &w.name == name) {

@@ -26,7 +26,7 @@ impl Structured for AgentsNote {
 }
 
 impl WorkspacePlugin {
-    /// When a workspace is used (a tool call targeting it, or `workspace_use`),
+    /// When a workspace is used (a tool call targeting it, or `workspace.use`),
     /// inject its AGENTS.md (or CLAUDE.md) as a note: once per path, and again
     /// only when the file's content hash differs from the latest injection.
     /// An empty file is skipped entirely. Reads go through the workspace

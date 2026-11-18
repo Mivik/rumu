@@ -1,7 +1,10 @@
 //! The configuration half of the `@rumu` workspace:
 //!
-//! - `@rumu:/workspaces` lists the registry; `@rumu:/workspaces/<name>`
-//!   reads and writes one entry (`{root, ssh?, read_only?}`);
+//! - `@rumu:/workspaces` lists the workspaces (the project's first, then the
+//!   rest of the registry, then `@scratch` and `@rumu`);
+//!   `@rumu:/workspaces/<name>` reads and writes one registry entry
+//!   (`{root, ssh?, read_only?}`), and its `workspace.use` makes it the
+//!   branch's default (`@scratch` and `@rumu` have entries for that alone);
 //! - `@rumu:/project/workspaces` is the session's project's ordered workspace
 //!   list (the first is its default), read-before-write like a card.
 //!
@@ -12,10 +15,11 @@
 use async_trait::async_trait;
 use rumu_cards::deck::Action;
 use rumu_core::{
-    Content, Cx, PathState, Structured, ToolError, ToolOutput, ToolResult, Utf8UnixPath,
+    Content, Cx, PathState, RUMU_WORKSPACE, SCRATCH_WORKSPACE, Structured, ToolError, ToolOutput,
+    ToolResult, Utf8UnixPath,
 };
 use serde::{Deserialize, Serialize};
-use serde_json::json;
+use serde_json::{Value, json};
 
 use crate::approve::{approve, deck_name};
 use crate::workspaces::{
@@ -24,7 +28,7 @@ use crate::workspaces::{
 
 use super::WorkspacePlugin;
 use super::tools::replace_occurrences;
-use super::vfs::{At, Node, Out};
+use super::vfs::{ActionSpec, Approval, At, NoArgs, Node, Out};
 
 /// Payload of the read marker on `@rumu:/project/workspaces` (v1): the
 /// content hash the last read returned. A write must be based on it.
@@ -38,34 +42,14 @@ impl Structured for ProjectWorkspacesRead {
     const V: u32 = 1;
 }
 
-/// `/workspaces`: the registry, one line per workspace: the default `*`,
-/// name, machine label, root, rw/ro, and `(mounted)` for the project's.
+/// `/workspaces`: one line per workspace: the default `*`, name, machine
+/// label, root, rw/ro, and `(mounted)` for the project's.
 pub(super) struct WorkspacesDir;
 
 #[async_trait]
 impl Node for WorkspacesDir {
     async fn list(&self, at: &At<'_>) -> Out {
-        let list = at.p.workspaces.list();
-        if list.is_empty() {
-            return Ok("(no workspaces)".into());
-        }
-        let lines: Vec<String> = list
-            .iter()
-            .map(|ws| {
-                let star = if at.state.default_workspace.as_deref() == Some(ws.name.as_str()) {
-                    "* "
-                } else {
-                    "  "
-                };
-                let rw = if ws.read_only { "ro" } else { "rw" };
-                let mut line = format!("{star}{} {} {} {rw}", ws.name, ws.label(), ws.root);
-                if at.state.mounted.iter().any(|n| n == &ws.name) {
-                    line.push_str("  (mounted)");
-                }
-                line
-            })
-            .collect();
-        Ok(lines.join("\n").into())
+        Ok(at.p.listing(at.state).await.into())
     }
 
     fn holds_files(&self) -> bool {
@@ -73,24 +57,41 @@ impl Node for WorkspacesDir {
     }
 }
 
-/// `/workspaces/<name>`: one registry entry.
+/// `/workspaces/<name>`: one registry entry, or `@scratch` / `@rumu`.
 pub(super) struct Entry;
 
 #[async_trait]
 impl Node for Entry {
     async fn list(&self, at: &At<'_>) -> Out {
-        Ok(at.p.entry_text(at.param("name"))?.into())
+        let name = at.param("name");
+        match name {
+            RUMU_WORKSPACE => Ok(
+                "# rumu's own data (cards, history, sessions, tasks, …); not in \
+                 the registry; no bash\n"
+                    .into(),
+            ),
+            SCRATCH_WORKSPACE => {
+                let root = at.state.workspaces.iter().find(|w| w.name == name);
+                let root = root.map(|w| w.root.to_string()).unwrap_or_default();
+                Ok(format!(
+                    "# this session's throwaway directory, removed with it; not in the registry\n\
+                     root: {root}\n"
+                )
+                .into())
+            }
+            _ => Ok(at.p.entry_text(name)?.into()),
+        }
     }
 
     async fn write(&self, at: &At<'_>, content: &str, from: Option<&str>) -> Out {
         no_from(from)?;
-        let name = at.param("name");
+        let name = fixed(at.param("name"))?;
         at.p.entry_write(at.state, name, content, at.cx).await
     }
 
     /// Replace on the current text, then take the write path.
     async fn edit(&self, at: &At<'_>, old: &str, new: &str, all: bool) -> Out {
-        let name = at.param("name");
+        let name = fixed(at.param("name"))?;
         let text = at.p.entry_text(name)?;
         let (new_text, n) = replace_occurrences(&text, old, new, all)
             .map_err(|e| ToolError::model(e.to_string()))?;
@@ -102,8 +103,34 @@ impl Node for Entry {
     }
 
     async fn delete(&self, at: &At<'_>) -> Out {
-        at.p.entry_delete(at.state, at.param("name"), at.cx).await
+        at.p.entry_delete(at.state, fixed(at.param("name"))?, at.cx)
+            .await
     }
+
+    fn actions(&self) -> &'static [ActionSpec] {
+        &[ActionSpec {
+            name: "workspace.use",
+            about: "make it this branch's default workspace (forks inherit it)",
+            args: rumu_core::tool_schema::<NoArgs>,
+            approval: Approval::Never,
+        }]
+    }
+
+    async fn invoke(&self, at: &At<'_>, spec: &ActionSpec, args: Value) -> Out {
+        let NoArgs {} = spec.parse(args)?;
+        at.p.use_workspace(at.state, at.param("name"), at.cx).await
+    }
+}
+
+/// `name`, unless it is `@scratch` or `@rumu`: they are listed beside the
+/// registry, not in it, and only to be used.
+fn fixed(name: &str) -> ToolResult<&str> {
+    if name == RUMU_WORKSPACE || name == SCRATCH_WORKSPACE {
+        return Err(ToolError::model(format!(
+            "`{name}` is not in the registry and cannot be changed; `workspace.use` is all it has"
+        )));
+    }
+    Ok(name)
 }
 
 /// `/project`: the session's project (only `workspaces` under it).

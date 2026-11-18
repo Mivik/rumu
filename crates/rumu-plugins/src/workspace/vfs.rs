@@ -2,12 +2,21 @@
 //! ([`matchit`]), each served by a stateless [`Node`]. The file tools
 //! resolve an `@rumu` path here and call the node's operation; whatever a
 //! node does not serve is refused the same way everywhere.
+//!
+//! Paths name data. What can be done to one object beyond reading and
+//! writing it is one of its node's actions ([`ActionSpec`]), run by
+//! `invoke` with the action's full name (`<type>.<action>`, unique across
+//! the table) and the object's path; `list` shows a node's actions.
 
 use std::sync::LazyLock;
 
 use async_trait::async_trait;
 use matchit::{Params, Router};
 use rumu_core::{Cx, PathState, RUMU_WORKSPACE, ToolError, ToolOutput, ToolResult, Utf8UnixPath};
+use schemars::JsonSchema;
+use serde::Deserialize;
+use serde::de::DeserializeOwned;
+use serde_json::Value;
 
 use super::WorkspacePlugin;
 use super::cards::{Card, CardsDir};
@@ -56,6 +65,208 @@ static ROUTER: LazyLock<Router<&'static dyn Node>> = LazyLock::new(|| {
     }
     router
 });
+
+/// Every rumu action with the route it acts on. Building it checks that
+/// each full name is `<type>.<action>` and unique (a node with actions is
+/// registered under one route).
+static ACTIONS: LazyLock<Vec<(&'static ActionSpec, &'static str)>> = LazyLock::new(|| {
+    let mut all: Vec<(&'static ActionSpec, &'static str)> = Vec::new();
+    for (path, node) in ROUTES {
+        for spec in node.actions() {
+            assert!(
+                spec.name.contains('.') && !spec.name.contains('/'),
+                "action `{}` is not <type>.<action>",
+                spec.name
+            );
+            assert!(
+                !all.iter().any(|(s, _)| s.name == spec.name),
+                "action `{}` is declared twice",
+                spec.name
+            );
+            all.push((spec, path));
+        }
+    }
+    all
+});
+
+/// What an action on an object can do without asking: every action says.
+#[derive(Debug, Clone, Copy)]
+pub(super) enum Approval {
+    /// Never asks the user (it touches only this branch or what it owns).
+    Never,
+    /// Asks for this deck action unless a grant covers it; the node's
+    /// `invoke` puts the question through `approve`.
+    #[expect(
+        dead_code,
+        reason = "`deck.mount` (the /decks step) is the first to ask"
+    )]
+    Asks(rumu_cards::deck::Action),
+}
+
+/// One action of a node: its full name, a line saying what it does, the
+/// schema of its arguments, and whether it asks the user.
+pub(super) struct ActionSpec {
+    pub name: &'static str,
+    pub about: &'static str,
+    pub args: fn() -> Value,
+    pub approval: Approval,
+}
+
+/// The arguments of an action that takes none.
+#[derive(Deserialize, JsonSchema)]
+#[serde(deny_unknown_fields)]
+pub(super) struct NoArgs {}
+
+impl ActionSpec {
+    /// Its arguments parsed, or an error with their schema.
+    pub fn parse<T: DeserializeOwned>(&self, args: Value) -> ToolResult<T> {
+        serde_json::from_value(args).map_err(|e| {
+            ToolError::model(format!(
+                "{}: invalid arguments: {e}; they are {}",
+                self.name,
+                (self.args)()
+            ))
+        })
+    }
+
+    /// Its line under `actions:`.
+    fn line(&self) -> (String, String) {
+        let mut about = self.about.to_owned();
+        if let Approval::Asks(_) = self.approval {
+            about.push_str(" (asks the user)");
+        }
+        (signature(self.name, &(self.args)()), about)
+    }
+}
+
+/// `name(a: string, b?: integer)` from an object schema's properties.
+pub(crate) fn signature(name: &str, schema: &Value) -> String {
+    let required: Vec<&str> = schema["required"]
+        .as_array()
+        .into_iter()
+        .flatten()
+        .filter_map(Value::as_str)
+        .collect();
+    let params: Vec<String> = schema["properties"]
+        .as_object()
+        .into_iter()
+        .flatten()
+        .map(|(key, prop)| {
+            let opt = if required.contains(&key.as_str()) {
+                ""
+            } else {
+                "?"
+            };
+            format!("{key}{opt}: {}", type_of(prop))
+        })
+        .collect();
+    format!("{name}({})", params.join(", "))
+}
+
+/// A property's type, as short as a signature wants it.
+fn type_of(prop: &Value) -> String {
+    if let Some(values) = prop["enum"].as_array() {
+        let names: Vec<String> = values.iter().map(Value::to_string).collect();
+        return names.join(" | ");
+    }
+    let one = |t: &str| match t {
+        "array" => format!("{}[]", type_of(&prop["items"])),
+        "object" => "object".to_owned(),
+        t => t.to_owned(),
+    };
+    match &prop["type"] {
+        Value::String(t) => one(t),
+        Value::Array(types) => {
+            let names: Vec<String> = types
+                .iter()
+                .filter_map(Value::as_str)
+                .filter(|t| *t != "null")
+                .map(one)
+                .collect();
+            names.join(" | ")
+        }
+        _ => match prop["anyOf"].as_array().or(prop["oneOf"].as_array()) {
+            Some(alts) => {
+                let names: Vec<String> = alts
+                    .iter()
+                    .filter(|a| a["type"] != "null")
+                    .map(type_of)
+                    .collect();
+                names.join(" | ")
+            }
+            None => "any".to_owned(),
+        },
+    }
+}
+
+/// The `actions:` section of a listing: `signature — what it does` lines.
+pub(crate) fn actions_section(lines: impl IntoIterator<Item = (String, String)>) -> String {
+    let mut out = String::from("actions:");
+    for (sig, about) in lines {
+        out.push_str(&format!("\n  {sig} — {about}"));
+    }
+    out
+}
+
+/// `/tasks/{id}` as the model writes it: `@rumu:/tasks/<id>`.
+fn shown_route(pattern: &str) -> String {
+    let path = pattern
+        .replace('{', "<")
+        .replace('}', ">")
+        .replace("<*", "<");
+    format!("{RUMU_WORKSPACE}:{path}")
+}
+
+/// Every rumu action and what it acts on, for refusals.
+fn known_actions() -> String {
+    let all: Vec<String> = ACTIONS
+        .iter()
+        .map(|(s, path)| format!("`{}` on `{}`", s.name, shown_route(path)))
+        .collect();
+    all.join(", ")
+}
+
+/// The refusal of `action`, which `node` (at `abs`) does not have.
+pub(super) fn not_here(action: &str, abs: &Utf8UnixPath, node: &dyn Node) -> ToolError {
+    let here = match node.actions() {
+        [] => format!("`{RUMU_WORKSPACE}:{abs}` has no actions"),
+        specs => {
+            let names: Vec<String> = specs.iter().map(|s| format!("`{}`", s.name)).collect();
+            format!("`{RUMU_WORKSPACE}:{abs}` has {}", names.join(", "))
+        }
+    };
+    match ACTIONS.iter().find(|(s, _)| s.name == action) {
+        Some((_, path)) => ToolError::model(format!(
+            "`{action}` acts on `{}`; {here}",
+            shown_route(path)
+        )),
+        None => unknown_action(action, &here),
+    }
+}
+
+/// The refusal of a rumu action without a `path`.
+pub(super) fn needs_path(action: &str) -> ToolError {
+    match ACTIONS.iter().find(|(s, _)| s.name == action) {
+        Some((_, path)) => ToolError::model(format!(
+            "`{action}` needs `path`: the `{}` it acts on",
+            shown_route(path)
+        )),
+        None => unknown_action(action, ""),
+    }
+}
+
+fn unknown_action(action: &str, here: &str) -> ToolError {
+    let here = if here.is_empty() {
+        String::new()
+    } else {
+        format!("{here}; ")
+    };
+    ToolError::model(format!(
+        "no action `{action}`; {here}rumu's actions: {} (`list` an object to see its own). An \
+         MCP tool is `<server>/<tool>`.",
+        known_actions()
+    ))
+}
 
 /// The top-level directories, in table order.
 static ROOTS: LazyLock<Vec<&'static str>> = LazyLock::new(|| {
@@ -132,6 +343,20 @@ pub(super) trait Node: Send + Sync {
         Err(bad_scope())
     }
 
+    /// What `invoke` can do to this object; `list` shows them.
+    fn actions(&self) -> &'static [ActionSpec] {
+        &[]
+    }
+
+    /// Run `spec`, one of [`Node::actions`] (the caller checked), with its
+    /// raw arguments.
+    async fn invoke(&self, at: &At<'_>, spec: &ActionSpec, _args: Value) -> Out {
+        Err(ToolError::model(format!(
+            "`{}` is not served at `{RUMU_WORKSPACE}:{}`",
+            spec.name, at.abs
+        )))
+    }
+
     /// The refusal of a write, edit or delete here.
     fn refuse(&self, abs: &Utf8UnixPath, verb: &str) -> ToolError {
         if self.holds_files() {
@@ -145,6 +370,16 @@ pub(super) trait Node: Send + Sync {
             root.unwrap_or_default()
         ))
     }
+}
+
+/// `list` of `node`: its own listing, then its actions.
+pub(super) async fn list_node(node: &dyn Node, at: &At<'_>) -> Out {
+    let mut out = node.list(at).await?;
+    if !node.actions().is_empty() {
+        let section = actions_section(node.actions().iter().map(ActionSpec::line));
+        out.content.text = format!("{}\n\n{section}", out.content.text.trim_end());
+    }
+    Ok(out)
 }
 
 impl WorkspacePlugin {
@@ -271,5 +506,38 @@ mod tests {
         assert!(ROUTER.at("/history/cards").is_err());
         let roots = "cards history sessions skills tasks tools workspaces project";
         assert_eq!(ROOTS.join(" "), roots);
+    }
+
+    #[test]
+    fn actions_have_unique_full_names_and_one_route_each() {
+        let all: Vec<String> = ACTIONS
+            .iter()
+            .map(|(s, path)| format!("{} {path}", s.name))
+            .collect();
+        assert_eq!(
+            all,
+            ["task.kill /tasks/{id}", "workspace.use /workspaces/{name}"]
+        );
+        assert_eq!(shown_route("/cards/{*path}"), "@rumu:/cards/<path>");
+    }
+
+    #[test]
+    fn signatures_name_each_argument_and_its_type() {
+        let schema = serde_json::json!({
+            "type": "object",
+            "properties": {
+                "at": { "type": "string" },
+                "write": { "type": ["boolean", "null"] },
+                "tags": { "type": "array", "items": { "type": "string" } },
+                "mode": { "enum": ["a", "b"] },
+            },
+            "required": ["at"],
+        });
+        assert_eq!(
+            signature("deck.mount", &schema),
+            r#"deck.mount(at: string, write?: boolean, tags?: string[], mode?: "a" | "b")"#
+        );
+        let none = rumu_core::tool_schema::<NoArgs>();
+        assert_eq!(signature("task.kill", &none), "task.kill()");
     }
 }
