@@ -543,11 +543,13 @@ export async function compactBranch(focus: string): Promise<boolean> {
   }
 }
 
+/** `branch.stop`: stop this branch's reply; background tasks it started keep
+ *  running (kill them from the composer's task tab). */
 export async function stopTurn(): Promise<void> {
   const branch = state.activeBranch
   if (!branch) return
   try {
-    await rumu.request('abort', { branch })
+    await rumu.request('branch.stop', { branch })
   } catch (err) {
     toast('error', t('errors.abort'), (err as Error).message)
   }

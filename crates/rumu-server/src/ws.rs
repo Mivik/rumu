@@ -922,6 +922,15 @@ async fn dispatch(state: &AppState, method: &str, p: &Value) -> Result<Value> {
             Ok(json!({}))
         }
 
+        // Stop this branch's reply and nothing else: background tasks it
+        // started keep running (the web's stop button). `abort` is the blunter
+        // one — it cancels them too.
+        "branch.stop" => {
+            let branch: BranchId = str_param(p, "branch")?.into();
+            kernel.stop(&branch)?;
+            Ok(json!({}))
+        }
+
         "abort" => {
             let branch: BranchId = str_param(p, "branch")?.into();
             kernel.abort(&branch)?;

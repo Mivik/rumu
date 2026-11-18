@@ -4911,6 +4911,65 @@ async fn per_branch_task_limit() {
     assert!(text.contains("limit 1"), "{text}");
 }
 
+/// `branch.stop` ends the reply and leaves the background task it started
+/// running; `abort` is the one that takes the task down too.
+#[tokio::test]
+async fn stop_ends_the_reply_and_keeps_its_tasks() {
+    let plugin = Arc::new(background_plugin(
+        "bg",
+        &["bgwork"],
+        vec![],
+        noop_hooks(),
+        noop_tools(),
+    ));
+    let (kernel, _llm, session, branch) = setup(
+        vec![plugin],
+        vec![
+            LlmResponse::calls(vec![ToolCall::new(
+                "c1",
+                "bgwork",
+                json!({ "ms": 60_000, "background": true }),
+            )]),
+            LlmResponse::text("started"),
+        ],
+    )
+    .await;
+    let mut rx = kernel.tap_pushes();
+    kernel.prompt(&branch, "go").await.unwrap();
+    wait_until(Duration::from_secs(5), || {
+        kernel
+            .tasks(&session)
+            .unwrap()
+            .iter()
+            .any(|t| t.status.is_running())
+    })
+    .await;
+
+    kernel.stop(&branch).unwrap();
+    wait_until(Duration::from_secs(5), || {
+        kernel.is_idle(&branch).unwrap_or(false)
+    })
+    .await;
+    tokio::time::sleep(Duration::from_millis(100)).await;
+    assert!(
+        kernel.tasks(&session).unwrap()[0].status.is_running(),
+        "a stopped reply leaves its background task alone"
+    );
+    while let Ok(v) = rx.try_recv() {
+        assert_ne!(v["method"], "task.done", "the task must not finish: {v}");
+    }
+
+    kernel.abort(&branch).unwrap();
+    wait_until(Duration::from_secs(5), || {
+        !kernel.tasks(&session).unwrap()[0].status.is_running()
+    })
+    .await;
+    assert_eq!(
+        kernel.tasks(&session).unwrap()[0].status,
+        TaskStatus::Cancelled
+    );
+}
+
 /// A plugin invoke (`code` script) may not ask for `background`.
 #[tokio::test]
 async fn background_from_plugin_invoke_is_refused() {

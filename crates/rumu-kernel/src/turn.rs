@@ -258,13 +258,12 @@ impl Kernel {
         Ok(())
     }
 
-    /// `abort` WS method: cancel the running loop for a branch. Already-queued
-    /// items are still written but no longer start a turn; posts arriving
-    /// after the abort wake normally.
-    pub fn abort(&self, branch: &BranchId) -> Result<()> {
-        // Background work started by this branch (or a sub-agent below it)
-        // stops too; its completion notes are still written, without waking.
-        self.abort_tasks(branch);
+    /// `branch.stop` WS method: stop the reply on `branch` and nothing else.
+    /// Already-queued items are still written but no longer start a turn;
+    /// posts arriving after the stop wake normally. Background tasks the
+    /// branch started keep running — see [`Kernel::abort`] for the blunter
+    /// version.
+    pub fn stop(&self, branch: &BranchId) -> Result<()> {
         let mut inner = self.inner.lock().unwrap();
         if let Some(t) = inner.running.get(branch) {
             t.cancel();
@@ -273,6 +272,14 @@ impl Kernel {
         drop(inner);
         self.signal_tasks();
         Ok(())
+    }
+
+    /// `abort` WS method: stop the branch and cancel every background task it
+    /// (or a sub-agent below it) started. Their completion notes are still
+    /// written, without waking.
+    pub fn abort(&self, branch: &BranchId) -> Result<()> {
+        self.abort_tasks(branch);
+        self.stop(branch)
     }
 
     /// Register the loop guard for `branch`, returning its cancellation token.
