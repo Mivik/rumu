@@ -377,7 +377,13 @@ async fn pump(acp: Arc<Acp>, cx: ConnectionTo<Client>, mut pushes: broadcast::Re
             let id = session.map(|s| s.id.clone());
             tokio::spawn(async move {
                 match id {
-                    Some(id) => decide::answer(rumu, cx, id, elicit, params).await,
+                    // An editor's prompt cannot be withdrawn: no clock.
+                    Some(id) => {
+                        let _ = rumu
+                            .call("decision.hold", json!({ "id": params.get("id") }))
+                            .await;
+                        decide::answer(rumu, cx, id, elicit, params).await
+                    }
                     // No client session to ask: declined.
                     None => {
                         let _ = rumu

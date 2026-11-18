@@ -4689,6 +4689,26 @@ async fn workspace_registry_reads_and_writes() {
     );
     assert!(registry.get("new").unwrap().read_only);
 
+    // Nobody answering is no approval either, and the model hears which.
+    host.answers
+        .lock()
+        .unwrap()
+        .push_back(serde_json::Value::Null);
+    let out = plugin
+        .call_tool(
+            "write",
+            json!({ "path": "@rumu:/workspaces/new", "content": format!("root: {}\n", new_dir.display()) }),
+            &cx,
+        )
+        .await
+        .unwrap();
+    assert!(
+        out.is_error && out.content.text.contains("did not answer within 10 min"),
+        "{}",
+        out.content.text
+    );
+    assert!(registry.get("new").unwrap().read_only);
+
     // Edit changes an existing entry through the same approval path.
     host.answers
         .lock()

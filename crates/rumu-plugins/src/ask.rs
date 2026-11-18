@@ -83,8 +83,9 @@ struct AskArgs {
     timeout: Option<u64>,
 }
 
-/// How long `ask` waits for the user by default.
-const ASK_TIMEOUT: u64 = 600;
+/// How long `ask` waits for the user by default, and an approval at all
+/// (seconds).
+pub(crate) const ASK_TIMEOUT: u64 = 600;
 
 /// `delegate` arguments: an `agent` call with `mode: "session"`.
 #[derive(Debug, Deserialize, JsonSchema)]

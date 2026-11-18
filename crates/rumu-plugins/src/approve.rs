@@ -1,6 +1,7 @@
 //! The user's approval of one assistant deck acting on another: mounting it,
 //! writing to it, asking it or linking its cards. A grant (`deck.yaml`, or an
 //! earlier "allow for this session" / "always allow") skips the question.
+//! Nobody answering in time is no approval: the action is not taken.
 
 use rumu_cards::Decks;
 use rumu_cards::deck::{Action, Scope};
@@ -47,14 +48,20 @@ pub(crate) async fn approve(
     if allowed(decks, &state, &session, action, to) {
         return Ok(true);
     }
-    // No timeout: going on without the user is never an approval.
-    let answer = cx
-        .decide(request, None)
+    let timeout = std::time::Duration::from_secs(crate::ask::ASK_TIMEOUT);
+    let Some(answer) = cx
+        .decide(request, Some(timeout))
         .await
-        .map_err(|e| ToolError::model(e.to_string()))?;
-    let answer: Answer = answer
-        .and_then(|a| serde_json::from_value(a).ok())
-        .unwrap_or_default();
+        .map_err(|e| ToolError::model(e.to_string()))?
+    else {
+        // Told apart from a refusal: the user said nothing, not no.
+        return Err(ToolError::model(format!(
+            "the user did not answer within {} min, so this was not done; ask for it again once \
+             they are back",
+            crate::ask::ASK_TIMEOUT / 60
+        )));
+    };
+    let answer: Answer = serde_json::from_value(answer).unwrap_or_default();
     if answer.allow {
         decks.remember(action, answer.scope, &session, &state.assistant, to);
     }
