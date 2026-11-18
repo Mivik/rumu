@@ -18,6 +18,7 @@
 import DOMPurify from 'dompurify'
 import hljs from 'highlight.js/lib/core'
 import { marked, type Token } from 'marked'
+import markedCjkFriendly from 'marked-cjk-friendly'
 import { shallowRef } from 'vue'
 import { t } from '../i18n'
 import { state, type LightboxImage } from './state/state'
@@ -169,6 +170,9 @@ function renderCode(text: string, info: string | undefined): string {
 }
 
 marked.setOptions({ gfm: true })
+// `**加粗。**正文`: CommonMark won't close emphasis after CJK punctuation
+// when a CJK letter follows.
+marked.use(markedCjkFriendly())
 marked.use({ renderer: { code: ({ text, lang }) => renderCode(text, lang) } })
 
 // ---- math: KaTeX, code-split like the grammars. Until it lands a formula
