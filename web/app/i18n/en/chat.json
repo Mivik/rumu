@@ -122,7 +122,13 @@
     "mountHint": "{deck} would be mounted at {at}, and its cards readable from then on.",
     "moveProjectTitle": "{from} wants to move this session into {project}",
     "moveProjectHint": "{'@'}rumu:/cards/project",
-    "projectCreateTitle": "{from} wants to create the project {name}",
+    "deckCreateTitle": {
+      "assistant": "{from} wants to create the assistant {name}",
+      "project": "{from} wants to create the project {name}",
+      "deck": "{from} wants to create the deck {name}"
+    },
+    "deckChangeTitle": "{from} wants to change the configuration of {deck}",
+    "grantsHint": "It changes what may be mounted or asked, so it can only be allowed once.",
     "workspaceChangeTitle": "{from} wants to change the workspace {name}",
     "workspaceDeleteTitle": "{from} wants to delete the workspace {name}",
     "workspaceDeleteHint": "Projects that mount it lose it too.",

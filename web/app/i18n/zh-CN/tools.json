@@ -16,6 +16,8 @@
     "search": "搜索",
     "workspaceUse": "切换到",
     "kill": "停止",
+    "mount": "挂载",
+    "unmount": "卸载",
     "other": "调用",
     "show": "展示"
   },

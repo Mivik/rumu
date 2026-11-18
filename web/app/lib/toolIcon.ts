@@ -16,12 +16,13 @@ const ICONS: Record<string, string> = {
   agent: 'agent',
   delegate: 'agent',
   ask: 'ask',
-  card_mount: 'deck',
   // A background task's own name; those are MCP calls in practice.
   invoke: 'mcp',
   // `invoke` rows stand for their action (`displayCall`).
   'task.kill': 'stop',
   'workspace.use': 'switch',
+  'deck.mount': 'deck',
+  'deck.unmount': 'deck',
 }
 
 /** The Icon name for a `name` tool call; an MCP tool (`<server>/<tool>`)

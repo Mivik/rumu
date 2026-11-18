@@ -419,6 +419,8 @@ const VERB_KEYS: Record<string, string> = {
   show: 'show',
   'task.kill': 'kill',
   'workspace.use': 'workspaceUse',
+  'deck.mount': 'mount',
+  'deck.unmount': 'unmount',
 }
 
 /** A piece of a summary line; `mono` marks a literal (a file, a command). */

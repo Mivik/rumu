@@ -37,7 +37,7 @@ import { openAgentView } from './branchView'
 import { requestComposerFocus, toast } from './ui'
 import { chooseLandingProject, landingAssistant, landingProject, rememberSessionPicks } from './projects'
 
-/** `card.list`: what the open branch has mounted (`card_mount` included), else
+/** `card.list`: what the open branch has mounted (`deck.mount` included), else
  * the default mounts of the assistant in view. An assistant gone from the
  * config has no shelf; its old sessions still open, with no cards. */
 async function listCards(): Promise<Card[]> {

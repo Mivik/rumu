@@ -196,7 +196,8 @@ export type DecisionRequest =
   | WriteRequest
   | DeleteRequest
   | LinkRequest
-  | ProjectCreateRequest
+  | DeckCreateRequest
+  | DeckChangeRequest
   | WorkspaceChangeRequest
   | WorkspaceDeleteRequest
 
@@ -246,9 +247,9 @@ export interface QuestionOption {
   description?: string
 }
 
-/** `card_mount` without a grant: `from` mounts `deck` at `at`. */
+/** `deck.mount` without a grant: `from` mounts `deck` at `at`. */
 export interface MountRequest {
-  kind: 'card_mount'
+  kind: 'deck_mount'
   from: string
   from_id: string
   deck: string
@@ -292,12 +293,29 @@ export interface LinkRequest {
   path: string
 }
 
-/** `card_mount(create, at: "project")`: `from` wants a project named `name`. */
-export interface ProjectCreateRequest {
-  kind: 'project_create'
+/** A deck created by writing `@rumu:/decks/<name>`: `content` is its
+ * configuration as the model wrote it (`once` when it sets grants). */
+export interface DeckCreateRequest {
+  kind: 'deck_create'
   from: string
   from_id: string
   name: string
+  deck_kind: 'assistant' | 'project' | 'deck'
+  content: string
+  once?: boolean
+}
+
+/** A deck's configuration would change: `before`/`after` are its YAML
+ * (`once` when its grants change: no lasting answer covers those). */
+export interface DeckChangeRequest {
+  kind: 'deck_change'
+  from: string
+  from_id: string
+  deck: string
+  deck_id: string
+  before: string
+  after: string
+  once?: boolean
 }
 
 /** A registered workspace entry would change: `before`/`after` are its YAML. */

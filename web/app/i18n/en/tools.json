@@ -16,6 +16,8 @@
     "search": "searched",
     "workspaceUse": "switched to",
     "kill": "stopped",
+    "mount": "mounted",
+    "unmount": "unmounted",
     "other": "called",
     "show": "showed"
   },

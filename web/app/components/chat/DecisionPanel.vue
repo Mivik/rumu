@@ -1,8 +1,8 @@
 <script setup lang="ts">
 // A tool call waiting on the user (`decision.requested`): questions an `ask`
 // puts to the user (QuestionsForm), or approval of an `ask` between
-// assistants, mounting a deck, writing to another deck, or a link into
-// another deck. It
+// assistants, mounting a deck, writing to another deck, a link into
+// another deck, or creating or changing a deck or a workspace. It
 // unfolds from the top of the composer, so the request sits where the reply
 // to it would be written; the oldest pending one of the open session shows,
 // the rest wait their turn (other sessions' requests are marked in the
@@ -92,7 +92,7 @@ const view = computed<RequestView | null>(() => {
         detail: r.task,
         hint: t('chat.ask.hint', { from: r.from, to: r.to }),
       }
-    case 'card_mount':
+    case 'deck_mount':
       if (r.at === '/cards/project')
         return {
           title: t('chat.ask.moveProjectTitle', { from: r.from, project: r.deck }),
@@ -124,11 +124,19 @@ const view = computed<RequestView | null>(() => {
         detail: r.content,
         hint: t('chat.ask.deleteHint', { path: r.path }),
       }
-    case 'project_create':
+    case 'deck_create':
       return {
-        title: t('chat.ask.projectCreateTitle', { from: r.from, name: r.name }),
+        title: t(`chat.ask.deckCreateTitle.${r.deck_kind}`, { from: r.from, name: r.name }),
+        detail: r.content,
+        hint: r.once ? t('chat.ask.grantsHint') : null,
+      }
+    case 'deck_change':
+      return {
+        title: t('chat.ask.deckChangeTitle', { from: r.from, deck: r.deck }),
         detail: null,
-        hint: null,
+        hint: r.once ? t('chat.ask.grantsHint') : null,
+        before: r.before,
+        after: r.after,
       }
     case 'workspace_change':
       return {
@@ -150,6 +158,13 @@ const view = computed<RequestView | null>(() => {
 function answer(allow: boolean, scope: DecisionScope = 'once'): void {
   if (current.value) void answerDecision(current.value.id, { allow, scope })
 }
+
+/** A request no lasting answer may cover (a change to a deck's grants):
+ *  only "allow once" is offered. */
+const onceOnly = computed(() => {
+  const r = shown.value?.request
+  return !!r && 'once' in r && r.once === true
+})
 
 /** Decline the current request, or dismiss its questions. */
 function decline(): void {
@@ -269,6 +284,7 @@ onBeforeUnmount(() => window.removeEventListener('keydown', onKey, true))
                     {{ t('chat.ask.deny') }}
                   </button>
                   <button
+                    v-if="!onceOnly"
                     type="button"
                     class="btn flex-auto px-3 py-1 sm:flex-none"
                     @click="answer(true, 'always')"
@@ -276,6 +292,7 @@ onBeforeUnmount(() => window.removeEventListener('keydown', onKey, true))
                     {{ t('chat.ask.always') }}
                   </button>
                   <button
+                    v-if="!onceOnly"
                     type="button"
                     class="btn flex-auto px-3 py-1 sm:flex-none"
                     @click="answer(true, 'session')"

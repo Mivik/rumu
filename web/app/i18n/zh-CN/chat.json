@@ -122,7 +122,13 @@
     "mountHint": "{deck} 会挂载到 {at}，之后可以读取其中的卡片。",
     "moveProjectTitle": "{from} 想把本会话移入 {project}",
     "moveProjectHint": "{'@'}rumu:/cards/project",
-    "projectCreateTitle": "{from} 想创建项目 {name}",
+    "deckCreateTitle": {
+      "assistant": "{from} 想创建助手 {name}",
+      "project": "{from} 想创建项目 {name}",
+      "deck": "{from} 想创建卡组 {name}"
+    },
+    "deckChangeTitle": "{from} 想修改 {deck} 的配置",
+    "grantsHint": "涉及挂载或委派授权，仅可允许本次。",
     "workspaceChangeTitle": "{from} 想修改工作区 {name}",
     "workspaceDeleteTitle": "{from} 想删除工作区 {name}",
     "workspaceDeleteHint": "挂载它的项目将一并移除它。",

@@ -114,14 +114,19 @@ function openAddress(abs: string): boolean {
         segs[0] ?? null,
         state.workspaces.some((w) => w.name === segs[0]),
       )
-    // `/project/workspaces`: the session's project, workspaces and all.
-    case 'project': {
-      const id = state.pathState?.project
-      return go('projects', id ?? null, !!id)
+    // `/decks/<name>`: an assistant's or a project's page, or the deck in
+    // the library.
+    case 'decks': {
+      const name = segs[0]
+      const assistant = state.assistants.find((a) => a.name === name)
+      if (assistant) return go('assistants', assistant.id)
+      const project = state.projects.find((p) => p.name === name)
+      if (project) return go('projects', project.id)
+      return go('decks', null)
     }
     case 'skills':
       return go('settings', 'skills')
-    case 'tools':
+    case 'mcp':
       return go('settings', 'mcp')
   }
   return false
