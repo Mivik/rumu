@@ -78,6 +78,22 @@ pub(super) struct Sessions;
 
 #[async_trait]
 impl vfs::Node for Sessions {
+    fn about(&self) -> &'static str {
+        "past conversations you can see: yours and the mounted decks'"
+    }
+
+    fn doc(&self, at: &At<'_>) -> &'static str {
+        if at.opt("id").is_some() {
+            return "";
+        }
+        "Past conversations you can see (those of the mounted decks: this project's, or your \
+         own outside any project), most recently updated first. `@rumu:/sessions/<session>` is \
+         one's overview with its branches as node ranges; `.../<node>` reads one node in full, \
+         `.../<from>..<to>` a stretch of a branch (long bodies clipped). A node is named by \
+         its id or an unambiguous prefix of 4+ characters. `search` with this scope (or a \
+         session's) finds nodes. Read-only."
+    }
+
     async fn list(&self, at: &At<'_>) -> Out {
         let mut sessions = visible_sessions(at.cx, at.opt("id"))?;
         sessions.sort_by_key(|s| Reverse(s.updated_at));
@@ -115,6 +131,10 @@ pub(super) struct ByAssistant;
 
 #[async_trait]
 impl vfs::Node for ByAssistant {
+    fn about(&self) -> &'static str {
+        "the same sessions, by assistant"
+    }
+
     async fn list(&self, at: &At<'_>) -> Out {
         let own = at.state.assistant.clone();
         let mut ids: Vec<String> = visible_sessions(at.cx, None)?
@@ -147,6 +167,10 @@ pub(super) struct Session;
 
 #[async_trait]
 impl vfs::Node for Session {
+    fn about(&self) -> &'static str {
+        "one session's overview, node or range"
+    }
+
     async fn list(&self, at: &At<'_>) -> Out {
         let (sid, what) = (at.param("sid"), at.param("what"));
         let (info, nodes, branches) = match at.cx.history().session_tree(&SessionId::from(sid)) {
@@ -316,7 +340,7 @@ impl WorkspacePlugin {
         for (si, group) in groups {
             let info = &sessions[si];
             out.push(format!(
-                "{WS}:/sessions/{}  {}{}",
+                "session {WS}:/sessions/{}  {}{}",
                 info.id,
                 json_quote(&info.title, TITLE_CHARS),
                 self.session_owner(info, cx)?

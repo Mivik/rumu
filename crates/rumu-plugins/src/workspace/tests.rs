@@ -64,6 +64,11 @@ fn flush_output(host: &std::sync::Arc<FakeRuntime>, call_id: &str, out: &ToolOut
     host.apply_output(call_id, out);
 }
 
+/// A listing's entries: what follows its node's doc (one paragraph).
+fn entries(text: &str) -> &str {
+    text.split_once("\n\n").map_or(text, |(_, rest)| rest)
+}
+
 /// `invoke` arguments mounting the deck named `deck` at `at`.
 fn mount(deck: &str, at: &str) -> Value {
     json!({ "action": "deck.mount", "path": format!("@rumu:/decks/{deck}"), "args": { "at": at } })
@@ -1157,7 +1162,7 @@ async fn workspace_use_lists_and_switches() {
         .await
         .unwrap();
     assert!(!out.is_error, "{}", out.content.text);
-    let lines: Vec<&str> = out.content.text.lines().collect();
+    let lines: Vec<&str> = entries(&out.content.text).lines().collect();
     assert!(
         lines[0].starts_with("* proj local /p/rumu rw"),
         "{}",
@@ -1169,7 +1174,7 @@ async fn workspace_use_lists_and_switches() {
         lines[1]
     );
     assert!(
-        lines[2].starts_with("  @rumu rumu's own data: @rumu:/cards"),
+        lines[2].starts_with("  @rumu rumu's own data (`list @rumu:/`)"),
         "{}",
         lines[2]
     );
@@ -1426,11 +1431,36 @@ async fn rumu_workspace_edges() {
     let home = card_home();
     let (plugin, _host, cx) = card_plugin_for(home.path());
 
-    // `list @rumu:` shows the roots.
+    // `list @rumu:` shows what it is, then the roots, each with a line.
     let out = plugin.call_tool("list", json!({}), &cx).await.unwrap();
+    let roots: Vec<&str> = entries(&out.content.text)
+        .lines()
+        .map(|l| l.split(" — ").next().unwrap())
+        .collect();
     assert_eq!(
-        out.content.text,
-        "cards/\ndecks/\nhistory/\nsessions/\nskills/\ntasks/\nmcp/\nworkspaces/"
+        roots,
+        [
+            "cards/",
+            "decks/",
+            "history/",
+            "sessions/",
+            "skills/",
+            "tasks/",
+            "mcp/",
+            "workspaces/"
+        ]
+    );
+    assert!(
+        out.content.text.starts_with("rumu's own data, as paths"),
+        "{}",
+        out.content.text
+    );
+    assert!(
+        out.content
+            .text
+            .contains("\ntasks/ — this session's background tasks\n"),
+        "{}",
+        out.content.text
     );
 
     // Unknown paths name the roots.
@@ -2094,7 +2124,7 @@ async fn session_listing_and_overview() {
         .await
         .unwrap();
     assert!(!out.is_error, "{}", out.content.text);
-    let line = out.content.text.lines().next().unwrap();
+    let line = entries(&out.content.text).lines().next().unwrap();
     let mut fields = line.split("  ");
     assert_eq!(
         fields.next(),
@@ -2110,7 +2140,7 @@ async fn session_listing_and_overview() {
         .call_tool("list", json!({ "path": "@rumu:/sessions" }), &here)
         .await
         .unwrap();
-    let line = out.content.text.lines().next().unwrap();
+    let line = entries(&out.content.text).lines().next().unwrap();
     assert!(line.ends_with("\"config hunting\"  (current)"), "{line}");
 
     // The overview: header + one line per branch (created_at order), main
@@ -3115,8 +3145,8 @@ fn hit_addrs(text: &str) -> Vec<String> {
     let mut session = "";
     let mut out = Vec::new();
     for line in text.lines() {
-        if line.starts_with("@rumu:/sessions/") {
-            session = line.split("  ").next().unwrap();
+        if let Some(header) = line.strip_prefix("session ") {
+            session = header.split("  ").next().unwrap();
         } else if let Some(rest) = line.strip_prefix("  ") {
             out.push(format!("{session}/{}", rest.split("  ").next().unwrap()));
         }
@@ -3323,9 +3353,9 @@ async fn search_sessions_and_cards_by_scope() {
     // One header per session with its quoted title; node lines carry kind,
     // time and a quoted snippet.
     assert!(
-        out.content
-            .text
-            .starts_with(&format!("@rumu:/sessions/{s1}  \"ssh setup\"\n  N1  note ")),
+        out.content.text.starts_with(&format!(
+            "session @rumu:/sessions/{s1}  \"ssh setup\"\n  N1  note "
+        )),
         "{}",
         out.content.text
     );
@@ -3612,7 +3642,7 @@ async fn search_downweights_tool_results_and_breaks_ties_by_time() {
     // The title is a JSON literal cut to 48 chars, `…` outside the quotes.
     assert!(
         text.starts_with(&format!(
-            "@rumu:/sessions/{sid}  \"line one \\\"quoted\\\"\\nline two, long enough to be cu\"…\n"
+            "session @rumu:/sessions/{sid}  \"line one \\\"quoted\\\"\\nline two, long enough to be cu\"…\n"
         )),
         "{text}"
     );
@@ -3759,7 +3789,8 @@ async fn bash_leaves_detached_processes_alone() {
         .status();
 }
 
-/// `read @rumu:/tasks/<id>` renders the task's status and buffered output.
+/// `read @rumu:/tasks/<id>` summarizes the task (status, the end of its
+/// output, its result); its `output` is the whole buffer, numbered from 1.
 #[tokio::test]
 async fn task_read_renders_status_and_output() {
     use rumu_core::{Content, TaskId, TaskInfo, TaskKind, TaskStatus};
@@ -3785,38 +3816,71 @@ async fn task_read_renders_status_and_output() {
         result: Some(Content::text("ignored")),
         data: None,
     };
-    host.tasks
-        .lock()
-        .unwrap()
-        .push((info, "partial\nmore output\n".into()));
+    let output: String = (1..=30).map(|i| format!("line {i}\n")).collect();
+    host.tasks.lock().unwrap().push((info, output));
 
     let out = plugin
         .call_tool("read", json!({ "path": "@rumu:/tasks/t1" }), &cx)
         .await
         .unwrap();
     assert!(!out.is_error, "{}", out.content.text);
-    assert!(out.content.text.contains("task t1 · ok · bash: ls"));
-    assert!(out.content.text.contains("partial\nmore output"));
-    assert!(out.content.text.contains("--- result ---\nignored"));
+    let text = &out.content.text;
+    assert!(text.starts_with("task t1 · ok · bash: ls"), "{text}");
+    assert!(
+        text.contains(
+            "\n\noutput, lines 11–30 of 30 (all of it: `@rumu:/tasks/t1/output`):\nline 11\n"
+        ),
+        "{text}"
+    );
+    assert!(!text.contains("line 10\n"), "{text}");
+    assert!(
+        text.ends_with("line 30\n\n--- result ---\nignored"),
+        "{text}"
+    );
+    assert!(!text.contains("actions:"), "`read` is the summary alone");
+
+    // The whole output, numbered from its first line.
+    let out = plugin
+        .call_tool(
+            "read",
+            json!({ "path": "@rumu:/tasks/t1/output", "offset": 10, "limit": 2 }),
+            &cx,
+        )
+        .await
+        .unwrap();
+    assert_eq!(out.content.text, "line 10\nline 11");
+    let out = plugin
+        .call_tool("read", json!({ "path": "@rumu:/tasks/t1/output" }), &cx)
+        .await
+        .unwrap();
+    assert!(out.content.text.starts_with("line 1\nline 2\n"));
+    assert!(
+        out.content
+            .text
+            .ends_with("line 30\n\n--- result ---\nignored")
+    );
 
     let listing = plugin
-        .call_tool("read", json!({ "path": "@rumu:/tasks" }), &cx)
+        .call_tool("list", json!({ "path": "@rumu:/tasks" }), &cx)
         .await
         .unwrap();
     assert!(!listing.is_error, "{}", listing.content.text);
-    assert!(listing.content.text.contains("@rumu:/tasks/t1"));
+    assert!(entries(&listing.content.text).starts_with("@rumu:/tasks/t1  ok"));
 
-    // `list` adds the task's actions; `read` does not.
+    // `list` adds its files and its actions.
     let listed = plugin
         .call_tool("list", json!({ "path": "@rumu:/tasks/t1" }), &cx)
         .await
         .unwrap();
     assert!(
-        listed.content.text.ends_with("\n\nactions:\n  task.kill() — cancel it (a command's whole process tree) and report how it ended"),
+        listed.content.text.ends_with(
+            "\n\nfiles:\n  output — its whole buffered output (then its result); page with \
+             `offset`/`limit`\n\nactions:\n  task.kill() — cancel it (a command's whole process \
+             tree) and report how it ended"
+        ),
         "{}",
         listed.content.text
     );
-    assert!(!out.content.text.contains("actions:"));
 }
 
 /// `invoke` runs an object's action, checked against what its node declares.
@@ -4952,7 +5016,7 @@ async fn workspace_registry_reads_and_writes() {
         .await
         .unwrap();
     assert!(!out.is_error, "{}", out.content.text);
-    let lines: Vec<&str> = out.content.text.lines().collect();
+    let lines: Vec<&str> = entries(&out.content.text).lines().collect();
     assert_eq!(lines.len(), 4, "{}", out.content.text);
     assert!(lines[0].starts_with("* app local "), "{}", lines[0]);
     assert!(lines[0].ends_with(" ro  (mounted)"), "{}", lines[0]);
@@ -5216,7 +5280,7 @@ async fn workspaces_list_the_projects_workspaces_first() {
         .call_tool("list", json!({ "path": "@rumu:/workspaces" }), &cx)
         .await
         .unwrap();
-    let lines: Vec<&str> = out.content.text.lines().collect();
+    let lines: Vec<&str> = entries(&out.content.text).lines().collect();
     assert!(lines[0].starts_with("* app local "), "{}", lines[0]);
     assert!(lines[0].ends_with("(mounted)"), "{}", lines[0]);
     assert!(lines[1].starts_with("  proj local "), "{}", lines[1]);

@@ -629,7 +629,7 @@ impl Kernel {
 fn started(id: &TaskId, label: &str) -> String {
     format!(
         "started task {id} ({label}) — you will be notified when it finishes; \
-         `read {RUMU_WORKSPACE}:/tasks/{id}` shows its output, `invoke` `task.kill` on it \
+         `read {RUMU_WORKSPACE}:/tasks/{id}` shows how it is doing, `invoke` `task.kill` on it \
          stops it"
     )
 }

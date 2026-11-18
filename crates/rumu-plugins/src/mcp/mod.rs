@@ -330,7 +330,7 @@ fn first_line(tool: &Tool) -> &str {
 
 /// `read`'s and `search`'s view of one tool: an action of its server.
 fn render(out: &mut String, server: &str, tool: &Tool, pretty: bool) {
-    let _ = writeln!(out, "## action {server}/{}", tool.name);
+    let _ = writeln!(out, "action {server}/{}", tool.name);
     if let Some(title) = &tool.title {
         let _ = writeln!(out, "{title}");
     }

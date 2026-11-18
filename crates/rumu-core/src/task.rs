@@ -164,8 +164,10 @@ impl Structured for TaskDone {
 }
 
 /// The line appended with a task's result when it was truncated: the buffered
-/// output stays readable through `@rumu:/tasks/<id>`, paging with `offset` /
-/// `limit` when it exceeds the tool-output cap.
+/// output stays readable through `@rumu:/tasks/<id>/output`, paging with
+/// `offset` / `limit` when it exceeds the tool-output cap.
 pub fn task_output_hint(id: &TaskId) -> String {
-    format!("read {RUMU_WORKSPACE}:/tasks/{id} to inspect the output (page with `offset`/`limit`)")
+    format!(
+        "read {RUMU_WORKSPACE}:/tasks/{id}/output for the whole output (page with `offset`/`limit`)"
+    )
 }

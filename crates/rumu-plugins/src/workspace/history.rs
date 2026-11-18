@@ -26,6 +26,17 @@ pub(super) struct HistoryRoot;
 
 #[async_trait]
 impl Node for HistoryRoot {
+    fn about(&self) -> &'static str {
+        "the change timeline of the mounted decks"
+    }
+
+    fn doc(&self, _at: &At<'_>) -> &'static str {
+        "The mounted decks' changes, newest first: commit, path, op, author, time. `list \
+         @rumu:/history/cards/<path>` lists one card path's versions (a deleted card's too; a \
+         moved card starts anew) and `read @rumu:/history/cards/<path>@<commit>` reads one, \
+         with its diff from the version before. Read-only."
+    }
+
     async fn list(&self, at: &At<'_>) -> Out {
         timeline(&at.p.cards(at.cx)?).map(Into::into)
     }
@@ -37,6 +48,10 @@ pub(super) struct CardHistory;
 
 #[async_trait]
 impl Node for CardHistory {
+    fn about(&self) -> &'static str {
+        "one card path's versions"
+    }
+
     async fn list(&self, at: &At<'_>) -> Out {
         let cards = at.p.cards(at.cx)?;
         let (deck, path) = card_at(&cards, at.param("path"))?;

@@ -84,8 +84,8 @@ and report failures plainly.";
 pub const TASK_INSTRUCTIONS: &str = "Tools with a `background` argument may run as kernel tasks: \
 `background: true` returns a task id immediately, and a note with the result arrives when it \
 finishes — you are woken up for it, so to wait, just end your turn; don't poll. \
-`read @rumu:/tasks/<id>` shows a task's status and buffered output so far (pass `offset`/`limit` \
-to page through it); `invoke` `task.kill` on it cancels it.";
+`read @rumu:/tasks/<id>` shows a task's status and the end of its output (`.../output` holds \
+all of it); `invoke` `task.kill` on it cancels it.";
 
 /// The kernel's built-in `agent` tool spec (also offered to `code` scripts).
 pub fn agent_tool() -> ToolSpec {

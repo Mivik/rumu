@@ -601,6 +601,18 @@ pub(super) struct DecksDir;
 
 #[async_trait]
 impl Node for DecksDir {
+    fn about(&self) -> &'static str {
+        "the decks you may see, and each one's configuration"
+    }
+
+    fn doc(&self, _at: &At<'_>) -> &'static str {
+        "Every deck you may see: its name, kind (assistant, project or deck), where it is \
+         mounted, whether mounting or writing it asks the user, and its charter's summary. Only \
+         mounted decks feed the catalog, recall, list, search and notices. \
+         `@rumu:/decks/<name>` is one deck's configuration; write a new name (with `kind:`) to \
+         create one, which asks the user."
+    }
+
     async fn list(&self, at: &At<'_>) -> Out {
         let (p, state) = (at.p, at.state);
         let cards = Cards::new(p.decks(), &state.mounts);
@@ -654,6 +666,36 @@ pub(super) struct DeckFile;
 
 #[async_trait]
 impl Node for DeckFile {
+    fn about(&self) -> &'static str {
+        "one deck's configuration, as YAML"
+    }
+
+    fn doc(&self, at: &At<'_>) -> &'static str {
+        let kind = at.p.deck_named(at.state, at.param("name"));
+        match kind.map(|d| Kind::of(&d.meta)) {
+            Some(Kind::Assistant) => {
+                "An assistant's configuration (its persona is its pinned instructions card, not \
+                 here): `model`, `mcp` (servers and the rules enabling their tools), `skills`, \
+                 `mounts` (`{deck, at, write}`, decks by name), `allow_ask` (assistants by name) \
+                 and `cat`. `write` needs a read of it as it is now and keeps any field left \
+                 out; `write` with `from` renames it. Asks the user: `mounts` and `allow_ask` \
+                 (every time, once only), your own `mcp`, and anything of another assistant."
+            }
+            Some(Kind::Project) => {
+                "A project's configuration (its charter is its pinned `about` card, not here): \
+                 `icon`, `private` and `workspaces` (registered names, in order, the first its \
+                 default). `write` needs a read of it as it is now and keeps any field left out; \
+                 `write` with `from` renames it. This session's project changes freely, but \
+                 `private`; another project asks the user."
+            }
+            _ => {
+                "A deck's configuration: `private` (hidden from sessions that do not mount it). \
+                 `write` needs a read of it as it is now; `write` with `from` renames it; any \
+                 change asks the user."
+            }
+        }
+    }
+
     async fn list(&self, at: &At<'_>) -> Out {
         let deck = at.p.named(at.state, at.param("name"))?;
         Ok(at.p.shown(at.state, &at.p.config_of(&deck)).into())

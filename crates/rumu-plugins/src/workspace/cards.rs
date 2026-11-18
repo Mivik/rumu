@@ -23,6 +23,21 @@ pub(super) struct CardsDir;
 
 #[async_trait]
 impl Node for CardsDir {
+    fn about(&self) -> &'static str {
+        "cards of the decks mounted on this branch: your memory"
+    }
+
+    fn doc(&self, _at: &At<'_>) -> &'static str {
+        "Cards of the decks mounted on this branch, under their mount points (`/cards/self` is \
+         your own deck); `list` a mount point for its cards. A card is \
+         `@rumu:/cards/<mount>/<path>`: `read` gives its editable view (YAML frontmatter, then \
+         the body), and `write` / `edit` / `delete` need a read of its current version (a card \
+         changed since is refused: read it again and merge). `write` with `from` moves one. \
+         Writing a deck that is neither yours nor the project's asks the user unless a grant \
+         covers it; pinned cards are the user's to delete. Card edits survive a rewind. \
+         `search` with this scope (or a prefix) finds cards."
+    }
+
     async fn list(&self, at: &At<'_>) -> Out {
         at.p.card_list("", at.cx).await
     }
@@ -49,6 +64,10 @@ impl Card {
 
 #[async_trait]
 impl Node for Card {
+    fn about(&self) -> &'static str {
+        "a card, or a directory of cards"
+    }
+
     async fn list(&self, at: &At<'_>) -> Out {
         at.p.card_list(at.param("path"), at.cx).await
     }

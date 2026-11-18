@@ -6,7 +6,12 @@
 //! Paths name data. What can be done to one object beyond reading and
 //! writing it is one of its node's actions ([`ActionSpec`]), run by
 //! `invoke` with the action's full name (`<type>.<action>`, unique across
-//! the table) and the object's path; `list` shows a node's actions.
+//! the table) and the object's path.
+//!
+//! Every node documents itself, so the system prompt need not: `list` of a
+//! path shows its node's [`Node::doc`], then its entries, then the files
+//! rumu defines under it (`files:`, each with its node's [`Node::about`]),
+//! then its actions (`actions:`).
 
 use std::sync::LazyLock;
 
@@ -24,14 +29,15 @@ use super::decks::{DeckFile, DecksDir};
 use super::history::{CardHistory, HistoryRoot};
 use super::registry::{Entry, WorkspacesDir};
 use super::session::{ByAssistant, Session, Sessions};
-use super::task::{Task, Tasks};
+use super::task::{Task, TaskOutput, Tasks};
 use super::tools::slice_lines;
 
 /// What a node operation returns.
 pub(super) type Out = ToolResult<ToolOutput>;
 
 /// Every `@rumu` path. The roots come in the order `list @rumu:/` names
-/// them.
+/// them; a route with a fixed last segment under another is one of its
+/// `files:`.
 const ROUTES: &[(&str, &dyn Node)] = &[
     ("/", &Root),
     ("/cards", &CardsDir),
@@ -50,21 +56,56 @@ const ROUTES: &[(&str, &dyn Node)] = &[
     ("/skills/{name}/{*rest}", &SkillFiles),
     ("/tasks", &Tasks),
     ("/tasks/{id}", &Task),
+    ("/tasks/{id}/output", &TaskOutput),
     ("/mcp", &Mcp),
     ("/mcp/{server}", &Mcp),
     ("/workspaces", &WorkspacesDir),
     ("/workspaces/{name}", &Entry),
 ];
 
-static ROUTER: LazyLock<Router<&'static dyn Node>> = LazyLock::new(|| {
+/// The routes, each with its pattern (a listing finds its files by it).
+static ROUTER: LazyLock<Router<(&'static str, &'static dyn Node)>> = LazyLock::new(|| {
     let mut router = Router::new();
     for (path, node) in ROUTES {
         router
-            .insert(*path, *node)
+            .insert(*path, (*path, *node))
             .expect("the @rumu routes are valid");
     }
     router
 });
+
+/// The files rumu defines right under `pattern`: routes one fixed segment
+/// below it, as `name` (`name/` when routes lie below it too) and the
+/// line its node says about itself.
+fn files_of(pattern: &str) -> Vec<(String, &'static str)> {
+    let prefix = format!("{}/", pattern.trim_end_matches('/'));
+    ROUTES
+        .iter()
+        .filter_map(|(path, node)| {
+            let name = path.strip_prefix(&prefix)?;
+            if name.is_empty() || name.contains(['/', '{']) {
+                return None;
+            }
+            let below = format!("{path}/");
+            let dir = ROUTES.iter().any(|(p, _)| p.starts_with(&below));
+            let shown = if dir {
+                format!("{name}/")
+            } else {
+                name.to_owned()
+            };
+            Some((shown, node.about()))
+        })
+        .collect()
+}
+
+/// A listing section: its title, then `  name — about` lines.
+fn section(title: &str, lines: impl IntoIterator<Item = (String, String)>) -> String {
+    let mut out = title.to_owned();
+    for (name, about) in lines {
+        out.push_str(&format!("\n  {name} — {about}"));
+    }
+    out
+}
 
 /// Every rumu action with the route it acts on. Building it checks that
 /// each full name is `<type>.<action>` and unique (a node with actions is
@@ -200,11 +241,7 @@ fn type_of(prop: &Value) -> String {
 
 /// The `actions:` section of a listing: `signature — what it does` lines.
 pub(crate) fn actions_section(lines: impl IntoIterator<Item = (String, String)>) -> String {
-    let mut out = String::from("actions:");
-    for (sig, about) in lines {
-        out.push_str(&format!("\n  {sig} — {about}"));
-    }
-    out
+    section("actions:", lines)
 }
 
 /// `/tasks/{id}` as the model writes it: `@rumu:/tasks/<id>`.
@@ -279,11 +316,12 @@ static ROOTS: LazyLock<Vec<&'static str>> = LazyLock::new(|| {
     roots
 });
 
-/// One routed request: the plugin, the normalized path, its route
-/// parameters, and the calling branch.
+/// One routed request: the plugin, the normalized path, the route it
+/// matched and its parameters, and the calling branch.
 pub(super) struct At<'a> {
     pub p: &'a WorkspacePlugin,
     pub abs: &'a Utf8UnixPath,
+    pattern: &'static str,
     params: Params<'static, 'a>,
     pub state: &'a PathState,
     pub cx: &'a Cx,
@@ -301,15 +339,59 @@ impl At<'_> {
     }
 }
 
-/// What an `@rumu` path serves. Every node lists, and reads as its listing
-/// unless it says otherwise; writing, deleting and searching are refused
-/// unless the node serves them.
+/// What an `@rumu` path serves. Every node says what it is and lists, and
+/// reads as its listing unless it says otherwise; writing, deleting and
+/// searching are refused unless the node serves them.
 #[async_trait]
 pub(super) trait Node: Send + Sync {
+    /// One line on what it is: shown after its name where it is listed.
+    fn about(&self) -> &'static str;
+
+    /// What `list` shows first: what it holds, what its entries look like,
+    /// what may be written and what asks the user. Empty when its entries
+    /// say enough.
+    fn doc(&self, _at: &At<'_>) -> &'static str {
+        ""
+    }
+
+    /// Its entries (or, for a file, what it is now).
     async fn list(&self, at: &At<'_>) -> Out;
 
+    /// The whole listing: its doc, its entries, the files rumu defines under
+    /// it, and its actions; the parts it has, a blank line apart (just its
+    /// entries, untouched, when it has nothing else).
+    async fn listing(&self, at: &At<'_>) -> Out {
+        let mut out = self.list(at).await?;
+        let doc = self.doc(at).trim();
+        let files = if at.pattern == "/" {
+            Vec::new()
+        } else {
+            files_of(at.pattern)
+        };
+        if doc.is_empty() && files.is_empty() && self.actions().is_empty() {
+            return Ok(out);
+        }
+        let mut parts: Vec<String> = Vec::new();
+        if !doc.is_empty() {
+            parts.push(doc.to_owned());
+        }
+        let entries = out.content.text.trim_end();
+        if !entries.is_empty() {
+            parts.push(entries.to_owned());
+        }
+        if !files.is_empty() {
+            let lines = files.into_iter().map(|(name, about)| (name, about.into()));
+            parts.push(section("files:", lines));
+        }
+        if !self.actions().is_empty() {
+            parts.push(actions_section(self.actions().iter().map(ActionSpec::line)));
+        }
+        out.content.text = parts.join("\n\n");
+        Ok(out)
+    }
+
     async fn read(&self, at: &At<'_>, offset: Option<u64>, limit: Option<u64>) -> Out {
-        let out = self.list(at).await?;
+        let out = self.listing(at).await?;
         slice_lines(out.content.text, offset, limit)
             .map(ToolOutput::ok)
             .map_err(ToolError::model)
@@ -371,16 +453,6 @@ pub(super) trait Node: Send + Sync {
     }
 }
 
-/// `list` of `node`: its own listing, then its actions.
-pub(super) async fn list_node(node: &dyn Node, at: &At<'_>) -> Out {
-    let mut out = node.list(at).await?;
-    if !node.actions().is_empty() {
-        let section = actions_section(node.actions().iter().map(ActionSpec::line));
-        out.content.text = format!("{}\n\n{section}", out.content.text.trim_end());
-    }
-    Ok(out)
-}
-
 impl WorkspacePlugin {
     /// The node serving the `@rumu` path `abs`, with the request it gets.
     pub(super) fn route<'a>(
@@ -397,11 +469,13 @@ impl WorkspacePlugin {
             ))
         })?;
         let params = matched.params;
+        let (pattern, node) = *matched.value;
         Ok((
-            *matched.value,
+            node,
             At {
                 p: self,
                 abs,
+                pattern,
                 params,
                 state,
                 cx,
@@ -424,9 +498,22 @@ struct Root;
 
 #[async_trait]
 impl Node for Root {
+    fn about(&self) -> &'static str {
+        "rumu's own data"
+    }
+
+    fn doc(&self, _at: &At<'_>) -> &'static str {
+        "rumu's own data, as paths (no `bash`). `list` any of them for what it holds, what may \
+         be written and what asks the user, and the actions `invoke` runs on it (`action` its \
+         full name, `path` the object)."
+    }
+
     async fn list(&self, _at: &At<'_>) -> Out {
-        let roots: Vec<String> = ROOTS.iter().map(|r| format!("{r}/")).collect();
-        Ok(roots.join("\n").into())
+        let lines: Vec<String> = files_of("/")
+            .into_iter()
+            .map(|(name, about)| format!("{name} — {about}"))
+            .collect();
+        Ok(lines.join("\n").into())
     }
 }
 
@@ -437,6 +524,20 @@ struct Mcp;
 
 #[async_trait]
 impl Node for Mcp {
+    fn about(&self) -> &'static str {
+        "this session's MCP servers; a server's tools are its actions"
+    }
+
+    fn doc(&self, at: &At<'_>) -> &'static str {
+        if at.opt("server").is_some() {
+            return "";
+        }
+        "This session's MCP servers. A server's tools are its actions: `invoke` one with \
+         `action: \"<server>/<tool>\"` and no `path`. `list @rumu:/mcp/<server>` shows them; \
+         `read` it for its instructions and each tool's input schema. `search` with this scope \
+         (or a server's) finds tools."
+    }
+
     async fn list(&self, at: &At<'_>) -> Out {
         let (hub, servers) = (at.p.mcp(), at.p.servers(at.cx)?);
         match at.opt("server") {
@@ -446,10 +547,12 @@ impl Node for Mcp {
     }
 
     async fn read(&self, at: &At<'_>, offset: Option<u64>, limit: Option<u64>) -> Out {
-        let (hub, servers) = (at.p.mcp(), at.p.servers(at.cx)?);
         let out = match at.opt("server") {
-            None => crate::mcp::list_servers(&hub, &servers).await,
-            Some(server) => crate::mcp::read_server(&hub, &servers, server).await?,
+            None => self.listing(at).await?,
+            Some(server) => {
+                let (hub, servers) = (at.p.mcp(), at.p.servers(at.cx)?);
+                crate::mcp::read_server(&hub, &servers, server).await?
+            }
         };
         slice_lines(out.content.text, offset, limit)
             .map(ToolOutput::ok)
@@ -469,6 +572,19 @@ struct SkillFiles;
 
 #[async_trait]
 impl Node for SkillFiles {
+    fn about(&self) -> &'static str {
+        "the skills enabled for this session: instructions to load when a task needs one"
+    }
+
+    fn doc(&self, at: &At<'_>) -> &'static str {
+        if at.opt("name").is_some() {
+            return "";
+        }
+        "The skills enabled for this session, each with what it is for. `read \
+         @rumu:/skills/<name>` loads one: its SKILL.md, then a list of its other files, which \
+         are `@rumu:/skills/<name>/<path>`. Read-only."
+    }
+
     async fn list(&self, at: &At<'_>) -> Out {
         let (skills, rules) = (at.p.skills(), at.p.skill_rules(at.cx)?);
         match at.opt("name") {
@@ -478,10 +594,12 @@ impl Node for SkillFiles {
     }
 
     async fn read(&self, at: &At<'_>, offset: Option<u64>, limit: Option<u64>) -> Out {
-        let (skills, rules) = (at.p.skills(), at.p.skill_rules(at.cx)?);
         let out = match at.opt("name") {
-            None => crate::skills::list_skills(&skills, &rules),
-            Some(name) => crate::skills::read(&skills, &rules, at.abs, name, at.param("rest"))?,
+            None => self.listing(at).await?,
+            Some(name) => {
+                let (skills, rules) = (at.p.skills(), at.p.skill_rules(at.cx)?);
+                crate::skills::read(&skills, &rules, at.abs, name, at.param("rest"))?
+            }
         };
         slice_lines(out.content.text, offset, limit)
             .map(ToolOutput::ok)

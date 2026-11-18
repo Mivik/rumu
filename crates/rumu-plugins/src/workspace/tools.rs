@@ -998,7 +998,7 @@ impl WorkspacePlugin {
             }
             Target::Rumu { abs } => {
                 let (node, at) = self.route(&abs, state, cx)?;
-                super::vfs::list_node(node, &at).await
+                node.listing(&at).await
             }
         }
     }
@@ -1191,9 +1191,7 @@ impl WorkspacePlugin {
             "  "
         };
         lines.push(format!(
-            "{star}{RUMU_WORKSPACE} rumu's own data: {RUMU_WORKSPACE}:/cards (knowledge cards), \
-             {RUMU_WORKSPACE}:/workspaces (the registry), {RUMU_WORKSPACE}:/sessions (past \
-             conversations); no bash"
+            "{star}{RUMU_WORKSPACE} rumu's own data (`list {RUMU_WORKSPACE}:/`); no bash"
         ));
         lines.join("\n")
     }

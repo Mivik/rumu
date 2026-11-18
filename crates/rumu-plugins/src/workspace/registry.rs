@@ -32,6 +32,19 @@ pub(super) struct WorkspacesDir;
 
 #[async_trait]
 impl Node for WorkspacesDir {
+    fn about(&self) -> &'static str {
+        "the workspaces: the registry, then `@scratch` and `@rumu`"
+    }
+
+    fn doc(&self, _at: &At<'_>) -> &'static str {
+        "Every workspace: this project's first, then the rest of the registry, then `@scratch` \
+         and `@rumu`; `*` marks this branch's default. `@rumu:/workspaces/<name>` is one's \
+         entry (`root`, optional `ssh: [user@]host` and `read_only`): `write` a new name to \
+         register a directory (a local root must exist); changing or deleting an entry asks the \
+         user, as other projects may mount it. A project's own list is `workspaces:` in its \
+         `@rumu:/decks/<name>`."
+    }
+
     async fn list(&self, at: &At<'_>) -> Out {
         Ok(at.p.listing(at.state).await.into())
     }
@@ -46,6 +59,10 @@ pub(super) struct Entry;
 
 #[async_trait]
 impl Node for Entry {
+    fn about(&self) -> &'static str {
+        "one workspace's entry"
+    }
+
     async fn list(&self, at: &At<'_>) -> Out {
         let name = at.param("name");
         match name {

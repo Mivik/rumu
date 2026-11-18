@@ -72,7 +72,7 @@ pub fn search_text(cards: &Cards, query: &str, args: &Value) -> ToolResult<ToolO
     let terms = recall::tokens(query);
     let mut out = Vec::new();
     for hit in hits.iter().take(limit) {
-        let mut block = card_uri(&hit.card.path);
+        let mut block = format!("card {}", card_uri(&hit.card.path));
         if let Some(m) = hit.card.summary() {
             block.push_str(&format!("  {}", json_quote(&m, SUMMARY_CHARS)));
         }
@@ -248,7 +248,7 @@ mod tests {
             .unwrap_or_default()
             .to_owned();
         assert_eq!(
-            first, "@rumu:/cards/self/t  \"about the loop\"",
+            first, "card @rumu:/cards/self/t  \"about the loop\"",
             "keyword hit ranks first: {}",
             out.content.text
         );
@@ -259,7 +259,7 @@ mod tests {
         );
         assert!(
             out.content.text.contains(
-                "@rumu:/cards/self/x  \"the kernel crate implements the agent loop\"\n  \"the kernel"
+                "card @rumu:/cards/self/x  \"the kernel crate implements the agent loop\"\n  \"the kernel"
             ),
             "summary line, then the quoted snippet: {}",
             out.content.text

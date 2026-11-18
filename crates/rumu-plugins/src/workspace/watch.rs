@@ -29,7 +29,6 @@ use tracing::warn;
 
 use super::WorkspacePlugin;
 use super::backend::{Backend, BackendError, ExecOutput};
-use super::task::task_view;
 use super::time::iso_local;
 
 /// `bash`'s `watch` argument (`{}` watches every line).
@@ -37,7 +36,7 @@ use super::time::iso_local;
 #[serde(deny_unknown_fields)]
 pub(super) struct WatchArgs {
     /// regex: only matching lines are events (all output still lands in
-    /// `@rumu:/tasks/<id>`)
+    /// `@rumu:/tasks/<id>/output`)
     #[serde(rename = "match")]
     filter: Option<String>,
     /// regex: a matching line is the last event; the command is then killed
@@ -64,7 +63,7 @@ const ROUND_MAX: Duration = Duration::from_secs(60);
 const BUCKET: u32 = 10;
 
 /// Characters of a batch shown inline; a longer one keeps its start and end
-/// and points at its lines in `@rumu:/tasks/<id>`.
+/// and points at its lines in `@rumu:/tasks/<id>/output`.
 const INLINE_LIMIT: usize = 2_000;
 
 /// Characters a batch keeps of its start, and of its end: within
@@ -101,7 +100,7 @@ impl Default for WatchTiming {
 }
 
 /// Payload of a watch event note (`workspace.watch` v1): the batch's lines in
-/// the `@rumu:/tasks/<id>` view.
+/// `@rumu:/tasks/<id>/output`.
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 pub struct WatchEvent {
     pub task: TaskId,
@@ -606,11 +605,11 @@ impl Watch {
         if batch.count == 0 {
             return None;
         }
-        // The output so far ends the task view: count back from its last
+        // The output so far ends the task's output: count back from its last
         // line. (Later trimming of the buffer shifts older events' numbers.)
         let lines = s.seen + usize::from(s.open);
         let view = match cx.history().task(&self.task) {
-            Ok(Some((info, output))) => task_view(&info, &output).lines().count(),
+            Ok(Some((_, output))) => output.lines().count(),
             _ => lines,
         };
         let at = |n: usize| (n + view).saturating_sub(lines).max(1);
@@ -643,7 +642,7 @@ impl Watch {
         };
         if truncated {
             body.push_str(&format!(
-                "\n(whole batch: read {RUMU_WORKSPACE}:/tasks/{} offset={from} limit={})",
+                "\n(whole batch: read {RUMU_WORKSPACE}:/tasks/{}/output offset={from} limit={})",
                 self.task,
                 to + 1 - from
             ));
@@ -950,15 +949,15 @@ mod tests {
         assert_eq!(
             texts(&inbox),
             [
-                "watch t-w: +2 lines (L 4–5)\none\ntwo",
-                "watch t-w: +1 lines (L 6–6)\nthree",
+                "watch t-w: +2 lines (L 1–2)\none\ntwo",
+                "watch t-w: +1 lines (L 3–3)\nthree",
             ]
         );
-        // The pointer lines are the task view's lines.
+        // The pointer lines are the task output's lines.
         let read = plugin
             .call_tool(
                 "read",
-                json!({ "path": "@rumu:/tasks/t-w", "offset": 4, "limit": 2 }),
+                json!({ "path": "@rumu:/tasks/t-w/output", "offset": 1, "limit": 2 }),
                 &cx,
             )
             .await
@@ -1003,15 +1002,15 @@ mod tests {
             "watch": { "match": "ERROR" },
         });
         let out = watch(&plugin, &cx, args).await;
-        assert_eq!(out, "exit code: 0\nL10: ERROR c");
+        assert_eq!(out, "exit code: 0\nL7: ERROR c");
         assert_eq!(
             texts(&inbox),
-            ["watch t-w (errors in app): +2 matching lines (L 5–8)\nL5: ERROR a\nL8: ERROR b"]
+            ["watch t-w (errors in app): +2 matching lines (L 2–5)\nL2: ERROR a\nL5: ERROR b"]
         );
         let read = plugin
             .call_tool(
                 "read",
-                json!({ "path": "@rumu:/tasks/t-w", "offset": 4, "limit": 5 }),
+                json!({ "path": "@rumu:/tasks/t-w/output", "offset": 1, "limit": 5 }),
                 &cx,
             )
             .await
@@ -1039,7 +1038,7 @@ mod tests {
             "watch ended: `until` matched the last line below, and the command was killed (1 \
              events before it)\nworking\nREADY"
         );
-        assert_eq!(texts(&inbox), ["watch t-w: +1 lines (L 4–4)\nstart"]);
+        assert_eq!(texts(&inbox), ["watch t-w: +1 lines (L 1–1)\nstart"]);
     }
 
     /// The lifetime (`timeout`) kills the command and says so; with nothing
@@ -1110,12 +1109,14 @@ mod tests {
         assert_eq!(posts.len(), 1, "{posts:?}");
         let note = &posts[0];
         assert!(
-            note.starts_with("watch t-w: +500 lines (L 4–503)\nline 1\n"),
+            note.starts_with("watch t-w: +500 lines (L 1–500)\nline 1\n"),
             "{note}"
         );
         assert!(note.contains("lines omitted"), "{note}");
         assert!(
-            note.ends_with("line 500\n(whole batch: read @rumu:/tasks/t-w offset=4 limit=500)"),
+            note.ends_with(
+                "line 500\n(whole batch: read @rumu:/tasks/t-w/output offset=1 limit=500)"
+            ),
             "{note}"
         );
         assert!(note.chars().count() < INLINE_LIMIT + 200);
@@ -1161,7 +1162,7 @@ mod tests {
         let body = |note: &str| note.lines().skip(1).map(str::to_owned).collect::<Vec<_>>();
         let first = nth_post(&inbox, 1).await;
         assert!(
-            first.starts_with("watch t-w (poll state): +3 lines (L 4–6)\n--- round 1 (initial) · "),
+            first.starts_with("watch t-w (poll state): +3 lines (L 1–3)\n--- round 1 (initial) · "),
             "{first}"
         );
         assert!(first.ends_with(" · exit 0 ---\na\nb"), "{first}");
@@ -1184,11 +1185,11 @@ mod tests {
             .unwrap();
         assert!(out.starts_with("watch ended: `until` matched"), "{out}");
         assert!(out.ends_with(" ---\ndone"), "{out}");
-        // Every round is in the task view, header first.
+        // Every round is in the task output, header first.
         let read = plugin
             .call_tool(
                 "read",
-                json!({ "path": "@rumu:/tasks/t-w", "offset": 4, "limit": 3 }),
+                json!({ "path": "@rumu:/tasks/t-w/output", "offset": 1, "limit": 3 }),
                 &cx,
             )
             .await
@@ -1213,7 +1214,7 @@ mod tests {
             texts(&inbox),
             [
                 "watch t-w: no matching line for 3s",
-                "watch t-w: +1 matching lines (L 5–5)\nL5: ERROR x",
+                "watch t-w: +1 matching lines (L 2–2)\nL2: ERROR x",
                 "watch t-w: no matching line for 3s",
             ]
         );

@@ -97,7 +97,7 @@ async fn lists_reads_and_searches_the_bound_servers() {
         "{server}"
     );
     assert!(
-        server.contains("## action fake/echo\nEcho the given text back.\nInput schema: {"),
+        server.contains("action fake/echo\nEcho the given text back.\nInput schema: {"),
         "{server}"
     );
 
@@ -107,7 +107,7 @@ async fn lists_reads_and_searches_the_bound_servers() {
         .content
         .text;
     assert!(
-        hits.starts_with("## action fake/list_issues\nList issues\n"),
+        hits.starts_with("action fake/list_issues\nList issues\n"),
         "{hits}"
     );
     assert!(!hits.contains("fake/echo"));
