@@ -3536,6 +3536,36 @@ async fn bash_streams_progress_chunks() {
     assert!(chunks.contains("two"), "chunks: {chunks:?}");
 }
 
+/// `tail` keeps the last lines for the model, but streams all of them and
+/// keeps the command's own exit code.
+#[tokio::test]
+async fn bash_tail_keeps_the_last_lines() {
+    let dir = tempfile::tempdir().unwrap();
+    let (plugin, host, cx, _home) = setup(dir.path(), false);
+    let run = |tail: usize| {
+        plugin.call_tool(
+            "bash",
+            json!({ "command": "seq 1 5; exit 3", "tail": tail }),
+            &cx,
+        )
+    };
+    let out = run(2).await.unwrap();
+    assert!(out.is_error);
+    assert_eq!(
+        out.content.text,
+        "exit code: 3\n… [3 earlier lines omitted] …\n4\n5\n"
+    );
+    let streamed = host
+        .progress
+        .lock()
+        .unwrap()
+        .iter()
+        .any(|(_, _, p)| matches!(p, rumu_core::Progress::Append(s) if s.starts_with("1\n")));
+    assert!(streamed);
+    let out = run(5).await.unwrap();
+    assert_eq!(out.content.text, "exit code: 3\n1\n2\n3\n4\n5\n");
+}
+
 /// A background bash future that is dropped kills its process tree: the
 /// shell and the processes it started.
 #[tokio::test]

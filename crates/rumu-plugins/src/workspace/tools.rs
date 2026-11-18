@@ -68,6 +68,30 @@ impl Structured for BashResult {
     const V: u32 = 1;
 }
 
+/// Keep the last `n` lines of `text` (all of it with no `n`), behind a
+/// marker counting the dropped ones. A trailing newline ends the last line
+/// rather than starting an empty one.
+fn last_lines(text: String, n: Option<usize>) -> String {
+    let Some(n) = n else { return text };
+    let body = text.strip_suffix('\n').unwrap_or(&text);
+    let total = body.split('\n').count();
+    if total <= n {
+        return text;
+    }
+    let start = match n {
+        0 => text.len(),
+        n => body
+            .rmatch_indices('\n')
+            .nth(n - 1)
+            .map_or(0, |(i, _)| i + 1),
+    };
+    format!(
+        "… [{} earlier lines omitted] …\n{}",
+        total - n,
+        &text[start..]
+    )
+}
+
 impl From<BashOutcome> for ToolOutput {
     fn from(outcome: BashOutcome) -> Self {
         let mut content =
@@ -193,6 +217,9 @@ struct BashArgs {
     /// seconds, default 60, max 600; with `watch`: its lifetime, default
     /// 1800, max 86400
     timeout: Option<u64>,
+    /// return only the last N lines of output; the user still sees all of it
+    /// live, and the exit code stays the command's (unlike `| tail`)
+    tail: Option<usize>,
     /// with `background: true`: send new output lines to you as notes while
     /// it runs (`{}` for every line)
     watch: Option<WatchArgs>,
@@ -308,7 +335,8 @@ stdout+stderr (truncated to ~20k chars) and the exit code. Default timeout 60s (
 between reruns) as notes that wake you, until the command exits, `until` matches, `task_kill` \
 or its lifetime ends. Prefer `match`/`until` \
 to piping into grep (pipes buffer lines), and make `match` cover failures too (Traceback, \
-Error, Killed): silence is not success."
+Error, Killed): silence is not success. Use `tail`, not `| tail`, to keep only the end of \
+the output."
                     .into(),
                 schema: tool_schema::<BashArgs>(),
                 background: true,
@@ -1065,10 +1093,13 @@ impl WorkspacePlugin {
                 code: out.code,
                 // A watch already posted the rest: the result (and so the
                 // completion note) carries only what is still pending.
-                output: match &watch {
-                    Some(watch) => watch.tail(cx),
-                    None => out.combined,
-                },
+                output: last_lines(
+                    match &watch {
+                        Some(watch) => watch.tail(cx),
+                        None => out.combined,
+                    },
+                    args.tail,
+                ),
                 effects,
                 structured: cx.call().is_some_and(|c| c.parent.is_some()),
             }
