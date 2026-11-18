@@ -99,6 +99,14 @@ pub async fn boot(home: &Path) -> Result<Booted> {
         Arc::new(settings::Settings::load(home, genai.clone(), mcp.clone())?.with_skills(skills));
     let llm = load_llm(genai)?;
     let kernel = Kernel::new(store.clone(), llm, plugins, workspaces.clone())?;
+    // Every deck configuration change (the web's or a model's) reaches the
+    // clients. Weak: the kernel outlives nothing it is handed here.
+    let weak = Arc::downgrade(&kernel);
+    decks.on_change(move || {
+        if let Some(kernel) = weak.upgrade() {
+            kernel.decks_changed();
+        }
+    });
     kernel.set_assistant_model({
         let decks = decks.clone();
         Arc::new(move |id| decks.get(id).and_then(|d| d.meta.model))

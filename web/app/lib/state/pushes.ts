@@ -35,7 +35,15 @@ import type {
 import { MAX_TRACE, state } from './state'
 import { applyDelta } from './stream'
 import { artifactOf } from '../artifacts'
-import { closeSession, forgetSession, markSeen, openSession, refreshCards, refreshLists } from './sessions'
+import {
+  closeSession,
+  forgetSession,
+  markSeen,
+  openSession,
+  refreshAssistants,
+  refreshCards,
+  refreshLists,
+} from './sessions'
 import { onSettingsUpdated, refreshSettings } from './models'
 import type { SettingsInfo } from '../generated/SettingsInfo'
 import { refreshLibrary } from './library'
@@ -75,6 +83,14 @@ function onWorkspacesUpdated(p: { workspaces: Workspace[]; projects: Record<stri
   state.workspaces = p.workspaces
   void refreshProjects().catch(() => {})
   if (state.activeBranch) void loadPath(state.activeBranch)
+}
+
+/** A deck's configuration or the roster changed (here, in another tab, or
+ *  by a model writing `@rumu:/decks`): re-read what shows it. */
+function onDecksUpdated(): void {
+  void refreshAssistants().catch(() => {})
+  void refreshProjects().catch(() => {})
+  if (state.page?.page === 'decks') void refreshLibrary()
 }
 
 function onNodeAppended(p: NodeAppendedPush): void {
@@ -329,6 +345,7 @@ export function startApp(): void {
   })
   rumu.onPush('warning', (p) => onWarning(p as unknown as WarningPush))
   rumu.onPush('settings.updated', (p) => onSettingsUpdated(p as unknown as { settings: SettingsInfo }))
+  rumu.onPush('decks.updated', onDecksUpdated)
   rumu.onPush('workspaces.updated', (p) =>
     onWorkspacesUpdated(p as unknown as { workspaces: Workspace[]; projects: Record<string, string[]> }),
   )

@@ -541,6 +541,8 @@ pub struct Decks {
     write_lock: Arc<Mutex<()>>,
     /// "Allow for this session" answers: (session id, action, deck id).
     session_grants: Arc<Mutex<HashSet<(String, Action, String)>>>,
+    /// Called after every change to a deck's `deck.yaml` or to the roster.
+    listeners: Arc<RwLock<Vec<Box<dyn Fn() + Send + Sync>>>>,
 }
 
 impl Decks {
@@ -556,7 +558,21 @@ impl Decks {
             inner: Arc::new(RwLock::new(inner)),
             write_lock: Arc::new(Mutex::new(())),
             session_grants: Arc::default(),
+            listeners: Arc::default(),
         })
+    }
+
+    /// Call `f` after every change to a deck's `deck.yaml` (created,
+    /// updated, renamed), to the roster or to the default assistant, or a
+    /// deck's deletion. Card writes are not changes here.
+    pub fn on_change(&self, f: impl Fn() + Send + Sync + 'static) {
+        self.listeners.write().unwrap().push(Box::new(f));
+    }
+
+    fn changed(&self) {
+        for f in self.listeners.read().unwrap().iter() {
+            f();
+        }
     }
 
     /// Hold the write lock (see [`Decks::write_lock`]).
@@ -584,6 +600,7 @@ impl Decks {
         }
         write_default(&self.home, id)?;
         self.inner.write().unwrap().default = id.to_owned();
+        self.changed();
         Ok(())
     }
 
@@ -855,8 +872,12 @@ impl Decks {
         } else {
             write_deck_meta(&deck, "create deck", Some(&Charter::BLANK))?;
         }
-        let mut inner = self.inner.write().unwrap();
-        inner.decks.insert(deck.meta.id.clone(), deck.clone());
+        self.inner
+            .write()
+            .unwrap()
+            .decks
+            .insert(deck.meta.id.clone(), deck.clone());
+        self.changed();
         Ok(deck)
     }
 
@@ -879,6 +900,8 @@ impl Decks {
         if was_default {
             inner.default = fallback_default(&self.home, &mut inner.decks)?;
         }
+        drop(guard);
+        self.changed();
         Ok(())
     }
 
@@ -915,6 +938,7 @@ impl Decks {
                 .map_err(rumu_core::IoError::at("removing", &deck.dir))?;
         }
         self.inner.write().unwrap().decks.remove(id);
+        self.changed();
         Ok(())
     }
 }

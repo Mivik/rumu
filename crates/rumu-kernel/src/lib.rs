@@ -482,6 +482,13 @@ impl Kernel {
         self.push("settings.updated", json!({ "settings": settings }));
     }
 
+    /// A deck's configuration or the roster changed (from the web or a
+    /// model's `@rumu:/decks` write): clients re-read their assistant and
+    /// project lists.
+    pub fn decks_changed(&self) {
+        self.push("decks.updated", json!({}));
+    }
+
     /// The workspace registry changed: push it, so clients re-read their
     /// branch state (a mounted workspace may have gone or changed). Called
     /// on every registry change.

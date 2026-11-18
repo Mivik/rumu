@@ -530,35 +530,19 @@ async fn dispatch(state: &AppState, method: &str, p: &Value) -> Result<Value> {
                 private: Option<bool>,
             }
             let req: Update = parse_params(p)?;
-            let mut deck = project_deck(state, &req.id)?;
-            let name = req.name.filter(|n| *n != deck.meta.name);
-            let icon = req.icon.map(rumu_cards::DeckIcon::normalized);
-            let private = req.private.filter(|p| *p != deck.private());
-            if name.is_some()
-                || icon.as_ref().is_some_and(|i| *i != deck.meta.icon)
-                || private.is_some()
-            {
-                let mut meta = deck.meta.clone();
-                if let Some(name) = name {
-                    meta.name = name;
-                }
-                if let Some(icon) = icon {
-                    meta.icon = icon;
-                }
-                if let Some(private) = private {
-                    meta.private = private;
-                }
-                state.decks.upsert(meta)?;
-                deck = project_deck(state, &req.id)?;
-            }
-            if let Some(names) = req.workspaces {
-                rumu_plugins::set_project_workspaces(
-                    &state.home,
-                    &state.workspaces,
-                    deck.id(),
-                    names,
-                )?;
-            }
+            let deck = project_deck(state, &req.id)?;
+            let deck = rumu_plugins::update_project(
+                &state.home,
+                &state.decks,
+                &state.workspaces,
+                &deck,
+                rumu_plugins::ProjectChange {
+                    name: req.name,
+                    workspaces: req.workspaces,
+                    icon: req.icon,
+                    private: req.private,
+                },
+            )?;
             Ok(json!({ "project": rumu_plugins::project_of(&deck, &state.workspaces) }))
         }
 
@@ -638,24 +622,20 @@ async fn dispatch(state: &AppState, method: &str, p: &Value) -> Result<Value> {
                     write: m.write,
                 })
                 .collect();
-            let meta = rumu_cards::DeckMeta {
-                id: existing
-                    .as_ref()
-                    .map(|d| d.id().to_owned())
-                    .unwrap_or_default(),
-                name: req.name.clone(),
-                assistant: true,
-                project: false,
-                private: existing.as_ref().is_some_and(|d| d.private()),
-                mounts,
-                allow_ask: req.allow_ask,
-                model: req.model,
-                mcp: req.mcp,
-                skills: req.skills,
-                icon: existing.as_ref().and_then(|d| d.meta.icon.clone()),
-                cat: req.cat,
-            };
-            let deck = state.decks.upsert(meta)?;
+            // The web edits the whole form: what it leaves out is cleared.
+            let deck = rumu_plugins::save_assistant(
+                &state.decks,
+                existing.as_ref(),
+                rumu_plugins::AssistantConfig {
+                    name: req.name.clone(),
+                    mounts,
+                    allow_ask: req.allow_ask,
+                    mcp: req.mcp,
+                    skills: req.skills,
+                    cat: req.cat,
+                    model: req.model,
+                },
+            )?;
             let cards = Cards::library(&state.decks);
             let public = format!("{}/instructions", deck.id());
             match req.instructions.filter(|i| !i.trim().is_empty()) {
