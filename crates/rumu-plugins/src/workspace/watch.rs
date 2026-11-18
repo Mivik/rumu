@@ -42,8 +42,6 @@ pub(super) struct WatchArgs {
     filter: Option<String>,
     /// regex: a matching line is the last event; the command is then killed
     until: Option<String>,
-    /// wake you on events (default true); false only delivers the notes
-    wake: Option<bool>,
     /// seconds (min 1): rerun the command this often; the events are the
     /// lines that changed since the last run
     every: Option<u64>,
@@ -252,7 +250,6 @@ pub(super) struct Watch {
     timing: WatchTiming,
     filter: Option<Regex>,
     until: Option<Regex>,
-    wake: bool,
     lifetime: Duration,
     every: Option<Duration>,
     /// The `silence` argument, and as a duration.
@@ -332,7 +329,6 @@ impl WorkspacePlugin {
             timing: self.watch_timing,
             filter,
             until,
-            wake: args.wake.unwrap_or(true),
             lifetime: Duration::from_secs(lifetime),
             every,
             silence,
@@ -684,7 +680,7 @@ impl Watch {
         );
         let post = Post {
             effects: vec![note],
-            wake: self.wake,
+            wake: true,
             paced: true,
         };
         if let Err(e) = self.inbox.post(&cx.branch, post) {
@@ -706,7 +702,7 @@ impl Watch {
         ));
         let post = Post {
             effects: vec![note],
-            wake: self.wake,
+            wake: true,
             paced: true,
         };
         if let Err(e) = self.inbox.post(&cx.branch, post) {
@@ -1100,18 +1096,6 @@ mod tests {
         seen.extend(out.lines().skip(1).map(|l| l.parse::<u64>().unwrap()));
         let want: Vec<u64> = (1..=seen.len() as u64).collect();
         assert_eq!(seen, want);
-    }
-
-    /// `wake: false` delivers notes without waking.
-    #[tokio::test]
-    async fn watch_without_wake_only_delivers() {
-        let dir = tempfile::tempdir().unwrap();
-        let (plugin, _host, inbox, cx, _home) = setup(dir.path(), BranchKind::Main);
-        let args = json!({ "command": "echo hi; sleep 0.4", "watch": { "wake": false } });
-        watch(&plugin, &cx, args).await;
-        let posts = inbox.posts();
-        assert_eq!(posts.len(), 1);
-        assert!(!posts[0].1.wake);
     }
 
     /// A long batch keeps both ends inline and points at all of its lines.
