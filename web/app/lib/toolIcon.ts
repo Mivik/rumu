@@ -16,13 +16,16 @@ const ICONS: Record<string, string> = {
   agent: 'agent',
   delegate: 'agent',
   ask: 'ask',
-  task_kill: 'stop',
   card_mount: 'deck',
-  workspace_use: 'switch',
-  call_tool: 'mcp',
+  // A background task's own name; those are MCP calls in practice.
+  invoke: 'mcp',
+  // `invoke` rows stand for their action (`displayCall`).
+  'task.kill': 'stop',
+  'workspace.use': 'switch',
 }
 
-/** The Icon name for a `name` tool call. */
+/** The Icon name for a `name` tool call; an MCP tool (`<server>/<tool>`)
+ * gets the puzzle piece. */
 export function toolIcon(name: string): string {
-  return ICONS[name] ?? 'tool'
+  return ICONS[name] ?? (name.includes('/') ? 'mcp' : 'tool')
 }

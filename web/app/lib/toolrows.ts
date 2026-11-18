@@ -95,15 +95,24 @@ export function argsOf(call: { args: unknown } | null): Args {
     : null
 }
 
-/** A call as the user reads it: an MCP `call_tool` stands for the tool it
- * calls, named `<server>/<tool>` (no clash with a built-in) with its own args. */
+/** A call as the user reads it: an `invoke` stands for the action it runs,
+ * named by its full name — `<type>.<action>` for rumu's (`task.kill`),
+ * `<server>/<tool>` for an MCP tool; neither clashes with a built-in — with
+ * the action's own args, and the object it acts on as their `path`. */
 export function displayCall<C extends { name: string; args: unknown }>(call: C): C
 export function displayCall<C extends { name: string; args: unknown }>(call: C | null): C | null
 export function displayCall<C extends { name: string; args: unknown }>(call: C | null): C | null {
-  if (call?.name !== 'call_tool') return call
+  if (call?.name !== 'invoke') return call
   const args = argsOf(call)
-  if (typeof args?.tool !== 'string') return call
-  return { ...call, name: args.tool, args: args.args ?? {} }
+  if (typeof args?.action !== 'string' || !args.action) return call
+  const own = argsOf({ args: args.args }) ?? {}
+  const shown = typeof args.path === 'string' ? { ...own, path: args.path } : own
+  return { ...call, name: args.action, args: shown }
+}
+
+/** Whether a call (as displayed) is an action of an `@rumu` object. */
+function isAction(name: string): boolean {
+  return name.includes('.') && !name.includes('/')
 }
 
 function strArg(args: Args, key: string): string {
@@ -131,8 +140,8 @@ function callFull(name: string, call: Call): string {
       if (command) return ws ? `${ws}: ${command}` : command
       return ws
     }
-    case 'workspace_use':
-      return workspaceLabel(str('name')) || 'list'
+    case 'workspace.use':
+      return workspaceLabel(baseName(str('path')))
     case 'search': {
       const query = str('query')
       const scope = str('scope')
@@ -143,7 +152,7 @@ function callFull(name: string, call: Call): string {
     case 'agent':
       return str('task')
     default:
-      return argSummary(call)
+      return isAction(name) ? str('path') : argSummary(call)
   }
 }
 
@@ -172,14 +181,15 @@ function callShort(name: string, call: Call): string {
       return oneLine(str('command'))
     case 'code':
       return preview(str('code'), 40)
-    case 'workspace_use':
-      return workspaceLabel(str('name')) || 'list'
+    case 'workspace.use':
+      return workspaceLabel(baseName(str('path')))
     case 'search':
       return preview(str('query'), 40)
     case 'agent':
       return preview(str('task'), 40)
     default:
-      return preview(argSummary(call), 40)
+      // An action's object: the last part of its path (`t-1a2b` for a task).
+      return isAction(name) ? baseName(str('path')) : preview(argSummary(call), 40)
   }
 }
 
@@ -229,7 +239,7 @@ function diffText(diff: DiffCounts): string {
 function resultShort(name: string, output: string, diff: DiffCounts | null): string {
   if (!output) return ''
   switch (name) {
-    case 'workspace_use':
+    case 'workspace.use':
       return ''
     case 'list': {
       const n = nonEmptyLines(output).length
@@ -406,8 +416,9 @@ const VERB_KEYS: Record<string, string> = {
   'edit:card': 'editCard',
   list: 'list',
   search: 'search',
-  workspace_use: 'workspaceUse',
   show: 'show',
+  'task.kill': 'kill',
+  'workspace.use': 'workspaceUse',
 }
 
 /** A piece of a summary line; `mono` marks a literal (a file, a command). */
@@ -423,10 +434,7 @@ export function toolPhrase(v: ToolRowView): PhrasePart[] {
   const key = v.toolCardId ? `${v.name}:card` : v.name
   const verbKey = VERB_KEYS[key]
   if (verbKey && v.callText) {
-    const verb =
-      key === 'workspace_use' && v.callText === 'list'
-        ? t('tools.verb.workspaceList')
-        : t(`tools.verb.${verbKey}` as MessageKey)
+    const verb = t(`tools.verb.${verbKey}` as MessageKey)
     return [{ text: `${verb} ` }, { text: v.callText, mono: true }]
   }
   return [{ text: `${t('tools.verb.other')} ` }, { text: v.name, mono: true }]
