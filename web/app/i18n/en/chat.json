@@ -131,6 +131,7 @@
     "questionN": "Question {n}",
     "multiple": "Choose any",
     "custom": "Something else…",
+    "note": "Add a note, or answer in your own words…",
     "answer": "Type your answer…",
     "skip": "Skip",
     "next": "Next",

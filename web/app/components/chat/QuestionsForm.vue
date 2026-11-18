@@ -1,8 +1,10 @@
 <script setup lang="ts">
 // The questions of an `ask` to the user (`kind: "questions"`), inside the
 // composer's decision panel. One question shows at a time — tabs switch
-// between several — its options listed with their descriptions, and below
-// them a line to answer in the user's own words, which every question has.
+// between several — its options listed with their descriptions, and a line
+// for the user's own words, which every question has. For several choices it
+// is one more box to tick; for a single choice it sits under the options as a
+// note sent along with the option picked (or alone, when none fits).
 // Picking an option of a single-choice question moves on to the next one.
 import { computed, nextTick, reactive, ref } from 'vue'
 import { t } from '../../i18n'
@@ -12,18 +14,14 @@ import Icon from '../ui/Icon.vue'
 
 const props = defineProps<{ id: string; request: QuestionsRequest }>()
 
-/** One question's answer: the options picked, the words written, and whether
- *  the words count. The flag is kept apart from the words so that either side
- *  can be turned off and back on without losing what it held: for a single
- *  choice the words stand in for the picked option, for several they add to it.
- *
- *  TODO: the row is meant to become a comment *added* to the options rather
- *  than a "something else" standing in for one (`chat.ask.custom` would change
- *  with it); a single choice would then keep its option too. */
+/** One question's answer: the options picked, the words written, and — for
+ *  several choices, where the words are a box to tick — whether they count.
+ *  The flag is kept apart from the words so that the box can be unticked and
+ *  ticked again without losing them. */
 type Draft = { selected: string[]; custom: string; useCustom: boolean }
 
 const drafts = reactive<Draft[]>(
-  props.request.questions.map((q) => ({ selected: [], custom: '', useCustom: !q.options.length })),
+  props.request.questions.map(() => ({ selected: [], custom: '', useCustom: false })),
 )
 const index = ref(0)
 const customEl = ref<HTMLInputElement>()
@@ -35,16 +33,15 @@ const last = computed(() => index.value === props.request.questions.length - 1)
 
 function customCounts(i: number): boolean {
   const d = drafts[i]!
-  return d.useCustom && d.custom.trim() !== ''
+  return d.custom.trim() !== '' && (d.useCustom || !props.request.questions[i]!.multiple)
 }
 
 function picked(i: number, label: string): boolean {
-  const d = drafts[i]!
-  return (props.request.questions[i]!.multiple || !d.useCustom) && d.selected.includes(label)
+  return drafts[i]!.selected.includes(label)
 }
 
 function answered(i: number): boolean {
-  return customCounts(i) || drafts[i]!.selected.some((label) => picked(i, label))
+  return customCounts(i) || drafts[i]!.selected.length > 0
 }
 
 const complete = computed(() => drafts.every((_, i) => answered(i)))
@@ -58,13 +55,12 @@ function pick(label: string): void {
     return
   }
   d.selected = [label]
-  d.useCustom = false
   if (!last.value) setTimeout(() => go(index.value + 1), 160)
 }
 
-/** Typing chooses the row; emptying it gives a single choice its option back. */
+/** Typing ticks the box of several choices; emptying it unticks it. */
 function onCustomInput(e: Event): void {
-  draft.value.useCustom = (e.target as HTMLInputElement).value.trim() !== '' || !question.value.options.length
+  draft.value.useCustom = (e.target as HTMLInputElement).value.trim() !== ''
 }
 
 function toggleCustom(): void {
@@ -93,7 +89,7 @@ function next(): void {
 function submit(): void {
   void answerDecision(props.id, {
     answers: drafts.map((d, i) => ({
-      selected: d.selected.filter((label) => picked(i, label)),
+      selected: d.selected,
       custom: customCounts(i) ? d.custom.trim() : undefined,
     })),
   })
@@ -136,6 +132,7 @@ function onCustomKey(e: KeyboardEvent): void {
       <p v-if="question.multiple" class="mt-0.5 text-micro text-ink-3">{{ t('chat.ask.multiple') }}</p>
 
       <div
+        v-if="question.options.length"
         ref="optionsEl"
         class="mt-2 divide-y divide-line-soft overflow-hidden rounded-control bg-surface ring-1 ring-line-soft"
         :role="question.multiple ? 'group' : 'radiogroup'"
@@ -159,29 +156,42 @@ function onCustomKey(e: KeyboardEvent): void {
             <span v-if="o.description" class="block text-meta text-ink-3">{{ o.description }}</span>
           </span>
         </button>
-        <!-- the user's own words: always there -->
-        <div class="q-option" :class="{ 'is-on': question.options.length && customCounts(index) }">
+        <!-- several choices: the user's own words are one more box to tick -->
+        <div v-if="question.multiple" class="q-option" :class="{ 'is-on': customCounts(index) }">
           <button
-            v-if="question.options.length"
             type="button"
-            :role="question.multiple ? 'checkbox' : 'radio'"
+            role="checkbox"
             :aria-checked="customCounts(index)"
             :aria-label="t('chat.ask.custom')"
-            class="q-mark"
-            :class="question.multiple ? 'rounded-[5px]' : 'rounded-full'"
+            class="q-mark rounded-[5px]"
             @click="toggleCustom"
           >
-            <Icon v-if="question.multiple" name="ok" :size="11" />
+            <Icon name="ok" :size="11" />
           </button>
           <input
             ref="customEl"
             v-model="draft.custom"
             class="min-w-0 flex-1 border-0 bg-transparent p-0 text-secondary focus:shadow-none"
-            :placeholder="question.options.length ? t('chat.ask.custom') : t('chat.ask.answer')"
+            :placeholder="t('chat.ask.custom')"
             @input="onCustomInput"
             @keydown="onCustomKey"
           />
         </div>
+      </div>
+      <!-- one choice, or none to pick from: the words go under the options,
+           a note added to the one picked, or the answer itself -->
+      <div
+        v-if="!question.multiple"
+        class="mt-2 flex rounded-control bg-surface px-3 py-2 ring-1 ring-line-soft"
+      >
+        <input
+          ref="customEl"
+          v-model="draft.custom"
+          class="min-w-0 flex-1 border-0 bg-transparent p-0 text-secondary focus:shadow-none"
+          :placeholder="question.options.length ? t('chat.ask.note') : t('chat.ask.answer')"
+          @input="onCustomInput"
+          @keydown="onCustomKey"
+        />
       </div>
 
       <div class="mt-2.5 flex items-center justify-end gap-1.5">

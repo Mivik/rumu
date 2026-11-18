@@ -213,6 +213,8 @@ fn render_answers(questions: &[Question], answers: &[Answer]) -> String {
         if let Some(custom) = a.custom.as_deref().map(str::trim).filter(|c| !c.is_empty()) {
             parts.push(if q.options.is_empty() {
                 custom.to_owned()
+            } else if !q.multiple && !parts.is_empty() {
+                format!("(their note) {custom}")
             } else {
                 format!("(in their own words) {custom}")
             });
@@ -457,7 +459,7 @@ mod tests {
         let plugin = plugin(home.path());
         let host = FakeRuntime::arc();
         host.answers.lock().unwrap().push_back(json!({ "answers": [
-            { "selected": ["Postgres"] },
+            { "selected": ["Postgres"], "custom": "with pgvector" },
             { "selected": ["Search", "Auth", "Nope"], "custom": "realtime too" },
             { "custom": "next Friday" },
         ] }));
@@ -476,7 +478,7 @@ mod tests {
         assert_eq!(
             out.content.text,
             "The user answers:\
-             \n\nQ: Which database?\nA: Postgres\
+             \n\nQ: Which database?\nA: Postgres; (their note) with pgvector\
              \n\nQ: Which features?\nA: Auth; Search; (in their own words) realtime too\
              \n\nQ: When is the deadline?\nA: next Friday"
         );
