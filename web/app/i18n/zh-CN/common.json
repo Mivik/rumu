@@ -3,7 +3,11 @@
     "token": "访问令牌",
     "connect": "连接",
     "invalid": "令牌无效",
-    "unreachable": "无法连接服务器"
+    "unreachable": "无法连接服务器，正在重试…"
+  },
+  "update": {
+    "ready": "rumu 有新版本",
+    "reload": "刷新"
   },
   "offlineReconnecting": "正在重连…",
   "connected": "已连接",

@@ -23,7 +23,9 @@ projects, MCP servers — is set up in the web UI. Data lives in `RUMU_HOME`
 
 `bash` runs unsandboxed on the server's machine, and anyone with the token has
 full access. The server binds `127.0.0.1` by default; for remote access use an
-SSH tunnel or HTTPS through a reverse proxy.
+SSH tunnel or HTTPS through a reverse proxy (on a Tailscale tailnet,
+`tailscale serve --bg 7878`). HTTPS is also what lets a browser install the
+web UI as an app (PWA): its offline shell needs a secure context.
 
 ## Concepts
 

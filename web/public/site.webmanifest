@@ -1,6 +1,10 @@
 {
+  "id": "/",
   "name": "rumu",
   "short_name": "rumu",
+  "description": "A small, calm AI agent with a good memory.",
+  "start_url": "/",
+  "scope": "/",
   "icons": [
     {
       "src": "/web-app-manifest-192x192.png",

@@ -1,11 +1,13 @@
 // Boot the store (WS connection + push handlers) once, client-side.
-import { defineNuxtPlugin } from '#app'
+import { watch } from 'vue'
+import { defineNuxtPlugin, useRuntimeConfig } from '#app'
 import { t } from '../i18n'
 import { auth, captureToken, initAuth, setToken } from '../lib/auth'
 import { rumu } from '../lib/api'
 import { followLink } from '../lib/links'
 import { startApp } from '../lib/store'
 import { openLightbox, toast } from '../lib/state/ui'
+import { checkUpdate, watchUpdates } from '../lib/update'
 import { copyText } from '../lib/util'
 
 /** Copy a fence's source; the button acknowledges inline for a moment. */
@@ -39,6 +41,12 @@ export default defineNuxtPlugin(() => {
     }
   })
   startApp()
+
+  // A reconnection is often a server restart, i.e. maybe a new build.
+  watchUpdates(useRuntimeConfig().app.buildId)
+  watch(rumu.connected, (up) => {
+    if (up) void checkUpdate()
+  })
 
   // Clicks inside rendered markdown: copy a fence; follow rumu addresses and
   // card links (lib/links.ts).

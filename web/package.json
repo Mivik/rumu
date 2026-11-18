@@ -13,7 +13,7 @@
   "type": "module",
   "scripts": {
     "dev": "nuxt dev",
-    "build": "nuxt generate",
+    "build": "nuxt generate && node scripts/build-sw.mjs",
     "typecheck": "nuxt typecheck",
     "format": "prettier --write .",
     "format:check": "prettier --check .",

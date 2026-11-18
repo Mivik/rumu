@@ -3,7 +3,11 @@
     "token": "Access token",
     "connect": "Connect",
     "invalid": "Invalid token",
-    "unreachable": "Server unreachable"
+    "unreachable": "Server unreachable, retrying…"
+  },
+  "update": {
+    "ready": "A new version of rumu is available",
+    "reload": "Reload"
   },
   "offlineReconnecting": "Reconnecting…",
   "connected": "connected",

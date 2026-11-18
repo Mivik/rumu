@@ -38,6 +38,9 @@ export default defineNuxtConfig({
           content: 'width=device-width, initial-scale=1, maximum-scale=1, interactive-widget=resizes-content',
         },
         { name: 'color-scheme', content: 'light dark' },
+        // The installed app's title bar follows the canvas (main.css).
+        { name: 'theme-color', content: '#fbf7f1', media: '(prefers-color-scheme: light)' },
+        { name: 'theme-color', content: '#1a1714', media: '(prefers-color-scheme: dark)' },
         { name: 'apple-mobile-web-app-title', content: 'rumu' },
       ],
       link: [
@@ -77,6 +80,10 @@ export default defineNuxtConfig({
   },
 
   devServer: { port: 5173 },
+
+  // lib/update.ts runs its own check for a newer build, on reconnects and
+  // page visibility as well as a timer; Nuxt's hourly one would only race it.
+  experimental: { checkOutdatedBuildInterval: false },
 
   // Only the production build writes web/dist: nitro empties its publicDir
   // on every start, so setting it for `nuxt dev` too would wipe the bundle

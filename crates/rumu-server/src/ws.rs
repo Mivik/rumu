@@ -8,7 +8,9 @@ use axum::Router;
 use axum::body::Bytes;
 use axum::extract::ws::{Message, WebSocket, WebSocketUpgrade};
 use axum::extract::{DefaultBodyLimit, Path, Query, State};
-use axum::http::header::{CONTENT_SECURITY_POLICY, CONTENT_TYPE, X_CONTENT_TYPE_OPTIONS};
+use axum::http::header::{
+    CACHE_CONTROL, CONTENT_SECURITY_POLICY, CONTENT_TYPE, X_CONTENT_TYPE_OPTIONS,
+};
 use axum::http::{HeaderValue, StatusCode, Uri};
 use axum::response::{IntoResponse, Response};
 use axum::routing::{get, post};
@@ -133,10 +135,15 @@ pub fn router(state: AppState, token: crate::auth::Token) -> Router {
 /// Serve an embedded asset, SPA-style: unknown paths get `index.html` with a
 /// 200, except missing `_nuxt/` assets, which 404 so a stale bundle fails
 /// visibly.
+///
+/// The bundle under `_nuxt/` is content-hashed and cached for good; the rest
+/// (`index.html`, `sw.js`, the `_nuxt/builds/` manifests the page polls for
+/// a new version) is revalidated every time.
 async fn static_asset(uri: Uri) -> Response {
     let path = uri.path().trim_start_matches('/');
     if let Some(file) = WebAssets::get(path) {
-        return serve(file);
+        let immutable = path.starts_with("_nuxt/") && !path.starts_with("_nuxt/builds/");
+        return serve(file, immutable);
     }
     let Some(index) = WebAssets::get("index.html") else {
         return not_found().into_response();
@@ -144,12 +151,21 @@ async fn static_asset(uri: Uri) -> Response {
     if path.starts_with("_nuxt/") {
         return StatusCode::NOT_FOUND.into_response();
     }
-    serve(index)
+    serve(index, false)
 }
 
-fn serve(file: EmbeddedFile) -> Response {
+fn serve(file: EmbeddedFile, immutable: bool) -> Response {
     let mime = file.metadata.mimetype().to_owned();
-    ([(CONTENT_TYPE, mime)], file.data).into_response()
+    let cache = if immutable {
+        "public, max-age=31536000, immutable"
+    } else {
+        "no-cache"
+    };
+    (
+        [(CONTENT_TYPE, mime), (CACHE_CONTROL, cache.to_owned())],
+        file.data,
+    )
+        .into_response()
 }
 
 fn not_found() -> &'static str {
