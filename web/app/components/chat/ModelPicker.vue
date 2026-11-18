@@ -6,7 +6,7 @@
 import { computed } from 'vue'
 import { t } from '../../i18n'
 import { openPage } from '../../lib/router'
-import { assistantModel, currentPick, modelByRef, models, pick, resolvePick } from '../../lib/state/models'
+import { assistantModel, currentPick, models, pick, resolvePick } from '../../lib/state/models'
 import type { Effort } from '../../lib/generated/Effort'
 import type { ModelInfo } from '../../lib/generated/ModelInfo'
 import Icon from '../ui/Icon.vue'
@@ -22,7 +22,7 @@ const ownLabel = computed(() => {
   const m = own.value
   if (!m) return ''
   const r = resolvePick(m)
-  return [modelByRef(m.model)?.name ?? m.model, r?.effort].filter(Boolean).join(' · ')
+  return [m.model, r?.effort].filter(Boolean).join(' · ')
 })
 const efforts = computed<Effort[]>(() => resolved.value?.model?.efforts ?? [])
 
@@ -77,10 +77,12 @@ function configure(close: () => void): void {
               @click="follow(close)"
             >
               <Icon name="ok" :size="13" class="flex-none text-brand" :class="use ? 'invisible' : ''" />
-              <span class="flex-none text-secondary" :class="use ? 'text-ink-2' : 'font-semibold text-ink'">{{
-                t('settings.assistantModel')
-              }}</span>
-              <span class="min-w-0 truncate text-micro text-ink-3">{{ ownLabel }}</span>
+              <span class="flex min-w-0 flex-wrap items-baseline gap-x-2">
+                <span class="min-w-0 text-secondary" :class="use ? 'text-ink-2' : 'font-semibold text-ink'">{{
+                  t('settings.assistantModel')
+                }}</span>
+                <span class="min-w-0 text-micro wrap-anywhere text-ink-3">{{ ownLabel }}</span>
+              </span>
             </button>
             <div class="mx-1 my-1 border-t border-line-soft" />
           </template>

@@ -5,7 +5,7 @@
 // provider). Pins toggle in place.
 import { computed, ref } from 'vue'
 import { t } from '../../i18n'
-import { editSettings, modelByRef, models } from '../../lib/state/models'
+import { editSettings, models } from '../../lib/state/models'
 import type { ModelInfo } from '../../lib/generated/ModelInfo'
 import Icon from '../ui/Icon.vue'
 import NoProviders from '../settings/NoProviders.vue'
@@ -56,6 +56,14 @@ function toggleGroup(g: { key: string; models: ModelInfo[] }): void {
   folds.value = { ...folds.value, [g.key]: !isOpen(g) }
 }
 
+/** The id beside a model's name, so like-named models tell apart: the
+ *  full ref among the pinned (no provider heads them), none when the name
+ *  is the id. */
+function idOf(m: ModelInfo, pinned: boolean): string {
+  const id = pinned ? m.ref : m.id
+  return id === m.name ? '' : id
+}
+
 async function togglePin(m: ModelInfo): Promise<void> {
   await editSettings('settings.pin', { model: m.ref, pinned: !m.pinned })
 }
@@ -98,14 +106,14 @@ async function togglePin(m: ModelInfo): Promise<void> {
             class="flex-none text-brand"
             :class="selected === m.ref ? '' : 'invisible'"
           />
-          <span
-            class="flex-none text-secondary"
-            :class="selected === m.ref ? 'font-semibold text-ink' : 'text-ink-2'"
-            >{{ m.name }}</span
-          >
-          <span class="min-w-0 truncate text-micro text-ink-3" :title="m.target?.model">{{
-            modelByRef(m.target?.model ?? '')?.name ?? m.target?.model
-          }}</span>
+          <span class="flex min-w-0 flex-wrap items-baseline gap-x-2">
+            <span
+              class="min-w-0 text-secondary"
+              :class="selected === m.ref ? 'font-semibold text-ink' : 'text-ink-2'"
+              >{{ m.name }}</span
+            >
+            <span class="min-w-0 text-micro wrap-anywhere text-ink-3">{{ m.target?.model }}</span>
+          </span>
         </button>
       </template>
 
@@ -145,11 +153,18 @@ async function togglePin(m: ModelInfo): Promise<void> {
               class="flex-none text-brand"
               :class="selected === m.ref ? '' : 'invisible'"
             />
-            <span
-              class="min-w-0 truncate text-secondary"
-              :class="selected === m.ref ? 'font-semibold text-ink' : 'text-ink-2'"
-              >{{ m.name }}</span
-            >
+            <span class="flex min-w-0 flex-wrap items-baseline gap-x-2">
+              <span
+                class="min-w-0 text-secondary"
+                :class="selected === m.ref ? 'font-semibold text-ink' : 'text-ink-2'"
+                >{{ m.name }}</span
+              >
+              <span
+                v-if="idOf(m, group.key === 'pinned')"
+                class="min-w-0 text-micro wrap-anywhere text-ink-3"
+                >{{ idOf(m, group.key === 'pinned') }}</span
+              >
+            </span>
           </button>
           <button
             type="button"
