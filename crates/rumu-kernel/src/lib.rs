@@ -85,7 +85,8 @@ pub const TASK_INSTRUCTIONS: &str = "Tools with a `background` argument may run 
 `background: true` returns a task id immediately, and a note with the result arrives when it \
 finishes — you are woken up for it, so to wait, just end your turn; don't poll. \
 `read @rumu:/tasks/<id>` shows a task's status and the end of its output (`.../output` holds \
-all of it); `invoke` `task.kill` on it cancels it.";
+all of it); `invoke` `task.kill` on it cancels it. A task does not survive rumu restarting: \
+its note then says `finished: lost`, and you can start it again.";
 
 /// The kernel's built-in `agent` tool spec (also offered to `code` scripts).
 pub fn agent_tool() -> ToolSpec {
@@ -185,7 +186,9 @@ pub(crate) struct Inner {
     pub agent_depth: usize,
     /// Permit gate for concurrent sub-agent loops.
     pub agent_gate: Arc<Semaphore>,
-    /// Runtime-only table of background tasks (lost on restart).
+    /// The live table of background tasks; each one is also recorded in its
+    /// session's journal, so a restart brings the table back (see
+    /// `recover_tasks`).
     pub tasks: HashMap<TaskId, crate::task::TaskEntry>,
     /// Running background tasks allowed per owner branch.
     pub max_tasks_per_branch: usize,
@@ -286,7 +289,9 @@ impl Kernel {
         let registry = workspaces.list();
         // A kernel restart loses every in-flight task, and the agent branches
         // that were running them are never resumed: close them out so the tree
-        // does not claim a live sub-agent forever.
+        // does not claim a live sub-agent forever. Their tasks' journals are
+        // read once the kernel is up (`recover_tasks`), which reports the ones
+        // that died with it.
         for session in store.list_sessions()? {
             for branch in store.branches_of_session(&session.id)? {
                 if matches!(branch.kind, BranchKind::Agent { .. })
@@ -407,6 +412,12 @@ impl Kernel {
         // forever, so a kernel built outside a runtime is an error.
         let handle = tokio::runtime::Handle::try_current().map_err(|_| Error::NoRuntime)?;
         handle.spawn(post_worker(kernel.clone(), post_rx));
+        // After the worker: the notes it posts for the tasks a previous run
+        // left behind go through it.
+        handle.spawn({
+            let kernel = kernel.clone();
+            async move { kernel.recover_tasks().await }
+        });
         Ok(kernel)
     }
 

@@ -4970,6 +4970,101 @@ async fn stop_ends_the_reply_and_keeps_its_tasks() {
     );
 }
 
+// ---------- restart ----------
+
+/// A task still running when its kernel stopped comes back as `lost` in the
+/// next kernel's table, with the completion note it never posted — and only
+/// the first restart reports it.
+#[tokio::test]
+async fn restart_reports_a_lost_task_once() {
+    let dir = tempfile::tempdir().unwrap();
+    let sessions = dir.path().join("sessions");
+    let seen = dir.path().join("seen.json");
+    let store = Arc::new(Store::open(&sessions, &seen).unwrap());
+    let plugin = Arc::new(background_plugin(
+        "bg",
+        &["bgwork"],
+        vec![],
+        noop_hooks(),
+        noop_tools(),
+    ));
+    let llm = Arc::new(FakeLlm::new(vec![
+        LlmResponse::calls(vec![ToolCall::new(
+            "c1",
+            "bgwork",
+            json!({ "ms": 60_000, "background": true }),
+        )]),
+        LlmResponse::text("started"),
+    ]));
+    let kernel = Kernel::new(store.clone(), llm, vec![plugin], Workspaces::default()).unwrap();
+    let (session, _) = kernel.create_session("assistant".into()).await.unwrap();
+    let branch = session.active_branch.clone();
+    run_turn(&kernel, &branch, "go").await;
+    let id = kernel.tasks(&session.id).unwrap()[0].id.clone();
+    assert!(kernel.tasks(&session.id).unwrap()[0].status.is_running());
+
+    // A second kernel over the same journals: the task died with the first.
+    let second = Kernel::new(
+        store.clone(),
+        Arc::new(FakeLlm::new(vec![])),
+        vec![],
+        Workspaces::default(),
+    )
+    .unwrap();
+    wait_until(Duration::from_secs(5), || {
+        second
+            .tasks(&session.id)
+            .is_ok_and(|t| t.iter().any(|t| t.id == id && t.status == TaskStatus::Lost))
+    })
+    .await;
+    let adopted = second.tasks(&session.id).unwrap();
+    let task = adopted.iter().find(|t| t.id == id).unwrap();
+    assert!(task.is_error, "a lost task reads as an error");
+    assert!(task.ended_at.is_some());
+    let notes = |k: &Arc<Kernel>| -> Vec<String> {
+        k.branch_path(&branch)
+            .unwrap()
+            .0
+            .iter()
+            .filter_map(|n| match &n.body {
+                NodeBody::Note { content, .. }
+                    if content
+                        .decode::<TaskDone>()
+                        .is_some_and(|d| d.status == TaskStatus::Lost) =>
+                {
+                    Some(content.text.clone())
+                }
+                _ => None,
+            })
+            .collect()
+    };
+    let reported = notes(&second);
+    assert_eq!(reported.len(), 1, "{reported:?}");
+    assert!(
+        reported[0].starts_with(&format!("task {id} (bgwork: "))
+            && reported[0].contains("finished: lost"),
+        "{}",
+        reported[0]
+    );
+
+    // The record says it is over now: a third kernel adopts it silently.
+    let third = Kernel::new(
+        store,
+        Arc::new(FakeLlm::new(vec![])),
+        vec![],
+        Workspaces::default(),
+    )
+    .unwrap();
+    wait_until(Duration::from_secs(5), || {
+        third
+            .tasks(&session.id)
+            .is_ok_and(|t| t.iter().any(|t| t.id == id && t.status == TaskStatus::Lost))
+    })
+    .await;
+    tokio::time::sleep(Duration::from_millis(100)).await;
+    assert_eq!(notes(&third).len(), 1, "reported once");
+}
+
 /// A plugin invoke (`code` script) may not ask for `background`.
 #[tokio::test]
 async fn background_from_plugin_invoke_is_refused() {

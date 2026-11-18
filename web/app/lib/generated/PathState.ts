@@ -45,7 +45,7 @@ assistant: string,
  */
 delegated_by?: string | null, 
 /**
- * The branch's card mount table (root defaults + `card_mount` markers).
+ * The branch's card mount table (root defaults + `deck.mount` markers).
  */
 mounts: Array<CardMount>, 
 /**

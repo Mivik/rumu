@@ -10,6 +10,7 @@
 //! {"t":"node","id":"7c9e…","parent":null,"session":"7c9e…","at":1,"body":{"type":"note","source":"system","content":{"text":"","data":{"tag":"root","v":1,"data":{}}}}}
 //! {"t":"node","branch":"7c9e…","id":"5d1a…","parent":"7c9e…","session":"7c9e…","at":2,"body":{"type":"user","content":{"text":"hi"}}}
 //! {"t":"branch_update","id":"7c9e…","status":"done"}
+//! {"t":"task","id":"t-1a2b3c4d","session":"7c9e…","branch":"7c9e…","status":"running",…}
 //! {"t":"meta","title":"refactor","updated_at":3}
 //! ```
 //!
@@ -21,8 +22,10 @@
 //! Loading a file folds the records into memory: `session` is the header
 //! (the initial [`SessionInfo`]), `meta` patches it (title /
 //! active_branch / project / updated_at — whatever the mutating call changed),
-//! `branch` adds a branch and `branch_update` moves its head/status, and
-//! `node` adds a node — with `branch`, it is also that branch's new head.
+//! `branch` adds a branch and `branch_update` moves its head/status, `node`
+//! adds a node — with `branch`, it is also that branch's new head — and `task`
+//! adds or updates one background task (the kernel writes one when a task
+//! starts and when it ends, so a restart knows what it lost).
 //! A session's `updated_at` is never older than its newest node; its
 //! `touched_at` follows the user's prompts on main lines and project moves.
 //! Optional fields are `#[serde(default)]` and
@@ -55,7 +58,7 @@ use std::sync::Mutex;
 
 use rumu_core::{
     Artifact, Branch, BranchId, BranchKind, BranchStatus, IoError, Node, NodeBody, NodeId,
-    SessionId, SessionInfo, Timestamp,
+    SessionId, SessionInfo, TaskId, TaskInfo, Timestamp,
 };
 use serde::{Deserialize, Serialize};
 use serde_json::Value;
@@ -119,6 +122,10 @@ enum Record {
         #[serde(flatten)]
         node: Box<Node>,
     },
+    /// A background task's start or a later status change; the latest record
+    /// per id wins. Written by the kernel so a restart can tell what it lost
+    /// (the runtime table itself is not persisted).
+    Task(Box<TaskInfo>),
     /// A record tag this build does not know (e.g. a retired record type):
     /// parsed and dropped so old journals still load.
     #[serde(other)]
@@ -147,6 +154,9 @@ struct SessionState {
     info: SessionInfo,
     branches: HashMap<BranchId, Branch>,
     nodes: HashMap<NodeId, Node>,
+    /// Background tasks by id, oldest first when read (see
+    /// [`Store::tasks_of`]); their status is the latest record's.
+    tasks: HashMap<TaskId, TaskInfo>,
 }
 
 impl Store {
@@ -378,6 +388,42 @@ impl Store {
         self.append(&sid, &rec)?;
         st.apply(&sid, rec);
         Ok(())
+    }
+
+    /// Record a background task's state (`TaskInfo` without its result and
+    /// output, which the journal keeps as ordinary notes instead). The latest
+    /// record per id wins.
+    pub fn append_task(&self, task: &TaskInfo) -> Result<()> {
+        let mut st = self.state.lock().unwrap();
+        if st.loaded(&task.session)?.is_none() {
+            return Ok(()); // a no-op on unknown sessions
+        }
+        let rec = Record::Task(Box::new(TaskInfo {
+            result: None,
+            data: None,
+            ..task.clone()
+        }));
+        self.append(&task.session, &rec)?;
+        st.apply(&task.session, rec);
+        Ok(())
+    }
+
+    /// Every task recorded in `session`'s journal, oldest first.
+    pub fn tasks_of(&self, session: &SessionId) -> Result<Vec<TaskInfo>> {
+        let st = self.state.lock().unwrap();
+        Ok(match st.sessions.get(session) {
+            Some(Entry::Loaded(s)) => {
+                let mut v: Vec<TaskInfo> = s.tasks.values().cloned().collect();
+                v.sort_by(|a, b| {
+                    a.started_at
+                        .cmp(&b.started_at)
+                        .then_with(|| a.id.cmp(&b.id))
+                });
+                v
+            }
+            Some(Entry::Corrupt(msg)) => return Err(unreadable(session, msg)),
+            None => vec![],
+        })
     }
 
     pub fn branches_of_session(&self, session: &SessionId) -> Result<Vec<Branch>> {
@@ -642,6 +688,7 @@ impl SessionState {
             info,
             branches: HashMap::new(),
             nodes: HashMap::new(),
+            tasks: HashMap::new(),
         }
     }
 
@@ -694,6 +741,9 @@ impl SessionState {
                 }
                 self.info.updated_at = self.info.updated_at.max(node.at);
                 self.nodes.insert(node.id.clone(), *node);
+            }
+            Record::Task(info) => {
+                self.tasks.insert(info.id.clone(), *info);
             }
             Record::Unknown => {}
         }
@@ -792,7 +842,7 @@ fn ensure_trailing_newline(path: &Path) -> Result<()> {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use rumu_core::{BranchKind, NodeBody, now};
+    use rumu_core::{BranchKind, NodeBody, TaskInfo, now};
 
     fn mk_session(store: &Store) -> (SessionInfo, Branch, Node) {
         let root = Node {
@@ -830,6 +880,62 @@ mod tests {
         store.insert_branch(&branch).unwrap();
         store.insert_node(&root).unwrap();
         (session, branch, root)
+    }
+
+    /// A task record: the latest one per id wins, and a task that was still
+    /// running when the journal was last written comes back as it was left.
+    #[test]
+    fn task_records_fold_by_id_and_survive_a_reopen() {
+        let dir = temp_dir("tasks");
+        let (sid, branch, task) = {
+            let store = Store::open(&dir, &dir.join("seen.json")).unwrap();
+            let (session, branch, _root) = mk_session(&store);
+            let task = TaskInfo {
+                id: TaskId::new(),
+                session: session.id.clone(),
+                branch: branch.id.clone(),
+                call_id: "c1".into(),
+                kind: rumu_core::TaskKind::Tool {
+                    name: "bash".into(),
+                    args_summary: "sleep 999".into(),
+                },
+                summary: "sleep 999".into(),
+                status: rumu_core::TaskStatus::Running,
+                started_at: now(),
+                ended_at: None,
+                truncated: false,
+                is_error: false,
+                result: Some(rumu_core::Content::text("not persisted")),
+                data: None,
+            };
+            store.append_task(&task).unwrap();
+            let mut ended = task.clone();
+            ended.status = rumu_core::TaskStatus::Done;
+            ended.ended_at = Some(now());
+            store.append_task(&ended).unwrap();
+            let second = TaskInfo {
+                id: TaskId::new(),
+                status: rumu_core::TaskStatus::Running,
+                started_at: task.started_at + 1,
+                ..task.clone()
+            };
+            store.append_task(&second).unwrap();
+
+            let open = store.tasks_of(&session.id).unwrap();
+            assert_eq!(open.len(), 2, "one row per id");
+            assert_eq!(open[0].status, rumu_core::TaskStatus::Done);
+            assert_eq!(open[1].status, rumu_core::TaskStatus::Running);
+            (session.id, branch.id, open[1].clone())
+        };
+
+        let store = Store::open(&dir, &dir.join("seen.json")).unwrap();
+        let tasks = store.tasks_of(&sid).unwrap();
+        assert_eq!(tasks.len(), 2);
+        assert_eq!(tasks[1].id, task.id);
+        assert_eq!(tasks[1].branch, branch);
+        assert_eq!(tasks[1].status, rumu_core::TaskStatus::Running);
+        assert!(tasks[1].result.is_none(), "only the note carries a result");
+        std::fs::remove_dir_all(&dir).ok();
     }
 
     fn temp_dir(tag: &str) -> PathBuf {

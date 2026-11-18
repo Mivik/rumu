@@ -85,6 +85,7 @@
     "running": "running",
     "ok": "ok",
     "error": "error",
-    "cancelled": "cancelled"
+    "cancelled": "cancelled",
+    "lost": "lost"
   }
 }

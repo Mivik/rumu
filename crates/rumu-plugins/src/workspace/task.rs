@@ -7,8 +7,9 @@
 //! - `read /tasks/<id>/output` — its whole buffered output (then its result),
 //!   pageable with `offset` / `limit`; watch events number their lines in it.
 //!
-//! Tasks are runtime-only: a kernel restart loses running tasks, and their
-//! old transcript entries remain ordinary notes/results.
+//! The table is the kernel's live one; what a restart makes of it comes from
+//! each task's record in the session journal (a task that was running is
+//! `lost`, and its output is gone).
 
 use async_trait::async_trait;
 use rumu_core::{OUTPUT_LIMIT, RUMU_WORKSPACE, TaskId, TaskInfo, ToolError, ToolOutput};
@@ -37,9 +38,9 @@ impl Node for Tasks {
     }
 
     fn doc(&self, _at: &At<'_>) -> &'static str {
-        "This session's background tasks (`background: true` calls), newest last. They live \
-         only while rumu runs. `read @rumu:/tasks/<id>` summarizes one; its `output` is the \
-         whole buffer."
+        "This session's background tasks (`background: true` calls), oldest first, including \
+         ones an earlier run of rumu left behind (a task that was still running then is \
+         `lost`). `read @rumu:/tasks/<id>` summarizes one; its `output` is the whole buffer."
     }
 
     async fn list(&self, at: &At<'_>) -> Out {

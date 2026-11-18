@@ -8,8 +8,10 @@ import type { TaskKind } from "./TaskKind";
 import type { TaskStatus } from "./TaskStatus";
 
 /**
- * A read-only snapshot of one kernel task. Tasks are runtime state (not
- * persisted): a kernel restart loses everything still running.
+ * A read-only snapshot of one kernel task. The table itself is runtime state,
+ * but each task also leaves a record in its session's journal, so after a
+ * restart a task that was running comes back as [`TaskStatus::Lost`] instead
+ * of vanishing (its output buffer is not kept).
  */
 export type TaskInfo = { id: TaskId, session: SessionId, 
 /**

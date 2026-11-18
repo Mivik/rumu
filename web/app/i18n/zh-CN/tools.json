@@ -85,6 +85,7 @@
     "running": "运行中",
     "ok": "成功",
     "error": "错误",
-    "cancelled": "已取消"
+    "cancelled": "已取消",
+    "lost": "已丢失"
   }
 }

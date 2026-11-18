@@ -6,8 +6,7 @@ use crate::{BranchId, Content, RUMU_WORKSPACE, SessionId, Structured, Tagged, Ti
 
 /// A kernel task id: `t-` plus 8 random hex digits. Random (not sequential)
 /// because ids are written into persisted notes, and a restarted kernel must
-/// not hand a fresh task an id an old transcript already uses. Runtime-only —
-/// a kernel restart loses running tasks.
+/// not hand a fresh task an id an old transcript already uses.
 #[derive(Debug, Clone, PartialEq, Eq, Hash, PartialOrd, Ord, Serialize, Deserialize, ts_rs::TS)]
 #[serde(transparent)]
 #[ts(export)]
@@ -89,6 +88,9 @@ pub enum TaskStatus {
     Done,
     Failed,
     Cancelled,
+    /// A kernel restart killed it before it finished: the work is gone, and
+    /// whatever it wrote to its output buffer with it.
+    Lost,
 }
 
 impl TaskStatus {
@@ -103,12 +105,15 @@ impl TaskStatus {
             Self::Done => "ok",
             Self::Failed => "error",
             Self::Cancelled => "cancelled",
+            Self::Lost => "lost",
         }
     }
 }
 
-/// A read-only snapshot of one kernel task. Tasks are runtime state (not
-/// persisted): a kernel restart loses everything still running.
+/// A read-only snapshot of one kernel task. The table itself is runtime state,
+/// but each task also leaves a record in its session's journal, so after a
+/// restart a task that was running comes back as [`TaskStatus::Lost`] instead
+/// of vanishing (its output buffer is not kept).
 #[derive(Debug, Clone, Serialize, Deserialize, ts_rs::TS)]
 #[ts(export)]
 pub struct TaskInfo {

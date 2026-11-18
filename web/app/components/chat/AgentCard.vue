@@ -31,7 +31,8 @@ const failed = computed(
     !!props.view &&
     (props.view.status !== 'ok' ||
       props.view.taskStatus === 'failed' ||
-      props.view.taskStatus === 'cancelled'),
+      props.view.taskStatus === 'cancelled' ||
+      props.view.taskStatus === 'lost'),
 )
 const statusText = computed(() => {
   if (running.value) return taskStatusWord('running')

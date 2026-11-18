@@ -105,7 +105,10 @@ line (a task's `output`); and `actions:`. `list @rumu:/` names the roots, a
 line each. A path gets a file of its own only for a part with its own size
 or use: `@rumu:/tasks/<id>` is a task's summary (its state, the last lines
 of its output, the start of its result) and `@rumu:/tasks/<id>/output` its
-whole buffered output, which `bash` watch events number their lines in.
+whole buffered output, which `bash` watch events number their lines in. A
+task's record lives in its session's journal, so a restart of rumu keeps the
+table: a task that was still running comes back as `lost`, with a note
+saying so, rather than quietly vanishing.
 `search` marks each hit `card`, `session` or `action`.
 
 Which set a workspace is in shows in its path, not in a field:

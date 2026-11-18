@@ -1,12 +1,14 @@
-//! Background tasks: kernel-owned, runtime-only table, completion via the
-//! inbox, and their cancellation (`task.kill`).
+//! Background tasks: the kernel's live table, completion via the inbox,
+//! cancellation (`task.kill`) and what a restart leaves of them.
 //!
 //! A task is a plugin tool call or a sub-agent that runs detached from the
 //! turn that started it. The kernel keeps its status and an output buffer in
 //! [`Inner::tasks`](crate::Inner); the buffer keeps the last
 //! [`TASK_OUTPUT_LIMIT`] bytes of `Progress::Append` text plus the latest
-//! `Progress::Data`. Nothing is persisted: a kernel restart loses every
-//! running task (and [`Kernel::new`] closes out their agent branches).
+//! `Progress::Data`. Both die with the process, but each task also leaves a
+//! record in its session's journal, so [`Kernel::recover_tasks`] can bring
+//! the table back: ended tasks as they ended, and the ones still running as
+//! [`TaskStatus::Lost`], with the completion note they never got to post.
 
 use std::sync::Arc;
 use std::time::{Duration, Instant};
@@ -21,6 +23,11 @@ use serde_json::{Value, json};
 use tokio_util::sync::CancellationToken;
 
 use crate::host::KernelRuntime;
+
+/// What a task that a restart killed says in its completion note.
+const LOST_TASK: &str = "rumu restarted while this task was running, so the work it was doing \
+                         and the output it had collected are gone. Start it again if you still \
+                         need it.";
 
 /// One task's runtime row. Tasks stay in the table after they end so the UI
 /// and `@rumu:/tasks/<id>` can still show the result.
@@ -305,6 +312,7 @@ impl Kernel {
             );
             (id, token, info)
         };
+        self.save_task(&info);
         self.signal_tasks();
         self.push("task.started", json!({ "task": info }));
         Ok((id, token))
@@ -420,8 +428,81 @@ impl Kernel {
 
         self.signal_tasks();
         self.push("task.done", json!({ "task": info }));
+        self.save_task(&info);
         self.deliver_completion(&info, note, effects, &source, wake)
             .await;
+    }
+
+    /// Persist a task's state in its session's journal, so a restart can tell
+    /// what it lost (see [`Kernel::recover_tasks`]). Its output buffer and
+    /// result stay out: the notes it posted already carry them.
+    fn save_task(&self, info: &TaskInfo) {
+        if let Err(e) = self.store.append_task(info) {
+            self.warn(format!("could not record task {}: {e}", info.id));
+        }
+    }
+
+    // ---- restart ----
+
+    /// Adopt what earlier runs left in the journals: a task that was running
+    /// when its kernel stopped comes back as [`TaskStatus::Lost`] with the
+    /// completion note it never got to post; the others come back as they
+    /// ended. Their output buffers and effects are gone — only the notes they
+    /// posted and this table remain.
+    pub(crate) async fn recover_tasks(self: &Arc<Self>) {
+        let sessions = match self.store.list_sessions() {
+            Ok(v) => v,
+            Err(e) => return self.warn(format!("could not recover tasks: {e}")),
+        };
+        for session in sessions {
+            let tasks = match self.store.tasks_of(&session.id) {
+                Ok(v) => v,
+                Err(e) => {
+                    self.warn(format!(
+                        "could not recover the tasks of {}: {e}",
+                        session.id
+                    ));
+                    continue;
+                }
+            };
+            for mut info in tasks {
+                if !info.status.is_running() {
+                    self.adopt_task(info);
+                    continue;
+                }
+                info.status = TaskStatus::Lost;
+                info.ended_at = Some(now());
+                info.is_error = true;
+                let content = Content::text(LOST_TASK);
+                info.result = Some(content.clone());
+                self.save_task(&info);
+                let note = completion_text(&info, &content);
+                self.adopt_task(info.clone());
+                self.push("task.done", json!({ "task": info }));
+                // A note, not a wake: the branch may have work of its own as
+                // soon as the user comes back.
+                self.deliver_completion(&info, note, vec![], SYSTEM_SOURCE, false)
+                    .await;
+            }
+        }
+    }
+
+    /// Put a task the journal remembers into the live table, ended and with
+    /// no output: nothing can run or cancel it any more.
+    fn adopt_task(&self, info: TaskInfo) {
+        let mut inner = self.inner.lock().unwrap();
+        inner.tasks.entry(info.id.clone()).or_insert(TaskEntry {
+            info,
+            output: String::new(),
+            dropped: 0,
+            source: SYSTEM_SOURCE.to_owned(),
+            token: CancellationToken::new(),
+            // Its completion is already in the transcript: never wait on it.
+            post_done: true,
+            aborted_by_owner: false,
+        });
+        drop(inner);
+        self.signal_tasks();
     }
 
     /// Post the tool's own effects (attributed to its plugin) and then the

@@ -3,7 +3,6 @@
 /**
  * A kernel task id: `t-` plus 8 random hex digits. Random (not sequential)
  * because ids are written into persisted notes, and a restarted kernel must
- * not hand a fresh task an id an old transcript already uses. Runtime-only —
- * a kernel restart loses running tasks.
+ * not hand a fresh task an id an old transcript already uses.
  */
 export type TaskId = string;

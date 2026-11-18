@@ -387,8 +387,9 @@ pub trait History: Send + Sync {
     fn sessions(&self) -> Result<Vec<SessionInfo>>;
     /// One session's info plus all of its nodes and branches.
     fn session_tree(&self, session: &SessionId) -> Result<(SessionInfo, Vec<Node>, Vec<Branch>)>;
-    /// Every kernel task owned by a branch of `session`, oldest first. Tasks
-    /// are runtime-only: a kernel restart loses them.
+    /// Every kernel task owned by a branch of `session`, oldest first,
+    /// including the ones earlier kernels left behind (a restart marks a task
+    /// that was running `lost`).
     fn tasks(&self, session: &SessionId) -> Result<Vec<TaskInfo>>;
     /// One kernel task plus its full buffered output (already annotated when
     /// the buffer dropped earlier text). `None` when no such task exists.
