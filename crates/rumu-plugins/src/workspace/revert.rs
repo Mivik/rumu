@@ -1,5 +1,5 @@
-//! Reverting the file changes made since a user message. The `write`/`edit`
-//! results on the way carry their patches ([`FilePatch`]), so undoing them is
+//! Reverting the file changes made since a user message. The `write`/`edit`/
+//! `delete` results on the way carry their patches ([`FilePatch`]), so undoing them is
 //! applying those patches backwards — nothing is snapshotted. Each change is
 //! undone on its own, with fuzz: whatever else changed in the file since —
 //! the user, `bash`, another session — stays, even right beside it. Only when
@@ -329,7 +329,7 @@ async fn plan_file(state: &PathState, file: &FileRef, changes: &[&Change]) -> Op
     };
     out.label = rumu_core::display(&ws.name, ws.root.to_path(), abs.to_path());
     let complete = changes.iter().all(|c| match c.kind {
-        PatchKind::Update => c.hunks.is_some(),
+        PatchKind::Update | PatchKind::Delete => c.hunks.is_some(),
         PatchKind::Create => c.content.is_some(),
     });
     if ws.read_only || !complete {
@@ -350,10 +350,10 @@ async fn plan_file(state: &PathState, file: &FileRef, changes: &[&Change]) -> Op
     };
     let (action, before) = match (&now, before) {
         (Some(now), Some(before)) if *now == before => return None,
-        (Some(_), Some(before)) => (RevertAction::Restore, Some(before)),
+        (_, Some(before)) => (RevertAction::Restore, Some(before)),
         (Some(_), None) => (RevertAction::Delete, None),
-        // Unwinding needs a file to start from.
-        (None, _) => return left(out),
+        // Absent before the changes and now.
+        (None, None) => return None,
     };
     let (added, removed) = line_counts(
         now.as_deref().unwrap_or(""),
@@ -384,18 +384,25 @@ async fn read_text(
 
 /// Undo `changes` (oldest first) on `now`, newest first: the content before
 /// the oldest (`None`: the file did not exist), or `None` when something
-/// else changed what they wrote.
+/// else changed what they wrote. A delete is undone by its removed content;
+/// a file there again holding anything else conflicts.
 fn unwind(now: Option<String>, changes: &[&Change]) -> Option<Option<String>> {
     let mut cur = now;
     for c in changes.iter().rev() {
-        let text = cur?;
         cur = match c.kind {
-            PatchKind::Update => Some(unapply(&text, c.hunks.as_deref()?)?),
+            PatchKind::Update => Some(unapply(&cur?, c.hunks.as_deref()?)?),
             PatchKind::Create => {
-                if Some(&text) != c.content.as_ref() {
+                if cur.is_none() || cur != c.content {
                     return None;
                 }
                 None
+            }
+            PatchKind::Delete => {
+                let old = unapply("", c.hunks.as_deref()?)?;
+                if cur.as_ref().is_some_and(|text| *text != old) {
+                    return None;
+                }
+                Some(old)
             }
         };
     }
@@ -658,5 +665,28 @@ mod tests {
         assert_eq!(unwind(Some("a\nb\nc\n".into()), &[&create, &edit]), None);
         // Gone already: nothing to unwind from.
         assert_eq!(unwind(None, &[&create, &edit]), None);
+    }
+
+    #[test]
+    fn unwinding_a_delete_puts_the_content_back() {
+        let edit = change(PatchKind::Update, Some(hunks("a\n", "a\nb\n")), None);
+        let delete = change(PatchKind::Delete, Some(hunks("a\nb\n", "")), None);
+        assert_eq!(
+            unwind(None, &[&edit, &delete]),
+            Some(Some("a\n".to_owned()))
+        );
+        // Written again since with the same content: still that content.
+        assert_eq!(
+            unwind(Some("a\nb\n".into()), &[&delete]),
+            Some(Some("a\nb\n".to_owned()))
+        );
+        // Something else there now: refused.
+        assert_eq!(unwind(Some("other\n".into()), &[&delete]), None);
+        // An emptied file comes back empty.
+        let empty = change(PatchKind::Delete, Some(hunks("", "")), None);
+        assert_eq!(unwind(None, &[&empty]), Some(Some(String::new())));
+        // Created then deleted: absent before, absent now.
+        let create = change(PatchKind::Create, None, Some("a\nb\n"));
+        assert_eq!(unwind(None, &[&create, &delete]), Some(None));
     }
 }

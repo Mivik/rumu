@@ -45,7 +45,8 @@ pub fn extract_fields(kind: &str, payload: &Value, state: &PathState) -> Fields 
                 .map(str::to_owned);
             if let Some(args) = args {
                 match f.tool.as_deref() {
-                    Some("read") | Some("write") | Some("edit") | Some("list") | Some("show") => {
+                    Some("read") | Some("write") | Some("edit") | Some("delete") | Some("list")
+                    | Some("show") => {
                         let (ws, paths) = file_target(args, state);
                         f.workspace = ws;
                         f.paths = paths;

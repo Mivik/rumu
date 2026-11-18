@@ -8,6 +8,7 @@
     "read": "read",
     "write": "wrote",
     "edit": "edited",
+    "delete": "deleted",
     "readCard": "read",
     "writeCard": "wrote",
     "editCard": "edited",
@@ -37,6 +38,7 @@
   },
   "edit": {
     "created": "new file",
+    "deleted": "deleted",
     "hunks": "{count} place | {count} places"
   },
   "thought": {

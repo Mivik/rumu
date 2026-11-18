@@ -120,6 +120,7 @@ function callFull(name: string, call: Call): string {
     case 'read':
     case 'write':
     case 'edit':
+    case 'delete':
     case 'list':
     case 'show':
       // `proj:` / `@rumu:` (empty rest) is that workspace's root.
@@ -155,6 +156,7 @@ function callShort(name: string, call: Call): string {
     case 'read':
     case 'write':
     case 'edit':
+    case 'delete':
     case 'show':
       return str('path') ? baseName(str('path')) : ''
     case 'list': {
@@ -181,10 +183,11 @@ function callShort(name: string, call: Call): string {
   }
 }
 
-/** `+N −M` counts for a write/edit row: from the result's hunks, or — for
- * results older than the payload — a browser diff of the call's strings. */
+/** `+N −M` counts for a write/edit/delete row: from the result's hunks, or
+ * — for results older than the payload — a browser diff of the call's
+ * strings. */
 function diffOf(name: string, patch: FilePatch | null, args: Args): DiffCounts | null {
-  if (name !== 'write' && name !== 'edit') return null
+  if (name !== 'write' && name !== 'edit' && name !== 'delete') return null
   if (patch?.hunks) {
     let added = 0
     let removed = 0
@@ -196,8 +199,9 @@ function diffOf(name: string, patch: FilePatch | null, args: Args): DiffCounts |
     }
     return added + removed ? { added, removed } : null
   }
-  // An update whose hunks were dropped (too big, non-UTF-8): nothing to count.
-  if (patch?.kind === 'update') return null
+  // An update or delete whose hunks were dropped (too big, non-UTF-8):
+  // nothing to count.
+  if (patch?.kind === 'update' || name === 'delete') return null
   // No payload: a legacy edit diffs its strings, a legacy write / a create
   // counts its content as all-added.
   const str = (key: string): string => (typeof args?.[key] === 'string' ? (args[key] as string) : '')
@@ -215,6 +219,12 @@ export function bashExit(text: string): { code: number | null; body: string } {
   return m ? { code: Number(m[1]), body: text.slice(m[0].length) } : { code: null, body: text }
 }
 
+/** `+N −M`, leaving out a zero side (a create says `+N`, a delete `−M`). */
+function diffText(diff: DiffCounts): string {
+  const parts = [diff.added ? `+${diff.added}` : '', diff.removed ? `−${diff.removed}` : '']
+  return parts.filter(Boolean).join(' ')
+}
+
 /** What the call produced, as a count or a word (empty when the call line says it). */
 function resultShort(name: string, output: string, diff: DiffCounts | null): string {
   if (!output) return ''
@@ -229,8 +239,9 @@ function resultShort(name: string, output: string, diff: DiffCounts | null): str
       return t('tools.count.lines', { count: lineCount(output) })
     case 'write':
     case 'edit':
+    case 'delete':
       // the row shows these colored; the plain form serves the tooltip
-      return diff ? (diff.removed ? `+${diff.added} −${diff.removed}` : `+${diff.added}`) : ''
+      return diff ? diffText(diff) : ''
     case 'bash': {
       // a clean exit is the norm; say the exit code only when it isn't 0
       const { code, body } = bashExit(output)
@@ -389,6 +400,7 @@ const VERB_KEYS: Record<string, string> = {
   read: 'read',
   write: 'write',
   edit: 'edit',
+  delete: 'delete',
   'read:card': 'readCard',
   'write:card': 'writeCard',
   'edit:card': 'editCard',
@@ -422,11 +434,12 @@ export function toolPhrase(v: ToolRowView): PhrasePart[] {
 
 /** A successful edit of a workspace file: its diff stands outside the
  * run's fold, as an EditCard. Card edits stay rows (the card chip opens
- * them); a failed edit is a row with its error. */
+ * them; a deleted card's patch names no file); a failed edit is a row with
+ * its error. */
 export function isFileEdit(v: ToolRowView): boolean {
-  return (
-    (v.name === 'write' || v.name === 'edit') && v.status === 'ok' && !v.toolCardId && v.row.call !== null
-  )
+  if (v.status !== 'ok' || v.row.call === null) return false
+  if (v.name === 'delete') return !!v.patch?.file
+  return (v.name === 'write' || v.name === 'edit') && !v.toolCardId
 }
 
 /** Rows the user expanded, and blocked rows they collapsed (blocked rows

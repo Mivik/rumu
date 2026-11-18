@@ -1,12 +1,12 @@
-//! The `@rumu:/cards` part of the `@rumu` workspace: read/write/edit on the
-//! cards of the branch's mounted decks, with read-before-write (CAS) backed
-//! by git history.
+//! The `@rumu:/cards` part of the `@rumu` workspace: read/write/edit/delete
+//! on the cards of the branch's mounted decks, with read-before-write (CAS)
+//! backed by git history.
 
 use async_trait::async_trait;
 use rumu_cards::deck::Action;
 use rumu_cards::usage::CardOp;
 use rumu_cards::{Cards, card, usage};
-use rumu_core::{Cx, Effect, ToolError, ToolOutput, ToolResult};
+use rumu_core::{Content, Cx, Effect, RUMU_WORKSPACE, ToolError, ToolOutput, ToolResult};
 use serde_json::json;
 
 use super::WorkspacePlugin;
@@ -101,6 +101,10 @@ impl Node for Card {
             if n == 1 { "" } else { "s" }
         );
         Ok(out)
+    }
+
+    async fn delete(&self, at: &At<'_>) -> Out {
+        at.p.card_delete(Self::path(at), at.cx).await
     }
 
     async fn search(&self, at: &At<'_>, query: &str, limit: Option<usize>) -> Out {
@@ -435,6 +439,73 @@ impl WorkspacePlugin {
             text.push_str(&link_warnings(&mounted.deck, &content_path, &new_card.body));
         }
         Ok(ToolOutput::ok(text).with_data(&patch).with_effect(effect))
+    }
+
+    /// Delete a card. A pinned card (a deck's charter, an assistant's
+    /// instructions) is the user's to delete; any other must have been read
+    /// in its current version first, except a link, which holds nothing to
+    /// lose. Writing another deck's cards needs the same approval.
+    pub(super) async fn card_delete(&self, public: &str, cx: &Cx) -> ToolResult<ToolOutput> {
+        let cards = self.cards(cx)?;
+        let state = cx.state()?;
+        if let Some(err) = invalid_card_ref(&cards, public) {
+            return Err(err);
+        }
+        let shown = rumu_cards::card_uri(public);
+        let Some(existing) = cards.raw(public).map_err(|e| card_load_err(public, e))? else {
+            return Err(no_card_err(public, &[]));
+        };
+        if existing.pinned() {
+            return Err(ToolError::model(format!(
+                "card `{shown}` is pinned (a deck's charter or an assistant's instructions); the \
+                 user deletes pinned cards in the web UI"
+            )));
+        }
+        if existing.link().is_none()
+            && let Some(err) = self.ensure_fresh_read(&cards, public, &existing, cx)
+        {
+            return Err(err);
+        }
+        let (deck, path) = cards
+            .split(public)
+            .map(|(m, p)| (m.deck.id().to_owned(), p.to_owned()))
+            .unwrap_or_default();
+        let view = card::view_of(&existing);
+        let request = json!({
+            "kind": "card_delete",
+            "from": deck_name(self.decks(), &state.assistant),
+            "from_id": state.assistant,
+            "deck": deck_name(self.decks(), &deck),
+            "deck_id": deck,
+            "path": public,
+            "content": view,
+        });
+        if !approve(self.decks(), cx, Action::Write, &deck, request)
+            .await
+            .map_err(|e| ToolError::model(format!("delete: {e}")))?
+        {
+            return Err(ToolError::model(format!(
+                "the user declined deleting `{shown}` from deck `{}`",
+                deck_name(self.decks(), &deck)
+            )));
+        }
+        // Checked against the version read; the store re-checks it under its
+        // write lock, after any wait for the user's approval.
+        let base = card::view_rev_of(&view);
+        cards
+            .remove(public, Some(&base), &author_of(cx, self.decks()))
+            .map_err(|e| ToolError::model(format!("delete failed: {e}")))?;
+        // Seen as deleted: the branch gets no "was deleted" notice for it.
+        let seen = Content::marker(&usage::CardUpdate {
+            deck,
+            path,
+            rev: "deleted".into(),
+        });
+        Ok(ToolOutput::ok(format!(
+            "deleted cards/{public}.md (its versions stay in `{RUMU_WORKSPACE}:/history/cards/{public}`)"
+        ))
+        .with_data(&patch::delete(Some(view)).await)
+        .with_effect(seen))
     }
 
     /// Read-before-write concurrency: the latest `card_use` for the card's

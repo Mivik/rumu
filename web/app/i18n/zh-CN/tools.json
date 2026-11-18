@@ -8,6 +8,7 @@
     "read": "读取",
     "write": "写入",
     "edit": "编辑",
+    "delete": "删除",
     "readCard": "读取",
     "writeCard": "写入",
     "editCard": "编辑",
@@ -37,6 +38,7 @@
   },
   "edit": {
     "created": "新文件",
+    "deleted": "已删除",
     "hunks": "{count} 处"
   },
   "thought": {

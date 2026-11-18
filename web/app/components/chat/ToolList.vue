@@ -66,7 +66,7 @@ function bodyOf(v: ToolRowView): 'diff' | 'file' | 'bash' | null {
   if (!v.row.call) return null
   if (v.name === 'bash') return 'bash'
   if (v.status !== 'ok') return null
-  if (v.name === 'write' || v.name === 'edit') return 'diff'
+  if (v.name === 'write' || v.name === 'edit' || v.name === 'delete') return 'diff'
   if (v.name === 'read' && !v.attachments.length) return 'file'
   return null
 }
@@ -134,7 +134,10 @@ function liveTaskOutput(id: string | null): string {
           v.callText
         }}</span>
         <span v-if="v.diff" class="max-w-[40%] flex-none truncate text-micro text-ink-3">
-          · <span class="font-medium text-pine">+{{ v.diff.added }}</span>
+          ·
+          <span v-if="v.diff.added || !v.diff.removed" class="font-medium text-pine"
+            >+{{ v.diff.added }}</span
+          >
           <span v-if="v.diff.removed" class="font-medium text-danger">−{{ v.diff.removed }}</span>
         </span>
         <span

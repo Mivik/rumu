@@ -78,6 +78,7 @@ fn tool_kind(kind: Kind) -> ToolKind {
     match kind {
         Kind::Read => ToolKind::Read,
         Kind::Edit => ToolKind::Edit,
+        Kind::Delete => ToolKind::Delete,
         Kind::Execute => ToolKind::Execute,
         Kind::Search => ToolKind::Search,
         Kind::Other => ToolKind::Other,

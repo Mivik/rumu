@@ -118,6 +118,12 @@ const view = computed<RequestView | null>(() => {
         detail: `${r.path} → ${r.target}`,
         hint: t('chat.ask.linkHint', { path: r.path, target: r.target }),
       }
+    case 'card_delete':
+      return {
+        title: t('chat.ask.deleteTitle', { from: r.from, deck: r.deck }),
+        detail: r.content,
+        hint: t('chat.ask.deleteHint', { path: r.path }),
+      }
     case 'project_create':
       return {
         title: t('chat.ask.projectCreateTitle', { from: r.from, name: r.name }),
@@ -131,6 +137,12 @@ const view = computed<RequestView | null>(() => {
         hint: null,
         before: r.before,
         after: r.after,
+      }
+    case 'workspace_delete':
+      return {
+        title: t('chat.ask.workspaceDeleteTitle', { from: r.from, name: r.name }),
+        detail: r.before,
+        hint: t('chat.ask.workspaceDeleteHint'),
       }
   }
 })

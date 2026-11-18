@@ -5,8 +5,9 @@
 //! - `@rumu:/project/workspaces` is the session's project's ordered workspace
 //!   list (the first is its default), read-before-write like a card.
 //!
-//! Creating a registry entry needs no approval; changing an existing one asks
-//! the user (`workspace`), since other projects may mount it.
+//! Creating a registry entry needs no approval; changing or deleting an
+//! existing one asks the user (`workspace`), since other projects may mount
+//! it.
 
 use async_trait::async_trait;
 use rumu_cards::deck::Action;
@@ -17,7 +18,9 @@ use serde::{Deserialize, Serialize};
 use serde_json::json;
 
 use crate::approve::{approve, deck_name};
-use crate::workspaces::{entry_yaml, parse_entry, set_project_workspaces, upsert_workspace};
+use crate::workspaces::{
+    entry_yaml, parse_entry, remove_workspace, set_project_workspaces, upsert_workspace,
+};
 
 use super::WorkspacePlugin;
 use super::tools::replace_occurrences;
@@ -96,6 +99,10 @@ impl Node for Entry {
             out.content.text = edited(at.abs, n);
         }
         Ok(out)
+    }
+
+    async fn delete(&self, at: &At<'_>) -> Out {
+        at.p.entry_delete(at.state, at.param("name"), at.cx).await
     }
 }
 
@@ -239,6 +246,35 @@ impl WorkspacePlugin {
         upsert_workspace(&self.home, &self.workspaces, ws)
             .map_err(|e| ToolError::model(e.to_string()))?;
         Ok(ToolOutput::ok(format!("wrote `@rumu:/workspaces/{name}`")))
+    }
+
+    /// Remove one registry entry, and from every project mounting it (what
+    /// the web's `workspace.delete` does), with the user's approval.
+    async fn entry_delete(&self, state: &PathState, name: &str, cx: &Cx) -> Out {
+        let Some(current) = self.workspaces.get(name) else {
+            return Err(no_workspace(name));
+        };
+        let before = entry_yaml(&current).map_err(|e| ToolError::model(e.to_string()))?;
+        let request = json!({
+            "kind": "workspace_delete",
+            "from": deck_name(self.decks(), &state.assistant),
+            "from_id": state.assistant,
+            "name": name,
+            "before": before,
+        });
+        if !approve(self.decks(), cx, Action::Workspace, name, request)
+            .await
+            .map_err(|e| ToolError::model(format!("workspace: {e}")))?
+        {
+            return Err(ToolError::model(format!(
+                "the user declined to delete workspace `{name}`"
+            )));
+        }
+        remove_workspace(&self.home, &self.workspaces, name)
+            .map_err(|e| ToolError::model(e.to_string()))?;
+        Ok(ToolOutput::ok(format!(
+            "deleted `@rumu:/workspaces/{name}`; no project mounts it any more"
+        )))
     }
 
     /// Replace the project's list, after the read-before-write check.

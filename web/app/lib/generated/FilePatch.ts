@@ -4,10 +4,10 @@ import type { Hunk } from "./Hunk";
 import type { PatchKind } from "./PatchKind";
 
 /**
- * Payload of the `workspace.file_patch` marker (v1) on real-workspace
- * `write`/`edit` results. `hunks` is `None` for a create (the UI renders
- * the call's `content`) and for an update whose diff was dropped: over the
- * size cap, or against a non-UTF-8 previous version.
+ * Payload of the `workspace.file_patch` marker (v1) on `write`/`edit`/
+ * `delete` results. `hunks` is `None` for a create (the UI renders the
+ * call's `content`) and for an update or delete whose diff was dropped:
+ * over the size cap, or of a non-UTF-8 file.
  */
 export type FilePatch = { kind: PatchKind, hunks?: Array<Hunk> | null, 
 /**

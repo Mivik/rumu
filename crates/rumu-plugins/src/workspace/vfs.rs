@@ -92,8 +92,8 @@ impl At<'_> {
 }
 
 /// What an `@rumu` path serves. Every node lists, and reads as its listing
-/// unless it says otherwise; writing and searching are refused unless the
-/// node serves them.
+/// unless it says otherwise; writing, deleting and searching are refused
+/// unless the node serves them.
 #[async_trait]
 pub(super) trait Node: Send + Sync {
     async fn list(&self, at: &At<'_>) -> Out;
@@ -118,11 +118,21 @@ pub(super) trait Node: Send + Sync {
         Err(self.refuse(at.abs, "edit"))
     }
 
+    async fn delete(&self, at: &At<'_>) -> Out {
+        if self.holds_files() {
+            return Err(self.refuse(at.abs, "delete"));
+        }
+        Err(ToolError::model(format!(
+            "`{RUMU_WORKSPACE}:{}` cannot be deleted",
+            at.abs
+        )))
+    }
+
     async fn search(&self, _at: &At<'_>, _query: &str, _limit: Option<usize>) -> Out {
         Err(bad_scope())
     }
 
-    /// The refusal of a write or edit here.
+    /// The refusal of a write, edit or delete here.
     fn refuse(&self, abs: &Utf8UnixPath, verb: &str) -> ToolError {
         if self.holds_files() {
             return ToolError::model(format!(

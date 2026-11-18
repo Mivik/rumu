@@ -205,6 +205,13 @@ struct ListArgs {
 
 #[derive(Debug, Deserialize, JsonSchema)]
 #[serde(deny_unknown_fields)]
+struct DeleteArgs {
+    /// `<workspace>:<path>`, or a path in the default workspace
+    path: String,
+}
+
+#[derive(Debug, Deserialize, JsonSchema)]
+#[serde(deny_unknown_fields)]
 struct BashArgs {
     /// shell snippet
     command: String,
@@ -307,6 +314,18 @@ and on multiple matches unless `replace_all`; rejected on read-only \
 workspaces."
                     .into(),
                 schema: tool_schema::<EditArgs>(),
+                background: false,
+                output_schema: None,
+                parallel: false,
+            },
+            ToolSpec {
+                name: "delete".into(),
+                description: "Delete a file (not a directory: use `bash` for those; \
+rejected on read-only workspaces), a card (read it first; pinned cards are the user's to \
+delete) or an `@rumu:/workspaces/<name>` entry (asks the user). Same `path` addressing as \
+`read`; a rewind restores a deleted file."
+                    .into(),
+                schema: tool_schema::<DeleteArgs>(),
                 background: false,
                 output_schema: None,
                 parallel: false,
@@ -679,6 +698,7 @@ pub(super) async fn call(
         "read" => p.tool_read(state, &args, cx).await.finish(),
         "write" => p.tool_write(state, &args, cx).await.finish(),
         "edit" => p.tool_edit(state, &args, cx).await.finish(),
+        "delete" => p.tool_delete(state, &args, cx).await.finish(),
         "list" => p.tool_list(state, &args, cx).await.finish(),
         "bash" => p.tool_bash(state, &args, cx).await.finish(),
         "workspace_use" => p.tool_use(state, &args, cx).await.finish(),
@@ -910,6 +930,56 @@ impl WorkspacePlugin {
                 node.edit(&at, &args.old_string, &args.new_string, all)
                     .await
             }
+        }
+    }
+
+    /// `delete`: a file (its content kept in the patch, so a rewind can put
+    /// it back), or whatever `@rumu` node serves deleting.
+    async fn tool_delete(
+        &self,
+        state: &PathState,
+        args: &Value,
+        cx: &Cx,
+    ) -> ToolResult<ToolOutput> {
+        let args: DeleteArgs = parse_args("delete", args)?;
+        let (ws, abs) = match target_of(state, &args.path)? {
+            Target::Real { ws, abs } => (ws, abs),
+            Target::Rumu { abs } => {
+                let (node, at) = self.route(&abs, state, cx)?;
+                return node.delete(&at).await;
+            }
+        };
+        let effects = self.maybe_inject_agents(cx, &ws).await;
+        let shown = display(&ws, &abs);
+        let result = async {
+            if ws.read_only {
+                return Err(read_only_err(&ws, "deletes are refused"));
+            }
+            let backend = self.backend_for(&ws);
+            let old = match backend.read_bytes(&abs).await {
+                Ok(bytes) => String::from_utf8(bytes).ok(),
+                Err(e) if is_not_found(&e) => {
+                    return Err(ToolError::model(format!("delete {shown}: no such file")));
+                }
+                Err(_) if backend.list_dir(&abs).await.is_ok() => {
+                    return Err(ToolError::model(format!(
+                        "delete {shown}: is a directory; `delete` removes files only, use bash \
+                         for a directory"
+                    )));
+                }
+                Err(e) => return Err(backend_err("delete", Some(shown.clone()), e)),
+            };
+            let patch = patch::delete(old).await;
+            backend
+                .remove_file(&abs)
+                .await
+                .map_err(|e| backend_err("delete", Some(shown.clone()), e))?;
+            Ok(ToolOutput::ok(format!("deleted {shown}")).with_data(&patch.at(&ws, &abs)))
+        }
+        .await;
+        match result {
+            Ok(out) => Ok(out.with_effects(effects)),
+            Err(e) => Err(e.with_effects(effects)),
         }
     }
 

@@ -204,13 +204,13 @@ An assistant acting on a deck other than its own asks the user first
 (`decision.requested`), unless a grant already covers it. There are five
 actions:
 
-| action   | what                                    | granted up front by                    |
-|----------|-----------------------------------------|----------------------------------------|
-| `mount`  | mount the deck (makes it readable)      | an entry in its `deck.yaml` mounts     |
-| `write`  | write, move into or out of its cards    | a `deck.yaml` mount with `write: true` |
-| `ask`    | ask the assistant deck a question       | `allow_ask` in the asked deck          |
-| `link`   | link one of its cards from another deck | nothing                                |
-| `create` | create a [project](projects.md) deck    | nothing                                |
+| action   | what                                            | granted up front by                    |
+|----------|-------------------------------------------------|----------------------------------------|
+| `mount`  | mount the deck (makes it readable)              | an entry in its `deck.yaml` mounts     |
+| `write`  | write, move into or out of, or delete its cards | a `deck.yaml` mount with `write: true` |
+| `ask`    | ask the assistant deck a question               | `allow_ask` in the asked deck          |
+| `link`   | link one of its cards from another deck         | nothing                                |
+| `create` | create a [project](projects.md) deck            | nothing                                |
 
 - An assistant may do anything with its own deck and with the session's
   project deck.
@@ -242,6 +242,9 @@ actions:
   - The destination must not exist.
   - `from` must pass the read check.
   - Moving across decks needs the `write` approval of both decks.
+- **Delete.** `delete` removes a card, after the same read check (a link,
+  holding only its target, needs none). Pinned cards are deleted by the user,
+  in the web UI. The card's versions stay in its history.
 - `deck.yaml` is never written by the model.
 
 ## History

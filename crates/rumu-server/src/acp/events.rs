@@ -46,6 +46,7 @@ pub(super) enum Event {
 pub(super) enum Kind {
     Read,
     Edit,
+    Delete,
     Execute,
     Search,
     Other,
@@ -276,6 +277,7 @@ fn kind(tool: &str) -> Kind {
     match tool {
         "read" => Kind::Read,
         "write" | "edit" => Kind::Edit,
+        "delete" => Kind::Delete,
         "bash" => Kind::Execute,
         "search" | "list" => Kind::Search,
         _ => Kind::Other,
@@ -302,6 +304,7 @@ fn title(call: &ToolCall) -> String {
         "read" => format!("Read {}", arg("path")),
         "write" => format!("Write {}", arg("path")),
         "edit" => format!("Edit {}", arg("path")),
+        "delete" => format!("Delete {}", arg("path")),
         "list" => format!("List {}", arg("path")),
         "show" => format!("Show {}", arg("path")),
         "search" => format!("Search {}", line(arg("query"))),
@@ -319,10 +322,11 @@ struct FilePatch {
     hunks: Option<Vec<Hunk>>,
 }
 
-/// What a `write`/`edit` did to `path`: its hunks, else what the call itself
-/// says (a created file's content, an edit's strings).
+/// What a `write`/`edit`/`delete` did to `path`: its hunks (a delete's as
+/// emptying the file), else what the call itself says (a created file's
+/// content, an edit's strings).
 fn diffs(call: &ToolCall, path: PathBuf, data: Option<&rumu_core::Tagged>) -> Vec<FileDiff> {
-    if !matches!(call.name.as_str(), "write" | "edit") {
+    if !matches!(call.name.as_str(), "write" | "edit" | "delete") {
         return vec![];
     }
     let Some(patch) = data

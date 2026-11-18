@@ -1,5 +1,5 @@
 <script setup lang="ts">
-// The Claude-Code-style diff of an expanded write/edit row: two line-number
+// The Claude-Code-style diff of an expanded write/edit/delete row: two line-number
 // gutters, a sign column, the code highlighted per line in the file's
 // language. Renders the result's FilePatch hunks; without them it falls
 // back to the call's own strings — a legacy edit diffed in the browser (no
@@ -67,9 +67,11 @@ const rows = computed<Row[]>(() => {
     }
     return out
   }
-  // An update whose hunks were dropped (too big to diff) shows a note; a
-  // legacy result falls back to its args — an edit's strings, a content.
-  if (props.patch?.kind === 'update') return [{ kind: 'note', text: t('tools.diff.unavailable') }]
+  // An update or delete whose hunks were dropped (too big to diff, not
+  // text) shows a note; a legacy result falls back to its args — an edit's
+  // strings, a content.
+  if (props.patch?.kind === 'update' || props.patch?.kind === 'delete')
+    return [{ kind: 'note', text: t('tools.diff.unavailable') }]
   if (strArg('old_string') || strArg('new_string')) {
     return diffLines(strArg('old_string'), strArg('new_string')).map((l) => line(l.sign, l.text, null, null))
   }

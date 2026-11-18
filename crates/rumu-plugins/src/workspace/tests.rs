@@ -488,6 +488,112 @@ async fn revert_undoes_the_recorded_writes() {
     assert_eq!(again.files[0].action, RevertAction::Changed);
 }
 
+/// `delete` removes files only, keeping the content in its patch, and a
+/// revert puts the file back; read-only workspaces refuse it.
+#[tokio::test]
+async fn delete_removes_files_and_a_revert_restores_them() {
+    let dir = tempfile::tempdir().unwrap();
+    std::fs::write(dir.path().join("a.txt"), "a1\na2\n").unwrap();
+    std::fs::create_dir(dir.path().join("d")).unwrap();
+    let (plugin, host, cx, _home) = setup(dir.path(), false);
+    let args = json!({ "path": "a.txt" });
+
+    let deleted = plugin.call_tool("delete", args.clone(), &cx).await.unwrap();
+    assert!(!deleted.is_error, "{}", deleted.content.text);
+    assert!(
+        deleted.content.text.starts_with("deleted "),
+        "{}",
+        deleted.content.text
+    );
+    assert!(!dir.path().join("a.txt").exists());
+    let patch = deleted.content.decode::<patch::FilePatch>().unwrap();
+    assert_eq!(patch.kind, patch::PatchKind::Delete);
+    assert!(patch.file.is_some());
+    let removed: Vec<&str> = patch.hunks.as_ref().unwrap()[0]
+        .lines
+        .iter()
+        .map(String::as_str)
+        .collect();
+    assert_eq!(removed, ["-a1", "-a2"]);
+
+    let again = plugin.call_tool("delete", args.clone(), &cx).await.unwrap();
+    assert!(again.is_error && again.content.text.contains("no such file"));
+    let out = plugin
+        .call_tool("delete", json!({ "path": "d" }), &cx)
+        .await
+        .unwrap();
+    assert!(
+        out.is_error && out.content.text.contains("is a directory"),
+        "{}",
+        out.content.text
+    );
+    assert!(dir.path().join("d").is_dir());
+
+    let call = rumu_core::ToolCall::new("d1", "delete", args);
+    let nodes = vec![
+        sess_node(
+            "s",
+            "u",
+            None,
+            1,
+            NodeBody::User {
+                content: "go".into(),
+            },
+        ),
+        sess_node(
+            "s",
+            "a",
+            Some("u"),
+            2,
+            NodeBody::Assistant {
+                content: "".into(),
+                reasoning: vec![],
+                stats: Default::default(),
+                reasoning_reset: false,
+                tool_calls: vec![call],
+                model: "m".into(),
+                usage: Default::default(),
+            },
+        ),
+        sess_node(
+            "s",
+            "r",
+            None,
+            3,
+            NodeBody::ToolResult {
+                call_id: "d1".into(),
+                content: deleted.content,
+                is_error: false,
+                invoke: None,
+            },
+        ),
+    ];
+    let state = host.state.lock().unwrap().clone();
+    let plan = revert_plan(&state, &nodes).await;
+    assert_eq!(plan.files.len(), 1);
+    assert_eq!(plan.files[0].action, RevertAction::Restore);
+    let every = [rumu_core::FileRef {
+        ws: plan.files[0].ws.clone(),
+        path: plan.files[0].path.clone(),
+    }];
+    let (_, done) = revert_files(&state, &nodes, &every).await;
+    assert!(done.iter().all(|f| f.error.is_none()), "{done:?}");
+    assert_eq!(
+        std::fs::read_to_string(dir.path().join("a.txt")).unwrap(),
+        "a1\na2\n"
+    );
+
+    let ro = tempfile::tempdir().unwrap();
+    std::fs::write(ro.path().join("k.txt"), "keep\n").unwrap();
+    let (plugin, _host, cx, _home) = setup(ro.path(), true);
+    let out = plugin
+        .call_tool("delete", json!({ "path": "k.txt" }), &cx)
+        .await
+        .unwrap();
+    assert!(out.is_error && out.content.text.contains("read-only"));
+    assert!(ro.path().join("k.txt").exists());
+}
+
 #[tokio::test]
 async fn read_write_edit_list_roundtrip() {
     let dir = tempfile::tempdir().unwrap();
@@ -4206,6 +4312,142 @@ async fn writes_to_other_decks_need_approval() {
     assert_eq!(host.decisions.lock().unwrap().len(), asked);
 }
 
+/// Deleting a card: read first, pinned ones refused, links free; another
+/// deck's card asks like a write; the branch is not told of its own delete.
+#[tokio::test]
+async fn cards_are_deleted_after_a_read() {
+    let home = card_home();
+    crate::testutil::create_deck(home.path(), "user", None, &[]);
+    crate::testutil::put_card(home.path(), "main", "n", "note\n");
+    crate::testutil::put_card(
+        home.path(),
+        "main",
+        "about",
+        "---\npinned: true\n---\ncharter\n",
+    );
+    crate::testutil::put_card(home.path(), "user", "u", "user fact\n");
+    let (plugin, host, _cx) = card_plugin_for(home.path());
+    let user = plugin
+        .decks()
+        .list()
+        .into_iter()
+        .find(|d| d.meta.name == "user")
+        .unwrap()
+        .id()
+        .to_owned();
+    host.state
+        .lock()
+        .unwrap()
+        .mounts
+        .push(rumu_core::CardMount {
+            deck: user,
+            at: "/cards/user".into(),
+        });
+    let cx = host.cx();
+    let delete = |path: &str| json!({ "path": path });
+
+    // Not read yet: refused.
+    let out = plugin
+        .call_tool("delete", delete("@rumu:/cards/self/n"), &cx)
+        .await
+        .unwrap();
+    assert!(
+        out.is_error && out.content.text.contains("read it first"),
+        "{}",
+        out.content.text
+    );
+    let read = plugin
+        .call_tool("read", json!({ "path": "@rumu:/cards/self/n" }), &cx)
+        .await
+        .unwrap();
+    flush_output(&host, "call-1", &read);
+    let out = plugin
+        .call_tool("delete", delete("@rumu:/cards/self/n.md"), &cx)
+        .await
+        .unwrap();
+    assert!(!out.is_error, "{}", out.content.text);
+    assert!(crate::testutil::card_text(home.path(), "main", "n").is_none());
+    let patch = out.content.decode::<patch::FilePatch>().unwrap();
+    assert_eq!(patch.kind, patch::PatchKind::Delete);
+    assert!(patch.file.is_none());
+    assert!(host.decisions.lock().unwrap().is_empty());
+    // Its own delete is seen: no "was deleted" notice follows.
+    flush_output(&host, "call-1", &out);
+    let seen = host.cx().index().unwrap().all::<usage::CardUpdate>();
+    assert!(
+        seen.iter()
+            .any(|e| e.value.path == "n" && e.value.rev == "deleted")
+    );
+
+    // Pinned cards are the user's.
+    let out = plugin
+        .call_tool("delete", delete("@rumu:/cards/self/about"), &cx)
+        .await
+        .unwrap();
+    assert!(
+        out.is_error && out.content.text.contains("pinned"),
+        "{}",
+        out.content.text
+    );
+
+    // A link holds nothing to lose: deleted without a read.
+    let out = plugin
+        .call_tool(
+            "write",
+            json!({ "path": "@rumu:/cards/self/l", "content": "---\nlink: @rumu:/cards/self/about\n---\n" }),
+            &cx,
+        )
+        .await
+        .unwrap();
+    assert!(!out.is_error, "{}", out.content.text);
+    let out = plugin
+        .call_tool("delete", delete("@rumu:/cards/self/l"), &cx)
+        .await
+        .unwrap();
+    assert!(!out.is_error, "{}", out.content.text);
+    assert!(crate::testutil::card_text(home.path(), "main", "l").is_none());
+
+    // Another deck's card asks; declined, it stays.
+    let read = plugin
+        .call_tool("read", json!({ "path": "@rumu:/cards/user/u" }), &cx)
+        .await
+        .unwrap();
+    flush_output(&host, "call-1", &read);
+    host.answers
+        .lock()
+        .unwrap()
+        .push_back(json!({ "allow": false }));
+    let out = plugin
+        .call_tool("delete", delete("@rumu:/cards/user/u"), &cx)
+        .await
+        .unwrap();
+    assert!(
+        out.is_error && out.content.text.contains("declined"),
+        "{}",
+        out.content.text
+    );
+    let request = host.decisions.lock().unwrap().last().cloned().unwrap();
+    assert_eq!(request["kind"], "card_delete");
+    assert_eq!(request["content"], "user fact\n");
+    assert!(crate::testutil::card_text(home.path(), "user", "u").is_some());
+
+    // Directories and other roots are refused.
+    let out = plugin
+        .call_tool("delete", delete("@rumu:/cards"), &cx)
+        .await
+        .unwrap();
+    assert!(out.is_error && out.content.text.contains("is a directory"));
+    let out = plugin
+        .call_tool("delete", delete("@rumu:/sessions"), &cx)
+        .await
+        .unwrap();
+    assert!(
+        out.is_error && out.content.text.contains("cannot be deleted"),
+        "{}",
+        out.content.text
+    );
+}
+
 /// Card paths cannot leave their deck, and a move out of another deck needs
 /// the user's approval.
 #[tokio::test]
@@ -4777,6 +5019,56 @@ async fn workspace_registry_reads_and_writes() {
         .await
         .unwrap();
     assert!(out.is_error, "{}", out.content.text);
+}
+
+/// Deleting a registry entry asks the user and unmounts it everywhere, as
+/// the web's `workspace.delete` does.
+#[tokio::test]
+async fn workspace_entries_are_deleted_with_approval() {
+    let (_home, plugin, host, cx, registry) = project_setup();
+    host.answers
+        .lock()
+        .unwrap()
+        .push_back(json!({ "allow": false }));
+    let args = json!({ "path": "@rumu:/workspaces/proj" });
+    let out = plugin.call_tool("delete", args.clone(), &cx).await.unwrap();
+    assert!(
+        out.is_error && out.content.text.contains("declined"),
+        "{}",
+        out.content.text
+    );
+    assert!(registry.get("proj").is_some());
+    let request = host.decisions.lock().unwrap().last().cloned().unwrap();
+    assert_eq!(request["kind"], "workspace_delete");
+    assert!(request["before"].as_str().unwrap().contains("root:"));
+
+    host.answers
+        .lock()
+        .unwrap()
+        .push_back(json!({ "allow": true }));
+    let out = plugin.call_tool("delete", args, &cx).await.unwrap();
+    assert!(!out.is_error, "{}", out.content.text);
+    assert!(registry.get("proj").is_none());
+    assert_eq!(registry.project(PROJECT_ID), ["app"]);
+
+    let out = plugin
+        .call_tool("delete", json!({ "path": "@rumu:/workspaces/nope" }), &cx)
+        .await
+        .unwrap();
+    assert!(out.is_error, "{}", out.content.text);
+    let out = plugin
+        .call_tool(
+            "delete",
+            json!({ "path": "@rumu:/project/workspaces" }),
+            &cx,
+        )
+        .await
+        .unwrap();
+    assert!(
+        out.is_error && out.content.text.contains("cannot be deleted"),
+        "{}",
+        out.content.text
+    );
 }
 
 #[tokio::test]

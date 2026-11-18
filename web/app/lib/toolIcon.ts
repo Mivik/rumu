@@ -7,6 +7,7 @@ const ICONS: Record<string, string> = {
   read: 'read',
   write: 'write',
   edit: 'edit',
+  delete: 'trash',
   list: 'list',
   bash: 'bash',
   show: 'artifact',

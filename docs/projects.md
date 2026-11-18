@@ -112,7 +112,8 @@ stays a tool. Which set a workspace is in shows in its path, not in a field:
   ```
 
   A local `root` must be an existing directory. Changing an existing entry
-  asks the user (`workspace`), since other projects may mount it.
+  asks the user (`workspace`), since other projects may mount it, and so does
+  `delete`, which also unmounts it from every project.
 - `@rumu:/project/workspaces` is an ordered YAML list of registered names,
   the first being the project's default. Writing it mounts, unmounts and
   reorders. Like a card, it must be read before it is written, so two
@@ -134,6 +135,7 @@ stays a tool. Which set a workspace is in shows in its path, not in a field:
 |-----------------------------------------------|---------------------|
 | register a workspace                          | none                |
 | change a registered workspace                 | `workspace`         |
+| delete a registered workspace                 | `workspace`         |
 | mount, unmount or reorder the project's ones  | none                |
 | write the session's project deck              | none                |
 | leave the project                             | none                |
@@ -144,8 +146,7 @@ stays a tool. Which set a workspace is in shows in its path, not in a field:
   [Approvals](decks.md#approvals). "Always allow" is stored by target:
   `{ "workspace": { <assistant deck id>: [<workspace name>, …] } }`, and
   `create`, which has none, with `*`.
-- Deleting a workspace and mounting workspaces in another project are the
-  user's, in the web UI.
+- Mounting workspaces in another project is the user's, in the web UI.
 
 ## Web UI
 

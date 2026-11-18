@@ -194,9 +194,11 @@ export type DecisionRequest =
   | QuestionsRequest
   | MountRequest
   | WriteRequest
+  | DeleteRequest
   | LinkRequest
   | ProjectCreateRequest
   | WorkspaceChangeRequest
+  | WorkspaceDeleteRequest
 
 /** How long an approval lasts. */
 export type DecisionScope = 'once' | 'session' | 'always'
@@ -267,6 +269,18 @@ export interface WriteRequest {
   content: string
 }
 
+/** Deleting a card of a deck that is not `from`'s own: `content` (its view)
+ * at `path`. */
+export interface DeleteRequest {
+  kind: 'card_delete'
+  from: string
+  from_id: string
+  deck: string
+  deck_id: string
+  path: string
+  content: string
+}
+
 /** A link into another deck: the card at `path` would share `target`. */
 export interface LinkRequest {
   kind: 'card_link'
@@ -294,6 +308,15 @@ export interface WorkspaceChangeRequest {
   name: string
   before: string
   after: string
+}
+
+/** A registered workspace entry would be deleted: `before` is its YAML. */
+export interface WorkspaceDeleteRequest {
+  kind: 'workspace_delete'
+  from: string
+  from_id: string
+  name: string
+  before: string
 }
 
 /** `decision.resolved` push: answered, or the turn was aborted. */

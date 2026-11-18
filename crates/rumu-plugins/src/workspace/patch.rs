@@ -1,9 +1,11 @@
-//! The structured patch `write`/`edit` results carry for the UI
+//! The structured patch `write`/`edit`/`delete` results carry for the UI
 //! (`ToolOutput::with_data`): Claude-Code-style hunks — unified-diff line
 //! prefixes, 3 lines of context — rendered by the web's FileDiff. The
 //! model-facing text is unchanged and no file content is stored: a `create`
 //! carries no hunks (the UI renders the call's own `content`), and an update
 //! past the caps below carries none either (the UI falls back to the args).
+//! A `delete` carries the removed content as all-removed hunks — the only
+//! record of it, so past the caps the file cannot be restored.
 //! A real-workspace patch also names the file it wrote ([`FilePatch::file`]),
 //! which is what lets [`super::revert`] undo it later.
 
@@ -14,10 +16,10 @@ use serde::{Deserialize, Serialize};
 /// Sides larger than this are not diffed (hunks dropped).
 const MAX_DIFF_BYTES: usize = 1 << 20;
 
-/// Payload of the `workspace.file_patch` marker (v1) on real-workspace
-/// `write`/`edit` results. `hunks` is `None` for a create (the UI renders
-/// the call's `content`) and for an update whose diff was dropped: over the
-/// size cap, or against a non-UTF-8 previous version.
+/// Payload of the `workspace.file_patch` marker (v1) on `write`/`edit`/
+/// `delete` results. `hunks` is `None` for a create (the UI renders the
+/// call's `content`) and for an update or delete whose diff was dropped:
+/// over the size cap, or of a non-UTF-8 file.
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, ts_rs::TS)]
 #[ts(export)]
 pub(crate) struct FilePatch {
@@ -47,6 +49,7 @@ impl FilePatch {
 pub enum PatchKind {
     Create,
     Update,
+    Delete,
 }
 
 impl Structured for FilePatch {
@@ -82,6 +85,23 @@ pub(crate) async fn update(old: String, new: String) -> FilePatch {
         .flatten();
     FilePatch {
         kind: PatchKind::Update,
+        hunks,
+        file: None,
+    }
+}
+
+/// The patch of deleting a file that held `old` (`None`: not UTF-8, so no
+/// hunks).
+pub(crate) async fn delete(old: Option<String>) -> FilePatch {
+    let hunks = match old {
+        Some(old) => tokio::task::spawn_blocking(move || hunks_of(&old, ""))
+            .await
+            .ok()
+            .flatten(),
+        None => None,
+    };
+    FilePatch {
+        kind: PatchKind::Delete,
         hunks,
         file: None,
     }

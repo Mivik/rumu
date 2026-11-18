@@ -18,10 +18,12 @@ use super::Rumu;
 const APPROVALS: &[&str] = &[
     "card_mount",
     "card_write",
+    "card_delete",
     "card_link",
     "ask",
     "project_create",
     "workspace_change",
+    "workspace_delete",
 ];
 
 /// Answer one `decision.requested` (`params`) of the ACP session `session`.
@@ -65,10 +67,16 @@ async fn approval(cx: &ConnectionTo<Client>, session: &str, call: &str, request:
     let title = match field("kind") {
         "card_mount" => format!("Mount deck `{}` at `{}`", field("deck"), field("at")),
         "card_write" => format!("Write card `{}` in deck `{}`", field("path"), field("deck")),
+        "card_delete" => format!(
+            "Delete card `{}` from deck `{}`",
+            field("path"),
+            field("deck")
+        ),
         "card_link" => format!("Link `{}` from deck `{}`", field("target"), field("to")),
         "ask" => format!("Hand a task to `{}`: {}", field("to"), field("task")),
         "project_create" => format!("Create project `{}`", field("name")),
         "workspace_change" => format!("Change workspace `{}`", field("name")),
+        "workspace_delete" => format!("Delete workspace `{}`", field("name")),
         kind => kind.to_owned(),
     };
     let options = vec![

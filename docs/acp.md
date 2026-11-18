@@ -47,11 +47,12 @@ once (the second one refuses to start). Logs go to stderr.
 - Reply and reasoning stream as `agent_message_chunk` /
   `agent_thought_chunk`.
 - Each tool call is a `tool_call`, with `kind` `read`, `edit` (`write`,
-  `edit`), `execute` (`bash`), `search` (`search`, `list`) or `other`, and
-  the local file it is about as its location. Output a running tool prints
-  updates its content (at most once a second, the last 8 KiB); its result
-  completes or fails it. A `write`/`edit` result carries its change as
-  diffs: one per hunk (with context), or the whole new file.
+  `edit`), `delete` (`delete`), `execute` (`bash`), `search` (`search`,
+  `list`) or `other`, and the local file it is about as its location. Output
+  a running tool prints updates its content (at most once a second, the last
+  8 KiB); its result completes or fails it. A `write`/`edit`/`delete` result
+  carries its change as diffs: one per hunk (with context), or the whole new
+  file (a deleted file's diff empties it).
 - A sub-agent is its `agent` tool call; the branch it runs on is in that
   call's `_meta.rumu.branch`. Its own steps are not shown.
 

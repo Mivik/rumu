@@ -49,8 +49,13 @@ const hunks = computed(() => props.view.patch?.hunks?.length ?? 0)
       <span v-if="view.patch?.kind === 'create'" class="flex-none text-micro text-ink-3">{{
         t('tools.edit.created')
       }}</span>
+      <span v-else-if="view.patch?.kind === 'delete'" class="flex-none text-micro text-ink-3">{{
+        t('tools.edit.deleted')
+      }}</span>
       <span v-if="view.diff" class="flex-none font-mono text-micro">
-        <span class="font-medium text-pine">+{{ view.diff.added }}</span>
+        <span v-if="view.diff.added || !view.diff.removed" class="font-medium text-pine"
+          >+{{ view.diff.added }}</span
+        >
         <span v-if="view.diff.removed" class="ml-1 font-medium text-danger">−{{ view.diff.removed }}</span>
       </span>
       <span v-if="hunks > 1" class="ml-auto flex-none text-micro text-ink-3">{{
