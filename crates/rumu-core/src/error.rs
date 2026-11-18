@@ -84,7 +84,10 @@ impl std::error::Error for IoError {
 #[derive(Debug, thiserror::Error)]
 pub enum Error {
     /// No default workspace is set and an unqualified path was given.
-    #[error("no default workspace is set — call `workspace_use()` to list workspaces and pick one")]
+    #[error(
+        "no default workspace is set — `list @rumu:/workspaces` lists them; `invoke` \
+         `workspace.use` on one to pick it"
+    )]
     NoDefaultWorkspace,
 
     /// A `<name>:<path>` qualifier names an unknown workspace.

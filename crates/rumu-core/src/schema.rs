@@ -25,8 +25,8 @@ pub fn tool_schema<T: JsonSchema>() -> Value {
 }
 
 /// Parse a tool's arguments into its `#[derive(Deserialize)]` struct. A
-/// failure names the tool, e.g. ``task_kill: invalid arguments: missing field
-/// `id` ``.
+/// failure names the tool, e.g. ``read: invalid arguments: missing field
+/// `path` ``.
 pub fn parse_args<T: DeserializeOwned>(tool: &str, args: &Value) -> ToolResult<T> {
     serde_json::from_value(args.clone())
         .map_err(|e| ToolError::model(format!("{tool}: invalid arguments: {e}")))

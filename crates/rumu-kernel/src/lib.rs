@@ -84,8 +84,8 @@ and report failures plainly.";
 pub const TASK_INSTRUCTIONS: &str = "Tools with a `background` argument may run as kernel tasks: \
 `background: true` returns a task id immediately, and a note with the result arrives when it \
 finishes — you are woken up for it, so to wait, just end your turn; don't poll. \
-`task_kill(id)` cancels a running task. `read @rumu:/tasks/<id>` shows a task's status and \
-buffered output so far (pass `offset`/`limit` to page through it).";
+`read @rumu:/tasks/<id>` shows a task's status and buffered output so far (pass `offset`/`limit` \
+to page through it); `invoke` `task.kill` on it cancels it.";
 
 /// The kernel's built-in `agent` tool spec (also offered to `code` scripts).
 pub fn agent_tool() -> ToolSpec {
@@ -107,20 +107,6 @@ model alias (`rumu/<name>`). Use for open-ended work whose details don't need to
         background: false,
         output_schema: None,
         parallel: true,
-    }
-}
-
-/// The kernel's built-in `task_kill` tool.
-pub fn task_kill_tool() -> ToolSpec {
-    ToolSpec {
-        name: "task_kill".into(),
-        description: "Cancel a running task owned by this branch (or one of its sub-agent \
-descendants) and return its final status."
-            .into(),
-        schema: tool_schema::<task::TaskKillArgs>(),
-        background: false,
-        output_schema: None,
-        parallel: false,
     }
 }
 
@@ -354,16 +340,13 @@ impl Kernel {
                 });
             }
         }
-        // The kernel owns `agent` and `task_kill`; they are not
-        // routed to a plugin. `delegate` is `agent`'s half for another
-        // assistant: routed, never listed.
+        // The kernel owns `agent`; it is not routed to a plugin.
+        // `delegate` is `agent`'s half for another assistant: routed,
+        // never listed.
         system.push_str("\n\n");
         system.push_str(TASK_INSTRUCTIONS);
-        tools.retain(|t| {
-            !matches!(t.name.as_str(), "agent" | "task_kill") && t.name != rumu_core::DELEGATE_TOOL
-        });
+        tools.retain(|t| t.name != "agent" && t.name != rumu_core::DELEGATE_TOOL);
         tools.push(agent_tool());
-        tools.push(task_kill_tool());
         // Advertise `background` only on tools that may run as a task.
         for t in &mut tools {
             if t.background

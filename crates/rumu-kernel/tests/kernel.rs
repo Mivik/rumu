@@ -343,6 +343,14 @@ impl Plugin for TestPlugin {
                     data: Some(Tagged { tag, v: 1, data }),
                 }));
             }
+            "kill" => {
+                // `task.kill` as the workspace plugin runs it.
+                let id = rumu_core::TaskId::from(args["id"].as_str().unwrap_or_default());
+                return Ok(match cx.kill_task(&id).await {
+                    Ok(info) => ToolOutput::ok(format!("task {id}: {}", info.status.label())),
+                    Err(e) => ToolOutput::err(e.to_string()),
+                });
+            }
             "probe_state" => {
                 // Reports the default workspace as plugins see it mid-batch.
                 let state = cx.state()?;
@@ -952,7 +960,7 @@ async fn tool_calling_turn_and_title() {
             .iter()
             .map(|t| t.name.as_str())
             .collect::<Vec<_>>(),
-        vec!["agent", "plus", "task_kill"]
+        vec!["agent", "plus"]
     );
     assert!(kernel.system_prompt().contains("You have the calc plugin."));
 }
@@ -4767,13 +4775,13 @@ async fn background_completion_while_busy_lands_at_next_safe_point() {
     );
 }
 
-/// `task_kill` cancels a running task and reports its status; the cancelled
-/// task still posts a completion note.
+/// `Cx::kill_task` cancels a running task and reports its status; the
+/// cancelled task still posts a completion note.
 #[tokio::test]
-async fn task_kill_cancels_and_reports_cancelled() {
+async fn kill_task_cancels_and_reports_cancelled() {
     let plugin = Arc::new(background_plugin(
         "bg",
-        &["bgwork"],
+        &["bgwork", "kill"],
         vec![],
         noop_hooks(),
         noop_tools(),
@@ -4786,11 +4794,7 @@ async fn task_kill_cancels_and_reports_cancelled() {
                 "bgwork",
                 json!({ "ms": 60_000, "background": true }),
             )]),
-            LlmResponse::calls(vec![ToolCall::new(
-                "c2",
-                "task_kill",
-                json!({ "id": "$task" }),
-            )]),
+            LlmResponse::calls(vec![ToolCall::new("c2", "kill", json!({ "id": "$task" }))]),
             LlmResponse::text("done"),
         ],
     )

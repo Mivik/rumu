@@ -42,6 +42,10 @@ pub enum Error {
     #[error("no task `{id}`")]
     TaskNotFound { id: TaskId },
 
+    /// The task belongs to neither the branch nor one of its sub-agents.
+    #[error("task `{id}` is not owned by this branch or its sub-agents")]
+    TaskNotOwned { id: TaskId },
+
     /// The parent branch has no assistant node containing the agent call.
     #[error("agent: no assistant node containing call `{call_id}` on branch {branch}")]
     AgentCallNotFound { call_id: String, branch: BranchId },

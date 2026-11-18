@@ -1,5 +1,5 @@
 //! Background tasks: kernel-owned, runtime-only table, completion via the
-//! inbox, and the built-in `task_kill` tool.
+//! inbox, and their cancellation (`task.kill`).
 //!
 //! A task is a plugin tool call or a sub-agent that runs detached from the
 //! turn that started it. The kernel keeps its status and an output buffer in
@@ -14,8 +14,8 @@ use std::time::{Duration, Instant};
 use crate::{Error, Kernel, PostRequest, Result, TASK_OUTPUT_LIMIT, turn::AgentRun};
 use rumu_core::{
     BranchId, Call, Content, Cx, Effect, Post, Progress, ProgressSink, RUMU_WORKSPACE,
-    SYSTEM_SOURCE, SessionId, TaskDone, TaskId, TaskInfo, TaskKind, TaskStatus, ToolError,
-    ToolOutput, ToolResult, now, parse_args, task_output_hint,
+    SYSTEM_SOURCE, SessionId, TaskDone, TaskId, TaskInfo, TaskKind, TaskStatus, ToolOutput, now,
+    task_output_hint,
 };
 use serde_json::{Value, json};
 use tokio_util::sync::CancellationToken;
@@ -190,10 +190,7 @@ impl Kernel {
             kernel.finish_task(&task_id, outcome).await;
         });
 
-        Ok(ToolOutput::ok(format!(
-            "started task {id} ({label}) — you will be notified when it finishes; \
-             use task_kill / read {RUMU_WORKSPACE}:/tasks/{id}"
-        )))
+        Ok(ToolOutput::ok(started(&id, &label)))
     }
 
     /// Start a sub-agent as a background task. The agent permit is acquired
@@ -245,10 +242,7 @@ impl Kernel {
             kernel.finish_task(&task_id, outcome).await;
         });
 
-        Ok(ToolOutput::ok(format!(
-            "started task {id} ({label}) — you will be notified when it finishes; \
-             use task_kill / read {RUMU_WORKSPACE}:/tasks/{id}"
-        )))
+        Ok(ToolOutput::ok(started(&id, &label)))
     }
 
     fn create_task(
@@ -617,43 +611,27 @@ impl Kernel {
             .is_ok_and(|set| set.contains(owner))
     }
 
-    // ---- built-in tools ----
-
-    /// `task_kill(id)` from a branch (ownership checked).
-    pub(crate) async fn tool_task_kill(
-        self: &Arc<Self>,
-        branch: &BranchId,
-        args: &Value,
-    ) -> ToolResult<ToolOutput> {
-        let args: TaskKillArgs = parse_args("task_kill", args)?;
-        let id = TaskId::from(args.id.as_str());
-        let Some((token, info)) = self.task_token(&id) else {
-            return Err(ToolError::model(format!("no task `{id}`")));
+    /// `task.kill` from a call on `branch` (`Cx::kill_task`): the same
+    /// cancellation as [`Kernel::kill_task`], for the branch's own tasks and
+    /// its sub-agents' only.
+    pub(crate) async fn kill_task_from(&self, branch: &BranchId, id: &TaskId) -> Result<TaskInfo> {
+        let Some((_, info)) = self.task_token(id) else {
+            return Err(Error::TaskNotFound { id: id.clone() });
         };
         if !self.owns_task(branch, &info.branch) {
-            return Err(ToolError::model(format!(
-                "task `{id}` is not owned by this branch or its sub-agents"
-            )));
+            return Err(Error::TaskNotOwned { id: id.clone() });
         }
-        if info.status.is_running() {
-            token.cancel();
-        }
-        let Some(final_info) = self.wait_final(&id, Duration::from_secs(5)).await else {
-            return Err(ToolError::model(format!("no task `{id}`")));
-        };
-        Ok(ToolOutput::ok(format!(
-            "task {id}: {}",
-            final_info.status.label()
-        )))
+        self.kill_task(id).await
     }
 }
 
-// `task_kill` arguments (also the source of its schema).
-#[derive(Debug, serde::Deserialize, schemars::JsonSchema)]
-#[serde(deny_unknown_fields)]
-pub(crate) struct TaskKillArgs {
-    /// task id, e.g. t-1a2b3c4d
-    id: String,
+/// The result of a call started as a task: its id, and how to follow it.
+fn started(id: &TaskId, label: &str) -> String {
+    format!(
+        "started task {id} ({label}) — you will be notified when it finishes; \
+         `read {RUMU_WORKSPACE}:/tasks/{id}` shows its output, `invoke` `task.kill` on it \
+         stops it"
+    )
 }
 /// Keep the last [`TASK_OUTPUT_LIMIT`] bytes, on a char boundary.
 fn trim_buffer(entry: &mut TaskEntry) {

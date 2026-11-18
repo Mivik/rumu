@@ -54,7 +54,7 @@ pub fn extract_fields(kind: &str, payload: &Value, state: &PathState) -> Fields 
                     Some("bash") => {
                         f.workspace = bash_target(args, state);
                     }
-                    // search / workspace_use / agent / code carry no
+                    // search / invoke / agent / code carry no
                     // workspace or paths.
                     _ => {}
                 }
@@ -295,8 +295,8 @@ mod tests {
             &st,
         );
         assert_eq!(f.workspace, None);
-        // `workspace_use` / `search` / `agent` extract nothing.
-        for tool in ["workspace_use", "search", "agent"] {
+        // `invoke` / `search` / `agent` extract nothing.
+        for tool in ["invoke", "search", "agent"] {
             let f = extract_fields(
                 "tool.pre",
                 &json!({ "name": tool, "args": { "query": "x", "goal": "g" } }),

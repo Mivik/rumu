@@ -14,9 +14,8 @@ use serde_json::Value;
 /// `tool.pre` dispatch, and the `code` plugin leaves it out of its API stub.
 ///
 /// `agent` is allowed: a script may fan out agents with `Promise.all`;
-/// they fork at the enclosing `code` call. `task_kill` manages kernel tasks,
-/// which scripts cannot start (they already have `Promise.all`).
-pub const CODE_DENIED_TOOLS: &[&str] = &["code", "task_kill"];
+/// they fork at the enclosing `code` call.
+pub const CODE_DENIED_TOOLS: &[&str] = &["code"];
 
 #[derive(Debug, Clone, Default, Serialize, Deserialize)]
 pub struct Manifest {
@@ -469,6 +468,10 @@ pub trait Runtime: History {
     ) -> Result<DelegationReply> {
         Err(Error::msg("this host cannot start sessions"))
     }
+    /// Cancel the task `id` if `branch` owns it (see [`Cx::kill_task`]).
+    async fn kill_task(&self, _branch: &BranchId, _id: &TaskId) -> Result<TaskInfo> {
+        Err(Error::msg("this host has no tasks"))
+    }
 }
 
 /// The plugin tool an `agent` call naming another `assistant` runs as. The
@@ -660,6 +663,13 @@ impl Cx {
     /// its final reply. Aborting this call aborts that session's turn.
     pub async fn delegate(&self, delegation: Delegation) -> Result<DelegationReply> {
         self.runtime.delegate(&self.branch, delegation).await
+    }
+
+    /// Cancel the background task `id` and return its final status. Only a
+    /// task of this branch or of one of its sub-agents may be cancelled; one
+    /// that already ended is reported as it ended.
+    pub async fn kill_task(&self, id: &TaskId) -> Result<TaskInfo> {
+        self.runtime.kill_task(&self.branch, id).await
     }
 
     /// Push a progress update for this tool call. A no-op outside a tool call.

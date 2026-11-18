@@ -77,6 +77,10 @@ impl Runtime for KernelRuntime {
         Ok(self.0.delegate(branch, delegation).await?)
     }
 
+    async fn kill_task(&self, branch: &BranchId, id: &TaskId) -> Result<TaskInfo> {
+        Ok(self.0.kill_task_from(branch, id).await?)
+    }
+
     fn cancel_invokes(&self, _branch: &BranchId, parent_call: &str) {
         let mut inner = self.0.inner.lock().unwrap();
         if let Some(token) = inner.inner_scope.get(parent_call) {

@@ -337,7 +337,7 @@ mod tests {
         let err = resolve("a.txt", &cat, None).unwrap_err();
         let err = err.to_string();
         assert!(err.contains("no default workspace"), "{err}");
-        assert!(err.contains("`workspace_use()`"), "{err}");
+        assert!(err.contains("`workspace.use`"), "{err}");
     }
 
     #[test]

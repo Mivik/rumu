@@ -10,8 +10,8 @@ use rumu_core::{
     Branch, BranchId, BranchKind, BranchStatus, CODE_DENIED_TOOLS, Call, CallStats, CompactReason,
     Content, Cx, DELEGATE_TOOL, Effort, FILE_PATCH_TAG, Inherit, InheritContext, InnerCall, Invoke,
     ModelPick, ModelUse, NodeBody, NodeId, Plugin, RUMU_WORKSPACE, SYSTEM_SOURCE, SessionId,
-    ToolCall, ToolError, ToolOutput, ToolResultExt, TurnError, WorkspaceSet, WorkspaceUse,
-    parse_args, truncate_output,
+    ToolCall, ToolError, ToolOutput, TurnError, WorkspaceSet, WorkspaceUse, parse_args,
+    truncate_output,
 };
 use schemars::JsonSchema;
 use serde::Deserialize;
@@ -712,13 +712,6 @@ impl Kernel {
                     // Scripts already have `Promise.all`; background tasks are
                     // a model-facing tool affordance.
                     ToolOutput::err("background is not available from a plugin invoke")
-                } else if name == "task_kill" {
-                    self.tool_task_kill(branch, &args)
-                        .await
-                        .finish()
-                        .unwrap_or_else(|e| {
-                            ToolOutput::err(format!("tool `task_kill` failed: {e}"))
-                        })
                 } else if name == "agent" {
                     // Kernel built-in (not routed to a plugin). The sub-agent
                     // owns its cancellation: the child branch's token is a
