@@ -181,6 +181,10 @@ pub enum Action {
     Create,
     /// Change a registered workspace (the target is its name).
     Workspace,
+    /// Change a deck's configuration (`deck.yaml`, its grants aside: those
+    /// always ask). Unlike the others, not implied for the assistant's own
+    /// deck: its MCP servers are tools it would give itself.
+    Configure,
 }
 
 /// How long the user's approval lasts.
@@ -542,8 +546,11 @@ pub struct Decks {
     /// "Allow for this session" answers: (session id, action, deck id).
     session_grants: Arc<Mutex<HashSet<(String, Action, String)>>>,
     /// Called after every change to a deck's `deck.yaml` or to the roster.
-    listeners: Arc<RwLock<Vec<Box<dyn Fn() + Send + Sync>>>>,
+    listeners: Arc<RwLock<Vec<Listener>>>,
 }
+
+/// A [`Decks::on_change`] callback.
+type Listener = Box<dyn Fn() + Send + Sync>;
 
 impl Decks {
     /// Open the deck repositories under `RUMU_HOME`. A home with no decks at
@@ -707,7 +714,7 @@ impl Decks {
     /// `write: true` mounts, `to`'s `allow_ask`), and so do the user's earlier
     /// answers for the session and for always.
     pub fn allowed(&self, action: Action, session: &str, from: &str, to: &str) -> bool {
-        if from == to {
+        if from == to && action != Action::Configure {
             return true;
         }
         let mounts = |write: bool| {
@@ -724,7 +731,7 @@ impl Decks {
             Action::Ask => self
                 .get(to)
                 .is_some_and(|d| d.meta.allow_ask.iter().any(|a| a == from)),
-            Action::Link | Action::Create | Action::Workspace => false,
+            Action::Link | Action::Create | Action::Workspace | Action::Configure => false,
         };
         configured
             || self.session_grants.lock().unwrap().contains(&(

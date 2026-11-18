@@ -22,6 +22,8 @@ const APPROVALS: &[&str] = &[
     "card_link",
     "ask",
     "project_create",
+    "deck_create",
+    "deck_change",
     "workspace_change",
     "workspace_delete",
 ];
@@ -75,19 +77,31 @@ async fn approval(cx: &ConnectionTo<Client>, session: &str, call: &str, request:
         "card_link" => format!("Link `{}` from deck `{}`", field("target"), field("to")),
         "ask" => format!("Hand a task to `{}`: {}", field("to"), field("task")),
         "project_create" => format!("Create project `{}`", field("name")),
+        "deck_create" => format!("Create {} `{}`", field("deck_kind"), field("name")),
+        "deck_change" => format!("Change deck `{}`", field("deck")),
         "workspace_change" => format!("Change workspace `{}`", field("name")),
         "workspace_delete" => format!("Delete workspace `{}`", field("name")),
         kind => kind.to_owned(),
     };
-    let options = vec![
-        PermissionOption::new("allow_once", "Allow", PermissionOptionKind::AllowOnce),
-        PermissionOption::new(
+    // A change to grants is allowed only once at a time (`approve::confirm`).
+    let once = request.get("once").and_then(Value::as_bool) == Some(true);
+    let mut options = vec![PermissionOption::new(
+        "allow_once",
+        "Allow",
+        PermissionOptionKind::AllowOnce,
+    )];
+    if !once {
+        options.push(PermissionOption::new(
             "allow_always",
             "Always allow",
             PermissionOptionKind::AllowAlways,
-        ),
-        PermissionOption::new("reject_once", "Deny", PermissionOptionKind::RejectOnce),
-    ];
+        ));
+    }
+    options.push(PermissionOption::new(
+        "reject_once",
+        "Deny",
+        PermissionOptionKind::RejectOnce,
+    ));
     let tool_call = ToolCallUpdate::new(
         call.to_owned(),
         ToolCallUpdateFields::new()

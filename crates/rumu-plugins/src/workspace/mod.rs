@@ -24,6 +24,7 @@
 mod agents;
 pub(crate) mod backend;
 mod cards;
+mod decks;
 mod history;
 mod mount;
 mod patch;

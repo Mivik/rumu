@@ -23,18 +23,16 @@ pub struct AssistantConfig {
     pub model: Option<ModelUse>,
 }
 
-impl AssistantConfig {
-    /// The fields `deck` has now.
-    pub fn of(deck: &Deck) -> Self {
-        let m = &deck.meta;
+impl From<DeckMeta> for AssistantConfig {
+    fn from(m: DeckMeta) -> Self {
         Self {
-            name: m.name.clone(),
-            mounts: m.mounts.clone(),
-            allow_ask: m.allow_ask.clone(),
-            mcp: m.mcp.clone(),
-            skills: m.skills.clone(),
-            cat: m.cat.clone(),
-            model: m.model.clone(),
+            name: m.name,
+            mounts: m.mounts,
+            allow_ask: m.allow_ask,
+            mcp: m.mcp,
+            skills: m.skills,
+            cat: m.cat,
+            model: m.model,
         }
     }
 }

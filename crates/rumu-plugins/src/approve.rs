@@ -48,6 +48,24 @@ pub(crate) async fn approve(
     if allowed(decks, &state, &session, action, to) {
         return Ok(true);
     }
+    let answer = ask_user(cx, request).await?;
+    if answer.allow {
+        decks.remember(action, answer.scope, &session, &state.assistant, to);
+    }
+    Ok(answer.allow)
+}
+
+/// Ask the user whatever the grants say, and remember nothing: for changes
+/// to the grants themselves (a deck's `mounts` and `allow_ask`), which no
+/// earlier answer may cover. The request is marked `once`, so the user is
+/// offered only to allow it this once.
+pub(crate) async fn confirm(cx: &Cx, mut request: Value) -> ToolResult<bool> {
+    request["once"] = Value::Bool(true);
+    Ok(ask_user(cx, request).await?.allow)
+}
+
+/// Put `request` to the user and wait for the answer.
+async fn ask_user(cx: &Cx, request: Value) -> ToolResult<Answer> {
     let timeout = std::time::Duration::from_secs(crate::ask::ASK_TIMEOUT);
     let Some(answer) = cx
         .decide(request, Some(timeout))
@@ -61,11 +79,7 @@ pub(crate) async fn approve(
             crate::ask::ASK_TIMEOUT / 60
         )));
     };
-    let answer: Answer = serde_json::from_value(answer).unwrap_or_default();
-    if answer.allow {
-        decks.remember(action, answer.scope, &session, &state.assistant, to);
-    }
-    Ok(answer.allow)
+    Ok(serde_json::from_value(answer).unwrap_or_default())
 }
 
 /// A deck's display name, or its id when it is gone.
