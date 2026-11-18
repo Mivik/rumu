@@ -9,6 +9,7 @@
   "retitleSession": "Couldn't regenerate the title",
   "prompt": "Couldn't send message",
   "abort": "Couldn't stop rumu",
+  "takeBack": "Couldn't take the message back",
   "editFirst": "Can't edit the first message",
   "loadingBranch": "Couldn't load branch",
   "activate": "Couldn't switch branch",

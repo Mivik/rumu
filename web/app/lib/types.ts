@@ -11,6 +11,7 @@ import type { BranchId } from './generated/BranchId'
 import type { Content } from './generated/Content'
 import type { Decision } from './generated/Decision'
 import type { Node } from './generated/Node'
+import type { NodeId } from './generated/NodeId'
 import type { SessionId } from './generated/SessionId'
 import type { PathState } from './generated/PathState'
 import type { SessionInfo } from './generated/SessionInfo'
@@ -370,6 +371,8 @@ export interface TurnRetryingPush {
  * the next safe point and arrives as a normal `node.appended` user node. */
 export interface PromptQueuedPush {
   branch: BranchId
+  /** The user node it will be written as (`prompt.cancel` takes it back). */
+  node: NodeId
   text: string
 }
 

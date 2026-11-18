@@ -121,6 +121,7 @@ export {
   sendPrompt,
   startSessionIn,
   stopTurn,
+  takeBackPrompt,
   viewAssistant,
 } from './state/sessions'
 

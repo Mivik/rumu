@@ -172,7 +172,7 @@ const initial = {
   /** Agent-loop-running flag keyed by branch (turn.started .. turn.done/error). */
   busy: {} as Record<BranchId, boolean>,
   /** Prompts accepted while a branch was busy, until their user node lands. */
-  queuedPrompts: {} as Record<BranchId, { id: number; text: string }[]>,
+  queuedPrompts: {} as Record<BranchId, { id: NodeId; text: string }[]>,
   /** Pending automatic retry of the model call, keyed by branch; cleared by
    * the next turn event or the branch's first delta. */
   retrying: {} as Record<BranchId, RetryState>,

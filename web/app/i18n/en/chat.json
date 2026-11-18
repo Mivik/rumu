@@ -46,7 +46,8 @@
     "sessions": "Sessions",
     "openSessions": "Open sessions",
     "running": "running…",
-    "queued": "queued"
+    "queued": "queued",
+    "takeBack": "Take back to edit (↑)"
   },
   "user": {
     "edit": "Edit message",

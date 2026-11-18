@@ -45,7 +45,6 @@ import { toast } from './ui'
 import { t } from '../../i18n'
 
 let traceSeq = 1
-let queuedSeq = 1
 
 /** Live tool/task output kept in memory (chars). */
 const MAX_LIVE_OUTPUT = 1_000_000
@@ -118,9 +117,8 @@ function onNodeAppended(p: NodeAppendedPush): void {
   if (node.body.type === 'user') {
     const queued = state.queuedPrompts[branch]
     if (queued?.length) {
-      const i = queued.findIndex((q) => q.text === node.body.content.text)
+      const i = queued.findIndex((q) => q.id === node.id)
       if (i >= 0) queued.splice(i, 1)
-      else queued.shift()
       if (!queued.length) delete state.queuedPrompts[branch]
     }
   }
@@ -129,7 +127,7 @@ function onNodeAppended(p: NodeAppendedPush): void {
 /** A prompt accepted while the branch was busy; shown pending until written. */
 function onPromptQueued(p: PromptQueuedPush): void {
   const list = state.queuedPrompts[p.branch] ?? (state.queuedPrompts[p.branch] = [])
-  list.push({ id: queuedSeq++, text: p.text })
+  list.push({ id: p.node, text: p.text })
 }
 
 function onLlmDelta(p: LlmDeltaPush): void {

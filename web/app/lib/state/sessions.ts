@@ -10,6 +10,7 @@ import type {
   BranchId,
   Card,
   Assistant,
+  Content,
   DecisionAnswer,
   PendingDecision,
   Node,
@@ -549,6 +550,24 @@ export async function stopTurn(): Promise<void> {
     await rumu.request('abort', { branch })
   } catch (err) {
     toast('error', t('errors.abort'), (err as Error).message)
+  }
+}
+
+/** `prompt.cancel`: take back a steering prompt still queued on the active
+ * branch, returning its content; null once it has been written (or failed). */
+export async function takeBackPrompt(node: NodeId): Promise<Content | null> {
+  const branch = state.activeBranch
+  if (!branch) return null
+  try {
+    const res = await rumu.request<{ content: Content }>('prompt.cancel', { branch, node })
+    const queued = state.queuedPrompts[branch]
+    const i = queued?.findIndex((q) => q.id === node) ?? -1
+    if (i >= 0) queued!.splice(i, 1)
+    if (queued && !queued.length) delete state.queuedPrompts[branch]
+    return res.content
+  } catch (err) {
+    toast('error', t('errors.takeBack'), (err as Error).message)
+    return null
   }
 }
 

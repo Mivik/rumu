@@ -36,6 +36,10 @@
 // Editing a sent message (`editTarget`) loads its text and images here, the
 // draft set aside until the edit is resent or cancelled; sending forks from
 // just before the message (store.editPrompt).
+//
+// A steering prompt still queued (shown above the sheet, ChatView) comes back
+// into the writing on its key or on ↑ at the writing's start, unsent
+// (store.takeBackPrompt).
 import { computed, nextTick, onBeforeUnmount, onMounted, reactive, ref, watch } from 'vue'
 import { t } from '../../i18n'
 import {
@@ -43,9 +47,11 @@ import {
   editPrompt,
   isBusy,
   landingAssistant,
+  queuedPrompts,
   sendPrompt,
   state,
   stopTurn,
+  takeBackPrompt,
 } from '../../lib/store'
 import type { PromptAttachment } from '../../lib/store'
 import type { Content, Node as TreeNode } from '../../lib/types'
@@ -345,11 +351,52 @@ async function submit(): Promise<void> {
   quotes.value = quoted
 }
 
+// ---- taking back a queued prompt ----
+
+/** Take a steering prompt the turn has not written yet (the latest one by
+ *  default) back into the writing, ahead of what is written there; an edit
+ *  in progress is dropped for it. */
+async function takeBack(id = queuedPrompts.value.at(-1)?.id): Promise<void> {
+  if (!id) return
+  const into = activeDraft.value
+  const content = await takeBackPrompt(id)
+  if (!content) return
+  if (editTarget.value) editTarget.value = null
+  const images = content.attachments ?? []
+  const text = typedText(content.text, images.length)
+  into.text = [text, into.text].filter((s) => s.trim()).join('\n\n')
+  into.images = [...images.map((a) => storedImage(a)), ...into.images]
+  engaged.value = true
+  void nextTick(() => {
+    const el = textareaEl.value
+    if (!el || into !== current.value) return
+    el.focus()
+    el.setSelectionRange(text.length, text.length)
+  })
+}
+
+defineExpose({ takeBack })
+
 function onKeydown(e: KeyboardEvent): void {
   if (e.key === 'Escape' && editTarget.value) {
     e.preventDefault()
     editTarget.value = null
     return
+  }
+  // ↑ at the very start of the writing takes the latest queued prompt back.
+  if (
+    e.key === 'ArrowUp' &&
+    !e.isComposing &&
+    !(e.shiftKey || e.altKey || e.ctrlKey || e.metaKey) &&
+    !editTarget.value &&
+    queuedPrompts.value.length
+  ) {
+    const el = e.target as HTMLTextAreaElement
+    if (el.selectionStart === 0 && el.selectionEnd === 0) {
+      e.preventDefault()
+      void takeBack()
+      return
+    }
   }
   if (e.key !== 'Enter' || e.isComposing) return
   // Only a bare Enter sends; Shift and Alt break the line instead.

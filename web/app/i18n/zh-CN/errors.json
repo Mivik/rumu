@@ -9,6 +9,7 @@
   "retitleSession": "重新生成标题失败",
   "prompt": "发送消息失败",
   "abort": "停止失败",
+  "takeBack": "撤回失败",
   "editFirst": "无法编辑第一条消息",
   "loadingBranch": "加载分支失败",
   "activate": "切换分支失败",
