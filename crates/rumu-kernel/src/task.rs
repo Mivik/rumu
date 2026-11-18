@@ -44,9 +44,9 @@ pub(crate) struct TaskEntry {
     pub token: CancellationToken,
     /// The completion post has been queued (a waiting sub-agent may loop).
     pub post_done: bool,
-    /// Cancelled by [`crate::Kernel::abort`] for its owner: report with
-    /// `wake: false`.
-    pub aborted_by_owner: bool,
+    /// Cancelled by [`crate::Kernel::abort`] or with its stopped sub-agent:
+    /// the completion note is written with `wake: false`.
+    pub quiet: bool,
 }
 
 /// What a task's work returned.
@@ -307,7 +307,7 @@ impl Kernel {
                     source,
                     token: token.clone(),
                     post_done: false,
-                    aborted_by_owner: false,
+                    quiet: false,
                 },
             );
             (id, token, info)
@@ -414,8 +414,8 @@ impl Kernel {
             entry.info.ended_at = Some(now());
             entry.info.is_error = is_error;
             entry.info.result = Some(content.clone());
-            let wake = !entry.aborted_by_owner;
-            entry.aborted_by_owner = false;
+            let wake = !entry.quiet;
+            entry.quiet = false;
             let note = completion_text(&entry.info, &content);
             (
                 entry.info.clone(),
@@ -499,7 +499,7 @@ impl Kernel {
             token: CancellationToken::new(),
             // Its completion is already in the transcript: never wait on it.
             post_done: true,
-            aborted_by_owner: false,
+            quiet: false,
         });
         drop(inner);
         self.signal_tasks();
@@ -639,10 +639,11 @@ impl Kernel {
     }
 
     /// Cancel every running task owned by `branch` or one of its sub-agent
-    /// descendants, leaving the branch's own reply alone (`task.kill_all`, and
-    /// half of [`Kernel::abort`]). Their completion notes are still written,
-    /// with `wake: false`.
-    pub fn abort_tasks(&self, branch: &BranchId) {
+    /// descendants, leaving the branch's own reply alone. Their completion
+    /// notes are still written; they wake their owners like a `task.kill`
+    /// (`task.kill_all`), or with `quiet` not at all ([`Kernel::abort`], a
+    /// stopped sub-agent).
+    pub fn abort_tasks(&self, branch: &BranchId, quiet: bool) {
         let subtree = self.branch_subtree(branch).unwrap_or_else(|_| {
             let mut set = std::collections::HashSet::new();
             set.insert(branch.clone());
@@ -651,7 +652,7 @@ impl Kernel {
         let mut inner = self.inner.lock().unwrap();
         for entry in inner.tasks.values_mut() {
             if subtree.contains(&entry.info.branch) && entry.info.status.is_running() {
-                entry.aborted_by_owner = true;
+                entry.quiet = quiet;
                 entry.token.cancel();
             }
         }

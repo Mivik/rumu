@@ -4882,6 +4882,107 @@ async fn abort_cancels_owned_tasks_and_does_not_wake() {
     );
 }
 
+/// The UI's `task.kill` wakes the owner with the completion note, so the
+/// model hears its task is gone.
+#[tokio::test]
+async fn ui_kill_wakes() {
+    let plugin = Arc::new(background_plugin(
+        "bg",
+        &["bgwork"],
+        vec![],
+        noop_hooks(),
+        noop_tools(),
+    ));
+    let (kernel, _llm, session, branch) = setup(
+        vec![plugin],
+        vec![
+            LlmResponse::calls(vec![ToolCall::new(
+                "c1",
+                "bgwork",
+                json!({ "ms": 60_000, "background": true }),
+            )]),
+            LlmResponse::text("started"),
+            LlmResponse::text("noted"),
+        ],
+    )
+    .await;
+    kernel.set_wake_debounce(Duration::from_millis(10));
+    run_turn(&kernel, &branch, "go").await;
+    let mut rx = kernel.tap_pushes();
+    let id = kernel.tasks(&session).unwrap()[0].id.clone();
+
+    let info = kernel.kill_task(&id).await.unwrap();
+    assert_eq!(info.status, TaskStatus::Cancelled);
+    let (done, seen) = collect_turn(&mut rx, &branch.0).await;
+    assert_eq!(done["method"], "turn.done");
+    assert_eq!(turn_starts(&seen, "wake"), 1, "{seen:?}");
+}
+
+/// Killing a background sub-agent takes down the tasks it started, quietly,
+/// so none of them is left to wake the dead child later.
+#[tokio::test]
+async fn killing_a_sub_agent_kills_its_tasks() {
+    let plugin = Arc::new(background_plugin(
+        "bg",
+        &["bgwork"],
+        vec![],
+        noop_hooks(),
+        noop_tools(),
+    ));
+    let (kernel, session, branch) = setup_split(
+        vec![plugin],
+        vec![
+            LlmResponse::calls(vec![ToolCall::new(
+                "e1",
+                "agent",
+                json!({ "mode": "fork", "task": "watch it" }),
+            )]),
+            LlmResponse::text("parent done"),
+            LlmResponse::text("parent heard"),
+        ],
+        vec![
+            LlmResponse::calls(vec![ToolCall::new(
+                "c1",
+                "bgwork",
+                json!({ "ms": 60_000, "background": true }),
+            )]),
+            LlmResponse::text("waiting"),
+        ],
+    )
+    .await;
+    kernel.set_wake_debounce(Duration::from_millis(10));
+    let mut rx = kernel.tap_pushes();
+    kernel.prompt(&branch, "go").await.unwrap();
+    let running = |kernel: &Kernel| {
+        kernel
+            .tasks(&session)
+            .unwrap()
+            .into_iter()
+            .filter(|t| t.status.is_running())
+            .collect::<Vec<_>>()
+    };
+    wait_until(Duration::from_secs(5), || running(&kernel).len() == 2).await;
+    let agent = running(&kernel)
+        .into_iter()
+        .find(|t| matches!(t.kind, TaskKind::Agent { .. }))
+        .unwrap();
+
+    kernel.kill_task(&agent.id).await.unwrap();
+    wait_until(Duration::from_secs(5), || running(&kernel).is_empty()).await;
+    tokio::time::sleep(Duration::from_millis(100)).await;
+    let mut seen = vec![];
+    while let Ok(v) = rx.try_recv() {
+        seen.push(v);
+    }
+    // The kill wakes the parent; nothing wakes the dead child.
+    let wakes: Vec<_> = seen
+        .iter()
+        .filter(|v| v["method"] == "turn.started" && v["params"]["reason"] == "wake")
+        .map(|v| v["params"]["branch"].clone())
+        .collect();
+    assert_eq!(wakes, vec![json!(branch.0)], "{seen:?}");
+}
+
 /// Running tasks per owner branch are capped.
 #[tokio::test]
 async fn per_branch_task_limit() {

@@ -1093,7 +1093,7 @@ async fn dispatch(state: &AppState, method: &str, p: &Value) -> Result<Value> {
         // task tab's "stop all"); the branch's reply keeps going.
         "task.kill_all" => {
             let branch: BranchId = str_param(p, "branch")?.into();
-            kernel.abort_tasks(&branch);
+            kernel.abort_tasks(&branch, false);
             Ok(json!({}))
         }
 

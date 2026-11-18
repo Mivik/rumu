@@ -278,7 +278,7 @@ impl Kernel {
     /// (or a sub-agent below it) started. Their completion notes are still
     /// written, without waking.
     pub fn abort(&self, branch: &BranchId) -> Result<()> {
-        self.abort_tasks(branch);
+        self.abort_tasks(branch, true);
         self.stop(branch)
     }
 
@@ -1251,6 +1251,11 @@ impl Kernel {
         // Safe point at the end of the loop; also releases the loop guard and
         // re-arms a wake that arrived as the loop ended.
         self.end_loop(&child.id).await;
+        // A finished sub-agent waited for its tasks above; a stopped one takes
+        // them down with it, or their notes would wake it back up.
+        if token.is_cancelled() {
+            self.abort_tasks(&child.id, true);
+        }
 
         // Mark the child branch Done.
         let b = self
