@@ -82,15 +82,17 @@ harnesses' own docs.
   next model call gets the list again, or a note that none is left.
 - `@rumu:/mcp` holds the session's servers. A server is an object and its
   tools are its actions, named `<server>/<tool>` (a tool is not a path):
-  - `list @rumu:/mcp`: each server with its status and tool count.
+  - `list @rumu:/mcp`: what it holds, then each server with its status and
+    tool count.
   - `list @rumu:/mcp/<server>`: its status, then its tools under
     `actions:`, one line each: the signature (`fake/echo(text: string)`)
     and the first line of its description.
   - `read @rumu:/mcp/<server>`: its `instructions`, then each tool's
     description and input schema.
   - `search` with `scope: "@rumu:/mcp[/<server>]"`: BM25 over tool names,
-    titles and descriptions. Each hit is an action and prints its schema, so
-    the model can run it right away; the default limit is 5.
+    titles and descriptions. Each hit is an `action` (`action fake/echo`)
+    and prints its schema, so the model can run it right away; the default
+    limit is 5.
 - `invoke { action: "<server>/<tool>", args }` runs it (no `path`: the
   name says the server). The result's text and images come back as the tool
   result, `isError` as an error; each image is also copied to

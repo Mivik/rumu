@@ -95,8 +95,20 @@ Configuration is in the `@rumu` workspace and is changed with the file
 tools. What can be done to one of its objects beyond reading and writing it
 is one of the object's actions, run with `invoke { action, path, args? }`:
 `action` is the full name (`<type>.<action>`, unique), `path` the object, and
-`list` on an object shows its actions with their arguments. Which set a
-workspace is in shows in its path, not in a field:
+`list` on an object shows its actions with their arguments.
+
+`@rumu` documents itself, so the system prompt only points at `list
+@rumu:/`. `list` on any of its paths shows, a blank line apart: what the
+path holds, what may be written there and what asks the user (its node's
+doc); its entries; `files:`, the files rumu defines under it, each with a
+line (a task's `output`); and `actions:`. `list @rumu:/` names the roots, a
+line each. A path gets a file of its own only for a part with its own size
+or use: `@rumu:/tasks/<id>` is a task's summary (its state, the last lines
+of its output, the start of its result) and `@rumu:/tasks/<id>/output` its
+whole buffered output, which `bash` watch events number their lines in.
+`search` marks each hit `card`, `session` or `action`.
+
+Which set a workspace is in shows in its path, not in a field:
 
 ```
 @rumu:/workspaces/<name>      every visible workspace (the registry)
@@ -105,9 +117,10 @@ workspace is in shows in its path, not in a field:
 ```
 
 - `list @rumu:/workspaces` lists the workspaces: the project's first, then
-  the rest of the registry, then `@rumu`; each with its location, marked when
-  it is mounted in the session's project or is the default. `read
-  @rumu:/workspaces/<name>` returns its entry, `write` creates one:
+  the rest of the registry, then `@scratch` and `@rumu`; each with its
+  location, marked when it is mounted in the session's project or is the
+  default. `read @rumu:/workspaces/<name>` returns its entry, `write` creates
+  one:
 
   ```yaml
   root: ~/src/tokio

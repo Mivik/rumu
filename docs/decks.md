@@ -254,6 +254,9 @@ default); a plain deck has `private`; an assistant also has its mascot,
 
 - A write must follow a read of the deck as it is now (like a card); a field
   left out keeps its value; `edit` replaces text in the current one.
+- `list @rumu:/decks/<name>` puts what its kind's fields are and which
+  changes ask the user before the YAML, and its actions after; `read` gives
+  the YAML alone, and only a `read` counts as the read a write needs.
 - Writing a new name with `kind:` creates a deck; `write` with `from`
   renames one. Deleting a deck is the user's, in the web UI.
 - Decks the session may not see (private ones) are left out of `mounts` and
