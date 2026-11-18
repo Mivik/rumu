@@ -5,9 +5,9 @@
 // with the header as the trail back.
 import { computed, watch } from 'vue'
 import { t } from '../../i18n'
-import { layout } from '../../lib/layout'
+import { layout, leaveItem } from '../../lib/layout'
 import { SWAP } from '../../lib/motion'
-import { openPage, pageUp } from '../../lib/router'
+import { openPage } from '../../lib/router'
 import { connected, refreshAssistants, state } from '../../lib/store'
 import RumuCat from '../brand/RumuCat.vue'
 import Icon from '../ui/Icon.vue'
@@ -44,7 +44,11 @@ watch(connected, (up) => up && void refreshAssistants(), { immediate: true })
     </template>
     <template #title>
       <template v-if="inSheet">
-        <button type="button" class="flex-none text-ink-3 transition-colors hover:text-ink" @click="pageUp">
+        <button
+          type="button"
+          class="flex-none text-ink-3 transition-colors hover:text-ink"
+          @click="leaveItem"
+        >
           {{ t('assistants.title') }}
         </button>
         <Icon name="chevron" :size="14" class="-mx-1 flex-none text-ink-3" />
@@ -85,6 +89,7 @@ watch(connected, (up) => up && void refreshAssistants(), { immediate: true })
       :label="crumb ?? ''"
       :z="55"
       wrapper-class="p-8"
+      @close="leaveItem"
       panel-class="relative max-h-full w-[min(46rem,100%)] rounded-sheet"
     >
       <!-- the form's band and name head the dialog: no header above them -->
@@ -93,7 +98,7 @@ watch(connected, (up) => up && void refreshAssistants(), { immediate: true })
         class="icon-btn absolute top-3 right-3 z-10 size-8 rounded-full bg-surface/80 shadow-soft backdrop-blur-sm"
         :title="t('common.close')"
         :aria-label="t('common.close')"
-        @click="pageUp"
+        @click="leaveItem"
       >
         <Icon name="close" :size="16" />
       </button>

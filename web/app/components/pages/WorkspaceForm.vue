@@ -5,6 +5,7 @@
 // keys: an existing workspace keeps its name.
 import { computed, reactive, ref, watch } from 'vue'
 import { t } from '../../i18n'
+import { trackItemDirty } from '../../lib/layout'
 import { replacePage } from '../../lib/router'
 import { deleteWorkspace, saveWorkspace, state } from '../../lib/store'
 import type { Workspace } from '../../lib/types'
@@ -36,6 +37,7 @@ const browsing = ref(false)
 const nameEdited = ref(false)
 
 const dirty = computed(() => JSON.stringify(form) !== pristine.value)
+trackItemDirty(dirty)
 const NAME = /^[a-z][a-z0-9.-]+$/
 const nameInvalid = computed(() => isNew.value && !!form.name && !NAME.test(form.name))
 const nameTaken = computed(() => isNew.value && state.workspaces.some((w) => w.name === form.name))

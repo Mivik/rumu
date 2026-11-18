@@ -10,6 +10,7 @@ import { t } from '../../i18n'
 import { rumu } from '../../lib/api'
 import { CAT_SHAPE_MAX, assistantCat, assistantTone, randomCat } from '../../lib/assistantFace'
 import { CAT_ITEMS, itemSlot } from '../../lib/catItems'
+import { trackItemDirty } from '../../lib/layout'
 import { PROJECT_TONES, toneColor, type ProjectTone } from '../../lib/projectIcon'
 import { openPage, replacePage } from '../../lib/router'
 import { modelByRef, models, nearestEffort, refreshSettings, rulesEnable } from '../../lib/state/models'
@@ -116,6 +117,7 @@ const isDefault = computed(() => !!current.value?.default)
 /** The last assistant cannot go: sessions need one to run as. */
 const canDelete = computed(() => !isNew.value && state.assistants.length > 1)
 const dirty = computed(() => JSON.stringify(form) !== pristine.value)
+trackItemDirty(dirty)
 const canSave = computed(
   () => !saving.value && dirty.value && !!form.name.trim() && !badMounts.value.size && !badDecks.value.size,
 )

@@ -18,7 +18,6 @@
   "saved": "已保存",
   "cancel": "取消",
   "unsaved": "有未保存的修改",
-  "discardPrompt": "放弃未保存的修改？",
   "delete": "删除",
   "linkedWarning": "其他卡片链接到此处，删除后将成为悬空链接",
   "deleted": "已删除",

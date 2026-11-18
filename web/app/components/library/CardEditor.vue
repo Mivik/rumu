@@ -275,7 +275,7 @@ function edit(): void {
 /** True when leaving may discard work: the host asks before closing. */
 function confirmLeave(): boolean {
   if (mode.value !== 'edit') return true
-  return !dirty.value || window.confirm(t('library.discardPrompt'))
+  return !dirty.value || window.confirm(t('common.discardPrompt'))
 }
 
 defineExpose({ confirmLeave })

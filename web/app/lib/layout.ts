@@ -3,8 +3,9 @@
 // closes it on Escape, on a scrim click, and when the viewport grows past the
 // breakpoint that made it an overlay. The management pages themselves are
 // routes (router.ts); what is left here is the settings page's hand-offs.
-import { reactive } from 'vue'
-import { openPage } from './router'
+import { onBeforeUnmount, reactive, watchEffect, type Ref } from 'vue'
+import { t } from '../i18n'
+import { openPage, pageUp } from './router'
 import { state } from './state/state'
 
 /** The desktop breakpoint (Tailwind's `lg`). */
@@ -25,6 +26,8 @@ export const layout = reactive({
   settingsTrail: [] as { label: string; go?: () => void }[],
   /** A settings edit in flight: the section stays on its page until done. */
   settingsBusy: false,
+  /** The open project, workspace or assistant form has unsaved edits. */
+  itemDirty: false,
 })
 
 export function toggleSidebar(): void {
@@ -47,6 +50,18 @@ export function showModel(ref: string): void {
 export function itemDialog(): boolean {
   const p = state.page
   return layout.wide && !!p && (!!p.item || p.fresh) && p.page !== 'decks' && p.page !== 'settings'
+}
+
+/** For an item's form: publish its unsaved state while it is mounted. */
+export function trackItemDirty(dirty: Ref<boolean>): void {
+  watchEffect(() => (layout.itemDirty = dirty.value))
+  onBeforeUnmount(() => (layout.itemDirty = false))
+}
+
+/** Leave the open item for its page's list, asking first when its form has
+ *  unsaved edits. */
+export function leaveItem(): void {
+  if (!layout.itemDirty || window.confirm(t('common.discardPrompt'))) pageUp()
 }
 
 /** Escape closes the sidebar drawer, then the side panel. A card window is a

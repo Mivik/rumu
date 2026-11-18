@@ -5,6 +5,7 @@
 // folder added here is registered only when the form is submitted.
 import { computed, reactive, ref, watch } from 'vue'
 import { t } from '../../i18n'
+import { trackItemDirty } from '../../lib/layout'
 import { replacePage } from '../../lib/router'
 import {
   chooseLandingProject,
@@ -55,6 +56,7 @@ const project = computed(() =>
   creating.value ? null : (state.projects.find((p) => p.id === state.page?.item) ?? null),
 )
 const dirty = computed(() => JSON.stringify(form) !== pristine.value)
+trackItemDirty(dirty)
 const canSave = computed(() => !busy.value && (creating.value || dirty.value) && !!form.name.trim())
 
 /** The seal as the form has it; a new project's default tone is fixed when

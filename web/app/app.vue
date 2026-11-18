@@ -16,9 +16,9 @@ import { openArtifact } from './lib/artifacts'
 import Toasts from './components/Toasts.vue'
 import Modal from './components/ui/Modal.vue'
 import { t } from './i18n'
-import { closePanels, itemDialog, layout, WIDE } from './lib/layout'
+import { closePanels, itemDialog, layout, leaveItem, WIDE } from './lib/layout'
 import { SIDE_SHEET, SWAP } from './lib/motion'
-import { closePage, pageUp, sheetOf, type Page } from './lib/router'
+import { closePage, sheetOf, type Page } from './lib/router'
 import { state } from './lib/store'
 
 /** The side sheet's place: an overlay below xl, the third column at xl. */
@@ -52,7 +52,7 @@ function onKey(e: KeyboardEvent): void {
   if (e.key !== 'Escape') return
   if (state.drawers.length) return
   if (settingsDialog.value) closePage()
-  else if (itemDialog()) pageUp()
+  else if (itemDialog()) leaveItem()
   else closePanels()
 }
 

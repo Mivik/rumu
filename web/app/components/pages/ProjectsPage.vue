@@ -6,9 +6,9 @@
 // the sheet's whole width with the header as the trail back.
 import { computed, watch } from 'vue'
 import { t } from '../../i18n'
-import { layout } from '../../lib/layout'
+import { layout, leaveItem } from '../../lib/layout'
 import { SWAP } from '../../lib/motion'
-import { openPage, pageUp } from '../../lib/router'
+import { openPage } from '../../lib/router'
 import { connected, refreshWorkspaces, state } from '../../lib/store'
 import Icon from '../ui/Icon.vue'
 import Modal from '../ui/Modal.vue'
@@ -40,7 +40,11 @@ watch(connected, (up) => up && void refreshWorkspaces(), { immediate: true })
   <PageSheet :title="t('projects.title')" icon="mount" tone="text-tool">
     <template #title>
       <template v-if="inSheet">
-        <button type="button" class="flex-none text-ink-3 transition-colors hover:text-ink" @click="pageUp">
+        <button
+          type="button"
+          class="flex-none text-ink-3 transition-colors hover:text-ink"
+          @click="leaveItem"
+        >
           {{ t('projects.title') }}
         </button>
         <Icon name="chevron" :size="14" class="-mx-1 flex-none text-ink-3" />
@@ -116,9 +120,10 @@ watch(connected, (up) => up && void refreshWorkspaces(), { immediate: true })
       :label="crumb ?? ''"
       :z="55"
       wrapper-class="p-8"
+      @close="leaveItem"
       panel-class="max-h-full w-[min(36rem,100%)] rounded-sheet"
     >
-      <PageSheet modal :title="crumb ?? ''" @close="pageUp">
+      <PageSheet modal :title="crumb ?? ''" @close="leaveItem">
         <template #title>
           <span class="truncate" :class="{ 'font-card': onWorkspaces && !route.fresh }">{{ crumb }}</span>
         </template>
