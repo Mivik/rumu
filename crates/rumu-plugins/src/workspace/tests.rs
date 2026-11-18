@@ -1420,7 +1420,7 @@ async fn rumu_workspace_edges() {
     let out = plugin.call_tool("list", json!({}), &cx).await.unwrap();
     assert_eq!(
         out.content.text,
-        "cards/\nhistory/\nsessions/\nskills/\ntasks/\nmcp/\nworkspaces/"
+        "cards/\ndecks/\nhistory/\nsessions/\nskills/\ntasks/\nmcp/\nworkspaces/"
     );
 
     // Unknown paths name the roots.
@@ -1437,7 +1437,7 @@ async fn rumu_workspace_edges() {
         assert!(
             out.content
                 .text
-                .contains("roots: /cards, /history, /sessions"),
+                .contains("roots: /cards, /decks, /history, /sessions"),
             "{tool}: {}",
             out.content.text
         );
@@ -6020,6 +6020,441 @@ async fn private_decks_refuse_cross_deck_links() {
     assert!(
         out.is_error && out.content.text.contains("no longer exists"),
         "{}",
+        out.content.text
+    );
+}
+
+// ---------- @rumu:/decks ----------
+
+const NOTES_DECK: &str = "0193a2f1-0000-7000-8000-00000000d1d1";
+
+/// [`project_setup`] with `main` an assistant, a plain deck `notes` and a
+/// private deck `hidden` beside it.
+fn decks_setup() -> (
+    tempfile::TempDir,
+    WorkspacePlugin,
+    std::sync::Arc<FakeRuntime>,
+    rumu_core::Cx,
+    rumu_core::Workspaces,
+) {
+    let (home, _, _, _, registry) = project_setup();
+    let main = crate::testutil::deck_at(home.path(), "main");
+    rumu_cards::Decks::load(home.path())
+        .unwrap()
+        .upsert(rumu_cards::DeckMeta {
+            assistant: true,
+            ..main.meta
+        })
+        .unwrap();
+    crate::testutil::create_deck(
+        home.path(),
+        "notes",
+        Some(&format!("id: {NOTES_DECK}\nname: notes\n")),
+        &[],
+    );
+    hidden_deck(home.path());
+    let plugin = deck_plugin_with(home.path(), registry.clone());
+    let host = FakeRuntime::arc();
+    *host.state.lock().unwrap() = PathState {
+        workspaces: registry.list(),
+        mounted: registry.project(PROJECT_ID),
+        project: Some(PROJECT_ID.into()),
+        default_workspace: Some("app".into()),
+        assistant: crate::testutil::TEST_ASSISTANT.into(),
+        mounts: vec![
+            rumu_core::CardMount {
+                deck: crate::testutil::TEST_ASSISTANT.into(),
+                at: "/cards/self".into(),
+            },
+            rumu_core::CardMount {
+                deck: PROJECT_ID.into(),
+                at: rumu_core::PROJECT_MOUNT.into(),
+            },
+        ],
+        ..Default::default()
+    };
+    let cx = host.cx();
+    (home, plugin, host, cx, registry)
+}
+
+/// Call `tool` with `args` on a fresh call of `host`'s path; the output is
+/// flushed onto the path, so it is the base of later calls (as a read is).
+async fn call(
+    plugin: &WorkspacePlugin,
+    host: &std::sync::Arc<FakeRuntime>,
+    tool: &str,
+    args: serde_json::Value,
+) -> ToolOutput {
+    let out = plugin.call_tool(tool, args, &host.cx()).await.unwrap();
+    flush_output(host, "call-1", &out);
+    out
+}
+
+#[tokio::test]
+async fn decks_list_by_name_and_read_by_kind() {
+    let (_home, plugin, host, _cx, _registry) = decks_setup();
+
+    let out = call(&plugin, &host, "list", json!({ "path": "@rumu:/decks" })).await;
+    let text = &out.content.text;
+    assert!(text.contains("main  assistant  at /cards/self"), "{text}");
+    assert!(text.contains("proj  project  at /cards/project"), "{text}");
+    assert!(
+        text.contains("notes  deck  not mounted  asks the user to mount, write"),
+        "{text}"
+    );
+    assert!(
+        !text.contains("hidden"),
+        "a private deck is not listed: {text}"
+    );
+    assert!(!text.contains(PROJECT_ID), "decks go by name: {text}");
+
+    // A project: its seal, privacy and workspaces; the read is recorded.
+    let out = call(
+        &plugin,
+        &host,
+        "read",
+        json!({ "path": "@rumu:/decks/proj" }),
+    )
+    .await;
+    assert_eq!(
+        out.content.text,
+        "kind: project\nprivate: false\nworkspaces:\n- app\n- proj\n"
+    );
+    assert_eq!(out.effects[0].data.as_ref().unwrap().tag, "config.read");
+
+    // An assistant: its lists even when empty. Names match in any case.
+    let out = call(
+        &plugin,
+        &host,
+        "read",
+        json!({ "path": "@rumu:/decks/MAIN" }),
+    )
+    .await;
+    assert!(!out.is_error, "{}", out.content.text);
+    for line in [
+        "kind: assistant",
+        "mcp: {}",
+        "skills: []",
+        "mounts: []",
+        "allow_ask: []",
+    ] {
+        assert!(
+            out.content.text.contains(line),
+            "{line}: {}",
+            out.content.text
+        );
+    }
+
+    // A private deck the session does not mount is unknown.
+    let out = call(
+        &plugin,
+        &host,
+        "read",
+        json!({ "path": "@rumu:/decks/hidden" }),
+    )
+    .await;
+    assert!(
+        out.is_error && out.content.text.contains("no deck `hidden`"),
+        "{}",
+        out.content.text
+    );
+    let out = call(
+        &plugin,
+        &host,
+        "delete",
+        json!({ "path": "@rumu:/decks/notes" }),
+    )
+    .await;
+    assert!(
+        out.is_error && out.content.text.contains("in the web UI"),
+        "{}",
+        out.content.text
+    );
+}
+
+#[tokio::test]
+async fn deck_writes_follow_a_read_and_ask_by_field() {
+    use rumu_cards::deck::{Action, Scope};
+    let (_home, plugin, host, _cx, registry) = decks_setup();
+    let main = crate::testutil::TEST_ASSISTANT;
+    let write = |path: &str, content: &str| json!({ "path": path, "content": content });
+
+    // Unread: refused, with the deck as it is.
+    let out = call(
+        &plugin,
+        &host,
+        "write",
+        write("@rumu:/decks/proj", "private: true\n"),
+    )
+    .await;
+    assert!(
+        out.is_error && out.content.text.contains("read it again first"),
+        "{}",
+        out.content.text
+    );
+    assert!(out.content.text.contains("- proj"), "{}", out.content.text);
+
+    // The session's project: its workspaces change without asking.
+    call(
+        &plugin,
+        &host,
+        "read",
+        json!({ "path": "@rumu:/decks/proj" }),
+    )
+    .await;
+    let out = call(
+        &plugin,
+        &host,
+        "write",
+        write("@rumu:/decks/proj", "workspaces: [proj, app]\n"),
+    )
+    .await;
+    assert!(!out.is_error, "{}", out.content.text);
+    assert_eq!(registry.project(PROJECT_ID), ["proj", "app"]);
+    assert!(host.decisions.lock().unwrap().is_empty());
+
+    // Its privacy asks (`configure`); this host cannot answer.
+    let out = call(
+        &plugin,
+        &host,
+        "write",
+        write("@rumu:/decks/proj", "private: true\n"),
+    )
+    .await;
+    assert!(
+        out.is_error && out.content.text.contains("cannot ask"),
+        "{}",
+        out.content.text
+    );
+    let decision = host.decisions.lock().unwrap().pop().unwrap();
+    assert_eq!(decision["kind"], "deck_change");
+    assert!(
+        decision["after"]
+            .as_str()
+            .unwrap()
+            .contains("private: true")
+    );
+    assert!(decision.get("once").is_none());
+
+    // The assistant's own skills need nothing; its MCP servers ask, and an
+    // always-allow covers them afterwards.
+    call(
+        &plugin,
+        &host,
+        "read",
+        json!({ "path": "@rumu:/decks/main" }),
+    )
+    .await;
+    let out = call(
+        &plugin,
+        &host,
+        "write",
+        write("@rumu:/decks/main", "skills: ['*']\n"),
+    )
+    .await;
+    assert!(!out.is_error, "{}", out.content.text);
+    assert!(host.decisions.lock().unwrap().is_empty());
+    host.answers
+        .lock()
+        .unwrap()
+        .push_back(json!({ "allow": true, "scope": "always" }));
+    let out = call(
+        &plugin,
+        &host,
+        "write",
+        write("@rumu:/decks/main", "mcp: { github: ['*'] }\n"),
+    )
+    .await;
+    assert!(!out.is_error, "{}", out.content.text);
+    assert_eq!(host.decisions.lock().unwrap().len(), 1);
+    let out = call(
+        &plugin,
+        &host,
+        "write",
+        write("@rumu:/decks/main", "mcp: {}\n"),
+    )
+    .await;
+    assert!(!out.is_error, "{}", out.content.text);
+    assert_eq!(host.decisions.lock().unwrap().len(), 1, "granted");
+
+    // Its mounts are grants: asked every time, never remembered, even with
+    // a grant for everything else.
+    plugin
+        .decks()
+        .remember(Action::Configure, Scope::Always, "", main, main);
+    host.answers
+        .lock()
+        .unwrap()
+        .push_back(json!({ "allow": true, "scope": "always" }));
+    let out = call(
+        &plugin,
+        &host,
+        "write",
+        write(
+            "@rumu:/decks/main",
+            "mounts: [{ deck: notes, at: /cards/notes, write: true }]\n",
+        ),
+    )
+    .await;
+    assert!(!out.is_error, "{}", out.content.text);
+    let decision = host.decisions.lock().unwrap().pop().unwrap();
+    assert_eq!(decision["once"], true);
+    let deck = plugin.decks().get(main).unwrap();
+    assert_eq!(deck.meta.mounts.len(), 1);
+    assert_eq!(deck.meta.mounts[0].deck, NOTES_DECK, "names become ids");
+    assert!(deck.meta.mounts[0].write);
+    let out = call(
+        &plugin,
+        &host,
+        "write",
+        write("@rumu:/decks/main", "mounts: []\n"),
+    )
+    .await;
+    assert!(
+        out.is_error && out.content.text.contains("cannot ask"),
+        "{}",
+        out.content.text
+    );
+
+    // Fields of another kind, a new kind, and unknown fields are refused.
+    for (content, needle) in [
+        ("workspaces: [app]\n", "not a field of an assistant"),
+        ("kind: project\n", "does not change"),
+        ("colour: red\n", "unknown field"),
+    ] {
+        let out = call(&plugin, &host, "write", write("@rumu:/decks/main", content)).await;
+        assert!(
+            out.is_error && out.content.text.contains(needle),
+            "{content}: {}",
+            out.content.text
+        );
+    }
+
+    // `edit` applies to the deck as it is now, with no read required.
+    let out = plugin
+        .call_tool(
+            "edit",
+            json!({
+                "path": "@rumu:/decks/proj",
+                "old_string": "- proj\n- app",
+                "new_string": "- app\n- proj",
+            }),
+            &host.cx(),
+        )
+        .await
+        .unwrap();
+    assert!(!out.is_error, "{}", out.content.text);
+    assert_eq!(registry.project(PROJECT_ID), ["app", "proj"]);
+}
+
+#[tokio::test]
+async fn decks_are_created_and_renamed_by_writing() {
+    use rumu_cards::deck::Action;
+    let (_home, plugin, host, cx, registry) = decks_setup();
+    let main = crate::testutil::TEST_ASSISTANT;
+    let write = |path: &str, content: &str| json!({ "path": path, "content": content });
+
+    // A new name needs its kind.
+    let out = call(
+        &plugin,
+        &host,
+        "write",
+        write("@rumu:/decks/fresh", "private: true\n"),
+    )
+    .await;
+    assert!(
+        out.is_error && out.content.text.contains("`kind: assistant`"),
+        "{}",
+        out.content.text
+    );
+
+    // Creating asks (`create`); its creator's session may then mount and
+    // write it.
+    host.answers
+        .lock()
+        .unwrap()
+        .push_back(json!({ "allow": true }));
+    let out = plugin
+        .call_tool(
+            "write",
+            write("@rumu:/decks/fresh", "kind: project\nworkspaces: [app]\n"),
+            &cx,
+        )
+        .await
+        .unwrap();
+    assert!(!out.is_error, "{}", out.content.text);
+    flush_output(&host, "call-1", &out);
+    let decision = host.decisions.lock().unwrap().pop().unwrap();
+    assert_eq!(decision["kind"], "deck_create");
+    assert_eq!(decision["deck_kind"], "project");
+    let fresh = plugin
+        .decks()
+        .list()
+        .into_iter()
+        .find(|d| d.meta.name == "fresh")
+        .unwrap();
+    assert!(fresh.project());
+    assert_eq!(registry.project(fresh.id()), ["app"]);
+    let session = cx.session.to_string();
+    for action in [Action::Mount, Action::Write] {
+        assert!(plugin.decks().allowed(action, &session, main, fresh.id()));
+    }
+
+    // An assistant created with mounts asks once, whatever the grants.
+    host.answers
+        .lock()
+        .unwrap()
+        .push_back(json!({ "allow": true }));
+    let out = call(
+        &plugin,
+        &host,
+        "write",
+        write(
+            "@rumu:/decks/scout",
+            "kind: assistant\nmounts: [{ deck: notes, at: /cards/notes }]\n",
+        ),
+    )
+    .await;
+    assert!(!out.is_error, "{}", out.content.text);
+    let decision = host.decisions.lock().unwrap().pop().unwrap();
+    assert_eq!(
+        (decision["kind"].as_str(), decision["once"].as_bool()),
+        (Some("deck_create"), Some(true))
+    );
+    assert!(
+        plugin
+            .decks()
+            .list()
+            .iter()
+            .any(|d| d.meta.name == "scout" && d.assistant())
+    );
+
+    // A rename is a write to the new name from the old one, after a read.
+    call(
+        &plugin,
+        &host,
+        "read",
+        json!({ "path": "@rumu:/decks/notes" }),
+    )
+    .await;
+    host.answers
+        .lock()
+        .unwrap()
+        .push_back(json!({ "allow": true }));
+    let out = plugin
+        .call_tool(
+            "write",
+            json!({ "path": "@rumu:/decks/journal", "content": "{}\n", "from": "@rumu:/decks/notes" }),
+            &host.cx(),
+        )
+        .await
+        .unwrap();
+    assert!(!out.is_error, "{}", out.content.text);
+    assert_eq!(plugin.decks().get(NOTES_DECK).unwrap().meta.name, "journal");
+    let out = call(&plugin, &host, "write", write("@rumu:/decks/fresh", "{}\n")).await;
+    assert!(
+        !out.is_error,
+        "an unchanged write is fine: {}",
         out.content.text
     );
 }
