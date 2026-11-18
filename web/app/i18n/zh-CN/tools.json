@@ -79,6 +79,8 @@
     "running": "{count} 个后台任务运行中",
     "kill": "终止 {id}",
     "killAria": "终止任务 {id}",
+    "stopAll": "全部停止",
+    "stopAllAria": "停止这个分支的回复和它的全部后台任务",
     "close": "关闭任务输出"
   },
   "status": {

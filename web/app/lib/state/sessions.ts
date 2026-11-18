@@ -555,6 +555,18 @@ export async function stopTurn(): Promise<void> {
   }
 }
 
+/** `abort`: stop the reply and cancel every background task the branch (or a
+ *  sub-agent below it) started — the task tab's "stop all". */
+export async function stopAll(): Promise<void> {
+  const branch = state.activeBranch
+  if (!branch) return
+  try {
+    await rumu.request('abort', { branch })
+  } catch (err) {
+    toast('error', t('errors.abort'), (err as Error).message)
+  }
+}
+
 /** `prompt.cancel`: take back a steering prompt still queued on the active
  * branch, returning its content; null once it has been written (or failed). */
 export async function takeBackPrompt(node: NodeId): Promise<Content | null> {

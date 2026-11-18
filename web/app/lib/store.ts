@@ -120,6 +120,7 @@ export {
   refreshTasks,
   sendPrompt,
   startSessionIn,
+  stopAll,
   stopTurn,
   takeBackPrompt,
   viewAssistant,

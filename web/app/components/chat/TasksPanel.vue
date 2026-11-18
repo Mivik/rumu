@@ -5,7 +5,7 @@
 // the chat (TaskOutputPanel).
 import { computed, onBeforeUnmount, onMounted, ref } from 'vue'
 import { t } from '../../i18n'
-import { killTask, openTaskDetail, runningTasks, state, taskChild } from '../../lib/store'
+import { killTask, openTaskDetail, runningTasks, state, stopAll, taskChild } from '../../lib/store'
 import { taskElapsed, taskLabel } from '../../lib/tasks'
 import { toolIcon } from '../../lib/toolIcon'
 import type { TaskInfo } from '../../lib/types'
@@ -39,20 +39,36 @@ function isOpen(tk: TaskInfo): boolean {
           <Transition name="fold">
             <div v-if="folds" class="fold">
               <div>
-                <button type="button" class="tasks-row text-ink-2" @click="expanded = !expanded">
-                  <span class="flex size-4 flex-none items-center justify-center">
-                    <span class="dot-live dot-task size-1.5 rounded-full bg-pine" />
-                  </span>
-                  <span class="flex-1 truncate text-left">
-                    {{ t('tools.tasks.running', { count: runningTasks.length }) }}
-                  </span>
-                  <Icon
-                    name="down"
-                    :size="14"
-                    class="text-ink-3 transition-[rotate] duration-300 ease-soft"
-                    :class="{ 'rotate-180': showRows }"
-                  />
-                </button>
+                <div class="tasks-row text-ink-2">
+                  <button
+                    type="button"
+                    class="flex min-w-0 flex-1 items-center gap-2"
+                    @click="expanded = !expanded"
+                  >
+                    <span class="flex size-4 flex-none items-center justify-center">
+                      <span class="dot-live dot-task size-1.5 rounded-full bg-pine" />
+                    </span>
+                    <span class="flex-1 truncate text-left">
+                      {{ t('tools.tasks.running', { count: runningTasks.length }) }}
+                    </span>
+                    <Icon
+                      name="down"
+                      :size="14"
+                      class="text-ink-3 transition-[rotate] duration-300 ease-soft"
+                      :class="{ 'rotate-180': showRows }"
+                    />
+                  </button>
+                  <!-- takes the sub-agents' tasks down too, which no row shows -->
+                  <button
+                    type="button"
+                    class="flex-none rounded-control px-1 text-micro text-ink-3 transition-colors hover:text-danger"
+                    :title="t('tools.tasks.stopAllAria')"
+                    :aria-label="t('tools.tasks.stopAllAria')"
+                    @click="stopAll()"
+                  >
+                    {{ t('tools.tasks.stopAll') }}
+                  </button>
+                </div>
               </div>
             </div>
           </Transition>

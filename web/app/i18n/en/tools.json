@@ -79,6 +79,8 @@
     "running": "{count} background task running | {count} background tasks running",
     "kill": "kill {id}",
     "killAria": "kill task {id}",
+    "stopAll": "stop all",
+    "stopAllAria": "stop this branch's reply and every task it started",
     "close": "Close task output"
   },
   "status": {
