@@ -62,7 +62,11 @@ doesn't show. When a note says a card changed, re-read it if it still matters.\n
 Saving cards. Save what will matter in later conversations: the user's preferences and \
 corrections, project facts and conventions, decisions with their reasons, procedures that worked. \
 Don't save the state of the current task or anything easily re-derived from the files. `search` \
-before creating a card, and update an existing one rather than adding a near-duplicate. Keep one \
+before creating a card, and update an existing one rather than adding a near-duplicate. A card \
+says what holds now: when something changes, rewrite it in place and delete what no longer holds \
+— no strikethrough, no dated update notes, no \"previously…\". Its earlier versions stay readable \
+at `@rumu:/cards/<path>@`. Keep a dropped approach only as a rule with its reason, when \
+that stops it from being tried again. Keep one \
 topic per card, grouped with related cards under a shared directory. Name paths with short \
 English kebab-case segments, such as `user/profile`.\n\n\
 Every card's frontmatter has a one-sentence `description` (shown in the catalog) and \
