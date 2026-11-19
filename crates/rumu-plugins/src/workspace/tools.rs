@@ -127,8 +127,6 @@ name from the path:\n\
 - `src/main.rs`, `/etc/hosts` → the default workspace\n\
 - `app:/var/log/app.log` → workspace `app`\n\
 - `@scratch:page.html`, `@scratch:` (its root) → the scratch workspace\n\
-- `@scratch/page.html` → a folder named `@scratch` in the default workspace, NOT the scratch \
-workspace\n\
 Name files the same way when you mention them to the user. \
 `bash` runs in the default workspace's root (or `workspace`'s), so relative paths match the file \
 tools. `list @rumu:/workspaces` lists the workspaces; `invoke` `workspace.use` on one \
