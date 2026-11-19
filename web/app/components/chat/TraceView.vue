@@ -4,9 +4,9 @@
 // them, and each sub-agent's own rows folded under the call that started it.
 // A row opens into its full JSON. Like the conversation, it opens at the end
 // and follows new rows while you are there.
-import { computed, nextTick, reactive, ref, watch } from 'vue'
+import { computed, nextTick, reactive, ref, watch, watchEffect } from 'vue'
 import { t } from '../../i18n'
-import { pathNodes, state, trace } from '../../lib/store'
+import { ensureAgentNodes, pathNodes, state, trace } from '../../lib/store'
 import type { TraceKind } from '../../lib/store'
 import TraceRows from './TraceRows.vue'
 
@@ -14,6 +14,11 @@ const KINDS: TraceKind[] = ['user', 'assistant', 'tool', 'note', 'marker', 'hook
 
 const open = reactive(new Set<string>())
 const hidden = reactive(new Set<TraceKind>())
+
+// The tree leaves sub-agents' nodes out: an open agent row fetches its own.
+watchEffect(() => {
+  for (const key of open) if (key.startsWith('agent:')) void ensureAgentNodes(key.slice('agent:'.length))
+})
 
 function toggleKind(k: TraceKind): void {
   if (hidden.has(k)) hidden.delete(k)

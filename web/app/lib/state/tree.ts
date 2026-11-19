@@ -5,7 +5,7 @@
 import { rumu } from '../api'
 import { t } from '../../i18n'
 import type { MessageKey } from '../../i18n'
-import type { Branch, BranchId, BranchPathResult, NodeId, SessionTreeResult } from '../types'
+import type { Branch, BranchId, BranchPathResult, Node, NodeId, SessionId, SessionTreeResult } from '../types'
 import { state } from './state'
 import { syncLive } from './stream'
 import { toast } from './ui'
@@ -15,17 +15,42 @@ export function replaceTree(tree: SessionTreeResult): void {
   state.session = tree.session
   state.nodes = {}
   state.branches = {}
+  state.agentNodes = {}
+  state.usage = tree.usage
   for (const n of tree.nodes) state.nodes[n.id] = n
   for (const b of tree.branches) state.branches[b.id] = b
   syncLive(tree)
+}
+
+/** The open session's tree, sub-agents' nodes left out (`ensureAgentNodes`
+ *  fetches one's when it is opened). */
+export function fetchTree(session: SessionId): Promise<SessionTreeResult> {
+  return rumu.request<SessionTreeResult>('session.tree', { session, agents: false })
 }
 
 /** Re-fetch the open session's tree (authoritative after mutating ops). */
 export async function resyncTree(): Promise<void> {
   const id = state.sessionId
   if (!id) return
-  const tree = await rumu.request<SessionTreeResult>('session.tree', { session: id })
-  replaceTree(tree)
+  replaceTree(await fetchTree(id))
+}
+
+/** Fetch the nodes of sub-agent branch `id` the tree left out, once per
+ *  tree. A replaced tree drops them, so callers re-ask from a watcher. */
+export async function ensureAgentNodes(id: BranchId): Promise<void> {
+  if (state.branches[id]?.kind.type !== 'agent' || state.agentNodes[id]) return
+  const session = state.sessionId
+  state.agentNodes[id] = 'loading'
+  try {
+    const res = await rumu.request<{ nodes: Node[] }>('branch.nodes', { branch: id })
+    // A tree replaced meanwhile asks again.
+    if (state.sessionId !== session || state.agentNodes[id] !== 'loading') return
+    for (const n of res.nodes) state.nodes[n.id] ??= n
+    state.agentNodes[id] = 'loaded'
+  } catch (err) {
+    if (state.agentNodes[id] === 'loading') delete state.agentNodes[id]
+    toast('error', t('errors.loadingBranch'), (err as Error).message)
+  }
 }
 
 export async function loadPath(branch: BranchId): Promise<void> {

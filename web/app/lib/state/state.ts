@@ -17,6 +17,7 @@ import type {
   PathState,
   SessionId,
   SessionInfo,
+  SessionUsage,
   Tagged,
   TaskId,
   TaskInfo,
@@ -164,6 +165,11 @@ const initial = {
   session: null as SessionInfo | null,
   nodes: {} as Record<NodeId, Node>,
   branches: {} as Record<BranchId, Branch>,
+  /** Sub-agent branches whose nodes were fetched (`branch.nodes`):
+   *  `session.tree` leaves them out until one is opened. */
+  agentNodes: {} as Record<BranchId, 'loading' | 'loaded'>,
+  /** Token totals over every model call of the open session. */
+  usage: { calls: 0, input: 0, cached: 0, output: 0 } as SessionUsage,
   activeBranch: null as BranchId | null,
   pathState: null as PathState | null,
 

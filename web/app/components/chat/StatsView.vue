@@ -135,21 +135,9 @@ function replyRow(r: ReplyStat) {
 }
 const rows = computed(() => replies.value.map((r) => ({ r, ...replyRow(r) })))
 
-/** Every branch of the session, sub-agents included. */
-const session = computed(() => {
-  let calls = 0
-  let input = 0
-  let cached = 0
-  let output = 0
-  for (const n of Object.values(state.nodes)) {
-    if (n.body.type !== 'assistant') continue
-    calls++
-    input += n.body.usage.prompt_tokens
-    cached += n.body.usage.cached_tokens
-    output += n.body.usage.completion_tokens
-  }
-  return { calls, input, cached, output }
-})
+/** Every branch of the session, sub-agents included: totalled by the server,
+ *  since the tree leaves sub-agents' nodes out. */
+const session = computed(() => state.usage)
 </script>
 
 <template>

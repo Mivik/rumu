@@ -18,7 +18,6 @@ import type {
   Project,
   SessionId,
   SessionInfo,
-  SessionTreeResult,
   TaskId,
   TaskInfo,
   Workspace,
@@ -32,7 +31,7 @@ import { typedText } from '../attachments'
 import { currentPick, models } from './models'
 import { isUnseen } from './derived'
 import { state } from './state'
-import { findAgentChild, forkAt, loadPath, replaceTree, resyncTree } from './tree'
+import { fetchTree, findAgentChild, forkAt, loadPath, replaceTree, resyncTree } from './tree'
 import { openAgentView } from './branchView'
 import { requestComposerFocus, toast } from './ui'
 import { chooseLandingProject, landingAssistant, landingProject, rememberSessionPicks } from './projects'
@@ -156,7 +155,7 @@ let openSeq = 0
 export async function openSession(id: SessionId, opts: { history?: OpenHistory } = {}): Promise<boolean> {
   const seq = ++openSeq
   try {
-    const tree = await rumu.request<SessionTreeResult>('session.tree', { session: id })
+    const tree = await fetchTree(id)
     if (seq !== openSeq) return false
     if (state.sessionId !== tree.session.id) {
       // Panels beside the chat belong to the session that opened them.
@@ -230,6 +229,7 @@ export function closeSession(): void {
   state.session = null
   state.nodes = {}
   state.branches = {}
+  state.agentNodes = {}
   state.activeBranch = null
   state.pathState = null
   state.deltas = {}

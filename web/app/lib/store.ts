@@ -69,7 +69,7 @@ export {
   closeLightbox,
 } from './state/ui'
 
-export { findAgentChild, forkAt, selectBranch } from './state/tree'
+export { ensureAgentNodes, findAgentChild, forkAt, selectBranch } from './state/tree'
 export type { OpenHistory, PromptAttachment } from './state/sessions'
 
 export {

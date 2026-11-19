@@ -102,6 +102,13 @@ function onNodeAppended(p: NodeAppendedPush): void {
     if (state.page?.page === 'decks') void refreshLibrary()
   }
   if (state.sessionId && node.session === state.sessionId) {
+    if (node.body.type === 'assistant' && !state.nodes[node.id]) {
+      const u = node.body.usage
+      state.usage.calls++
+      state.usage.input += u.prompt_tokens
+      state.usage.cached += u.cached_tokens
+      state.usage.output += u.completion_tokens
+    }
     state.nodes[node.id] = node
     // A node extending a branch's head grows its path live (the active
     // one, or a sub-agent open beside it).

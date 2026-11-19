@@ -1,6 +1,6 @@
 //! WebSocket protocol, blob routes and static serving.
 
-use std::collections::HashMap;
+use std::collections::{HashMap, HashSet};
 use std::sync::Arc;
 
 use axum::Json;
@@ -834,16 +834,50 @@ async fn dispatch(state: &AppState, method: &str, p: &Value) -> Result<Value> {
             Ok(json!({}))
         }
 
+        // `agents: false` leaves out the nodes only sub-agent branches reach
+        // (most of a long session's bytes); `branch.nodes` fetches them.
+        // `usage` totals every model call of the session either way.
         "session.tree" => {
             let session: SessionId = str_param(p, "session")?.into();
-            let (session, nodes, branches) = kernel.session_tree(&session)?;
+            let agents = p.get("agents").and_then(Value::as_bool).unwrap_or(true);
+            let (session, mut nodes, branches) = kernel.session_tree(&session)?;
+            let usage = session_usage(&nodes);
+            if !agents {
+                let lines = line_nodes(&nodes, &branches);
+                nodes.retain(|n| lines.contains(&n.id));
+            }
             let live = kernel.live_turns(&session.id)?;
             Ok(json!({
                 "session": session,
                 "nodes": nodes,
                 "branches": branches,
                 "live": live,
+                "usage": usage,
             }))
+        }
+
+        // The nodes of `branch`'s path that `session.tree` with
+        // `agents: false` leaves out, root → head (none for a main line or a
+        // side question).
+        "branch.nodes" => {
+            let branch: BranchId = str_param(p, "branch")?.into();
+            let session = kernel.session_of(&branch)?;
+            let (_, nodes, branches) = kernel.session_tree(&session)?;
+            let lines = line_nodes(&nodes, &branches);
+            let head = branches.iter().find(|b| b.id == branch).map(|b| &b.head);
+            let by_id: HashMap<&NodeId, &rumu_core::Node> =
+                nodes.iter().map(|n| (&n.id, n)).collect();
+            let mut own = Vec::new();
+            let mut cur = head;
+            while let Some(n) = cur.and_then(|id| by_id.get(id)) {
+                if lines.contains(&n.id) {
+                    break;
+                }
+                own.push(*n);
+                cur = n.parent.as_ref();
+            }
+            own.reverse();
+            Ok(json!({ "nodes": own }))
         }
 
         "session.seen" => {
@@ -1338,6 +1372,42 @@ fn str_param<'a>(p: &'a Value, key: &str) -> Result<&'a str> {
         .ok_or_else(|| ServerError::MissingParam(key.to_owned()))
 }
 
+/// The nodes on the path of some branch that is not a sub-agent: every main
+/// line (the variant switcher walks them all) and side question.
+fn line_nodes(nodes: &[rumu_core::Node], branches: &[rumu_core::Branch]) -> HashSet<NodeId> {
+    let parent: HashMap<&NodeId, Option<&NodeId>> =
+        nodes.iter().map(|n| (&n.id, n.parent.as_ref())).collect();
+    let mut lines = HashSet::new();
+    for b in branches {
+        if matches!(b.kind, rumu_core::BranchKind::Agent { .. }) {
+            continue;
+        }
+        let mut cur = Some(&b.head);
+        while let Some(id) = cur {
+            let Some(up) = parent.get(id) else { break };
+            if !lines.insert(id.clone()) {
+                break;
+            }
+            cur = *up;
+        }
+    }
+    lines
+}
+
+/// Token totals over every model call in `nodes`.
+fn session_usage(nodes: &[rumu_core::Node]) -> Value {
+    let (mut calls, mut input, mut cached, mut output) = (0u64, 0u64, 0u64, 0u64);
+    for n in nodes {
+        if let rumu_core::NodeBody::Assistant { usage, .. } = &n.body {
+            calls += 1;
+            input += usage.prompt_tokens;
+            cached += usage.cached_tokens;
+            output += usage.completion_tokens;
+        }
+    }
+    json!({ "calls": calls, "input": input, "cached": cached, "output": output })
+}
+
 /// The project deck `id`; any other id is a bad request.
 fn project_deck(state: &AppState, id: &str) -> Result<rumu_cards::Deck> {
     state
@@ -1376,5 +1446,80 @@ fn optional_deck_param(state: &AppState, p: &Value) -> Result<Option<rumu_cards:
     {
         Some(id) => Ok(Some(deck_param(state, id)?)),
         None => Ok(None),
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use rumu_core::{Branch, BranchKind, BranchStatus, Content, Node, NodeBody};
+
+    use super::*;
+
+    fn node(id: &str, parent: Option<&str>) -> Node {
+        Node {
+            id: id.into(),
+            parent: parent.map(Into::into),
+            session: "s".into(),
+            at: 0,
+            dur_ms: None,
+            body: NodeBody::User {
+                content: Content::text(id),
+            },
+        }
+    }
+
+    fn branch(id: &str, head: &str, forked_from: Option<&str>, kind: BranchKind) -> Branch {
+        Branch {
+            id: id.into(),
+            session: "s".into(),
+            head: head.into(),
+            forked_from: forked_from.map(Into::into),
+            kind,
+            status: BranchStatus::Active,
+            created_at: 0,
+        }
+    }
+
+    /// Main lines (every variant) and side questions stay; what only a
+    /// sub-agent reaches, nested ones included, is left out.
+    #[test]
+    fn line_nodes_leave_out_only_sub_agents() {
+        let nodes = vec![
+            node("r", None),
+            node("a", Some("r")),
+            node("v", Some("r")), // a variant of `a`
+            node("q", Some("a")), // a side question off `a`
+            node("g1", Some("a")),
+            node("g2", Some("g1")),
+            node("n1", Some("g2")), // a sub-agent of the sub-agent
+        ];
+        let agent = |parent: &str| BranchKind::Agent {
+            task: String::new(),
+            parent_branch: parent.into(),
+            call_id: "c".into(),
+            via_plugin: false,
+            inherit: Default::default(),
+        };
+        let branches = vec![
+            branch("main", "a", None, BranchKind::Main),
+            branch("var", "v", Some("r"), BranchKind::Main),
+            branch(
+                "side",
+                "q",
+                Some("a"),
+                BranchKind::Side {
+                    parent_branch: "main".into(),
+                    quote: None,
+                },
+            ),
+            branch("g", "g2", Some("a"), agent("main")),
+            branch("n", "n1", Some("g2"), agent("g")),
+        ];
+        let mut kept: Vec<_> = line_nodes(&nodes, &branches)
+            .into_iter()
+            .map(|id| id.to_string())
+            .collect();
+        kept.sort();
+        assert_eq!(kept, ["a", "q", "r", "v"]);
     }
 }

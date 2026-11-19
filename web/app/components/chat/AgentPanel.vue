@@ -4,9 +4,17 @@
 // and follows the end unless scrolled away. Read-only: a sub-agent's branch
 // belongs to the call that started it, so its turns offer no edit,
 // regenerate or fork. It opens on the task, shown as the prompt it is.
-import { computed, nextTick, ref, watch } from 'vue'
+import { computed, nextTick, ref, watch, watchEffect } from 'vue'
 import { t } from '../../i18n'
-import { buildTimeline, callsOf, openAgentView, pathOf, provideBranchView, state } from '../../lib/store'
+import {
+  buildTimeline,
+  callsOf,
+  ensureAgentNodes,
+  openAgentView,
+  pathOf,
+  provideBranchView,
+  state,
+} from '../../lib/store'
 import type { Node } from '../../lib/types'
 import Icon from '../ui/Icon.vue'
 import AssistantGroup from './AssistantGroup.vue'
@@ -17,12 +25,18 @@ import UserRow from './UserRow.vue'
 const branch = computed(() => (state.agentView ? (state.branches[state.agentView] ?? null) : null))
 const kind = computed(() => (branch.value?.kind.type === 'agent' ? branch.value.kind : null))
 
+// The tree leaves a sub-agent's nodes out until it is opened.
+watchEffect(() => {
+  if (state.agentView) void ensureAgentNodes(state.agentView)
+})
+const loaded = computed(() => !!state.agentView && state.agentNodes[state.agentView] === 'loaded')
+
 /** The branch's own nodes from its goal prompt on, the prompt showing the
  *  task as it was given (the kernel's sub-agent framing is the model's, not
  *  the reader's). What was seeded before it is the parent's. */
 const nodes = computed<Node[]>(() => {
   const b = branch.value
-  if (!b || !kind.value) return []
+  if (!b || !kind.value || !loaded.value) return []
   const own = pathOf(b, b.forked_from)
   const at = own.findIndex((n) => n.body.type === 'user')
   const prompt = own[at]
@@ -112,7 +126,7 @@ watch(
           <ContextPills v-else-if="entry.kind === 'context'" :nodes="entry.nodes" />
           <CompactionRow v-else-if="entry.kind === 'compaction'" :node="entry.node" />
         </div>
-        <p v-if="!timeline.length" class="text-meta text-ink-3">{{ t('chat.agentView.empty') }}</p>
+        <p v-if="loaded && !timeline.length" class="text-meta text-ink-3">{{ t('chat.agentView.empty') }}</p>
       </div>
     </div>
   </section>

@@ -142,6 +142,15 @@ export interface SessionTreeResult {
   branches: Branch[]
   /** Branches with a running turn, and what their model call streamed. */
   live: Record<BranchId, LiveTurn>
+  /** Token totals over every model call of the session, sub-agents included. */
+  usage: SessionUsage
+}
+
+export interface SessionUsage {
+  calls: number
+  input: number
+  cached: number
+  output: number
 }
 
 export interface BranchPathResult {

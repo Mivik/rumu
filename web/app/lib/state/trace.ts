@@ -53,7 +53,8 @@ function build(nodes: Node[], hooks: HookTraceEntry[], index: Index, depth: numb
   let h = 0
   const agentsOf = (callId: string): void => {
     for (const b of index.agents.get(callId) ?? []) {
-      const own = ownNodes(b)
+      // Its nodes come when its row is opened (TraceView).
+      const own = state.agentNodes[b.id] === 'loaded' ? ownNodes(b) : []
       const children = depth < MAX_DEPTH ? build(own, index.hooks.get(b.id) ?? [], index, depth + 1) : []
       rows.push({ kind: 'agent', key: `agent:${b.id}`, branch: b, rows: children })
     }
