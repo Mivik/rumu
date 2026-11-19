@@ -1,10 +1,10 @@
 <script setup lang="ts">
 // Inline ‹ i/n › over the sibling subtrees of a message's parent: the
 // replaced variants of a turn live here, not on the conversation line.
-// Picking one swaps the session's active branch to it.
+// Picking one moves the session's main line to it.
 import { computed } from 'vue'
 import { t } from '../../i18n'
-import { isBusy, selectBranch, siblingAlternatives, state } from '../../lib/store'
+import { isBusy, moveHead, siblingAlternatives } from '../../lib/store'
 import type { NodeId } from '../../lib/types'
 import Icon from '../ui/Icon.vue'
 
@@ -18,8 +18,8 @@ const position = computed(() => Math.max(current.value, 0) + 1)
 function pick(index: number): void {
   if (isBusy.value) return
   const target = alternatives.value[index]
-  if (!target || target.current || target.branch === state.activeBranch) return
-  void selectBranch(target.branch)
+  if (!target || target.current) return
+  void moveHead(target.node)
 }
 
 function step(delta: number): void {

@@ -171,7 +171,7 @@ const initial = {
   agentNodes: {} as Record<BranchId, 'loading' | 'loaded'>,
   /** Token totals over every model call of the open session. */
   usage: { calls: 0, input: 0, cached: 0, output: 0 } as SessionUsage,
-  /** The branch the chat shows: the session's active branch, or a sub-agent
+  /** The branch the chat shows: the session's main line, or a sub-agent
    *  opened from it (`openAgentView`; the server's stays put). */
   activeBranch: null as BranchId | null,
   pathState: null as PathState | null,

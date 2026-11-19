@@ -30,7 +30,7 @@ import { typedText } from '../attachments'
 import { currentPick, models } from './models'
 import { isUnseen } from './derived'
 import { state } from './state'
-import { fetchTree, findAgentChild, forkAt, loadPath, replaceTree, resyncTree } from './tree'
+import { fetchTree, findAgentChild, loadPath, moveHead, replaceTree } from './tree'
 import { openAgentView } from './branchView'
 import { requestComposerFocus, toast } from './ui'
 import { chooseLandingProject, landingAssistant, landingProject, rememberSessionPicks } from './projects'
@@ -149,7 +149,7 @@ export async function openSession(id: SessionId, opts: { history?: OpenHistory }
     state.sessionId = tree.session.id
     viewAssistant(tree.session.assistant)
     replaceTree(tree)
-    state.activeBranch = tree.session.active_branch
+    state.activeBranch = tree.session.main_branch
     // A new session already written keeps the project it was written for.
     if (!landingWritten.value) chooseLandingProject(tree.session.project ?? null)
     const history = opts.history ?? 'push'
@@ -157,7 +157,7 @@ export async function openSession(id: SessionId, opts: { history?: OpenHistory }
       state.page = null
       commitRoute(history)
     }
-    await loadPath(tree.session.active_branch)
+    await loadPath(tree.session.main_branch)
     markSeen()
     void refreshTasks(tree.session.id)
     return true
@@ -402,10 +402,10 @@ export async function sendPrompt(
 
 /**
  * Regenerate the reply to a prompt: the server forks at the user message,
- * records the composer's model where it differs, replays the prompt (hooks
- * and memory injection included) and streams a new answer on that branch,
- * replacing the branch it leaves. The old reply stays reachable from the
- * message's variant switcher.
+ * moves the main line onto the user message, records the composer's model
+ * where it differs, replays the prompt (hooks and memory injection included)
+ * and streams a new answer from there. The old reply stays reachable from
+ * the message's variant switcher.
  */
 export async function regenerateFrom(nodeId: NodeId): Promise<void> {
   try {
@@ -414,9 +414,7 @@ export async function regenerateFrom(nodeId: NodeId): Promise<void> {
       ...composerChoice(),
     })
     settlePicks()
-    await resyncTree()
-    state.activeBranch = res.branch.id
-    if (state.session) state.session.active_branch = res.branch.id
+    // The head moved by the `branch.updated` push, which comes first.
     state.busy[res.branch.id] = true
     await loadPath(res.branch.id)
   } catch (err) {
@@ -462,7 +460,7 @@ export async function revertPlan(node: NodeId): Promise<RevertPlan | null> {
 /**
  * Rewind to the user message `node` on the active branch
  * (`branch.rewind`): revert `files` of its plan, and with `conversation`
- * fork a branch from just before the message and open it, the message put
+ * move the main line to just before the message, the message put
  * back into an empty composer. Returns the files reverted, the failed ones
  * carrying `error`; null when the request failed.
  */
@@ -481,9 +479,6 @@ export async function rewindTo(
       conversation,
     })
     if (res.branch) {
-      await resyncTree()
-      state.activeBranch = res.branch.id
-      if (state.session) state.session.active_branch = res.branch.id
       await loadPath(res.branch.id)
       putBack(node)
     }
@@ -583,6 +578,6 @@ export async function editPrompt(
     return false
   }
   const choice = composerChoice()
-  if (!(await forkAt(before, 'edit'))) return false
+  if (!(await moveHead(before, 'edit'))) return false
   return sendPrompt(next, attachments, choice)
 }

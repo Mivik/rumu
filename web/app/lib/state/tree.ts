@@ -1,10 +1,9 @@
-// The open session's node tree and branches: loading, switching and
-// forking. Everything that replaces the tree goes through `replaceTree`,
+// The open session's node tree and branches: loading, and moving the main
+// line. Everything that replaces the tree goes through `replaceTree`,
 // so the derived views always see a consistent snapshot.
 
 import { rumu } from '../api'
 import { t } from '../../i18n'
-import type { MessageKey } from '../../i18n'
 import type { Branch, BranchId, BranchPathResult, Node, NodeId, SessionId, SessionTreeResult } from '../types'
 import { state } from './state'
 import { syncLive } from './stream'
@@ -26,13 +25,6 @@ export function replaceTree(tree: SessionTreeResult): void {
  *  fetches one's when it is opened). */
 export function fetchTree(session: SessionId): Promise<SessionTreeResult> {
   return rumu.request<SessionTreeResult>('session.tree', { session, agents: false })
-}
-
-/** Re-fetch the open session's tree (authoritative after mutating ops). */
-export async function resyncTree(): Promise<void> {
-  const id = state.sessionId
-  if (!id) return
-  replaceTree(await fetchTree(id))
 }
 
 /** Fetch the nodes of sub-agent branch `id` the tree left out, once per
@@ -62,45 +54,26 @@ export async function loadPath(branch: BranchId): Promise<void> {
   }
 }
 
-/** Switch to `branch`: the message variant switcher's pick. */
-export async function selectBranch(id: BranchId): Promise<void> {
-  state.activeBranch = id
-  const b = state.branches[id]
-  if (b) {
-    // Optimistically follow the server's notion of active.
-    if (state.session) state.session.active_branch = id
-    // Keep the session list chip roughly in sync without a round trip.
-    state.pathState = null
-  }
-  try {
-    await rumu.request('branch.activate', { branch: id })
-  } catch (err) {
-    toast('error', t('errors.activate'), (err as Error).message)
-  }
-  await loadPath(id)
-}
-
 /**
- * Fork a new branch at `nodeId` and make it active — how an edited prompt
- * steps away from the turn it replaces. `label` names the action in the
- * error toast (edit); the branch left behind stays reachable from the
- * message's variant switcher.
+ * Move the session's main line to `node`: the variant switcher's pick (the
+ * end of another variant), or just before a message being edited. What it
+ * leaves stays reachable from the message's variant switcher. `label`
+ * names the action in the error toast.
  */
-export async function forkAt(nodeId: NodeId, label = 'edit'): Promise<Branch | null> {
+export async function moveHead(node: NodeId, label: 'activate' | 'edit' = 'activate'): Promise<boolean> {
+  const branch = state.session?.main_branch
+  if (!branch) return false
   try {
-    const res = await rumu.request<{ branch: Branch }>('branch.fork', { node: nodeId })
-    await resyncTree()
-    state.activeBranch = res.branch.id
-    if (state.session) state.session.active_branch = res.branch.id
-    await loadPath(res.branch.id)
-    return res.branch
+    // The head moves by the `branch.updated` push, which comes first.
+    await rumu.request('branch.move', { branch, node })
+    state.activeBranch = branch
+    await loadPath(branch)
+    return true
   } catch (err) {
-    toast(
-      'error',
-      t('errors.action', { label: t(`errors.labels.${label}` as MessageKey) }),
-      (err as Error).message,
-    )
-    return null
+    const message =
+      label === 'edit' ? t('errors.action', { label: t('errors.labels.edit') }) : t('errors.activate')
+    toast('error', message, (err as Error).message)
+    return false
   }
 }
 

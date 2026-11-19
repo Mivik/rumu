@@ -195,7 +195,12 @@ function onTaskProgress(p: TaskProgressPush): void {
 
 function onBranchUpdated(p: BranchUpdatedPush): void {
   if (state.sessionId && p.branch.session === state.sessionId) {
+    const old = state.branches[p.branch.id]
     state.branches[p.branch.id] = p.branch
+    // A head moved rather than grown (a variant picked, an edit — maybe in
+    // another tab): the shown path's state is another one.
+    const moved = old && old.head !== p.branch.head && state.nodes[p.branch.head]?.parent !== old.head
+    if (moved && p.branch.id === state.activeBranch) void loadPath(p.branch.id)
   }
 }
 
@@ -207,21 +212,8 @@ function onSessionUpdated(p: SessionUpdatedPush): void {
   // The model can create a project; learn it when a session names one.
   if (s.project && !state.projects.some((x) => x.id === s.project)) void refreshProjects().catch(() => {})
   if (state.sessionId === s.id) {
-    // Follow the server's active branch; a sub-agent shown here (one it
-    // does not know about) only gives way when that branch moves.
-    const moved = s.active_branch !== state.session?.active_branch
-    const onAgent = state.branches[state.activeBranch ?? '']?.kind.type === 'agent'
     state.session = s
     markSeen()
-    if (
-      (moved || !onAgent) &&
-      s.active_branch !== state.activeBranch &&
-      state.branches[s.active_branch] &&
-      !state.busy[state.activeBranch ?? '']
-    ) {
-      state.activeBranch = s.active_branch
-      loadPath(s.active_branch)
-    }
   }
 }
 

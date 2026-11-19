@@ -121,75 +121,83 @@ export const nestedRunningCount = computed(() => {
 })
 
 export interface SiblingAlternative {
-  /** Branch to activate when it is picked. */
-  branch: BranchId
-  /** The active branch's head is inside this subtree. */
+  /** Where the main line moves when it is picked: the newest end of its
+   *  subtree. */
+  node: NodeId
+  /** The shown branch's head is inside this subtree. */
   current: boolean
 }
 
-/** parentId → its sibling alternatives, built in one pass over the branches
- * (each head walks up to the root once) so the per-message switcher is a
- * lookup, not another walk of every branch. */
-const siblingIndex = computed<Map<NodeId, SiblingAlternative[]>>(() => {
-  // Which child of each ancestor a main line's head descends through
-  // (sub-agents and side questions hang off a line, they are not variants).
-  const byChild = new Map<NodeId, Map<NodeId, Branch[]>>()
+/** Nodes a sub-agent or side question added (each such branch's own, head
+ *  up to the node it forked from, as far as they are loaded): not part of
+ *  the main line, so never a variant of it. */
+const offLine = computed<Set<NodeId>>(() => {
+  const off = new Set<NodeId>()
   for (const b of Object.values(state.branches)) {
-    if (b.kind.type !== 'main') continue
+    if (b.kind.type === 'main') continue
     let cur: NodeId | null | undefined = b.head
     let guard = 0
-    while (cur && state.nodes[cur] && guard++ < 10_000) {
-      const parent = state.nodes[cur].parent
-      if (parent) {
-        let children = byChild.get(parent)
-        if (!children) {
-          children = new Map()
-          byChild.set(parent, children)
-        }
-        const list = children.get(cur) ?? []
-        list.push(b)
-        children.set(cur, list)
-      }
+    while (cur && cur !== b.forked_from && state.nodes[cur] && guard++ < 10_000) {
+      off.add(cur)
       cur = state.nodes[cur].parent
     }
   }
-  // The child of each ancestor the active branch's head descends through.
-  const activeChildOf = new Map<NodeId, NodeId>()
-  const head = currentBranch.value?.head
-  if (head) {
-    let cur: NodeId | null | undefined = head
-    let prev: NodeId | null = null
+  return off
+})
+
+/** parentId → its sibling alternatives: the children of each main-line node
+ * that has several, each with the newest leaf below it, built in one pass
+ * (each leaf walks up only until an ancestor already has a newer one) so the
+ * per-message switcher is a lookup. */
+const siblingIndex = computed<Map<NodeId, SiblingAlternative[]>>(() => {
+  const children = new Map<NodeId, Node[]>()
+  for (const n of Object.values(state.nodes)) {
+    if (!n.parent || offLine.value.has(n.id)) continue
+    const list = children.get(n.parent) ?? []
+    list.push(n)
+    children.set(n.parent, list)
+  }
+  // The newest leaf under each node.
+  const newest = new Map<NodeId, Node>()
+  for (const leaf of Object.values(state.nodes)) {
+    if (children.has(leaf.id) || offLine.value.has(leaf.id)) continue
+    let cur: Node | undefined = leaf
     let guard = 0
-    while (cur && state.nodes[cur] && guard++ < 10_000) {
-      if (prev) activeChildOf.set(cur, prev)
-      prev = cur
-      cur = state.nodes[cur].parent
+    while (cur && guard++ < 10_000) {
+      const best = newest.get(cur.id)
+      if (best && best.at >= leaf.at) break
+      newest.set(cur.id, leaf)
+      cur = cur.parent ? state.nodes[cur.parent] : undefined
     }
   }
-  // The branch to activate for a child subtree: its most recent one.
-  const pick = (branches: Branch[]): Branch =>
-    branches.reduce((best, b) => (b.created_at > best.created_at ? b : best))
+  // The child of each ancestor the shown head descends through.
+  const shownChildOf = new Map<NodeId, NodeId>()
+  let cur: NodeId | null | undefined = currentBranch.value?.head
+  let prev: NodeId | null = null
+  let guard = 0
+  while (cur && state.nodes[cur] && guard++ < 10_000) {
+    if (prev) shownChildOf.set(cur, prev)
+    prev = cur
+    cur = state.nodes[cur].parent
+  }
   const index = new Map<NodeId, SiblingAlternative[]>()
-  for (const [parentId, children] of byChild) {
-    if (children.size < 2) continue
-    const activeChild = activeChildOf.get(parentId) ?? null
+  for (const [parentId, kids] of children) {
+    if (kids.length < 2) continue
+    const shown = shownChildOf.get(parentId) ?? null
     index.set(
       parentId,
-      [...children.entries()]
-        .sort(([a], [b]) => (state.nodes[a]?.at ?? 0) - (state.nodes[b]?.at ?? 0) || a.localeCompare(b))
-        .map(([nodeId, branches]) => ({
-          branch: pick(branches).id,
-          current: nodeId === activeChild,
-        })),
+      kids
+        .sort((a, b) => a.at - b.at || a.id.localeCompare(b.id))
+        .map((n) => ({ node: newest.get(n.id)?.id ?? n.id, current: n.id === shown })),
     )
   }
   return index
 })
 
 /**
- * The alternatives at a message: one per child subtree of `parentId` that
- * holds a main line's head. Subtrees that only lead to sub-agent branches
- * (an `inherit: full` fork at an assistant node) or side questions do not.
+ * The alternatives at a message: one per child subtree of `parentId` on the
+ * main line. What sub-agents (a `mode: "fork"` child at an assistant node)
+ * and side questions added is not one.
  */
 export function siblingAlternatives(parentId: NodeId | null): SiblingAlternative[] {
   if (!parentId) return []

@@ -1,6 +1,6 @@
-// Which branch the chat shows: the session's active branch, or a sub-agent
-// opened from it. Opening one is client-side only — the server's active
-// branch (`state.session.active_branch`) stays put, and the chat (timeline,
+// Which branch the chat shows: the session's main line, or a sub-agent
+// opened from it. Opening one is client-side only — the session's main
+// line (`state.session.main_branch`) stays put, and the chat (timeline,
 // composer, stop, tasks) simply works on the sub-agent's branch, as on any.
 
 import { computed, type ComputedRef } from 'vue'
@@ -36,9 +36,9 @@ export function useBranchView(): BranchView {
 }
 
 /** Show the sub-agent branch `id` in the chat; `null` goes back to the
- *  session's active branch. */
+ *  session's main line. */
 export function openAgentView(id: BranchId | null): void {
-  const target = id ?? state.session?.active_branch ?? null
+  const target = id ?? state.session?.main_branch ?? null
   if (!target || target === state.activeBranch) return
   state.activeBranch = target
   state.pathState = null
