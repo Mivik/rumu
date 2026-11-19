@@ -13,6 +13,7 @@ import { computed } from 'vue'
 import { t } from '../../i18n'
 import type { ToolRowInfo } from '../../lib/store'
 import { openAgentView, openTaskDetail, state } from '../../lib/store'
+import type { Attachment } from '../../lib/types'
 import type { ToolRowView } from '../../lib/toolrows'
 import {
   argsOf,
@@ -27,6 +28,7 @@ import { taskStatusWord } from '../../lib/tasks'
 import { shortId } from '../../lib/util'
 import { toolIcon } from '../../lib/toolIcon'
 import { vEnter } from '../../lib/motion'
+import { blobUrl, kindOf } from '../../lib/attachments'
 import Icon from '../ui/Icon.vue'
 import Chip from '../ui/Chip.vue'
 import CardChip from './CardChip.vue'
@@ -35,6 +37,7 @@ import BashView from './BashView.vue'
 import FileDiff from './FileDiff.vue'
 import FileView from './FileView.vue'
 import ImageThumb from './ImageThumb.vue'
+import DocumentChip from './DocumentChip.vue'
 import JsonTree from './JsonTree.vue'
 
 const props = defineProps<{ rows: ToolRowInfo[] }>()
@@ -60,6 +63,16 @@ function isShellOpen(v: ToolRowView): boolean {
  * name otherwise. */
 function nameLabel(v: ToolRowView): string {
   return v.name === 'bash' && !isShellOpen(v) && !v.description ? '$' : v.name
+}
+
+/** A result's images: the ones a thumbnail fits. */
+function imagesOf(v: ToolRowView): Attachment[] {
+  return v.attachments.filter((a) => kindOf(a) === 'image')
+}
+
+/** A result's documents: the ones a chip names. */
+function documentsOf(v: ToolRowView): Attachment[] {
+  return v.attachments.filter((a) => kindOf(a) === 'document')
 }
 
 /** The dedicated body an expanded row gets: a successful write/edit its
@@ -237,16 +250,28 @@ function liveTaskOutput(id: string | null): string {
             v.output || t('common.empty')
           }}</pre>
         </div>
-        <div v-if="v.attachments.length">
+        <div v-if="imagesOf(v).length">
           <div class="mb-1 text-micro font-semibold text-ink-3">{{ t('tools.detail.images') }}</div>
           <div class="flex flex-wrap items-start gap-2">
             <ImageThumb
-              v-for="(a, i) in v.attachments"
+              v-for="(a, i) in imagesOf(v)"
               :key="`${a.hash}:${i}`"
               :attachment="a"
               :max-h="160"
               :max-w="240"
-              :tile="v.attachments.length > 1"
+              :tile="imagesOf(v).length > 1"
+            />
+          </div>
+        </div>
+        <div v-if="documentsOf(v).length">
+          <div class="mb-1 text-micro font-semibold text-ink-3">{{ t('tools.detail.documents') }}</div>
+          <div class="flex flex-wrap items-start gap-2">
+            <DocumentChip
+              v-for="(a, i) in documentsOf(v)"
+              :key="`${a.hash}:${i}`"
+              :name="a.name ?? t('chat.document.untitled')"
+              :size="a.size"
+              :href="blobUrl(a.hash)"
             />
           </div>
         </div>

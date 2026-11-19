@@ -63,6 +63,7 @@
     "args": "参数",
     "output": "输出",
     "images": "图片",
+    "documents": "文档",
     "outputError": "输出 · 错误",
     "liveOutput": "任务输出",
     "runningTag": "· 运行中"
