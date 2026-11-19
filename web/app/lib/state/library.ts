@@ -1,6 +1,6 @@
-// The card library page: every deck, independent of the mounted cards a
-// session sees. Mutations refresh both this view and the chat's `state.cards`,
-// so chips and the drawer follow. The open card is the page's item
+// The card library page: every deck, independent of the mounts a session
+// sees. Mutations also tell open card windows to re-read (`refreshCards`),
+// so the drawer follows. The open card is the page's item
 // (`/decks/<deck>/<path>`), so Back walks the cards that were read.
 
 import { computed } from 'vue'

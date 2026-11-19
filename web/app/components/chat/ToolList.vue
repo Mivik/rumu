@@ -13,7 +13,6 @@ import { computed } from 'vue'
 import { t } from '../../i18n'
 import type { ToolRowInfo } from '../../lib/store'
 import { openAgentView, openTaskDetail, state } from '../../lib/store'
-import { cardById } from '../../lib/cards'
 import type { ToolRowView } from '../../lib/toolrows'
 import { argsOf, isRowOpen, outputJson, toggleRow, toolRowTitle, toolRowView } from '../../lib/toolrows'
 import { taskStatusWord } from '../../lib/tasks'
@@ -32,8 +31,6 @@ import ImageThumb from './ImageThumb.vue'
 import JsonTree from './JsonTree.vue'
 
 const props = defineProps<{ rows: ToolRowInfo[] }>()
-
-const cardsMap = cardById
 
 const views = computed<ToolRowView[]>(() => props.rows.map(toolRowView))
 
@@ -173,8 +170,8 @@ function liveTaskOutput(id: string | null): string {
             }}
           </Chip>
           <CardChip
-            v-if="v.toolCardId && cardsMap.get(v.toolCardId)"
-            :card="cardsMap.get(v.toolCardId)!"
+            v-if="v.toolCardId && v.status === 'ok'"
+            :id="v.toolCardId"
             :use-ref="v.cardUseRef ?? undefined"
           />
           <span

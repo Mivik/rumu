@@ -31,6 +31,7 @@ import {
   startSessionIn,
   state,
 } from '../lib/store'
+import { mountedCardCount } from '../lib/cards'
 import type { Project, SessionInfo } from '../lib/types'
 import { layout } from '../lib/layout'
 import { openPage, sheetOf, type Page } from '../lib/router'
@@ -404,7 +405,7 @@ const otherLocale = computed<Locale>(
         <Icon name="memory" :size="16" class="text-memory" />
       </span>
       <span class="flex-1">{{ t('library.title') }}</span>
-      <span class="text-micro text-ink-3 tabular-nums">{{ state.cards.length }}</span>
+      <span class="text-micro text-ink-3 tabular-nums">{{ mountedCardCount }}</span>
     </button>
 
     <button

@@ -4,6 +4,7 @@
 import { ref, shallowRef, watch } from 'vue'
 import type { Attachment, Node, ToastKind } from '../types'
 import { blobUrl } from '../attachments'
+import { mountedId, mountedRef } from '../cards'
 import { state, type LightboxImage, type Toast } from './state'
 
 /** Rising on every request, so the composer takes focus however often it is
@@ -45,12 +46,12 @@ let windowSeq = 1
 /** Open a mounted card (a chip's id) in a new window over the ones already
  *  showing. */
 export function openDrawer(cardId: string, useRef?: string): void {
-  const card = state.cards.find((c) => c.id === cardId)
+  const ref = mountedRef(cardId)
   state.drawers.push({
     key: windowSeq++,
     cardId,
-    deck: card?.deck ?? null,
-    path: card?.path ?? null,
+    deck: ref?.deck ?? null,
+    path: ref?.path || null,
     useRef,
   })
 }
@@ -58,8 +59,7 @@ export function openDrawer(cardId: string, useRef?: string): void {
 /** Open a card by its deck-local address in a new window: a body link inside
  *  a card keeps the card it was clicked in open below. */
 export function openCardWindow(deck: string, path: string): void {
-  const card = state.cards.find((c) => c.deck === deck && c.path === path)
-  state.drawers.push({ key: windowSeq++, cardId: card?.id ?? null, deck, path })
+  state.drawers.push({ key: windowSeq++, cardId: mountedId(deck, path), deck, path })
 }
 
 /** Mark a window as closing: the one below it owns the scrim while it fades. */

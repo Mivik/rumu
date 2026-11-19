@@ -7,7 +7,7 @@
 import { t } from '../i18n'
 import { rumu } from './api'
 import { artifactsOnPath, showArtifact } from './artifacts'
-import { cardById, mountedRef } from './cards'
+import { fetchCard, mountedId, mountedRef } from './cards'
 import { closePage, openPage } from './router'
 import {
   closeDrawer,
@@ -32,14 +32,14 @@ import { copyText } from './util'
 function openDeckCard(ref: LibraryRef): void {
   if (state.drawers.length) return openCardWindow(ref.deck, ref.path)
   if (state.page?.page === 'decks') return openCard(ref.deck, ref.path)
-  const mounted = state.cards.find((c) => c.deck === ref.deck && c.path === ref.path)
-  if (mounted) return openDrawer(mounted.id)
+  const mounted = mountedId(ref.deck, ref.path)
+  if (mounted) return openDrawer(mounted)
   closeDrawer()
   openLibrary(ref.deck, ref.path)
 }
 
 /** `/cards/<mount>/<path>`: a card, or a folder (trailing `/`, a mount point,
- * a prefix of mounted cards) opened at its deck in the library. */
+ * or no card at that path) opened at its deck in the library. */
 function openCardAddress(rest: string): boolean {
   const id = rest
     .replace(/[?#].*$/, '')
@@ -52,16 +52,19 @@ function openCardAddress(rest: string): boolean {
   }
   const ref = mountedRef(id)
   if (!ref) return false
-  const folder =
-    rest.endsWith('/') ||
-    !ref.path ||
-    (!cardById.value.has(id) && state.cards.some((c) => c.id.startsWith(`${id}/`)))
-  if (!folder) {
-    openDeckCard(ref)
+  const openFolder = (): void => {
+    closeDrawer()
+    openLibraryAtDeck(ref.deck)
+  }
+  if (rest.endsWith('/') || !ref.path) {
+    openFolder()
     return true
   }
-  closeDrawer()
-  openLibraryAtDeck(ref.deck)
+  // Only the server knows whether a card is there or only cards below it.
+  fetchCard(id).then(
+    (card) => (card ? openDeckCard(ref) : openFolder()),
+    () => openDeckCard(ref),
+  )
   return true
 }
 

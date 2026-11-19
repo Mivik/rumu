@@ -59,7 +59,7 @@ const MAX_LIVE_OUTPUT = 1_000_000
 
 /** Did this node change the card library on disk? A write/edit records a
  * `card_use`; the memory hook records `card_update` notices for cards that
- * changed elsewhere. Both make `state.cards` stale until re-read. */
+ * changed elsewhere. Both make open card windows and deck counts stale. */
 function cardChanged(node: Node): boolean {
   if (node.body.type !== 'note') return false
   const data = node.body.content.data
@@ -72,10 +72,17 @@ function cardChanged(node: Node): boolean {
   return op === 'write' || op === 'edit'
 }
 
-/** Did this node change the branch's state (workspaces or model)? */
+/** Did this node change the branch's state (workspaces, model or card
+ *  mounts)? */
 function stateChanged(node: Node): boolean {
   const tag = node.body.type === 'note' ? node.body.content.data?.tag : undefined
-  return tag === 'workspace.use' || tag === 'workspace.set' || tag === 'model.use'
+  return (
+    tag === 'workspace.use' ||
+    tag === 'workspace.set' ||
+    tag === 'model.use' ||
+    tag === 'card.mount' ||
+    tag === 'card.unmount'
+  )
 }
 
 /** `workspaces.updated`: the registry or a project's workspace list changed. */

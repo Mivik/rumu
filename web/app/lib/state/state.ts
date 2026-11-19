@@ -9,7 +9,6 @@ import type {
   Effect,
   Branch,
   BranchId,
-  Card,
   Assistant,
   PendingDecision,
   Node,
@@ -139,10 +138,12 @@ const initial = {
   sessions: [] as SessionInfo[],
   /** The configured assistants (`assistant.list`); exactly one is the default. */
   assistants: [] as Assistant[],
-  /** The assistant in view: whose sessions the sidebar lists, whose library `cards`
-   *  holds, and who new sessions run as. */
+  /** The assistant in view: whose sessions the sidebar lists, whose cards
+   *  the shelf shows outside a session, and who new sessions run as. */
   assistant: '',
-  cards: [] as Card[],
+  /** Bumped whenever cards may have changed on disk: open card windows
+   *  re-read theirs. */
+  cardsRev: 0,
   /** The project decks (`project.list`, kept live by `workspaces.updated`). */
   projects: [] as Project[],
   /** The workspace registry (`workspace.list`, kept live by `workspaces.updated`). */

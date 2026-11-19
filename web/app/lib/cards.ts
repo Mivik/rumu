@@ -5,7 +5,8 @@
 //   2. Note { content.data = memory.card_update {id, rev} }         → "updated" pill
 //   3. ToolResult of a card read/write (read/write/edit on
 //      `@rumu:/cards/<id>`) + a card_use note → tool row chip
-//   4. the Context panel (card.list + the uses derived from the path)
+//   4. the card window, which reads the live card (card.get) beside the uses
+//      derived from the path
 // A card is identified by its deck id and path; records carry both. This
 // module maps all shapes to the same Card record. It mirrors the derivation in
 // crates/rumu-cards/src/usage.rs.
@@ -21,6 +22,7 @@ import type {
   LibraryRef,
   Node,
 } from './types'
+import { rumu } from './api'
 import { callsOnPath, pathNodes, state } from './store'
 
 /** The payload tag/version decode for one Content, or null. */
@@ -233,25 +235,24 @@ export function mountedId(deck: string, path: string): string | null {
   return mount ? `${mount.point}/${path}` : null
 }
 
-/** card path → record from card.list (paths are what the UI opens). */
-export const cardById = computed(() => {
-  const m = new Map<string, Card>()
-  for (const c of state.cards) m.set(c.id, c)
-  return m
-})
-
 /** A card's identity key: the link target's `deck:path` for a link, else its
  * own `deck:path`. Usage payloads carry the identity. */
 export function cardKey(card: Pick<Card, 'deck' | 'path' | 'link'>): string {
   return card.link ?? `${card.deck}:${card.path}`
 }
 
-/** card identity → record: usage payloads (imports, notices, uses) key on it. */
-export const cardByKey = computed(() => {
-  const m = new Map<string, Card>()
-  for (const c of state.cards) m.set(cardKey(c), c)
-  return m
+/** How many cards the mounted decks hold (the sidebar's count). */
+export const mountedCardCount = computed(() => {
+  const mounted = new Set(cardMounts.value.map((m) => m.deck))
+  return state.library.decks.reduce((sum, d) => sum + (mounted.has(d.id) ? d.cards : 0), 0)
 })
+
+/** The mounted card `id` (`self/dev/x`) as the open branch sees it (else the
+ *  assistant in view); null when no card is there (a folder, or gone). */
+export function fetchCard(id: string): Promise<Card | null> {
+  const scope = state.activeBranch ? { branch: state.activeBranch } : { assistant: state.assistant }
+  return rumu.request<Card | null>('card.get', { ...scope, id })
+}
 
 export type UseKind = 'import' | 'read' | 'write'
 
@@ -328,8 +329,3 @@ export const updateNotesByCard = computed(() => {
   }
   return m
 })
-
-/** Look up a card for an import payload; null if none. */
-export function cardForImport(imp: CardImport | null): Card | null {
-  return imp ? (cardByKey.value.get(`${imp.deck}:${imp.path}`) ?? null) : null
-}

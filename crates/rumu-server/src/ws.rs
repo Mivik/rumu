@@ -1134,58 +1134,11 @@ async fn dispatch(state: &AppState, method: &str, p: &Value) -> Result<Value> {
         // without a `branch` what an assistant deck sees by default:
         // `/cards/self` plus its `deck.yaml` mounts.
         "card.list" => {
-            let mounts = match p.get("branch").and_then(Value::as_str) {
-                Some(branch) => kernel
-                    .branch_path(&BranchId::from(branch))?
-                    .1
-                    .mounts
-                    .clone(),
-                None => {
-                    let deck = assistant_param(state, p)?;
-                    let mut mounts = vec![CardMount {
-                        deck: deck.id().to_owned(),
-                        at: rumu_cards::cards::SELF_MOUNT.into(),
-                    }];
-                    mounts.extend(state.decks.default_mounts(deck.id()));
-                    mounts
-                }
-            };
-            let cards = Cards::new(&state.decks, &mounts);
+            let cards = Cards::new(&state.decks, &card_mounts(state, p)?);
             let out: Vec<rumu_cards::CardInfo> = match cards.all() {
                 Ok(all) => all
                     .into_values()
-                    .map(|loaded| {
-                        // The card file's own deck and path (for a link, not
-                        // the target's): the drawer opens it in the library.
-                        let (deck, path) = cards
-                            .mount_of(&loaded.path)
-                            .map(|(mounted, path)| (mounted.deck.id().to_owned(), path.to_owned()))
-                            .unwrap_or_default();
-                        let description = loaded.card.summary();
-                        let keywords = loaded
-                            .card
-                            .keywords()
-                            .into_iter()
-                            .map(str::to_owned)
-                            .collect();
-                        let pinned = loaded.card.pinned();
-                        let link = loaded
-                            .link
-                            .clone()
-                            .or_else(|| loaded.card.link().map(str::to_owned));
-                        rumu_cards::CardInfo {
-                            id: loaded.path,
-                            deck,
-                            path,
-                            description,
-                            keywords,
-                            body: loaded.card.body,
-                            revision: loaded.card.revision,
-                            pinned,
-                            link,
-                            meta: loaded.card.meta,
-                        }
-                    })
+                    .map(|loaded| card_info(&cards, loaded))
                     .collect(),
                 Err(e) => {
                     warn!(error = %e, "card.list failed");
@@ -1193,6 +1146,14 @@ async fn dispatch(state: &AppState, method: &str, p: &Value) -> Result<Value> {
                 }
             };
             Ok(serde_json::to_value(out)?)
+        }
+
+        // One card by its mounted id (`self/dev/x`) as `card.list` lists it,
+        // or null when no card is there (a folder, or gone).
+        "card.get" => {
+            let cards = Cards::new(&state.decks, &card_mounts(state, p)?);
+            let loaded = cards.load(str_param(p, "id")?)?;
+            Ok(json!(loaded.map(|l| card_info(&cards, l))))
         }
 
         // ---- the library (the user's view of every deck) ----
@@ -1363,6 +1324,53 @@ async fn dispatch(state: &AppState, method: &str, p: &Value) -> Result<Value> {
         }
 
         other => Err(ServerError::UnknownMethod(other.to_owned())),
+    }
+}
+
+/// The mount table `card.list` / `card.get` read through: the `branch`'s,
+/// or without one the `assistant` deck's default (`/cards/self` plus its
+/// `deck.yaml` mounts).
+fn card_mounts(state: &AppState, p: &Value) -> Result<Vec<CardMount>> {
+    if let Some(branch) = p.get("branch").and_then(Value::as_str) {
+        return Ok(state.kernel.branch_path(&BranchId::from(branch))?.1.mounts);
+    }
+    let deck = assistant_param(state, p)?;
+    let mut mounts = vec![CardMount {
+        deck: deck.id().to_owned(),
+        at: rumu_cards::cards::SELF_MOUNT.into(),
+    }];
+    mounts.extend(state.decks.default_mounts(deck.id()));
+    Ok(mounts)
+}
+
+/// A loaded card as the web lists it.
+fn card_info(cards: &Cards, loaded: rumu_cards::cards::Loaded) -> rumu_cards::CardInfo {
+    // The card file's own deck and path (for a link, not the target's): the
+    // drawer opens it in the library.
+    let (deck, path) = cards
+        .mount_of(&loaded.path)
+        .map(|(mounted, path)| (mounted.deck.id().to_owned(), path.to_owned()))
+        .unwrap_or_default();
+    let link = loaded
+        .link
+        .clone()
+        .or_else(|| loaded.card.link().map(str::to_owned));
+    rumu_cards::CardInfo {
+        id: loaded.path,
+        deck,
+        path,
+        description: loaded.card.summary(),
+        keywords: loaded
+            .card
+            .keywords()
+            .into_iter()
+            .map(str::to_owned)
+            .collect(),
+        pinned: loaded.card.pinned(),
+        body: loaded.card.body,
+        revision: loaded.card.revision,
+        link,
+        meta: loaded.card.meta,
     }
 }
 

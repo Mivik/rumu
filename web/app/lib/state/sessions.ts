@@ -1,6 +1,5 @@
 // Session lifecycle: listing, opening/closing, creating, prompting.
 
-import { watch } from 'vue'
 import { rumu } from '../api'
 import { t } from '../../i18n'
 import { commitRoute } from '../router'
@@ -8,10 +7,10 @@ import type { SessionView, StatsRange } from '../router'
 import type {
   Branch,
   BranchId,
-  Card,
   Assistant,
   Content,
   DecisionAnswer,
+  LibraryDeck,
   PendingDecision,
   Node,
   NodeId,
@@ -35,15 +34,6 @@ import { fetchTree, findAgentChild, forkAt, loadPath, replaceTree, resyncTree } 
 import { openAgentView } from './branchView'
 import { requestComposerFocus, toast } from './ui'
 import { chooseLandingProject, landingAssistant, landingProject, rememberSessionPicks } from './projects'
-
-/** `card.list`: what the open branch has mounted (`deck.mount` included), else
- * the default mounts of the assistant in view. An assistant gone from the
- * config has no shelf; its old sessions still open, with no cards. */
-async function listCards(): Promise<Card[]> {
-  if (state.activeBranch) return rumu.request<Card[]>('card.list', { branch: state.activeBranch })
-  if (!state.assistants.some((c) => c.id === state.assistant)) return []
-  return rumu.request<Card[]>('card.list', { assistant: state.assistant })
-}
 
 /** The id of the default assistant ('' before the roster has loaded). */
 export function defaultAssistant(): string {
@@ -81,20 +71,15 @@ export async function refreshAssistants(): Promise<Assistant[]> {
   return state.assistants
 }
 
-// The shelf follows the open branch's mount table.
-watch(
-  () => state.activeBranch,
-  () => void refreshCards(),
-)
-
-/** In-flight `card.list` refresh, so a burst of writes costs one request. */
+/** In-flight deck count refresh, so a burst of writes costs one request. */
 let cardsRefresh: Promise<void> | null = null
 let cardsDirty = false
 
-/** A card was written or changed behind the live card list: re-read it, so
- * the drawer's "latest version" is actually the latest. A write landing
- * while a refresh is in flight marks it dirty and runs one more pass. */
+/** Cards may have changed on disk: open card windows re-read theirs, and the
+ * decks' card counts (the sidebar's) are re-read. A write landing while a
+ * refresh is in flight marks it dirty and runs one more pass. */
 export function refreshCards(): Promise<void> {
+  state.cardsRev++
   if (cardsRefresh) {
     cardsDirty = true
     return cardsRefresh
@@ -103,7 +88,7 @@ export function refreshCards(): Promise<void> {
     try {
       do {
         cardsDirty = false
-        state.cards = await listCards()
+        state.library.decks = await rumu.request<LibraryDeck[]>('library.decks')
       } while (cardsDirty)
     } catch (err) {
       toast('error', t('errors.listingCards'), (err as Error).message)
@@ -141,7 +126,6 @@ export async function answerDecision(id: string, answer: DecisionAnswer): Promis
 export function viewAssistant(assistant: string): void {
   if (state.assistant === assistant) return
   state.assistant = assistant
-  void refreshCards()
 }
 
 /** Open a session. `history` decides what happens to the address bar: a pick

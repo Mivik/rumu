@@ -13,15 +13,7 @@ import type { Content, Node, TaskDone } from '../../lib/types'
 import type { FilesReverted } from '../../lib/generated/FilesReverted'
 import { CATALOG_TAG, ASSISTANT_INTRO_TAG, TASK_TAG, TASK_VERSION } from '../../lib/types'
 import Icon from '../ui/Icon.vue'
-import {
-  agentsOf,
-  cardByKey,
-  cardForImport,
-  importOf,
-  mountedId,
-  updateOf,
-  workspaceUseOf,
-} from '../../lib/cards'
+import { agentsOf, importOf, mountedId, updateOf, workspaceUseOf } from '../../lib/cards'
 import { openDrawer } from '../../lib/store'
 import { vEnter } from '../../lib/motion'
 import NoticeRow from './NoticeRow.vue'
@@ -74,19 +66,16 @@ const parsed = computed(() => {
     if (task) {
       add({ kind: 'task', key: `task:${task.id}`, id: task.id, status: task.status, text: b.content.text })
     } else if (b.source === 'memory' && update) {
-      const id =
-        cardByKey.value.get(`${update.deck}:${update.path}`)?.id ??
-        mountedId(update.deck, update.path) ??
-        update.path
+      const id = mountedId(update.deck, update.path) ?? update.path
       add({ kind: 'update', key: `update:${id}`, id, label: id, text: b.content.text })
     } else if (b.source === 'memory' && imp) {
-      const card = cardForImport(imp)
-      const label = card?.id ?? mountedId(imp.deck, imp.path) ?? imp.path
+      const cardId = mountedId(imp.deck, imp.path)
+      const label = cardId ?? imp.path
       cards.push({
         node: n,
-        cardId: card?.id ?? null,
+        cardId,
         title: label,
-        hover: card ? `#${label}${card.description ? ` — ${card.description}` : ''}` : b.content.text,
+        hover: cardId ? `#${label}` : b.content.text,
       })
     } else if (agents) {
       // The injected text starts with `# CLAUDE.md (workspace `proj`)`;

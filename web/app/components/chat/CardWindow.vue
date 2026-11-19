@@ -6,10 +6,19 @@
 // open below it.
 import { computed, onBeforeUnmount, onMounted, ref, watch } from 'vue'
 import { t } from '../../i18n'
-import { cardKey, cardUsesOnPath, mountedRef, parseCardView, useIsCurrent } from '../../lib/cards'
+import {
+  cardKey,
+  cardUsesOnPath,
+  fetchCard,
+  mountedId,
+  mountedRef,
+  parseCardView,
+  useIsCurrent,
+} from '../../lib/cards'
 import type { CardUse, CardView } from '../../lib/cards'
 import { beginDrawerClose, closeDrawer, state } from '../../lib/store'
 import type { CardWindow } from '../../lib/store'
+import type { Card } from '../../lib/types'
 import { renderMarkdown } from '../../lib/markdown'
 import CardFace from '../CardFace.vue'
 import CardEditor from '../library/CardEditor.vue'
@@ -20,14 +29,29 @@ const props = defineProps<{ entry: CardWindow }>()
 const dialog = ref<HTMLDialogElement | null>(null)
 const pane = ref<InstanceType<typeof CardEditor> | null>(null)
 
-/** The live card behind this window, when the branch still mounts it. */
-const card = computed(
-  () =>
-    state.cards.find(
-      (c) =>
-        (props.entry.cardId !== null && c.id === props.entry.cardId) ||
-        (props.entry.deck !== null && c.deck === props.entry.deck && c.path === props.entry.path),
-    ) ?? null,
+/** The live card behind this window (`card.get`), when the branch still
+ *  mounts it; re-read whenever cards may have changed. */
+const card = ref<Card | null>(null)
+/** The first read is in; until then the window assumes the card is there. */
+const loaded = ref(false)
+let readSeq = 0
+watch(
+  () => [props.entry.cardId, state.cardsRev, state.activeBranch] as const,
+  async ([id]) => {
+    const seq = ++readSeq
+    let next: Card | null = null
+    try {
+      next = id ? await fetchCard(id) : null
+    } catch {
+      // A failed read keeps what is shown.
+      if (seq === readSeq) loaded.value = true
+      return
+    }
+    if (seq !== readSeq) return
+    card.value = next
+    loaded.value = true
+  },
+  { immediate: true },
 )
 const deck = computed(() => props.entry.deck ?? card.value?.deck ?? null)
 const path = computed(() => props.entry.path ?? card.value?.path ?? null)
@@ -35,7 +59,9 @@ const path = computed(() => props.entry.path ?? card.value?.path ?? null)
 const address = computed(() => props.entry.cardId ?? path.value ?? '')
 /** A window whose card is gone (opened from a chip, then deleted or
  *  unmounted) shows its recorded view instead of a reader. */
-const reader = computed(() => !!card.value || (props.entry.cardId === null && !!deck.value && !!path.value))
+const reader = computed(
+  () => !!card.value || ((!loaded.value || props.entry.cardId === null) && !!deck.value && !!path.value),
+)
 const selectedUse = computed<CardUse | null>(() => {
   const refId = props.entry.useRef
   if (!refId) return null // a library open: always the live card
@@ -150,9 +176,9 @@ function onBackdrop(e: MouseEvent): void {
 function onMoved(nextDeck: string, nextPath: string): void {
   const entry = state.drawers.find((window) => window.key === props.entry.key)
   if (!entry) return
-  const live = state.cards.find((c) => c.deck === nextDeck && c.path === nextPath)
-  if (!live) return close()
-  entry.cardId = live.id
+  const id = mountedId(nextDeck, nextPath)
+  if (!id) return close()
+  entry.cardId = id
   entry.deck = nextDeck
   entry.path = nextPath
 }

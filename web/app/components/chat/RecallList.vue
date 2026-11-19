@@ -5,7 +5,7 @@
 import { computed } from 'vue'
 import { t } from '../../i18n'
 import type { Node } from '../../lib/types'
-import { cardForImport, importOf, mountedId } from '../../lib/cards'
+import { importOf, mountedId } from '../../lib/cards'
 import { openDrawer } from '../../lib/store'
 import { vPlayOnce } from '../../lib/motion'
 import Icon from '../ui/Icon.vue'
@@ -28,15 +28,13 @@ const items = computed<Recalled[]>(() => {
     if (n.body.type !== 'note') continue
     const imp = importOf(n.body.content)
     if (!imp) continue
-    const card = cardForImport(imp)
-    const id = card?.id ?? null
-    // The card id when it is in the tree; otherwise the import's own path.
+    const id = mountedId(imp.deck, imp.path)
+    // The mounted id when its deck is mounted; otherwise the import's own path.
     const key = `card:${id ?? `${imp.deck}:${imp.path}`}`
     if (seen.has(key)) continue
     seen.add(key)
-    const label = card?.id ?? mountedId(imp.deck, imp.path) ?? imp.path
-    const what = card?.description ? ` — ${card.description}` : ''
-    out.push({ node: n, id, key, label, hover: `#${label}${what}` })
+    const label = id ?? imp.path
+    out.push({ node: n, id, key, label, hover: `#${label}` })
   }
   return out
 })
