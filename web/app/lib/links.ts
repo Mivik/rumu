@@ -72,20 +72,10 @@ function openCardAddress(rest: string): boolean {
 function openAddress(abs: string): boolean {
   const [head, ...segs] = abs.slice(1).split('/')
   switch (head) {
+    // `/cards/<path>[@<commit>]`: a past version opens the card itself (its
+    // history is a click away there).
     case 'cards':
-      return openCardAddress(segs.join('/'))
-    // `/history/cards/<id>[@<commit>]`: the card itself (its history is a
-    // click away there).
-    case 'history':
-      return (
-        segs[0] === 'cards' &&
-        openCardAddress(
-          segs
-            .slice(1)
-            .join('/')
-            .replace(/@[^/]*$/, ''),
-        )
-      )
+      return openCardAddress(segs.join('/').replace(/@[^/]*$/, ''))
     case 'sessions': {
       const sid = segs[0]
       // `/sessions/by-assistant/<deck>`: the assistant.

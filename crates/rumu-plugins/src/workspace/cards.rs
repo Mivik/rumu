@@ -10,12 +10,12 @@ use rumu_core::{Content, Cx, Effect, RUMU_WORKSPACE, ToolError, ToolOutput, Tool
 use serde_json::json;
 
 use super::WorkspacePlugin;
-use super::patch;
 use super::time::iso_local;
 use super::tools::{
     card_load_err, invalid_card_ref, no_card_err, replace_occurrences, slice_lines,
 };
 use super::vfs::{At, Node, Out};
+use super::{history, patch};
 use crate::approve::{approve, deck_name};
 
 /// `/cards`: the mount points.
@@ -35,7 +35,9 @@ impl Node for CardsDir {
          changed since is refused: read it again and merge). `write` with `from` moves one. \
          Writing a deck that is neither yours nor the project's asks the user unless a grant \
          covers it; pinned cards are the user's to delete. Card edits survive a rewind. \
-         `search` with this scope (or a prefix) finds cards."
+         `list @rumu:/cards/<path>@` lists a card's past versions (a deleted card's too; a moved \
+         card starts anew) and `read @rumu:/cards/<path>@<commit>` reads one, with its diff from \
+         the version before. `search` with this scope (or a prefix) finds cards."
     }
 
     async fn list(&self, at: &At<'_>) -> Out {
@@ -60,6 +62,24 @@ impl Card {
         let path = at.param("path");
         path.strip_suffix(".md").unwrap_or(path)
     }
+
+    /// `<path>@<commit>` (`<path>@` for all of them): a past version, as the
+    /// card path and the commit.
+    fn version<'a>(at: &'a At<'_>) -> Option<(&'a str, &'a str)> {
+        let (path, rev) = at.param("path").rsplit_once('@')?;
+        Some((path.strip_suffix(".md").unwrap_or(path), rev))
+    }
+
+    /// The path, refused when it names a past version.
+    fn current<'a>(at: &'a At<'_>) -> ToolResult<&'a str> {
+        match Self::version(at) {
+            Some((path, _)) => Err(ToolError::model(format!(
+                "past versions are read-only; write `{}`",
+                rumu_cards::card_uri(path)
+            ))),
+            None => Ok(Self::path(at)),
+        }
+    }
 }
 
 #[async_trait]
@@ -69,15 +89,25 @@ impl Node for Card {
     }
 
     async fn list(&self, at: &At<'_>) -> Out {
-        at.p.card_list(at.param("path"), at.cx).await
+        match Self::version(at) {
+            Some((path, "")) => history::list_versions(at, path),
+            Some((path, _)) => Err(ToolError::model(format!(
+                "`list @rumu:/cards/{path}@` lists a card's versions; `read` one"
+            ))),
+            None => at.p.card_list(at.param("path"), at.cx).await,
+        }
     }
 
     async fn read(&self, at: &At<'_>, offset: Option<u64>, limit: Option<u64>) -> Out {
-        at.p.card_read(Self::path(at), offset, limit, at.cx).await
+        match Self::version(at) {
+            Some((path, "")) => history::list_versions(at, path),
+            Some((path, rev)) => history::read_version(at, path, rev, offset, limit),
+            None => at.p.card_read(Self::path(at), offset, limit, at.cx).await,
+        }
     }
 
     async fn write(&self, at: &At<'_>, content: &str, from: Option<&str>) -> Out {
-        let path = Self::path(at);
+        let path = Self::current(at)?;
         at.p.card_write(path, content, CardOp::Write, from, at.cx)
             .await
     }
@@ -86,7 +116,7 @@ impl Node for Card {
     /// read-freshness check comes first: a stale read is the more
     /// fundamental problem than a non-matching string.
     async fn edit(&self, at: &At<'_>, old: &str, new: &str, all: bool) -> Out {
-        let (path, cx) = (Self::path(at), at.cx);
+        let (path, cx) = (Self::current(at)?, at.cx);
         let cards = at.p.cards(cx)?;
         if let Some(err) = invalid_card_ref(&cards, path) {
             return Err(err);
@@ -123,7 +153,7 @@ impl Node for Card {
     }
 
     async fn delete(&self, at: &At<'_>) -> Out {
-        at.p.card_delete(Self::path(at), at.cx).await
+        at.p.card_delete(Self::current(at)?, at.cx).await
     }
 
     async fn search(&self, at: &At<'_>, query: &str, limit: Option<usize>) -> Out {
@@ -524,7 +554,7 @@ impl WorkspacePlugin {
             rev: "deleted".into(),
         });
         Ok(ToolOutput::ok(format!(
-            "deleted cards/{public}.md (its versions stay in `{RUMU_WORKSPACE}:/history/cards/{public}`)"
+            "deleted cards/{public}.md (`list {RUMU_WORKSPACE}:/cards/{public}@` lists its versions)"
         ))
         .with_data(&patch::delete(Some(view)).await)
         .with_effect(seen))

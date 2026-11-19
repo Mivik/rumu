@@ -67,7 +67,7 @@ impl Node for Entry {
         let name = at.param("name");
         match name {
             RUMU_WORKSPACE => Ok(
-                "# rumu's own data (cards, history, sessions, tasks, …); not in \
+                "# rumu's own data (cards, decks, sessions, tasks, …); not in \
                  the registry; no bash\n"
                     .into(),
             ),

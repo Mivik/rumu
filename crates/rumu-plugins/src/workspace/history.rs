@@ -1,109 +1,54 @@
-//! `@rumu:/history`: the git history of the mounted decks, addressed by path.
+//! A card's past versions, addressed as `@rumu:/cards/<path>@<commit>`:
 //!
-//! - `list /history` — newest first, one line per commit over every mounted
-//!   deck: short commit, path, op, author, time;
-//! - `list /history/cards/<path>` — the versions at that path (moves are not
+//! - `list /cards/<path>@` — the versions at that path (moves are not
 //!   followed: a moved card is a new card);
-//! - `read /history/cards/<path>@<commit>` — one version's header and its diff
-//!   from the previous version.
+//! - `read /cards/<path>@<commit>` — one version's header and its diff from
+//!   the previous version.
 //!
 //! A deleted card keeps its old path here: `<path>` is looked up in the
 //! history of the deck mounted there. Only mounted decks are shown.
 
-use async_trait::async_trait;
 use rumu_cards::git::Commit;
 use rumu_cards::{Cards, card};
 use rumu_core::{ToolError, ToolOutput, ToolResult};
 
 use super::time::iso_local;
 use super::tools::slice_lines;
-use super::vfs::{At, Node, Out};
+use super::vfs::{At, Out};
 
-const TIMELINE_LIMIT: usize = 100;
-
-/// `/history`: the timeline of the mounted decks.
-pub(super) struct HistoryRoot;
-
-#[async_trait]
-impl Node for HistoryRoot {
-    fn about(&self) -> &'static str {
-        "the change timeline of the mounted decks"
-    }
-
-    fn doc(&self, _at: &At<'_>) -> &'static str {
-        "The mounted decks' changes, newest first: commit, path, op, author, time. `list \
-         @rumu:/history/cards/<path>` lists one card path's versions (a deleted card's too; a \
-         moved card starts anew) and `read @rumu:/history/cards/<path>@<commit>` reads one, \
-         with its diff from the version before. Read-only."
-    }
-
-    async fn list(&self, at: &At<'_>) -> Out {
-        timeline(&at.p.cards(at.cx)?).map(Into::into)
-    }
+/// `list /cards/<path>@`: the versions at a card path, newest first.
+pub(super) fn list_versions(at: &At<'_>, path: &str) -> Out {
+    let cards = at.p.cards(at.cx)?;
+    let (deck, path) = card_at(&cards, path)?;
+    versions(&cards, &deck, &path).map(Into::into)
 }
 
-/// `/history/cards/<path>`: a card path's versions; `<path>@<commit>` reads
-/// one.
-pub(super) struct CardHistory;
-
-#[async_trait]
-impl Node for CardHistory {
-    fn about(&self) -> &'static str {
-        "one card path's versions"
-    }
-
-    async fn list(&self, at: &At<'_>) -> Out {
-        let cards = at.p.cards(at.cx)?;
-        let (deck, path) = card_at(&cards, at.param("path"))?;
-        versions(&cards, &deck, &path).map(Into::into)
-    }
-
-    async fn read(&self, at: &At<'_>, offset: Option<u64>, limit: Option<u64>) -> Out {
-        let cards = at.p.cards(at.cx)?;
-        let Some((path, rev)) = at.param("path").rsplit_once('@') else {
-            return Err(ToolError::model(
-                "history read: use `@rumu:/history/cards/<path>@<commit>`",
-            ));
-        };
-        let (deck, path) = card_at(&cards, path)?;
-        let Some(commit) = deck
-            .touching(&path, None)
-            .map_err(deck_err)?
-            .into_iter()
-            .find(|c| c.hash == rev || c.short == rev)
-        else {
-            return Err(ToolError::model(format!(
-                "no version `{rev}` of `{path}` (`list @rumu:/history/cards/{path}` lists them)"
-            )));
-        };
-        let text = render_version(&cards, &deck, &path, &commit)?;
-        slice_lines(text, offset, limit)
-            .map(ToolOutput::ok)
-            .map_err(ToolError::model)
-    }
-}
-
-/// `list /history`: the timeline of the mounted decks, newest first.
-fn timeline(cards: &Cards) -> ToolResult<String> {
-    let mut rows: Vec<(i64, String)> = Vec::new();
-    for mounted in cards.mounts() {
-        for commit in mounted.deck.commits(TIMELINE_LIMIT).map_err(deck_err)? {
-            if !commit.touches_cards() {
-                continue;
-            }
-            rows.push((commit.at, timeline_line(cards, &mounted.deck, &commit)));
-        }
-    }
-    rows.sort_by_key(|r| std::cmp::Reverse(r.0));
-    rows.truncate(TIMELINE_LIMIT);
-    if rows.is_empty() {
-        return Ok("no card history in the mounted decks".into());
-    }
-    Ok(rows
+/// `read /cards/<path>@<commit>`: one version, with its diff from the one
+/// before.
+pub(super) fn read_version(
+    at: &At<'_>,
+    path: &str,
+    rev: &str,
+    offset: Option<u64>,
+    limit: Option<u64>,
+) -> Out {
+    let cards = at.p.cards(at.cx)?;
+    let public = path;
+    let (deck, path) = card_at(&cards, path)?;
+    let Some(commit) = deck
+        .touching(&path, None)
+        .map_err(deck_err)?
         .into_iter()
-        .map(|(_, line)| line)
-        .collect::<Vec<_>>()
-        .join("\n"))
+        .find(|c| c.hash == rev || c.short == rev)
+    else {
+        return Err(ToolError::model(format!(
+            "no version `{rev}` of `{public}` (`list @rumu:/cards/{public}@` lists them)"
+        )));
+    };
+    let text = render_version(&cards, &deck, &path, &commit)?;
+    slice_lines(text, offset, limit)
+        .map(ToolOutput::ok)
+        .map_err(ToolError::model)
 }
 
 /// One path's versions in one deck, newest first.
@@ -222,29 +167,6 @@ fn view_text(cards: &Cards, path: &str, text: &str) -> String {
             .insert("link".into(), serde_json::Value::String(shown));
     }
     card::view_of(&card)
-}
-
-/// The path a commit is about: for a move its destination, else its first
-/// changed card path, else the subject's.
-fn commit_path(commit: &Commit) -> String {
-    let (op, rest) = commit.op_path();
-    if op == "move"
-        && let Some((_, to)) = rest.split_once(" -> ")
-    {
-        return to.to_owned();
-    }
-    commit.changed.first().cloned().unwrap_or(rest)
-}
-
-fn timeline_line(cards: &Cards, deck: &rumu_cards::Deck, commit: &Commit) -> String {
-    let (op, _) = commit.op_path();
-    format!(
-        "{}  {}  {op}  {}  {}",
-        commit.short,
-        shown(cards, deck, &commit_path(commit)),
-        commit.author,
-        iso_local(commit.at * 1000)
-    )
 }
 
 fn version_line(cards: &Cards, deck: &rumu_cards::Deck, commit: &Commit, path: &str) -> String {

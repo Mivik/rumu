@@ -322,17 +322,16 @@ History is git. There is no other log.
   `view_rev`. A refused write lists the commits since then that touch the card
   (author, session, time) and the diff from the version that was read to the
   current one.
-- **Reading history.** The model reads history through the `@rumu` workspace,
-  by path:
-  - `list @rumu:/history` is the timeline of the mounted decks, newest first,
-    one line per change: short commit, path, op, author and time.
-  - `list @rumu:/history/cards/<path>` lists a card's versions, following its id
-    across moves.
-  - `read @rumu:/history/cards/<path>@<commit>` shows that version's header and
-    its diff from the previous version.
+- **Reading history.** The model reads a card's past versions at its path,
+  with an `@`:
+  - `list @rumu:/cards/<path>@` lists the versions at that path. Moves are not
+    followed: a moved card starts anew at its new path.
+  - `read @rumu:/cards/<path>@<commit>` shows that version's header and its
+    diff from the previous version.
   - A deleted or moved-away card keeps its old path here: `list` and `read`
-    under `@rumu:/history/cards/<old path>` find it in the history of the deck
-    mounted there. A `read` of a commit that does not touch the card is refused.
+    of `@rumu:/cards/<old path>@…` find it in the history of the deck mounted
+    there. A `read` of a commit that does not touch the card is refused, and
+    past versions cannot be written.
 - Catalog lines name the last author when it is not the current assistant.
 - No git binary is required: rumu reads and writes the repositories with
   gitoxide (`gix`). Push is not covered by `gix`.

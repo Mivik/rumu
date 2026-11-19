@@ -26,7 +26,6 @@ use serde_json::Value;
 use super::WorkspacePlugin;
 use super::cards::{Card, CardsDir};
 use super::decks::{DeckFile, DecksDir};
-use super::history::{CardHistory, HistoryRoot};
 use super::registry::{Entry, WorkspacesDir};
 use super::session::{AssistantSessions, BranchNode, ByAssistant, Session, SessionPart, Sessions};
 use super::task::{Task, TaskOutput, Tasks};
@@ -44,8 +43,6 @@ const ROUTES: &[(&str, &dyn Node)] = &[
     ("/cards/{*path}", &Card),
     ("/decks", &DecksDir),
     ("/decks/{name}", &DeckFile),
-    ("/history", &HistoryRoot),
-    ("/history/cards/{*path}", &CardHistory),
     ("/sessions", &Sessions),
     ("/sessions/by-assistant", &ByAssistant),
     ("/sessions/by-assistant/{id}", &AssistantSessions),
@@ -627,8 +624,7 @@ mod tests {
         assert_eq!(params("/sessions/s1/branches/b1"), "sid=s1 bid=b1");
         assert_eq!(params("/cards/self/notes/x.md"), "path=self/notes/x.md");
         assert!(ROUTER.at("/sessions/s1/a/b").is_err());
-        assert!(ROUTER.at("/history/cards").is_err());
-        let roots = "cards decks history sessions skills tasks mcp workspaces";
+        let roots = "cards decks sessions skills tasks mcp workspaces";
         assert_eq!(ROOTS.join(" "), roots);
     }
 

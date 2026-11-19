@@ -49,12 +49,6 @@ impl Commit {
         (op, path)
     }
 
-    /// True when the commit changed a card (as opposed to a `deck.yaml`-only
-    /// repository event).
-    pub fn touches_cards(&self) -> bool {
-        !self.changed.is_empty()
-    }
-
     /// The author's identity (`user` or a deck id), from the commit email.
     pub fn author_id(&self) -> &str {
         self.email.strip_suffix(EMAIL_DOMAIN).unwrap_or(&self.email)

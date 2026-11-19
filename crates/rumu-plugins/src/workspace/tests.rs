@@ -1431,7 +1431,6 @@ async fn rumu_workspace_edges() {
         [
             "cards/",
             "decks/",
-            "history/",
             "sessions/",
             "skills/",
             "tasks/",
@@ -1466,7 +1465,7 @@ async fn rumu_workspace_edges() {
         assert!(
             out.content
                 .text
-                .contains("roots: /cards, /decks, /history, /sessions"),
+                .contains("roots: /cards, /decks, /sessions"),
             "{tool}: {}",
             out.content.text
         );
@@ -4281,7 +4280,8 @@ async fn links_read_their_target_and_refuse_writes() {
     );
 }
 
-/// The `@rumu:/history` timeline, per-card versions and one version's diff.
+/// A card's versions at `<path>@` and one version's diff at `<path>@<commit>`;
+/// past versions are read-only.
 #[tokio::test]
 async fn history_listing_and_version_reads() {
     let home = card_home();
@@ -4304,19 +4304,7 @@ async fn history_listing_and_version_reads() {
     flush_output(&host, "call-1", &write);
 
     let out = plugin
-        .call_tool("list", json!({ "path": "@rumu:/history" }), &cx)
-        .await
-        .unwrap();
-    assert!(!out.is_error, "{}", out.content.text);
-    assert!(out.content.text.contains("self/a"), "{}", out.content.text);
-    assert!(out.content.text.contains("update"), "{}", out.content.text);
-
-    let out = plugin
-        .call_tool(
-            "list",
-            json!({ "path": "@rumu:/history/cards/self/a" }),
-            &cx,
-        )
+        .call_tool("list", json!({ "path": "@rumu:/cards/self/a@" }), &cx)
         .await
         .unwrap();
     assert!(!out.is_error, "{}", out.content.text);
@@ -4335,7 +4323,7 @@ async fn history_listing_and_version_reads() {
     let out = plugin
         .call_tool(
             "read",
-            json!({ "path": format!("@rumu:/history/cards/self/a@{}", commit.short) }),
+            json!({ "path": format!("@rumu:/cards/self/a@{}", commit.short) }),
             &cx,
         )
         .await
@@ -4343,6 +4331,21 @@ async fn history_listing_and_version_reads() {
     assert!(!out.is_error, "{}", out.content.text);
     assert!(out.content.text.contains("-one"), "{}", out.content.text);
     assert!(out.content.text.contains("+two"), "{}", out.content.text);
+
+    let out = plugin
+        .call_tool(
+            "write",
+            json!({ "path": format!("@rumu:/cards/self/a@{}", commit.short), "content": "x\n" }),
+            &cx,
+        )
+        .await
+        .unwrap();
+    assert!(out.is_error, "{}", out.content.text);
+    assert!(
+        out.content.text.contains("read-only"),
+        "{}",
+        out.content.text
+    );
 }
 
 /// A deleted card's history stays reachable at its old path.
@@ -4354,22 +4357,7 @@ async fn deleted_card_history_stays_at_its_old_path() {
     crate::testutil::remove_card(home.path(), "main", "gone");
 
     let out = plugin
-        .call_tool("list", json!({ "path": "@rumu:/history" }), &cx)
-        .await
-        .unwrap();
-    assert!(!out.is_error, "{}", out.content.text);
-    assert!(
-        out.content.text.contains("self/gone  delete"),
-        "{}",
-        out.content.text
-    );
-
-    let out = plugin
-        .call_tool(
-            "list",
-            json!({ "path": "@rumu:/history/cards/self/gone" }),
-            &cx,
-        )
+        .call_tool("list", json!({ "path": "@rumu:/cards/self/gone@" }), &cx)
         .await
         .unwrap();
     assert!(!out.is_error, "{}", out.content.text);
@@ -4389,7 +4377,7 @@ async fn deleted_card_history_stays_at_its_old_path() {
     let out = plugin
         .call_tool(
             "read",
-            json!({ "path": format!("@rumu:/history/cards/self/gone@{first}") }),
+            json!({ "path": format!("@rumu:/cards/self/gone@{first}") }),
             &cx,
         )
         .await
@@ -4405,7 +4393,7 @@ async fn deleted_card_history_stays_at_its_old_path() {
     let out = plugin
         .call_tool(
             "read",
-            json!({ "path": "@rumu:/history/cards/self/gone@0000000" }),
+            json!({ "path": "@rumu:/cards/self/gone@0000000" }),
             &cx,
         )
         .await
@@ -4884,11 +4872,7 @@ async fn history_lists_versions_by_path() {
     flush_output(&host, "call-1", &moved);
 
     let out = plugin
-        .call_tool(
-            "list",
-            json!({ "path": "@rumu:/history/cards/self/sub/b" }),
-            &cx,
-        )
+        .call_tool("list", json!({ "path": "@rumu:/cards/self/sub/b@" }), &cx)
         .await
         .unwrap();
     assert!(!out.is_error, "{}", out.content.text);
@@ -4911,7 +4895,7 @@ async fn history_lists_versions_by_path() {
     let out = plugin
         .call_tool(
             "read",
-            json!({ "path": format!("@rumu:/history/cards/self/sub/b@{}", commit.short) }),
+            json!({ "path": format!("@rumu:/cards/self/sub/b@{}", commit.short) }),
             &cx,
         )
         .await

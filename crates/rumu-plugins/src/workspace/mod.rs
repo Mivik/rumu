@@ -7,8 +7,8 @@
 //! `<workspace>:<path>` (rumu-core `addr`); the `@rumu` workspace is a
 //! virtual filesystem holding rumu's own data: cards of the decks mounted on
 //! this branch (`@rumu:/cards/<mount>/<path>`, mounted with `deck.mount` on
-//! `@rumu:/decks/<name>`), their history
-//! (`@rumu:/history`), and, read-only, past conversations
+//! `@rumu:/decks/<name>`; past versions at `<path>@<commit>`), and,
+//! read-only, past conversations
 //! (`@rumu:/sessions/...`).
 //!
 //! The workspace root of the file tools is an addressing convention, not a
