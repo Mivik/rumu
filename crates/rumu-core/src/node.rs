@@ -93,12 +93,14 @@ pub const SYSTEM_SOURCE: &str = "system";
 #[ts(export)]
 pub struct Content {
     /// Frozen at write time; with `attachments`, the ONLY thing the model
-    /// sees. An `[Image #N]` anchor marks where the N-th attachment sits
-    /// (see [`Content::segments`]).
+    /// sees. An `[Image #N]` anchor marks where the N-th image sits, an
+    /// `[Document #N]` anchor where the N-th document sits (see
+    /// [`Content::segments`]).
     pub text: String,
-    /// Images, in anchor-number order. Each names a blob in the
-    /// content-addressed blob store, normalized once at ingest so its bytes
-    /// (and so the projection) never change afterwards.
+    /// Images and documents, in the order they were attached. Each names a
+    /// blob in the content-addressed blob store: an image is normalized once
+    /// at ingest, a document is stored as it is, so its bytes (and so the
+    /// projection) never change afterwards.
     #[serde(default, skip_serializing_if = "Vec::is_empty")]
     pub attachments: Vec<Attachment>,
     /// For the UI and plugins; never projected.
@@ -108,8 +110,7 @@ pub struct Content {
 
 /// What kind of media an [`Attachment`] holds. These are the primitives a
 /// model can consume directly; video is not one (it is frames, optionally
-/// with an audio track), and documents are compiled by the harness into page
-/// images plus text.
+/// with an audio track).
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Default, Serialize, Deserialize, ts_rs::TS)]
 #[serde(rename_all = "lowercase")]
 #[ts(export)]
@@ -117,9 +118,13 @@ pub enum AttachmentKind {
     #[default]
     Image,
     Audio,
+    /// A text document kept whole: its bytes are stored as they are and
+    /// projected to the model as its text.
+    Document,
 }
 
-/// A reference to normalized media in the blob store.
+/// A reference to media in the blob store: a normalized image, or a document
+/// kept whole.
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, ts_rs::TS)]
 #[ts(export)]
 pub struct Attachment {
@@ -128,12 +133,14 @@ pub struct Attachment {
     pub kind: AttachmentKind,
     /// Lowercase hex SHA-256 of the stored bytes; the blob's file name.
     pub hash: String,
-    /// MIME type of the stored bytes (`image/png`, `image/jpeg`).
+    /// MIME type of the stored bytes (`image/png`, `text/markdown`).
     pub mime: String,
     /// Original file name, for display.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub name: Option<String>,
+    /// Pixel size of an image; a document has none, so it is 0.
     pub width: u32,
+    /// Pixel size of an image; a document has none, so it is 0.
     pub height: u32,
     /// Stored size in bytes.
     pub size: u64,
@@ -141,34 +148,106 @@ pub struct Attachment {
 
 impl Attachment {
     /// The stand-in text for readers that cannot show the media (transcripts,
-    /// search, a blob gone missing): `[image: name 800×600]`.
+    /// search, a blob gone missing): `[image: name 800×600]`, or
+    /// `[document: name]` for a document, which has no pixels.
     pub fn placeholder(&self) -> String {
+        match self.kind {
+            AttachmentKind::Image => self.media_placeholder("image"),
+            AttachmentKind::Audio => self.media_placeholder("audio"),
+            AttachmentKind::Document => match &self.name {
+                Some(name) => format!("[document: {name}]"),
+                None => "[document]".to_owned(),
+            },
+        }
+    }
+
+    /// `[<kind>: name W×H]`, the pixels included.
+    fn media_placeholder(&self, kind: &str) -> String {
         let at = match &self.name {
             Some(name) => format!("{name} {}×{}", self.width, self.height),
             None => format!("{}×{}", self.width, self.height),
         };
-        match self.kind {
-            AttachmentKind::Image => format!("[image: {at}]"),
-            AttachmentKind::Audio => format!("[audio: {at}]"),
-        }
+        format!("[{kind}: {at}]")
     }
 
     /// Where a prompt's attachment is copied inside the session's `@scratch`
     /// so tools can work on it: `.inbox/attachments/<hash prefix>.<ext>`.
     pub fn scratch_path(&self) -> String {
-        let ext = match self.mime.split_once('/') {
-            Some((_, "jpeg")) => "jpg",
-            Some((_, sub)) => sub,
-            None => "bin",
-        };
+        let ext = scratch_extension(&self.mime);
         let stem = self.hash.get(..12).unwrap_or(&self.hash);
         format!("{SCRATCH_INBOX}/attachments/{stem}.{ext}")
     }
 }
 
-/// The in-text anchor of the `n`-th (1-based) attachment: `[Image #n]`.
+/// The file extension a blob of MIME type `mime` gets in the `@scratch`: the
+/// common text kinds get their short name (`text/markdown` → `md`), and
+/// anything else the MIME subtype (`image/png` → `png`).
+fn scratch_extension(mime: &str) -> &str {
+    match mime {
+        "text/markdown" => "md",
+        "text/plain" => "txt",
+        "text/html" => "html",
+        "text/css" => "css",
+        "text/javascript" => "js",
+        "text/typescript" => "ts",
+        "text/csv" => "csv",
+        "text/tab-separated-values" => "tsv",
+        "text/x-python" => "py",
+        "text/x-rust" => "rs",
+        "text/x-shellscript" => "sh",
+        "text/x-diff" => "diff",
+        "application/json" => "json",
+        "application/xml" => "xml",
+        "application/yaml" => "yaml",
+        "application/toml" => "toml",
+        "application/sql" => "sql",
+        "image/jpeg" => "jpg",
+        _ => match mime.split_once('/') {
+            Some((_, sub)) => sub,
+            None => "bin",
+        },
+    }
+}
+
+/// The MIME type of a document named `name`, from its extension. Anything
+/// unknown is plain text: a document is stored as it is, and its type only
+/// tells a reader how to show it.
+pub fn document_mime(name: &str) -> &'static str {
+    let ext = name
+        .rsplit_once('.')
+        .filter(|(stem, _)| !stem.is_empty())
+        .map(|(_, ext)| ext.to_ascii_lowercase())
+        .unwrap_or_default();
+    match ext.as_str() {
+        "md" | "markdown" => "text/markdown",
+        "txt" | "log" | "text" => "text/plain",
+        "json" => "application/json",
+        "yaml" | "yml" => "application/yaml",
+        "toml" => "application/toml",
+        "xml" => "application/xml",
+        "csv" => "text/csv",
+        "tsv" => "text/tab-separated-values",
+        "html" | "htm" => "text/html",
+        "css" => "text/css",
+        "js" | "mjs" | "cjs" => "text/javascript",
+        "ts" | "tsx" => "text/typescript",
+        "py" => "text/x-python",
+        "rs" => "text/x-rust",
+        "sh" | "bash" => "text/x-shellscript",
+        "sql" => "application/sql",
+        "diff" | "patch" => "text/x-diff",
+        _ => "text/plain",
+    }
+}
+
+/// The in-text anchor of the `n`-th (1-based) image: `[Image #n]`.
 pub fn image_anchor(n: usize) -> String {
     format!("[Image #{n}]")
+}
+
+/// The in-text anchor of the `n`-th (1-based) document: `[Document #n]`.
+pub fn document_anchor(n: usize) -> String {
+    format!("[Document #{n}]")
 }
 
 /// The label projected ahead of the `n`-th image, so the model can refer to
@@ -181,17 +260,38 @@ pub fn image_label(n: usize, file: Option<&str>) -> String {
     }
 }
 
+/// The label projected ahead of the `n`-th document, so the model can refer
+/// to it by name: `Document n:`, or `Document n (@scratch:<path>):` when the
+/// document is also a file there.
+pub fn document_label(n: usize, file: Option<&str>) -> String {
+    match file {
+        Some(path) => format!("Document {n} ({SCRATCH_WORKSPACE}:{path}):"),
+        None => format!("Document {n}:"),
+    }
+}
+
 /// One piece of a [`Content`], in reading order.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum Segment<'a> {
     Text(&'a str),
-    /// The `n`-th (1-based) attachment. `anchored` is false for one whose
-    /// anchor is missing from the text; those follow all of the text.
-    Image {
+    /// The `n`-th (1-based) attachment of its kind — the image number or the
+    /// document number, each counted on its own. `anchored` is false for one
+    /// whose anchor is missing from the text; those follow all of the text.
+    Attachment {
         n: usize,
         attachment: &'a Attachment,
         anchored: bool,
     },
+}
+
+/// Which of the attachment kinds an attachment is, as an index into the
+/// per-kind lists [`Content::segments`] keeps.
+fn kind_index(kind: AttachmentKind) -> usize {
+    match kind {
+        AttachmentKind::Image => 0,
+        AttachmentKind::Audio => 1,
+        AttachmentKind::Document => 2,
+    }
 }
 
 impl Content {
@@ -203,47 +303,75 @@ impl Content {
         }
     }
 
-    /// Add images to the content.
+    /// Add attachments to the content.
     pub fn with_attachments(mut self, attachments: impl IntoIterator<Item = Attachment>) -> Self {
         self.attachments.extend(attachments);
         self
     }
 
-    /// Split the content into text and images, in reading order: the first
-    /// `[Image #N]` anchor of each attachment (1 ≤ N ≤ count, no leading
-    /// zero) is replaced by that image; repeated or out-of-range anchors stay
-    /// text. Attachments without an anchor follow the text, in order. This is
-    /// the one placement rule — the model projection, transcripts and the UI
-    /// all follow it.
+    /// Split the content into text and attachments, in reading order: the
+    /// first `[Image #N]` anchor of each image (1 ≤ N ≤ image count, no
+    /// leading zero) is replaced by that image, and the first `[Document #N]`
+    /// anchor of each document by that document — each kind is numbered on
+    /// its own. Repeated or out-of-range anchors stay text, and so does an
+    /// anchor of a kind the content has none of. Attachments without an
+    /// anchor follow the text, in order. This is the one placement rule —
+    /// the model projection, transcripts and the UI all follow it.
     pub fn segments(&self) -> Vec<Segment<'_>> {
-        const OPEN: &str = "[Image #";
+        const IMAGE: &str = "[Image #";
+        const DOCUMENT: &str = "[Document #";
         let text = self.text.as_str();
+        // The attachments of each kind, in order: an anchor counts within
+        // its own kind.
+        let mut by_kind: Vec<Vec<usize>> = vec![Vec::new(); 3];
+        for (i, a) in self.attachments.iter().enumerate() {
+            by_kind[kind_index(a.kind)].push(i);
+        }
+        // The number an attachment carries: its place among its own kind.
+        let mut numbers = vec![0usize; self.attachments.len()];
+        for list in &by_kind {
+            for (k, &i) in list.iter().enumerate() {
+                numbers[i] = k + 1;
+            }
+        }
         let mut placed = vec![false; self.attachments.len()];
         let mut out = Vec::new();
         let (mut last, mut scan) = (0, 0);
-        while let Some(off) = text[scan..].find(OPEN) {
-            let at = scan + off;
-            let digits = at + OPEN.len();
+        loop {
+            // The next anchor of either kind; the earlier one comes first.
+            let image_at = text[scan..].find(IMAGE).map(|off| scan + off);
+            let document_at = text[scan..].find(DOCUMENT).map(|off| scan + off);
+            let (at, kind, open) = match (image_at, document_at) {
+                (Some(i), Some(d)) if i < d => (i, AttachmentKind::Image, IMAGE),
+                (Some(_), Some(d)) => (d, AttachmentKind::Document, DOCUMENT),
+                (Some(i), None) => (i, AttachmentKind::Image, IMAGE),
+                (None, Some(d)) => (d, AttachmentKind::Document, DOCUMENT),
+                (None, None) => break,
+            };
+            let digits = at + open.len();
             let len = text[digits..]
                 .bytes()
                 .take_while(u8::is_ascii_digit)
                 .count();
             let end = digits + len;
+            let list = &by_kind[kind_index(kind)];
             let n = (len > 0 && !text[digits..].starts_with('0') && text[end..].starts_with(']'))
                 .then(|| text[digits..end].parse::<usize>().ok())
                 .flatten()
-                .filter(|n| (1..=placed.len()).contains(n) && !placed[n - 1]);
+                .filter(|n| (1..=list.len()).contains(n) && !placed[list[n - 1]]);
             let Some(n) = n else {
+                // Not an anchor of this attachment: it stays text.
                 scan = at + 1;
                 continue;
             };
             if last < at {
                 out.push(Segment::Text(&text[last..at]));
             }
-            placed[n - 1] = true;
-            out.push(Segment::Image {
+            let index = list[n - 1];
+            placed[index] = true;
+            out.push(Segment::Attachment {
                 n,
-                attachment: &self.attachments[n - 1],
+                attachment: &self.attachments[index],
                 anchored: true,
             });
             last = end + 1;
@@ -254,8 +382,8 @@ impl Content {
         }
         for (i, attachment) in self.attachments.iter().enumerate() {
             if !placed[i] {
-                out.push(Segment::Image {
-                    n: i + 1,
+                out.push(Segment::Attachment {
+                    n: numbers[i],
                     attachment,
                     anchored: false,
                 });
@@ -264,8 +392,8 @@ impl Content {
         out
     }
 
-    /// The text with every image as its [`Attachment::placeholder`], for
-    /// text-only readers (transcripts, search).
+    /// The text with every attachment as its [`Attachment::placeholder`],
+    /// for text-only readers (transcripts, search).
     pub fn rendered(&self) -> String {
         if self.attachments.is_empty() {
             return self.text.clone();
@@ -274,7 +402,7 @@ impl Content {
         for segment in self.segments() {
             match segment {
                 Segment::Text(t) => out.push_str(t),
-                Segment::Image {
+                Segment::Attachment {
                     attachment,
                     anchored,
                     ..
@@ -937,6 +1065,18 @@ mod tests {
         }
     }
 
+    fn document(name: &str) -> Attachment {
+        Attachment {
+            kind: AttachmentKind::Document,
+            hash: "1".repeat(64),
+            mime: "text/markdown".into(),
+            name: Some(name.into()),
+            width: 0,
+            height: 0,
+            size: 10,
+        }
+    }
+
     fn content(text: &str, names: &[&str]) -> Content {
         Content::text(text).with_attachments(names.iter().map(|n| image(n)))
     }
@@ -948,7 +1088,7 @@ mod tests {
             .iter()
             .map(|s| match s {
                 Segment::Text(t) => (*t).to_owned(),
-                Segment::Image { n, anchored, .. } => {
+                Segment::Attachment { n, anchored, .. } => {
                     format!("<{n}{}>", if *anchored { "" } else { "…" })
                 }
             })
@@ -986,5 +1126,100 @@ mod tests {
         let c = content("see [Image #1]:", &["a.png", "b.png"]);
         assert_eq!(c.rendered(), "see [image: a.png 4×3]:\n[image: b.png 4×3]");
         assert_eq!(content("plain", &[]).rendered(), "plain");
+    }
+
+    /// The attachments of a content as `(kind, number, anchored)`, in reading
+    /// order.
+    fn placed(c: &Content) -> Vec<(AttachmentKind, usize, bool)> {
+        c.segments()
+            .iter()
+            .filter_map(|s| match s {
+                Segment::Attachment {
+                    n,
+                    attachment,
+                    anchored,
+                } => Some((attachment.kind, *n, *anchored)),
+                Segment::Text(_) => None,
+            })
+            .collect()
+    }
+
+    #[test]
+    fn each_kind_is_numbered_on_its_own() {
+        let c = Content::text("i [Image #1] d [Document #1] i [Image #2] d [Document #2]")
+            .with_attachments([image("a"), document("b"), image("c"), document("d")]);
+        assert_eq!(
+            placed(&c),
+            [
+                (AttachmentKind::Image, 1, true),
+                (AttachmentKind::Document, 1, true),
+                (AttachmentKind::Image, 2, true),
+                (AttachmentKind::Document, 2, true),
+            ]
+        );
+        // An anchor of a kind the content has none of stays text.
+        let c = Content::text("no [Document #1] here").with_attachments([image("a")]);
+        assert_eq!(placed(&c), [(AttachmentKind::Image, 1, false)]);
+        assert_eq!(c.rendered(), "no [Document #1] here\n[image: a 4×3]");
+        // A document anchored twice is placed once; the second anchor is text.
+        let c = Content::text("[Document #1] and [Document #1]").with_attachments([document("a")]);
+        assert_eq!(placed(&c), [(AttachmentKind::Document, 1, true)]);
+        assert_eq!(c.rendered(), "[document: a] and [Document #1]");
+    }
+
+    #[test]
+    fn documents_have_their_own_placeholder_and_label() {
+        let d = document("notes.md");
+        assert_eq!(d.placeholder(), "[document: notes.md]");
+        let mut unnamed = d.clone();
+        unnamed.name = None;
+        assert_eq!(unnamed.placeholder(), "[document]");
+        assert_eq!(document_anchor(2), "[Document #2]");
+        assert_eq!(document_label(1, None), "Document 1:");
+        assert_eq!(
+            document_label(1, Some(".inbox/attachments/abc.md")),
+            "Document 1 (@scratch:.inbox/attachments/abc.md):"
+        );
+    }
+
+    #[test]
+    fn scratch_paths_use_short_extensions() {
+        let mut a = document("notes.md");
+        a.hash = "abcdef0123456789".into();
+        assert_eq!(a.scratch_path(), ".inbox/attachments/abcdef012345.md");
+        a.mime = "text/plain".into();
+        assert_eq!(a.scratch_path(), ".inbox/attachments/abcdef012345.txt");
+        a.mime = "application/json".into();
+        assert_eq!(a.scratch_path(), ".inbox/attachments/abcdef012345.json");
+        // An unknown type keeps the subtype as it was.
+        a.mime = "image/png".into();
+        assert_eq!(a.scratch_path(), ".inbox/attachments/abcdef012345.png");
+    }
+
+    #[test]
+    fn document_mime_follows_the_file_name() {
+        assert_eq!(document_mime("notes.md"), "text/markdown");
+        assert_eq!(document_mime("notes.MARKDOWN"), "text/markdown");
+        assert_eq!(document_mime("notes.txt"), "text/plain");
+        assert_eq!(document_mime("notes.log"), "text/plain");
+        assert_eq!(document_mime("data.json"), "application/json");
+        assert_eq!(document_mime("conf.yaml"), "application/yaml");
+        assert_eq!(document_mime("conf.yml"), "application/yaml");
+        assert_eq!(document_mime("conf.toml"), "application/toml");
+        assert_eq!(document_mime("data.xml"), "application/xml");
+        assert_eq!(document_mime("rows.csv"), "text/csv");
+        assert_eq!(document_mime("rows.tsv"), "text/tab-separated-values");
+        assert_eq!(document_mime("page.html"), "text/html");
+        assert_eq!(document_mime("style.css"), "text/css");
+        assert_eq!(document_mime("app.js"), "text/javascript");
+        assert_eq!(document_mime("app.ts"), "text/typescript");
+        assert_eq!(document_mime("app.py"), "text/x-python");
+        assert_eq!(document_mime("main.rs"), "text/x-rust");
+        assert_eq!(document_mime("run.sh"), "text/x-shellscript");
+        assert_eq!(document_mime("q.sql"), "application/sql");
+        assert_eq!(document_mime("fix.diff"), "text/x-diff");
+        // Anything else is plain text.
+        assert_eq!(document_mime("notes"), "text/plain");
+        assert_eq!(document_mime("archive.tar.gz"), "text/plain");
     }
 }

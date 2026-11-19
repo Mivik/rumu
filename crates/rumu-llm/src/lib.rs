@@ -50,9 +50,10 @@ use genai::resolver::{AuthData, Endpoint};
 use genai::{Client, ModelIden, ServiceTarget};
 use rumu_blob::Blobs;
 use rumu_core::{
-    ALIAS_PROVIDER, Attachment, CallStats, CompactSettings, Content, Effort, ModelAlias,
-    ModelConfig, ModelInfo, ModelPick, Node, NodeBody, Protocol, ProviderSettings, ReasoningBlock,
-    Role, Roles, Segment, Titles, ToolCall, ToolSpec, Usage, image_label, split_model_ref,
+    ALIAS_PROVIDER, Attachment, AttachmentKind, CallStats, CompactSettings, Content, Effort,
+    ModelAlias, ModelConfig, ModelInfo, ModelPick, Node, NodeBody, Protocol, ProviderSettings,
+    ReasoningBlock, Role, Roles, SCRATCH_WORKSPACE, Segment, Titles, ToolCall, ToolSpec, Usage,
+    document_label, image_label, split_model_ref,
 };
 use rumu_kernel::{Budget, Delta, Llm, LlmError, LlmResponse, OnDelta};
 use serde_json::{Value, json};
@@ -66,6 +67,11 @@ pub use probe::{Probe, probe};
 /// the provider dropped, and blocks whose prefix did not verify but that it
 /// passed through anyway (`thinking_mismatch_allowed`, which is not a reset).
 const THINKING_BINDING_BETA: &str = "thinking-binding-controls-2026-08-01";
+
+/// Largest document text projected to the model, in bytes. A document is
+/// read, not seen: a long one would flood the context, so it is cut and the
+/// `@scratch` file its label names holds the whole of it.
+const DOCUMENT_TEXT_LIMIT: usize = 16 << 10;
 
 /// The genai adapter. Its providers, aliases and roles come from the
 /// settings and can be replaced while running: a request uses the
@@ -575,7 +581,8 @@ impl Llm for GenaiLlm {
         let withheld = withholds_reasoning(to, &nodes[from..]);
         if let Some(blobs) = self.blobs.clone() {
             // Derive missing model copies off the executor; projecting then
-            // only reads them.
+            // only reads them. A document is already stored the way the
+            // model reads it, so there is nothing to derive.
             let images: Vec<Attachment> = nodes
                 .iter()
                 .filter(|n| projects(&n.body))
@@ -586,6 +593,7 @@ impl Llm for GenaiLlm {
                     _ => None,
                 })
                 .flat_map(|c| c.attachments.iter().cloned())
+                .filter(|a| a.kind != AttachmentKind::Document)
                 .collect();
             let _ = tokio::task::spawn_blocking(move || {
                 for a in &images {
@@ -957,11 +965,14 @@ fn blocks_have_text(blocks: &[ReasoningBlock]) -> bool {
 /// (the cache contract).
 ///
 /// - User → user message following `content.segments()`: text, and each
-///   attachment as its `Image n:` label followed by a base64 image part (the
+///   image as its `Image n:` label followed by a base64 image part (the
 ///   model's copy of its blob, [`Blobs::for_model`]; a blob that cannot be
 ///   read projects as the attachment's placeholder plus an "(image
-///   unavailable)" note instead of failing the request). Text-only content
-///   projects exactly as one text message;
+///   unavailable)" note instead of failing the request), and each document
+///   as its `Document n:` label followed by the document's own text (a blob
+///   that cannot be read projects as its placeholder plus an "(document
+///   unavailable)" note). Text-only content projects exactly as one text
+///   message;
 /// - Assistant → assistant text + tool calls, prefixed by its captured
 ///   thinking blocks so Anthropic can continue a tool-use loop (none before
 ///   the latest reasoning reset);
@@ -1229,36 +1240,79 @@ enum Piece {
     },
 }
 
-/// Text and images of `content`, in reading order: empty text segments
+/// Text and attachments of `content`, in reading order: empty text segments
 /// dropped, each image preceded by its `Image n:` label — naming its
 /// `@scratch` copy when `files` (a prompt's images, copied there on send). A
 /// blob that cannot be read becomes `Image n: [image: name W×H] (image
 /// unavailable)` — a missing image must never fail the request.
+///
+/// A document is not an image: it projects as text — its `Document n:` label
+/// and the document's own text. A document that cannot be read becomes
+/// `Document n: [document: name] (document unavailable)` — a missing
+/// document must never fail the request either.
 fn pieces(content: &Content, load: &LoadImage, files: bool) -> Vec<Piece> {
     let mut out = Vec::new();
     for segment in content.segments() {
         match segment {
             Segment::Text(t) if !t.is_empty() => out.push(Piece::Text(t.to_owned())),
             Segment::Text(_) => {}
-            Segment::Image { n, attachment, .. } => match load(attachment) {
-                Some((mime, bytes)) => {
-                    let file = files.then(|| attachment.scratch_path());
-                    out.push(Piece::Text(image_label(n, file.as_deref())));
-                    out.push(Piece::Image {
-                        mime,
-                        data: base64::engine::general_purpose::STANDARD.encode(bytes),
-                        name: attachment.name.clone(),
-                    });
+            Segment::Attachment { n, attachment, .. } => match attachment.kind {
+                AttachmentKind::Document => {
+                    out.push(Piece::Text(document_piece(n, attachment, load, files)))
                 }
-                None => out.push(Piece::Text(format!(
-                    "{} {} (image unavailable)",
-                    image_label(n, None),
-                    attachment.placeholder()
-                ))),
+                AttachmentKind::Image | AttachmentKind::Audio => match load(attachment) {
+                    Some((mime, bytes)) => {
+                        let file = files.then(|| attachment.scratch_path());
+                        out.push(Piece::Text(image_label(n, file.as_deref())));
+                        out.push(Piece::Image {
+                            mime,
+                            data: base64::engine::general_purpose::STANDARD.encode(bytes),
+                            name: attachment.name.clone(),
+                        });
+                    }
+                    None => out.push(Piece::Text(format!(
+                        "{} {} (image unavailable)",
+                        image_label(n, None),
+                        attachment.placeholder()
+                    ))),
+                },
             },
         }
     }
     out
+}
+
+/// A document projects as its text: the `Document n:` label — naming the
+/// `@scratch` copy when `files` — and then the document's own text, cut at
+/// [`DOCUMENT_TEXT_LIMIT`]. The cut says so and names the file that holds
+/// the whole of it.
+fn document_piece(n: usize, attachment: &Attachment, load: &LoadImage, files: bool) -> String {
+    let Some((_, bytes)) = load(attachment) else {
+        return format!(
+            "{} {} (document unavailable)",
+            document_label(n, None),
+            attachment.placeholder()
+        );
+    };
+    let file = files.then(|| attachment.scratch_path());
+    let label = document_label(n, file.as_deref());
+    let text = String::from_utf8_lossy(&bytes);
+    if text.len() <= DOCUMENT_TEXT_LIMIT {
+        return format!("{label}\n{text}");
+    }
+    let mut end = DOCUMENT_TEXT_LIMIT;
+    while !text.is_char_boundary(end) {
+        end -= 1;
+    }
+    let cut = match file.as_deref() {
+        Some(path) => format!(
+            "… [truncated: {end} of {} bytes shown; the whole document is at \
+             {SCRATCH_WORKSPACE}:{path}]",
+            text.len()
+        ),
+        None => format!("… [truncated: {end} of {} bytes shown]", text.len()),
+    };
+    format!("{label}\n{}\n{cut}", &text[..end])
 }
 
 #[cfg(test)]
@@ -1619,6 +1673,22 @@ mod tests {
         (dir, blobs, attachments)
     }
 
+    /// A blob store holding `texts`, plus the document naming each stored
+    /// blob.
+    fn documents_with(texts: &[&str]) -> (tempfile::TempDir, Blobs, Vec<Attachment>) {
+        let dir = tempfile::tempdir().unwrap();
+        let blobs = Blobs::open(dir.path()).unwrap();
+        let attachments = texts
+            .iter()
+            .map(|&text| {
+                blobs
+                    .ingest_document(text.as_bytes(), Some("notes.md".into()))
+                    .unwrap()
+            })
+            .collect();
+        (dir, blobs, attachments)
+    }
+
     /// The parts of one message as a compact shape: text verbatim, images as
     /// their base64 payload, everything else as `?`.
     fn shape(parts: &[ContentPart]) -> Vec<String> {
@@ -1705,6 +1775,131 @@ mod tests {
         assert_eq!(
             serde_json::to_value(&msg.content).unwrap(),
             serde_json::to_value(&ChatMessage::user("hello").content).unwrap()
+        );
+    }
+
+    #[test]
+    fn a_document_projects_as_its_text() {
+        let (_dir, blobs, atts) = documents_with(&["# Notes\n\nHello.\n"]);
+        let path = format!(".inbox/attachments/{}.md", &atts[0].hash[..12]);
+        let body = "# Notes\n\nHello.\n";
+
+        // A prompt's document is labelled with its `@scratch` copy, and
+        // follows its anchor.
+        let nodes = vec![node(NodeBody::User {
+            content: rumu_core::Content::text("read [Document #1] please")
+                .with_attachments(atts.clone()),
+        })];
+        let parts = project(ANTHROPIC, "SYSTEM", &[], &nodes, Some(&blobs)).messages[0]
+            .content
+            .parts()
+            .to_vec();
+        assert_eq!(
+            shape(&parts),
+            [
+                "text:\"read \"",
+                &format!(
+                    "text:{:?}",
+                    format!("Document 1 (@scratch:{path}):\n{body}")
+                ),
+                "text:\" please\"",
+            ]
+        );
+
+        // A tool result's document has no `@scratch` copy to name.
+        let nodes = vec![node(NodeBody::ToolResult {
+            call_id: "c1".into(),
+            content: rumu_core::Content::text("read").with_attachments(atts),
+            is_error: false,
+            invoke: None,
+        })];
+        let m = &project(ANTHROPIC, "SYSTEM", &[], &nodes, Some(&blobs)).messages[0];
+        let ContentPart::Custom(c) = &m.content.parts()[0] else {
+            panic!("not a custom part: {:?}", m.content.parts());
+        };
+        assert_eq!(
+            c.data["content"],
+            json!([
+                { "type": "text", "text": "read" },
+                { "type": "text", "text": format!("Document 1:\n{body}") },
+            ])
+        );
+    }
+
+    #[test]
+    fn a_long_document_is_cut_and_says_where_the_whole_one_is() {
+        let long = "x".repeat(20_000);
+        let (_dir, blobs, atts) = documents_with(&[&long]);
+        let path = format!(".inbox/attachments/{}.md", &atts[0].hash[..12]);
+        let nodes = vec![node(NodeBody::User {
+            content: rumu_core::Content::text("[Document #1]").with_attachments(atts),
+        })];
+        let parts = project(ANTHROPIC, "SYSTEM", &[], &nodes, Some(&blobs)).messages[0]
+            .content
+            .parts()
+            .to_vec();
+        let ContentPart::Text(text) = &parts[0] else {
+            panic!("not a text part: {parts:?}");
+        };
+        assert!(
+            text.starts_with(&format!("Document 1 (@scratch:{path}):\n")),
+            "{text}"
+        );
+        assert!(
+            text.contains(&format!(
+                "… [truncated: {DOCUMENT_TEXT_LIMIT} of 20000 bytes shown; the whole document is at @scratch:{path}]"
+            )),
+            "{text}"
+        );
+        assert_eq!(text.len(), text.trim_end().len(), "no trailing space");
+    }
+
+    #[test]
+    fn a_missing_document_projects_its_placeholder() {
+        let gone = Attachment {
+            kind: rumu_core::AttachmentKind::Document,
+            hash: "f".repeat(64),
+            mime: "text/markdown".into(),
+            name: Some("gone.md".into()),
+            width: 0,
+            height: 0,
+            size: 10,
+        };
+        let fallback = "Document 1: [document: gone.md] (document unavailable)";
+
+        // In a user message …
+        let nodes = vec![node(NodeBody::User {
+            content: rumu_core::Content::text("see [Document #1]").with_attachments([gone.clone()]),
+        })];
+        let parts = project(ANTHROPIC, "SYSTEM", &[], &nodes, None).messages[0]
+            .content
+            .parts()
+            .to_vec();
+        assert_eq!(
+            shape(&parts),
+            ["text:\"see \"", &format!("text:{fallback:?}")]
+        );
+
+        // … and in a tool result.
+        let nodes = vec![node(NodeBody::ToolResult {
+            call_id: "c1".into(),
+            content: rumu_core::Content::text("read").with_attachments([gone]),
+            is_error: false,
+            invoke: None,
+        })];
+        let parts = project(ANTHROPIC, "SYSTEM", &[], &nodes, None).messages[0]
+            .content
+            .parts()
+            .to_vec();
+        let ContentPart::Custom(c) = &parts[0] else {
+            panic!("not a custom part: {parts:?}");
+        };
+        assert_eq!(
+            c.data["content"],
+            json!([
+                { "type": "text", "text": "read" },
+                { "type": "text", "text": fallback },
+            ])
         );
     }
 

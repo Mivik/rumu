@@ -8,14 +8,16 @@ import type { Tagged } from "./Tagged";
 export type Content = { 
 /**
  * Frozen at write time; with `attachments`, the ONLY thing the model
- * sees. An `[Image #N]` anchor marks where the N-th attachment sits
- * (see [`Content::segments`]).
+ * sees. An `[Image #N]` anchor marks where the N-th image sits, an
+ * `[Document #N]` anchor where the N-th document sits (see
+ * [`Content::segments`]).
  */
 text: string, 
 /**
- * Images, in anchor-number order. Each names a blob in the
- * content-addressed blob store, normalized once at ingest so its bytes
- * (and so the projection) never change afterwards.
+ * Images and documents, in the order they were attached. Each names a
+ * blob in the content-addressed blob store: an image is normalized once
+ * at ingest, a document is stored as it is, so its bytes (and so the
+ * projection) never change afterwards.
  */
 attachments?: Array<Attachment>, 
 /**

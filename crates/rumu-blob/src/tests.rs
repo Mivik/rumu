@@ -46,12 +46,61 @@ fn png_round_trips_as_png() {
     assert_eq!(a.hash, b.hash);
     // A wire reference is rebuilt from the blob, keeping only the name.
     assert_eq!(blobs.describe(&a.hash, Some("a.png".into())).unwrap(), a);
-    // A stored non-image cannot be described.
-    let text = blobs.put(b"not an image").unwrap();
+    fs::remove_dir_all(&dir).ok();
+}
+
+#[test]
+fn a_document_is_stored_as_it_is() {
+    let dir = temp_dir("document");
+    let blobs = Blobs::open(&dir).unwrap();
+    let text = "# Notes\n\nHello.\n";
+    let a = blobs
+        .ingest_document(text.as_bytes(), Some("notes.md".into()))
+        .unwrap();
+    assert_eq!(a.kind, rumu_core::AttachmentKind::Document);
+    assert_eq!(a.mime, "text/markdown");
+    assert_eq!(a.name.as_deref(), Some("notes.md"));
+    assert_eq!((a.width, a.height), (0, 0));
+    assert_eq!(a.size, text.len() as u64);
+    // The bytes are the ones that were sent, byte for byte.
+    assert_eq!(blobs.get(&a.hash).unwrap(), text.as_bytes());
+    // The model reads the document as it is.
+    assert_eq!(
+        blobs.for_model(&a).unwrap(),
+        ("text/markdown".to_owned(), text.as_bytes().to_vec())
+    );
+    // A wire reference is rebuilt from the blob, keeping only the name.
+    assert_eq!(blobs.describe(&a.hash, Some("notes.md".into())).unwrap(), a);
+    // Without a name the type is plain text.
+    let plain = blobs.ingest_document(b"just text", None).unwrap();
+    assert_eq!(plain.mime, "text/plain");
+    assert_eq!(plain.name, None);
+    fs::remove_dir_all(&dir).ok();
+}
+
+#[test]
+fn a_document_must_be_text_and_small_enough() {
+    let dir = temp_dir("document-reject");
+    let blobs = Blobs::open(&dir).unwrap();
+    // Binary bytes are not a document.
     assert!(matches!(
-        blobs.describe(&text, None),
-        Err(Error::Unsupported)
+        blobs.ingest_document(b"\x00\x01\x02binary", None),
+        Err(Error::NotText)
     ));
+    // Neither is valid UTF-8.
+    assert!(matches!(
+        blobs.ingest_document(&[0xff, 0xfe], None),
+        Err(Error::NotText)
+    ));
+    // Too large to keep.
+    let big = vec![b'a'; MAX_DOCUMENT_BYTES + 1];
+    assert!(matches!(
+        blobs.ingest_document(&big, None),
+        Err(Error::TooLarge { .. })
+    ));
+    // A stored blob that is neither an image nor text describes as an error.
+    let hash = blobs.put(b"\x00binary").unwrap();
+    assert!(matches!(blobs.describe(&hash, None), Err(Error::NotText)));
     fs::remove_dir_all(&dir).ok();
 }
 
