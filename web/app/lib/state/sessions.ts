@@ -161,7 +161,6 @@ export async function openSession(id: SessionId, opts: { history?: OpenHistory }
     await loadPath(tree.session.active_branch)
     markSeen()
     void refreshTasks(tree.session.id)
-    refreshLists() // background; updated_at may have changed
     return true
   } catch (err) {
     toast('error', t('errors.loadingSession'), (err as Error).message)
