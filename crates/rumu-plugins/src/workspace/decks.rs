@@ -677,21 +677,22 @@ impl Node for DeckFile {
                 "An assistant's configuration (its persona is its pinned instructions card, not \
                  here): `model`, `mcp` (servers and the rules enabling their tools), `skills`, \
                  `mounts` (`{deck, at, write}`, decks by name), `allow_ask` (assistants by name) \
-                 and `cat`. `write` needs a read of it as it is now and keeps any field left \
-                 out; `write` with `from` renames it. Asks the user: `mounts` and `allow_ask` \
-                 (every time, once only), your own `mcp`, and anything of another assistant."
+                 and `cat`. `edit` changes it in place; `write` needs a read of it as it is now \
+                 and keeps any field left out; `write` with `from` renames it. Asks the user: \
+                 `mounts` and `allow_ask` (every time, once only), your own `mcp`, and anything \
+                 of another assistant."
             }
             Some(Kind::Project) => {
                 "A project's configuration (its charter is its pinned `about` card, not here): \
                  `icon`, `private` and `workspaces` (registered names, in order, the first its \
-                 default). `write` needs a read of it as it is now and keeps any field left out; \
-                 `write` with `from` renames it. This session's project changes freely, but \
-                 `private`; another project asks the user."
+                 default). `edit` changes it in place; `write` needs a read of it as it is now \
+                 and keeps any field left out; `write` with `from` renames it. This session's \
+                 project changes freely, but `private`; another project asks the user."
             }
             _ => {
                 "A deck's configuration: `private` (hidden from sessions that do not mount it). \
-                 `write` needs a read of it as it is now; `write` with `from` renames it; any \
-                 change asks the user."
+                 `edit` changes it in place; `write` needs a read of it as it is now; `write` \
+                 with `from` renames it; any change asks the user."
             }
         }
     }

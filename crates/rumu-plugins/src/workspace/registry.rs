@@ -40,9 +40,9 @@ impl Node for WorkspacesDir {
         "Every workspace: this project's first, then the rest of the registry, then `@scratch` \
          and `@rumu`; `*` marks this branch's default. `@rumu:/workspaces/<name>` is one's \
          entry (`root`, optional `ssh: [user@]host` and `read_only`): `write` a new name to \
-         register a directory (a local root must exist); changing or deleting an entry asks the \
-         user, as other projects may mount it. A project's own list is `workspaces:` in its \
-         `@rumu:/decks/<name>`."
+         register a directory (a local root must exist), `edit` to change one; changing or \
+         deleting an entry asks the user, as other projects may mount it. A project's own list \
+         is `workspaces:` in its `@rumu:/decks/<name>`."
     }
 
     async fn list(&self, at: &At<'_>) -> Out {
