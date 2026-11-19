@@ -2001,7 +2001,7 @@ async fn agent_forks_a_child_and_survives_batch_order() {
         assert!(
             content
                 .text
-                .contains("a reply without tool calls ends the sub-agent")
+                .contains("a reply without tool calls ends your turn")
         );
         assert!(content.text.contains("not yours to carry on"));
 
@@ -4663,6 +4663,64 @@ async fn setup_split(
     let (session, _) = kernel.create_session("assistant".into()).await.unwrap();
     let branch = BranchId::from(session.active_branch.0.as_str());
     (kernel, session.id, branch)
+}
+
+/// A message to a finished sub-agent runs it again, and that turn's reply
+/// reaches the parent as a note that wakes it — as its first reply did as the
+/// `agent` result.
+#[tokio::test]
+async fn a_message_to_a_finished_sub_agent_reports_back_to_the_parent() {
+    let (kernel, session, branch) = setup_split(
+        vec![],
+        vec![
+            LlmResponse::calls(vec![ToolCall::new(
+                "a1",
+                "agent",
+                json!({ "background": false, "task": "look" }),
+            )]),
+            LlmResponse::text("parent done"),
+            LlmResponse::text("parent read the follow-up"),
+        ],
+        vec![
+            LlmResponse::text("child summary"),
+            LlmResponse::text("child follow-up"),
+        ],
+    )
+    .await;
+    kernel.set_wake_debounce(Duration::from_millis(10));
+    run_turn_on(&kernel, &branch, "go").await;
+    let child = agent_branches(&kernel, &session).remove(0);
+    assert_eq!(child.status, BranchStatus::Done);
+
+    let mut rx = kernel.tap_pushes();
+    kernel.prompt(&child.id, "one more thing").await.unwrap();
+    let (done, _) = collect_turn(&mut rx, &child.id.0).await;
+    assert_eq!(done["method"], "turn.done");
+    let started = wait_push(
+        &mut rx,
+        |v| v["method"] == "turn.started" && v["params"]["branch"] == branch.0,
+        "the parent's wake turn",
+    )
+    .await;
+    assert_eq!(started["params"]["reason"], "wake");
+    let (done, _) = collect_turn(&mut rx, &branch.0).await;
+    assert_eq!(done["method"], "turn.done");
+
+    let (nodes, _) = kernel.branch_path(&branch).unwrap();
+    let note = nodes
+        .iter()
+        .find_map(|n| match &n.body {
+            NodeBody::Note { content, .. } if content.text.starts_with("sub-agent (look)") => {
+                Some(content.text.clone())
+            }
+            _ => None,
+        })
+        .expect("the follow-up reply on the parent");
+    assert!(note.ends_with("child follow-up"), "{note}");
+    assert!(nodes.iter().any(|n| matches!(&n.body,
+        NodeBody::Assistant { content, .. } if content.text == "parent read the follow-up")));
+    let child = agent_branches(&kernel, &session).remove(0);
+    assert_eq!(child.status, BranchStatus::Done);
 }
 
 /// A background tool returns a task id immediately; its completion note wakes

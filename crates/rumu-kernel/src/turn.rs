@@ -297,25 +297,30 @@ impl Kernel {
     fn spawn_turn(self: &Arc<Self>, branch: BranchId, token: CancellationToken, turn: TurnKind) {
         let k = self.clone();
         tokio::spawn(async move {
-            let res = k.run_turn(branch.clone(), turn, token).await;
-            k.finish_turn(branch, res.err()).await;
+            let run = {
+                let (k, branch, token) = (k.clone(), branch.clone(), token.clone());
+                async move { k.run_turn(branch, turn, token).await }
+            };
+            k.run_and_finish(branch, token, run).await;
         });
     }
 
     /// One user turn: prompt event → (unless regenerating) User node → the
     /// step loop. A regeneration forks at an existing prompt, so its prompt
     /// event is replayed but the message is not appended again; a retry has
-    /// neither — the loop simply runs again on what is already there.
+    /// neither — the loop simply runs again on what is already there. The
+    /// loop's outcome comes back when it ran (not for a blocked prompt or a
+    /// compaction).
     pub(crate) async fn run_turn(
         self: &Arc<Self>,
         branch: BranchId,
         turn: TurnKind,
         token: CancellationToken,
-    ) -> Result<()> {
+    ) -> Result<Option<LoopOutcome>> {
         match turn {
             TurnKind::Prompt(content) => {
                 if self.open_turn(&branch, content, true, "prompt").await? {
-                    return Ok(());
+                    return Ok(None);
                 }
             }
             TurnKind::Regenerate(content) => {
@@ -323,7 +328,7 @@ impl Kernel {
                     .open_turn(&branch, content, false, "regenerate")
                     .await?
                 {
-                    return Ok(());
+                    return Ok(None);
                 }
             }
             TurnKind::Retry => {
@@ -341,12 +346,12 @@ impl Kernel {
                 self.compact_now(&branch, CompactReason::Manual, focus.as_deref(), &token)
                     .await?;
                 self.push("turn.done", json!({ "branch": branch }));
-                return Ok(());
+                return Ok(None);
             }
         }
-        self.run_loop(branch.clone(), &token).await?;
+        let outcome = self.run_loop(branch.clone(), &token).await?;
         self.push("turn.done", json!({ "branch": branch }));
-        Ok(())
+        Ok(Some(outcome))
     }
 
     /// Announce a turn and dispatch its prompt event. Returns true when a hook
@@ -1266,6 +1271,9 @@ impl Kernel {
             }
         };
 
+        // Done before the guard goes: a message from here on reopens the
+        // branch, and that turn's reply reaches the parent as a note.
+        self.set_branch_status(&child.id, BranchStatus::Done);
         // Safe point at the end of the loop; also releases the loop guard and
         // re-arms a wake that arrived as the loop ended.
         self.end_loop(&child.id).await;
@@ -1275,33 +1283,22 @@ impl Kernel {
             self.abort_tasks(&child.id, true);
         }
 
-        // Mark the child branch Done.
         let b = self
             .store
             .get_branch(&child.id)?
             .ok_or_else(|| Error::Internal("agent branch vanished while finishing".into()))?;
-        let mut done = b.clone();
-        done.status = BranchStatus::Done;
-        self.store.set_branch_status(&done.id, done.status)?;
-        self.push("branch.updated", json!({ "branch": done }));
         self.push("turn.done", json!({ "branch": child.id }));
 
         // Cancelled here but not above: the user stopped this sub-agent itself.
         let interrupted = token.is_cancelled();
         let header = if !interrupted {
-            outcome
-                .stopped_early
-                .then_some("(sub-agent stopped without a final reply)")
+            None
         } else if parent_token.is_cancelled() {
             Some("(sub-agent cancelled before it finished)")
         } else {
-            Some("(sub-agent interrupted by the user before it finished)")
+            Some(INTERRUPTED)
         };
-        let summary = match header {
-            Some(header) if outcome.last_text.is_empty() => header.to_owned(),
-            Some(header) => format!("{header}\n{}", outcome.last_text),
-            None => outcome.last_text,
-        };
+        let summary = agent_summary(&outcome, header);
         let text = format!(
             "{summary}\n\n[transcript: {RUMU_WORKSPACE}:/sessions/{}/{}..{}]",
             parent.session,
@@ -1527,11 +1524,31 @@ fn rewritten(ev: &rumu_core::Event, mut content: Content) -> Content {
     content
 }
 
+/// What a sub-agent's turn hands back: its last text, after a header when the
+/// turn did not end on a reply. `header` names why it was cut short; without
+/// one, a loop that stopped early gets the generic line.
+pub(crate) fn agent_summary(outcome: &LoopOutcome, header: Option<&str>) -> String {
+    let header = header.or_else(|| {
+        outcome
+            .stopped_early
+            .then_some("(sub-agent stopped without a final reply)")
+    });
+    match header {
+        Some(header) if outcome.last_text.is_empty() => header.to_owned(),
+        Some(header) => format!("{header}\n{}", outcome.last_text),
+        None => outcome.last_text.clone(),
+    }
+}
+
+/// The header of a sub-agent turn the user stopped.
+pub(crate) const INTERRUPTED: &str = "(sub-agent interrupted by the user before it finished)";
+
 /// The framing both context modes give a sub-agent.
 fn sub_agent_text(task: &str) -> String {
     format!(
         "You are now a sub-agent. Goal: {task}\n\
-         Do the work, then reply with a concise summary — a reply without tool calls ends the \
-         sub-agent. Nothing you do here is visible to the main branch except that final reply."
+         Do the work, then reply with a concise summary — a reply without tool calls ends your \
+         turn and goes back to your parent; nothing else you do here is visible to it. Messages \
+         may come later; each reply to them goes back the same way."
     )
 }

@@ -1283,26 +1283,71 @@ impl Kernel {
     fn spawn_wake_turn(self: &Arc<Self>, branch: BranchId, token: CancellationToken) {
         let k = self.clone();
         tokio::spawn(async move {
-            // A finished sub-agent branch re-activates for this turn and goes
-            // back to Done afterwards.
-            let was_done = k
-                .store
-                .get_branch(&branch)
-                .ok()
-                .flatten()
-                .is_some_and(|b| b.status == BranchStatus::Done);
-            if was_done {
-                k.set_branch_status(&branch, BranchStatus::Active);
-            }
-            let res = k.run_loop(branch.clone(), &token).await;
-            if was_done {
-                k.set_branch_status(&branch, BranchStatus::Done);
-            }
-            if res.is_ok() {
-                k.push("turn.done", json!({ "branch": branch }));
-            }
-            k.finish_turn(branch, res.err()).await;
+            let run = {
+                let (k, branch, token) = (k.clone(), branch.clone(), token.clone());
+                async move {
+                    let outcome = k.run_loop(branch.clone(), &token).await?;
+                    k.push("turn.done", json!({ "branch": branch }));
+                    Ok(Some(outcome))
+                }
+            };
+            k.run_and_finish(branch, token, run).await;
         });
+    }
+
+    /// Run a turn's body on `branch` (whose loop guard is `token`), then
+    /// clean up after it. A finished sub-agent runs again like any branch — a
+    /// message from the user, a wake: it takes an agent permit, is Active
+    /// while it runs, and hands the turn's reply to its parent as a note that
+    /// wakes it, the way its first run handed back the `agent` result.
+    pub(crate) async fn run_and_finish(
+        self: &Arc<Self>,
+        branch: BranchId,
+        token: CancellationToken,
+        run: impl Future<Output = Result<Option<crate::turn::LoopOutcome>>>,
+    ) {
+        let Some(parent) = self.reopen_agent(&branch) else {
+            let res = run.await;
+            self.finish_turn(branch, res.err(), None).await;
+            return;
+        };
+        let gate = self.inner.lock().unwrap().agent_gate.clone();
+        let permit = tokio::select! {
+            biased;
+            _ = token.cancelled() => None,
+            permit = gate.acquire_owned() => permit.ok(),
+        };
+        let res = match permit {
+            Some(_) => run.await,
+            None => {
+                self.push("turn.done", json!({ "branch": branch }));
+                Ok(None)
+            }
+        };
+        let report = match &res {
+            Ok(None) => None,
+            Ok(Some(outcome)) => Some(crate::turn::agent_summary(
+                outcome,
+                token.is_cancelled().then_some(crate::turn::INTERRUPTED),
+            )),
+            Err(e) => Some(format!("(sub-agent failed: {e})")),
+        };
+        self.finish_turn(branch, res.err(), Some((parent, report)))
+            .await;
+    }
+
+    /// A finished sub-agent's branch about to run again: mark it Active and
+    /// return the parent it reports to. `None` for any other branch.
+    fn reopen_agent(&self, branch: &BranchId) -> Option<BranchId> {
+        let b = self.store.get_branch(branch).ok().flatten()?;
+        let BranchKind::Agent { parent_branch, .. } = &b.kind else {
+            return None;
+        };
+        if b.status != BranchStatus::Done {
+            return None;
+        }
+        self.set_branch_status(branch, BranchStatus::Active);
+        Some(parent_branch.clone())
     }
 
     pub(crate) fn set_branch_status(&self, branch: &BranchId, status: BranchStatus) {
@@ -1351,7 +1396,21 @@ impl Kernel {
     /// reads it for the error row, so it survives a reload); hook-blocked
     /// prompts never reach this: they push `turn.error` directly (a refusal,
     /// with nothing to record).
-    pub(crate) async fn finish_turn(self: &Arc<Self>, branch: BranchId, error: Option<Error>) {
+    ///
+    /// `reopened` is set for a finished sub-agent that ran again
+    /// ([`run_and_finish`](Self::run_and_finish)): its parent, and the reply
+    /// the turn hands it (none for a blocked prompt or a compaction). The
+    /// branch is Done again and the note on the parent before the guard is
+    /// released, so the parent's subtree never looks idle in between, and a
+    /// message arriving after it reopens the branch. A turn about to be
+    /// followed by another (a wake already pending) leaves the reply to that
+    /// one.
+    pub(crate) async fn finish_turn(
+        self: &Arc<Self>,
+        branch: BranchId,
+        error: Option<Error>,
+        reopened: Option<(BranchId, Option<String>)>,
+    ) {
         // The branch is gone (its session was deleted while the turn was being
         // cancelled): there is nothing left to record or report.
         if self.store.get_branch(&branch).ok().flatten().is_none() {
@@ -1373,6 +1432,11 @@ impl Kernel {
             }
             None => None,
         };
+        if let Some((parent, reply)) = reopened
+            && let Err(e) = self.close_agent_turn(&branch, &parent, reply).await
+        {
+            tracing::warn!(%branch, error = %e, "reporting to the parent branch failed");
+        }
         self.end_loop(&branch).await;
         if let Some((message, recorded)) = failure {
             let mut params = json!({ "branch": branch, "message": message });
@@ -1381,6 +1445,44 @@ impl Kernel {
             }
             self.push("turn.error", params);
         }
+    }
+
+    /// Close a turn a finished sub-agent ran again (see
+    /// [`finish_turn`](Self::finish_turn)): the branch back to Done, and its
+    /// reply to the parent as a note that wakes it.
+    async fn close_agent_turn(
+        self: &Arc<Self>,
+        branch: &BranchId,
+        parent: &BranchId,
+        reply: Option<String>,
+    ) -> Result<()> {
+        self.set_branch_status(branch, BranchStatus::Done);
+        let followed = {
+            let inner = self.inner.lock().unwrap();
+            inner.wake_pending.get(branch).is_some_and(|p| p.active)
+        };
+        let Some(text) = reply.filter(|_| !followed) else {
+            return Ok(());
+        };
+        let task = match self.store.get_branch(branch)?.map(|b| b.kind) {
+            Some(BranchKind::Agent { task, .. }) => task,
+            _ => String::new(),
+        };
+        let label: String = task
+            .lines()
+            .next()
+            .unwrap_or_default()
+            .chars()
+            .take(80)
+            .collect();
+        let note = NodeBody::Note {
+            source: SYSTEM_SOURCE.into(),
+            content: Content::text(format!("sub-agent ({label}) replied:\n{text}")),
+        };
+        self.deliver(parent, NodeId::new(), note, Some((SYSTEM_SOURCE, false)))
+            .await?;
+        self.request_wake(parent, Some(SYSTEM_SOURCE), false, true);
+        Ok(())
     }
 
     /// Record a terminal turn failure on the branch: make the tree valid

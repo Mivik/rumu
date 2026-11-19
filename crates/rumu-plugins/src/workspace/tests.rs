@@ -2008,7 +2008,7 @@ fn staged_session() -> (rumu_core::SessionInfo, Vec<Node>, Vec<rumu_core::Branch
             NodeBody::ToolResult {
                 call_id: "c1".into(),
                 content: rumu_core::Content::text(
-                    "You are now a sub-agent. Goal: find the config file\nDo the work, then reply with a concise summary — a reply without tool calls ends the sub-agent. Nothing you do here is visible to the main branch except that final reply.",
+                    "You are now a sub-agent. Goal: find the config file\nDo the work, then reply with a concise summary — a reply without tool calls ends your turn and goes back to your parent; nothing else you do here is visible to it. Messages may come later; each reply to them goes back the same way.",
                 ),
                 is_error: false,
                 invoke: None,
