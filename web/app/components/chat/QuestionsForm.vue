@@ -1,11 +1,12 @@
 <script setup lang="ts">
 // The questions of an `ask` to the user (`kind: "questions"`), inside the
 // composer's decision panel. One question shows at a time — tabs switch
-// between several — its options listed with their descriptions, and a line
-// for the user's own words, which every question has. For several choices it
-// is one more box to tick; for a single choice it sits under the options as a
-// note sent along with the option picked (or alone, when none fits).
-// Picking an option of a single-choice question moves on to the next one.
+// between several — its options listed with their descriptions, and a last
+// row for the user's own words, which every question has: one more box to
+// tick for several choices, one more radio for a single choice. The option
+// picked of a single choice opens a line for a note sent along with it.
+// Picking an option of a single-choice question moves on to the next one;
+// the pen at the end of its row picks it and stays, for the note.
 // The first touch holds the questions, so they no longer run out on the user.
 import { computed, nextTick, reactive, ref } from 'vue'
 import { t } from '../../i18n'
@@ -15,15 +16,16 @@ import Icon from '../ui/Icon.vue'
 
 const props = defineProps<{ id: string; request: QuestionsRequest }>()
 
-/** One question's answer: the options picked, the words written, and — for
- *  several choices, where the words are a box to tick — whether they count.
- *  The flag is kept apart from the words so that the box can be unticked and
- *  ticked again without losing them. */
-type Draft = { selected: string[]; custom: string; useCustom: boolean }
+/** One question's answer: the options picked, the user's own words and
+ *  whether their row is chosen, and the note on the option picked of a single
+ *  choice. The flag is kept apart from the words so that the row can be left
+ *  and chosen again without losing them. */
+type Draft = { selected: string[]; custom: string; useCustom: boolean; note: string }
 
 const drafts = reactive<Draft[]>(
-  props.request.questions.map(() => ({ selected: [], custom: '', useCustom: false })),
+  props.request.questions.map(() => ({ selected: [], custom: '', useCustom: false, note: '' })),
 )
+const rootEl = ref<HTMLElement>()
 const index = ref(0)
 const customEl = ref<HTMLInputElement>()
 const optionsEl = ref<HTMLElement>()
@@ -34,7 +36,7 @@ const last = computed(() => index.value === props.request.questions.length - 1)
 
 function customCounts(i: number): boolean {
   const d = drafts[i]!
-  return d.custom.trim() !== '' && (d.useCustom || !props.request.questions[i]!.multiple)
+  return d.custom.trim() !== '' && (d.useCustom || !props.request.questions[i]!.options.length)
 }
 
 function picked(i: number, label: string): boolean {
@@ -47,7 +49,9 @@ function answered(i: number): boolean {
 
 const complete = computed(() => drafts.every((_, i) => answered(i)))
 
-function pick(label: string): void {
+/** `note`: pick an option of a single choice to write a note on it, so stay
+ *  on the question with the caret in the note. */
+function pick(label: string, note = false): void {
   holdDecision(props.id)
   const d = draft.value
   if (question.value.multiple) {
@@ -57,26 +61,38 @@ function pick(label: string): void {
     return
   }
   d.selected = [label]
-  if (!last.value) setTimeout(() => go(index.value + 1), 160)
+  d.useCustom = false
+  if (note) void nextTick(() => optionsEl.value?.querySelector<HTMLInputElement>('input.q-note')?.focus())
+  else if (!last.value) setTimeout(() => go(index.value + 1), 160)
 }
 
-/** Typing ticks the box of several choices; emptying it unticks it. */
+/** Typing chooses the row of the user's own words — for a single choice in
+ *  place of the option picked; emptying it leaves the row. */
 function onCustomInput(e: Event): void {
   holdDecision(props.id)
-  draft.value.useCustom = (e.target as HTMLInputElement).value.trim() !== ''
+  const d = draft.value
+  d.useCustom = (e.target as HTMLInputElement).value.trim() !== ''
+  if (d.useCustom && !question.value.multiple) d.selected = []
 }
 
 function toggleCustom(): void {
+  holdDecision(props.id)
   const d = draft.value
   if (d.custom.trim() === '') customEl.value?.focus()
-  else d.useCustom = !d.useCustom
+  else if (question.value.multiple) d.useCustom = !d.useCustom
+  else {
+    d.useCustom = true
+    d.selected = []
+    customEl.value?.focus()
+  }
 }
 
 function go(i: number): void {
   holdDecision(props.id)
-  const typing = document.activeElement === customEl.value
+  const active = document.activeElement
+  const typing = active instanceof HTMLInputElement && !!rootEl.value?.contains(active)
   index.value = i
-  // One input serves every question, so a caret in it would stay put: send it
+  // The inputs serve every question, so a caret in one would stay put: send it
   // on to the next question's first option instead. A question without
   // options is answered by typing, so the caret goes into the box.
   const options = props.request.questions[i]!.options.length
@@ -92,10 +108,15 @@ function next(): void {
 
 function submit(): void {
   void answerDecision(props.id, {
-    answers: drafts.map((d, i) => ({
-      selected: d.selected,
-      custom: customCounts(i) ? d.custom.trim() : undefined,
-    })),
+    // A single choice is either an option, its note going along as the words,
+    // or the user's own words alone; the tool tells the two apart.
+    answers: drafts.map((d, i) => {
+      const note = !props.request.questions[i]!.multiple && d.selected.length ? d.note.trim() : ''
+      return {
+        selected: d.selected,
+        custom: customCounts(i) ? d.custom.trim() : note || undefined,
+      }
+    }),
   })
 }
 
@@ -111,7 +132,7 @@ function onCustomKey(e: KeyboardEvent): void {
   <!-- The tabs stay on the panel while the question, its options and the keys
        scroll under them: a phone's panel is short, and which question you are
        on should not depend on how far down you are. -->
-  <div class="flex min-h-0 flex-1 flex-col">
+  <div ref="rootEl" class="flex min-h-0 flex-1 flex-col">
     <!-- tabs, when there are several questions -->
     <div v-if="request.questions.length > 1" class="mt-2 flex flex-none flex-wrap gap-1" role="tablist">
       <button
@@ -142,35 +163,59 @@ function onCustomKey(e: KeyboardEvent): void {
         :role="question.multiple ? 'group' : 'radiogroup'"
         :aria-label="question.question"
       >
-        <button
-          v-for="o in question.options"
-          :key="o.label"
-          type="button"
-          :role="question.multiple ? 'checkbox' : 'radio'"
-          :aria-checked="picked(index, o.label)"
-          class="q-option"
-          :class="{ 'is-on': picked(index, o.label) }"
-          @click="pick(o.label)"
-        >
-          <span class="q-mark" :class="question.multiple ? 'rounded-[5px]' : 'rounded-full'">
-            <Icon v-if="question.multiple" name="ok" :size="11" />
-          </span>
-          <span class="min-w-0">
-            <span class="block text-secondary font-semibold text-ink">{{ o.label }}</span>
-            <span v-if="o.description" class="block text-meta text-ink-3">{{ o.description }}</span>
-          </span>
-        </button>
-        <!-- several choices: the user's own words are one more box to tick -->
-        <div v-if="question.multiple" class="q-option" :class="{ 'is-on': customCounts(index) }">
+        <div v-for="o in question.options" :key="o.label" :class="{ 'is-on': picked(index, o.label) }">
+          <div class="q-line flex">
+            <button
+              type="button"
+              :role="question.multiple ? 'checkbox' : 'radio'"
+              :aria-checked="picked(index, o.label)"
+              class="q-option min-w-0 flex-1"
+              @click="pick(o.label)"
+            >
+              <span class="q-mark" :class="question.multiple ? 'rounded-[5px]' : 'rounded-full'">
+                <Icon v-if="question.multiple" name="ok" :size="11" />
+              </span>
+              <span class="min-w-0">
+                <span class="block text-secondary font-semibold text-ink">{{ o.label }}</span>
+                <span v-if="o.description" class="block text-meta text-ink-3">{{ o.description }}</span>
+              </span>
+            </button>
+            <!-- a single choice: pick this one and stay to write a note -->
+            <button
+              v-if="!question.multiple && !picked(index, o.label)"
+              type="button"
+              class="flex-none self-stretch px-3 text-ink-3 transition-colors hover:text-ink"
+              :title="t('chat.ask.addNote')"
+              :aria-label="t('chat.ask.addNote')"
+              @click="pick(o.label, true)"
+            >
+              <Icon name="edit" :size="14" />
+            </button>
+          </div>
+          <!-- a single choice: a note goes along with the option picked -->
+          <div v-if="!question.multiple && picked(index, o.label)" class="-mt-1 pr-3 pb-2 pl-[38px]">
+            <input
+              v-model="draft.note"
+              class="q-note w-full rounded-[6px] border-0 bg-surface px-2 py-1 text-meta ring-1 ring-line-soft focus:shadow-none"
+              :placeholder="t('chat.ask.note')"
+              :aria-label="t('chat.ask.note')"
+              @input="holdDecision(id)"
+              @keydown="onCustomKey"
+            />
+          </div>
+        </div>
+        <!-- the user's own words: one more box to tick, or one more radio -->
+        <div class="q-option" :class="{ 'is-on': customCounts(index) }">
           <button
             type="button"
-            role="checkbox"
+            :role="question.multiple ? 'checkbox' : 'radio'"
             :aria-checked="customCounts(index)"
             :aria-label="t('chat.ask.custom')"
-            class="q-mark rounded-[5px]"
+            class="q-mark"
+            :class="question.multiple ? 'rounded-[5px]' : 'rounded-full'"
             @click="toggleCustom"
           >
-            <Icon name="ok" :size="11" />
+            <Icon v-if="question.multiple" name="ok" :size="11" />
           </button>
           <input
             ref="customEl"
@@ -182,17 +227,13 @@ function onCustomKey(e: KeyboardEvent): void {
           />
         </div>
       </div>
-      <!-- one choice, or none to pick from: the words go under the options,
-           a note added to the one picked, or the answer itself -->
-      <div
-        v-if="!question.multiple"
-        class="mt-2 flex rounded-control bg-surface px-3 py-2 ring-1 ring-line-soft"
-      >
+      <!-- nothing to pick from: the words are the answer itself -->
+      <div v-else class="mt-2 flex rounded-control bg-surface px-3 py-2 ring-1 ring-line-soft">
         <input
           ref="customEl"
           v-model="draft.custom"
           class="min-w-0 flex-1 border-0 bg-transparent p-0 text-secondary focus:shadow-none"
-          :placeholder="question.options.length ? t('chat.ask.note') : t('chat.ask.answer')"
+          :placeholder="t('chat.ask.answer')"
           @input="onCustomInput"
           @keydown="onCustomKey"
         />
@@ -224,11 +265,11 @@ function onCustomKey(e: KeyboardEvent): void {
   transition: background-color 0.15s;
 }
 
-button.q-option:not(.is-on):hover {
+:not(.is-on) > .q-line:hover {
   background: var(--surface-2);
 }
 
-.q-option.is-on {
+.is-on {
   background: color-mix(in srgb, var(--brand-soft) 55%, var(--surface));
 }
 
@@ -250,14 +291,14 @@ button.q-option:not(.is-on):hover {
     box-shadow 0.15s;
 }
 
-.is-on > .q-mark {
+.is-on .q-mark {
   border-color: var(--brand);
   background: var(--brand);
   color: var(--on-brand);
 }
 
 /* a chosen radio: a ring around a dot rather than a filled disc */
-.is-on > .q-mark.rounded-full {
+.is-on .q-mark.rounded-full {
   background: var(--surface);
   box-shadow:
     inset 0 0 0 3px var(--surface),
