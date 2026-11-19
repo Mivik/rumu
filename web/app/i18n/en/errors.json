@@ -7,6 +7,7 @@
   "newSession": "Couldn't start session",
   "deleteSession": "Couldn't delete session",
   "retitleSession": "Couldn't regenerate the title",
+  "renameSession": "Couldn't rename the session",
   "prompt": "Couldn't send message",
   "abort": "Couldn't stop rumu",
   "killTasks": "Couldn't stop the background tasks",

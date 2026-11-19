@@ -5,6 +5,7 @@
     "new": "Start session",
     "delete": "Delete session",
     "retitle": "Regenerate title",
+    "rename": "Rename",
     "unseen": "New activity",
     "deleteConfirm": "Delete",
     "deletePrompt": "Delete this session?",

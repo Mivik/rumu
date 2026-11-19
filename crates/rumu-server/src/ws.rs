@@ -898,6 +898,13 @@ async fn dispatch(state: &AppState, method: &str, p: &Value) -> Result<Value> {
             Ok(json!({}))
         }
 
+        "session.rename" => {
+            let session: SessionId = str_param(p, "session")?.into();
+            let title = str_param(p, "title")?;
+            kernel.set_title(&session, title)?;
+            Ok(json!({}))
+        }
+
         "session.delete" => {
             let session: SessionId = str_param(p, "session")?.into();
             kernel.delete_session(&session)?;

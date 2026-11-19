@@ -346,6 +346,16 @@ export async function retitleSession(id: SessionId): Promise<void> {
   }
 }
 
+/** Write `title` as the session's title, as given; no model is asked. It
+ *  arrives as a `session.updated` push. */
+export async function renameSession(id: SessionId, title: string): Promise<void> {
+  try {
+    await rumu.request('session.rename', { session: id, title })
+  } catch (err) {
+    toast('error', t('errors.renameSession'), (err as Error).message)
+  }
+}
+
 /** An attachment sent with a prompt: the uploaded blob, plus the name it was
  * attached under. */
 export interface PromptAttachment {

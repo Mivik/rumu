@@ -13,7 +13,7 @@
 // landing page, as does the new-session button. The open session is a
 // bordered sheet of paper on this one; the rest are plain lines. Each row ends
 // in its last activity time, which turns into the row's menu on hover.
-import { computed, onUnmounted, onUpdated, ref, watch } from 'vue'
+import { computed, onUnmounted, onUpdated, ref, watch, type Directive } from 'vue'
 import { LOCALE_LABELS, SUPPORTED_LOCALES, locale, setLocale, t } from '../i18n'
 import type { Locale } from '../i18n'
 import {
@@ -26,6 +26,7 @@ import {
   moveSession,
   openLibrary,
   openSession,
+  renameSession,
   retitleSession,
   sortedSessions,
   startSessionIn,
@@ -271,6 +272,42 @@ const waiting = computed(
 
 /** Titles are the title model's to write, so a session's can be redone. */
 const titledByModel = computed(() => models.settings?.titles === 'model' && !!models.settings.roles.title)
+
+/** The session whose title is being edited in place, and the text in it. */
+const renaming = ref<SessionInfo | null>(null)
+const renameText = ref('')
+
+function beginRename(session: SessionInfo): void {
+  renaming.value = session
+  renameText.value = session.title
+}
+
+/** Enter or leaving the field saves a changed, non-blank title; Escape drops
+ *  it. Both close the field, which blurs it once more: `renaming` is null
+ *  by then. */
+function endRename(save: boolean): void {
+  const session = renaming.value
+  renaming.value = null
+  const title = renameText.value.trim()
+  if (save && session && title && title !== session.title) void renameSession(session.id, title)
+}
+
+function onRenameKey(e: KeyboardEvent): void {
+  if (e.isComposing) return
+  if (e.key === 'Enter') endRename(true)
+  else if (e.key === 'Escape') {
+    e.stopPropagation()
+    endRename(false)
+  }
+}
+
+/** Focus the field and select its text as it mounts. */
+const vSelect: Directive<HTMLInputElement> = {
+  mounted(el) {
+    el.focus()
+    el.select()
+  },
+}
 
 /** The session whose action menu is asking for delete confirmation. The menu
  *  opens on its action list every time, so a reopened menu never starts on the
@@ -525,7 +562,7 @@ const otherLocale = computed<Locale>(
           <div
             v-for="row in shown(group)"
             :key="row.s.id"
-            draggable="true"
+            :draggable="renaming?.id !== row.s.id"
             class="group relative flex w-full min-w-0 items-center rounded-control border text-left text-secondary transition-[background-color,border-color,color,box-shadow] duration-200 has-[[aria-expanded=true]]:bg-surface-2/60 has-[:focus-visible]:ring-2 has-[:focus-visible]:ring-brand/25"
             :class="
               row.s.id === state.sessionId && !state.page
@@ -535,7 +572,21 @@ const otherLocale = computed<Locale>(
             @dragstart="startDrag($event, row.s)"
             @dragend="endDrag"
           >
+            <span v-if="renaming?.id === row.s.id" class="flex min-w-0 flex-1 py-1 pr-2.5 pl-3">
+              <input
+                v-model="renameText"
+                v-select
+                type="text"
+                class="w-full min-w-0 px-1.5 py-0.5 font-sans text-secondary font-normal"
+                :aria-label="t('chat.sidebar.rename')"
+                autocomplete="off"
+                spellcheck="false"
+                @keydown="onRenameKey"
+                @blur="endRename(true)"
+              />
+            </span>
             <button
+              v-else
               class="flex min-w-0 flex-1 items-center gap-2 py-2 pr-2.5 pl-3 text-left outline-none pointer-coarse:pr-10"
               :aria-current="row.s.id === state.sessionId && !state.page ? 'page' : undefined"
               @click="pickSession(row.s.id)"
@@ -593,6 +644,15 @@ const otherLocale = computed<Locale>(
                       {{ t('chat.sidebar.lastActive', { at: row.last }) }}
                     </p>
                     <div class="mx-1 mb-1 h-px bg-line-soft/70" />
+                    <button
+                      type="button"
+                      role="menuitem"
+                      class="flex w-full items-center gap-2 rounded-control px-2.5 py-1.5 text-left text-secondary text-ink-2 transition-colors duration-150 hover:bg-surface-2 hover:text-ink focus-visible:bg-surface-2 focus-visible:text-ink"
+                      @click="(close(), beginRename(row.s))"
+                    >
+                      <Icon name="edit" :size="14" />
+                      {{ t('chat.sidebar.rename') }}
+                    </button>
                     <button
                       v-if="titledByModel"
                       type="button"
