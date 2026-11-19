@@ -112,6 +112,7 @@ export {
   retryBranch,
   revertPlan,
   rewindTo,
+  renameSession,
   retitleSession,
   refreshAssistants,
   refreshTasks,

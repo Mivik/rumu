@@ -884,16 +884,20 @@ async fn sub_agent_task_does_not_retitle_the_session() {
     );
 }
 
-/// A title is written anew on request, from the first prompt, only while a
-/// model writes them.
+/// A title is written anew on request, only while a model writes them.
 #[tokio::test]
 async fn retitle_asks_the_title_model() {
     let (kernel, llm, session, b) = setup(
         vec![],
-        vec![LlmResponse::text("a"), LlmResponse::text("\"Greetings.\"")],
+        vec![
+            LlmResponse::text("the sidebar has no rename entry"),
+            LlmResponse::text("and then some"),
+            LlmResponse::text("\"Greetings.\""),
+        ],
     )
     .await;
     run_turn(&kernel, &b, "hello there").await;
+    run_turn(&kernel, &b, "what next").await;
     assert!(matches!(
         kernel.retitle(&session).await,
         Err(rumu_kernel::Error::NoTitleModel)
@@ -901,8 +905,39 @@ async fn retitle_asks_the_title_model() {
     *llm.titles.lock().unwrap() = rumu_core::Titles::Model;
     kernel.retitle(&session).await.unwrap();
     assert_eq!(kernel.list_sessions().unwrap().remove(0).title, "Greetings");
+    // It reads the first prompt, the first reply and the latest prompt.
     let asked = llm.projections().pop().unwrap();
-    assert!(matches!(&asked[0].body, NodeBody::User { content } if content.text == "hello there"));
+    let [
+        Node {
+            body: NodeBody::User { content },
+            ..
+        },
+    ] = asked.as_slice()
+    else {
+        panic!("the title model is asked with one user message: {asked:?}");
+    };
+    for part in [
+        "hello there",
+        "the sidebar has no rename entry",
+        "what next",
+    ] {
+        assert!(
+            content.text.contains(part),
+            "{part:?} in {:?}",
+            content.text
+        );
+    }
+}
+
+/// A title set by hand lands as given; a blank one leaves it alone.
+#[tokio::test]
+async fn a_hand_written_title_lands_as_given() {
+    let (kernel, _llm, session, b) = setup(vec![], vec![LlmResponse::text("a")]).await;
+    run_turn(&kernel, &b, "hello there").await;
+    kernel.set_title(&session, "  手写标题  ").unwrap();
+    assert_eq!(kernel.list_sessions().unwrap().remove(0).title, "手写标题");
+    kernel.set_title(&session, "   ").unwrap();
+    assert_eq!(kernel.list_sessions().unwrap().remove(0).title, "手写标题");
 }
 
 #[tokio::test]
