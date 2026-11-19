@@ -28,7 +28,7 @@ use super::cards::{Card, CardsDir};
 use super::decks::{DeckFile, DecksDir};
 use super::history::{CardHistory, HistoryRoot};
 use super::registry::{Entry, WorkspacesDir};
-use super::session::{AssistantSessions, ByAssistant, Session, SessionPart, Sessions};
+use super::session::{AssistantSessions, BranchNode, ByAssistant, Session, SessionPart, Sessions};
 use super::task::{Task, TaskOutput, Tasks};
 use super::tools::slice_lines;
 
@@ -51,6 +51,7 @@ const ROUTES: &[(&str, &dyn Node)] = &[
     ("/sessions/by-assistant/{id}", &AssistantSessions),
     ("/sessions/{sid}", &Session),
     ("/sessions/{sid}/{what}", &SessionPart),
+    ("/sessions/{sid}/branches/{bid}", &BranchNode),
     ("/skills", &SkillFiles),
     ("/skills/{name}", &SkillFiles),
     ("/skills/{name}/{*rest}", &SkillFiles),
@@ -622,6 +623,8 @@ mod tests {
         assert_eq!(params("/sessions/by-assistant"), "");
         assert_eq!(params("/sessions/by-assistant/a1"), "id=a1");
         assert_eq!(params("/sessions/s1/a..b"), "sid=s1 what=a..b");
+        // `branches` is a static segment beside `{what}`: it wins.
+        assert_eq!(params("/sessions/s1/branches/b1"), "sid=s1 bid=b1");
         assert_eq!(params("/cards/self/notes/x.md"), "path=self/notes/x.md");
         assert!(ROUTER.at("/sessions/s1/a/b").is_err());
         assert!(ROUTER.at("/history/cards").is_err());
@@ -642,6 +645,7 @@ mod tests {
                 "deck.unmount /decks/{name}",
                 "session.create /sessions",
                 "session.wait /sessions/{sid}",
+                "branch.send /sessions/{sid}/branches/{bid}",
                 "task.kill /tasks/{id}",
                 "workspace.use /workspaces/{name}"
             ]

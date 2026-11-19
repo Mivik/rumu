@@ -473,6 +473,10 @@ pub trait Runtime: History {
     async fn wait_idle(&self, _target: &BranchId) -> Result<()> {
         Err(Error::msg("this host cannot wait on branches"))
     }
+    /// Message the agent on `target` (see [`Cx::send`]).
+    async fn send(&self, _target: &BranchId, _content: Content) -> Result<()> {
+        Err(Error::msg("this host cannot message branches"))
+    }
     /// Cancel the task `id` if `branch` owns it (see [`Cx::kill_task`]).
     async fn kill_task(&self, _branch: &BranchId, _id: &TaskId) -> Result<TaskInfo> {
         Err(Error::msg("this host has no tasks"))
@@ -660,6 +664,13 @@ impl Cx {
     /// running or about to, no sub-agent still at work.
     pub async fn wait_idle(&self, target: &BranchId) -> Result<()> {
         self.runtime.wait_idle(target).await
+    }
+
+    /// Message the agent on the branch `target` (of any session): into its
+    /// running turn, or starting one. It counts toward that branch's wake
+    /// storm guard. Who may message whom is the caller's to check.
+    pub async fn send(&self, target: &BranchId, content: Content) -> Result<()> {
+        self.runtime.send(target, content).await
     }
 
     /// Cancel the background task `id` and return its final status. Only a

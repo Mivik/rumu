@@ -3,8 +3,10 @@
 //! and wait on sessions are in [`super::start`].
 //!
 //! - `list /sessions` — every session of this assistant, most recently updated first;
-//! - `list|read /sessions/<s>` — the session overview (branches with
-//!   `@rumu:/sessions/<s>/<first>..<head>` ranges);
+//! - `list|read /sessions/<s>` — the session overview (its branches, each
+//!   by its `@rumu:/sessions/<s>/branches/<b>` address);
+//! - `read /sessions/<s>/branches/<b>` — the branch's own nodes, rendered as
+//!   a range; `branch.send` on it messages the agent there;
 //! - `read /sessions/<s>/<node>` — one node, fully rendered;
 //! - `read /sessions/<s>/<a>..<b>` — a path fragment from `a` down to `b`
 //!   (`a` must be `b` or one of its ancestors), root→head order.
@@ -215,7 +217,7 @@ impl vfs::Node for Session {
         }
         let text = match what {
             // The overview.
-            "" => render_overview(&info, &nodes, &branches),
+            "" => render_overview(&info, &branches),
             // A range `<a>..<b>` or a single node.
             node if node.contains("..") => {
                 let (a, b) = node.split_once("..").expect("checked for `..`");
@@ -284,6 +286,50 @@ impl vfs::Node for SessionPart {
 
     async fn search(&self, _at: &At<'_>, _query: &str, _limit: Option<usize>) -> Out {
         Err(bad_scope())
+    }
+}
+
+/// `/sessions/<session>/branches/<branch>`: one agent's branch — its own
+/// nodes to read, and `branch.send` to message it.
+pub(super) struct BranchNode;
+
+#[async_trait]
+impl vfs::Node for BranchNode {
+    fn about(&self) -> &'static str {
+        "one agent's branch: its own transcript; `branch.send` messages it"
+    }
+
+    async fn list(&self, at: &At<'_>) -> Out {
+        let (sid, bid) = (at.param("sid"), at.param("bid"));
+        let (info, nodes, branches) = match at.cx.history().session_tree(&SessionId::from(sid)) {
+            Ok(t) => t,
+            Err(_) => return Err(ToolError::model(format!("no session `{sid}`"))),
+        };
+        if !can_see(at.state, &info) {
+            return Err(ToolError::model(format!("no session `{sid}`")));
+        }
+        let b = find_branch(&branches, bid, sid)?;
+        Ok(SessionView::new(sid, &nodes)
+            .render(&own_nodes(&nodes, b), true)
+            .into())
+    }
+
+    async fn search(&self, _at: &At<'_>, _query: &str, _limit: Option<usize>) -> Out {
+        Err(bad_scope())
+    }
+
+    fn actions(&self) -> &'static [ActionSpec] {
+        &[ActionSpec {
+            name: "branch.send",
+            about: "message the agent on it: into the turn it is running, or starting one; \
+                    another assistant's session asks the user first",
+            args: rumu_core::tool_schema::<super::start::SendArgs>,
+            approval: Approval::Asks(rumu_cards::deck::Action::Ask),
+        }]
+    }
+
+    async fn invoke(&self, at: &At<'_>, spec: &ActionSpec, args: Value) -> Out {
+        at.p.send_branch(at, spec.parse(args)?).await
     }
 }
 
@@ -758,9 +804,8 @@ fn abbreviate(id: &str, len: usize) -> String {
 }
 
 /// The session overview: one header line plus one line per branch,
-/// sorted by `created_at`, each with its transcript range.
-fn render_overview(info: &SessionInfo, nodes: &[Node], branches: &[Branch]) -> String {
-    let view = SessionView::new(&info.id.0, nodes);
+/// sorted by `created_at`, each with its address.
+fn render_overview(info: &SessionInfo, branches: &[Branch]) -> String {
     let mut out = format!(
         "session {} — \"{}\" · updated {}",
         info.id,
@@ -780,13 +825,9 @@ fn render_overview(info: &SessionInfo, nodes: &[Node], branches: &[Branch]) -> S
             rumu_core::BranchStatus::Active => "active",
             rumu_core::BranchStatus::Done => "done",
         };
-        let first = first_own_node(nodes, b)
-            .map(|n| view.short(&n.id.0))
-            .unwrap_or_default();
         let mut line = format!(
-            "  {kind:<8} {status:<10} {WS}:/sessions/{}/{first}..{}",
-            info.id,
-            view.short(&b.head.0)
+            "  {kind:<8} {status:<10} {}",
+            rumu_core::branch_address(&info.id, &b.id)
         );
         if let BranchKind::Agent { task, .. } = &b.kind {
             line.push_str(&format!("  task: {}", clip(task, 80)));
@@ -797,19 +838,42 @@ fn render_overview(info: &SessionInfo, nodes: &[Node], branches: &[Branch]) -> S
     out
 }
 
-/// The branch's first own node: the one whose parent is `forked_from` (the
-/// root node for `main`).
-fn first_own_node<'a>(nodes: &'a [Node], b: &Branch) -> Option<&'a Node> {
-    // Walking from the head along parents: several branches may fork at one
-    // node, so scanning for "a child of `forked_from`" is ambiguous — the
-    // head's own chain is not. `main` (forked_from = None) walks down to the
-    // root node.
-    let mut cur = node_by_id(nodes, &b.head.0)?;
-    while cur.parent.as_ref().map(|p| p.0.as_str()) != b.forked_from.as_ref().map(|f| f.0.as_str())
-    {
-        cur = cur.parent.as_ref().and_then(|p| node_by_id(nodes, &p.0))?;
+/// The branch's own nodes, root→head: from its head up to the node it
+/// forked from (all the way to the root for the main line).
+fn own_nodes<'a>(nodes: &'a [Node], b: &Branch) -> Vec<&'a Node> {
+    let mut own = Vec::new();
+    let mut cur = node_by_id(nodes, &b.head.0);
+    while let Some(n) = cur.filter(|n| Some(&n.id) != b.forked_from.as_ref()) {
+        own.push(n);
+        cur = n.parent.as_ref().and_then(|p| node_by_id(nodes, &p.0));
     }
-    Some(cur)
+    own.reverse();
+    own
+}
+
+/// The branch an address names in a session: by id, or a unique prefix of
+/// at least [`MIN_PREFIX`] chars.
+pub(super) fn find_branch<'a>(
+    branches: &'a [Branch],
+    id: &str,
+    sid: &str,
+) -> ToolResult<&'a Branch> {
+    let matches: Vec<&Branch> = match branches.iter().find(|b| b.id.0 == id) {
+        Some(b) => vec![b],
+        None if id.chars().count() >= MIN_PREFIX => {
+            branches.iter().filter(|b| b.id.0.starts_with(id)).collect()
+        }
+        None => Vec::new(),
+    };
+    match matches[..] {
+        [b] => Ok(b),
+        [] => Err(ToolError::model(format!(
+            "no branch `{id}` on session `{sid}`"
+        ))),
+        _ => Err(ToolError::model(format!(
+            "branch prefix `{id}` is ambiguous on session `{sid}`"
+        ))),
+    }
 }
 
 /// Clip to `max` chars on a char boundary, appending an ellipsis when cut.

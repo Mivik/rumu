@@ -1,8 +1,9 @@
 //! The actions on `@rumu:/sessions`: `session.create` starts a session of an
-//! assistant (yourself by default) on a prompt, and `session.wait` waits
-//! until a session is idle and returns its final reply. Together they hand
-//! work to a session of its own; with `invoke`'s `background: true`, the wait
-//! is a task whose completion note says the session is done.
+//! assistant (yourself by default) on a prompt, `session.wait` waits until a
+//! session is idle and returns its final reply, and `branch.send` messages
+//! the agent on a branch (a sub-agent, a session's main line). Together they
+//! hand work to a session of its own; with `invoke`'s `background: true`,
+//! the wait is a task whose completion note says the session is done.
 //!
 //! A started session is one like any other: it runs on by itself, nothing of
 //! the session that started it stops it, and it may start sessions in turn.
@@ -11,7 +12,7 @@
 
 use rumu_cards::deck::Action;
 use rumu_core::{
-    CardMount, Content, Effort, NewSession, NodeBody, SessionId, ToolError, TurnError,
+    BranchKind, CardMount, Content, Effort, NewSession, NodeBody, SessionId, ToolError, TurnError,
 };
 use schemars::JsonSchema;
 use serde::Deserialize;
@@ -36,6 +37,14 @@ pub(super) struct CreateArgs {
     /// the reasoning effort to run at
     #[serde(default)]
     effort: Option<Effort>,
+}
+
+/// `branch.send` arguments.
+#[derive(Deserialize, JsonSchema)]
+#[serde(deny_unknown_fields)]
+pub(super) struct SendArgs {
+    /// the message, self-contained: say what you want back
+    text: String,
 }
 
 impl WorkspacePlugin {
@@ -144,6 +153,89 @@ impl WorkspacePlugin {
             to.meta.name
         )
         .into())
+    }
+
+    /// `branch.send`: message the agent on a branch of a session this path may
+    /// see (or one it started). Not your own branch, nor a side question
+    /// (it has no tools to act on it). Another assistant's session asks the
+    /// user first, as `session.create` does. The message says who sends it:
+    /// a sub-agent's parent needs no address (the reply comes back by
+    /// itself), anyone else gives theirs to answer on.
+    pub(super) async fn send_branch(&self, at: &At<'_>, args: SendArgs) -> Out {
+        let text = args.text.trim();
+        if text.is_empty() {
+            return Err("branch.send: `text` must not be empty".into());
+        }
+        let (sid, bid) = (at.param("sid"), at.param("bid"));
+        let sid = SessionId::from(sid);
+        let missing = || ToolError::model(format!("no session `{sid}`"));
+        let (info, _, branches) = at.cx.history().session_tree(&sid).map_err(|_| missing())?;
+        let started = self
+            .started
+            .lock()
+            .unwrap()
+            .contains(&(at.cx.session.clone(), sid.clone()));
+        if !can_see(at.state, &info) && !started {
+            return Err(missing());
+        }
+        let target = super::session::find_branch(&branches, bid, &sid.0)?;
+        let to = rumu_core::branch_address(&sid, &target.id);
+        if target.id == at.cx.branch {
+            return Err("branch.send: this is your own branch".into());
+        }
+        if matches!(target.kind, BranchKind::Side { .. }) {
+            return Err("branch.send: a side question cannot act on messages".into());
+        }
+        let from = &at.state.assistant;
+        let from_name = self
+            .decks
+            .get(from)
+            .map_or_else(|| from.clone(), |d| d.meta.name.clone());
+        if &info.assistant != from {
+            let to_name = self
+                .decks
+                .get(&info.assistant)
+                .map_or_else(|| info.assistant.clone(), |d| d.meta.name.clone());
+            let request = json!({
+                "kind": "ask",
+                "from": from_name,
+                "from_id": from,
+                "to": to_name,
+                "to_id": info.assistant,
+                "task": text,
+            });
+            let allowed =
+                crate::approve::approve(&self.decks, at.cx, Action::Ask, &info.assistant, request)
+                    .await
+                    .map_err(|e| ToolError::model(format!("branch.send: {e}")))?;
+            if !allowed {
+                return Err(ToolError::model(format!(
+                    "branch.send: the user declined a message to `{to_name}`"
+                )));
+            }
+        }
+        let parent = matches!(&target.kind,
+            BranchKind::Agent { parent_branch, .. } if *parent_branch == at.cx.branch);
+        let (message, back) = if parent {
+            (
+                format!("A message from your parent:\n\n{text}"),
+                "its reply comes back to you as a note",
+            )
+        } else {
+            let here = rumu_core::branch_address(&at.cx.session, &at.cx.branch);
+            (
+                format!(
+                    "A message from `{from_name}` at `{here}` — `invoke` `branch.send` there \
+                     to answer:\n\n{text}"
+                ),
+                "it may answer with `branch.send`",
+            )
+        };
+        at.cx
+            .send(&target.id, Content::text(message))
+            .await
+            .map_err(|e| ToolError::model(format!("branch.send: {e}")))?;
+        Ok(format!("sent to `{to}`; {back}").into())
     }
 
     /// `session.wait`: wait until the session's main line is idle, then

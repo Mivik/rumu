@@ -2156,13 +2156,13 @@ async fn session_listing_and_overview() {
         let main_line = out.content.text.lines().nth(2).unwrap();
         assert!(
             main_line.starts_with(
-                "  main     active     @rumu:/sessions/01STESTSSESSION0000000000000/R..M1"
+                "  main     active     @rumu:/sessions/01STESTSSESSION0000000000000/branches/BMAIN"
             ),
             "{main_line}"
         );
         let agent_line = out.content.text.lines().nth(3).unwrap();
         assert!(
-            agent_line.starts_with("  agent    done       @rumu:/sessions/01STESTSSESSION0000000000000/E1..A2  task: find the config file"),
+            agent_line.starts_with("  agent    done       @rumu:/sessions/01STESTSSESSION0000000000000/branches/BEXP  task: find the config file"),
             "{agent_line}"
         );
     }
@@ -3934,7 +3934,7 @@ async fn invoke_runs_declared_actions_and_explains_the_rest() {
         "no action `task.pause`; `@rumu:/tasks/t1` has `task.kill`; rumu's actions: \
          `deck.mount` on `@rumu:/decks/<name>`, `deck.unmount` on `@rumu:/decks/<name>`, \
          `session.create` on `@rumu:/sessions`, `session.wait` on `@rumu:/sessions/<sid>`, \
-         `task.kill` on `@rumu:/tasks/<id>`",
+         `branch.send` on `@rumu:/sessions/<sid>/branches/<bid>`, `task.kill` on `@rumu:/tasks/<id>`",
     );
     // Arguments the action does not take come back with its schema.
     refused(

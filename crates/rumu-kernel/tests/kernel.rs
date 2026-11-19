@@ -1954,8 +1954,8 @@ async fn agent_forks_a_child_and_survives_batch_order() {
             "{e1_text}"
         );
         assert!(
-            e1_text.contains("\n\n[transcript: @rumu:/sessions/"),
-            "transcript address: {e1_text}"
+            e1_text.contains("\n\n[sub-agent: @rumu:/sessions/"),
+            "branch address: {e1_text}"
         );
         assert!(!e1_err);
         assert_eq!(result_text(&nodes, "o1"), ("other-done".to_owned(), false));
@@ -2000,18 +2000,11 @@ async fn agent_forks_a_child_and_survives_batch_order() {
         );
         assert!(content.text.contains("not yours to carry on"));
 
-        // The transcript address points into this session: `<first>..<head>`
-        // names the child's first own node and its final head.
-        let addr = e1_text
-            .split("[transcript: @rumu:/sessions/")
-            .nth(1)
-            .unwrap()
-            .trim_end_matches(']');
-        let (sid, range) = addr.split_once('/').unwrap();
-        assert_eq!(sid, session.0);
-        let (first, head) = range.split_once("..").unwrap();
-        assert_eq!(first, cnodes[3].id.0);
-        assert_eq!(head, child.head.0);
+        // The address names the child's branch in this session.
+        assert!(
+            e1_text.contains(&rumu_core::branch_address(&session, &child.id)),
+            "{e1_text}"
+        );
     }
 }
 
@@ -2139,18 +2132,14 @@ async fn agent_context_none_starts_at_the_root() {
         "the child must not see the parent's conversation"
     );
 
-    // The transcript address starts at the task node.
+    // The result names the child's branch.
     let (text, err) = result_text(&nodes, "e1");
     assert!(!err, "{text}");
-    let addr = text
-        .split("[transcript: @rumu:/sessions/")
-        .nth(1)
-        .unwrap()
-        .trim_end_matches(']');
-    let (_, range) = addr.split_once('/').unwrap();
-    let (first, head) = range.split_once("..").unwrap();
-    assert_eq!(first, cnodes[1].id.0);
-    assert_eq!(head, child.head.0);
+    let session = kernel.session_of(&child.id).unwrap();
+    assert!(
+        text.contains(&rumu_core::branch_address(&session, &child.id)),
+        "{text}"
+    );
 }
 
 /// An unknown `inherit.workspaces` name is a plain tool error: no child

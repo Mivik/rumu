@@ -152,6 +152,15 @@ fn header(info: &TaskInfo) -> String {
     if let Some(ended) = info.ended_at {
         text.push_str(&format!(" · ended {}", iso_local(ended)));
     }
+    if let rumu_core::TaskKind::Agent {
+        child_branch: Some(child),
+    } = &info.kind
+    {
+        text.push_str(&format!(
+            "\nsub-agent {} (`branch.send` on it messages it)",
+            rumu_core::branch_address(&info.session, child)
+        ));
+    }
     text
 }
 

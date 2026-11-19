@@ -109,6 +109,18 @@ impl Kernel {
         Ok(())
     }
 
+    /// `branch.send`: a message from another agent to `branch` — into its
+    /// running turn, or starting one. The same path as a steering prompt,
+    /// but it counts toward the storm guard and never resets it, so agents
+    /// messaging each other back and forth stop at the guard; only the user's
+    /// own prompt starts the count over.
+    pub async fn send(self: &Arc<Self>, branch: &BranchId, content: Content) -> Result<()> {
+        self.store
+            .get_branch(branch)?
+            .ok_or_else(|| Error::BranchNotFound(branch.clone()))?;
+        self.steer_prompt(branch, content).await
+    }
+
     /// A user prompt while a turn is running: dispatch the (still
     /// interceptable) prompt event, then queue the user node as a wake item so
     /// the running turn sees it at its next safe point — or a new turn starts
@@ -752,12 +764,12 @@ impl Kernel {
                                     }
                                 };
                                 match Box::pin(self.run_agent(
-                                    branch, fork_call, inner_call, &task, inherit, ask, token,
+                                    branch, fork_call, inner_call, &task, inherit, ask, token, None,
                                 ))
                                 .await
                                 {
-                                    Ok(AgentRun::Summary { text, .. }) => ToolOutput::ok(text),
-                                    Ok(AgentRun::Interrupted { text, .. }) => ToolOutput::err(text),
+                                    Ok(AgentRun::Summary(text)) => ToolOutput::ok(text),
+                                    Ok(AgentRun::Interrupted(text)) => ToolOutput::err(text),
                                     Ok(AgentRun::Aborted) => ToolOutput::err("aborted"),
                                     Ok(AgentRun::Refused(message)) => ToolOutput::err(message),
                                     Err(e) => ToolOutput::err(format!("agent failed: {e}")),
@@ -1007,9 +1019,10 @@ impl Kernel {
     ///
     /// The sub-agent ends when it replies without tool calls — that reply is
     /// the summary. An abort without one yields a fixed stopper line (plus
-    /// the last assistant text, if any). The result also
-    /// carries the address of the child's transcript, which `read` can open
-    /// (`@rumu:/sessions/...`).
+    /// the last assistant text, if any). The result also carries the address
+    /// of the child's branch (`@rumu:/sessions/<s>/branches/<b>`): `read`
+    /// opens its transcript, `branch.send` messages it. A background
+    /// sub-agent's task (`task_id`) names the branch as soon as it exists.
     ///
     /// With mode `fork` the fork point is the assistant node containing
     /// `call_id` (found by walking the path, not by assuming it is the head:
@@ -1028,6 +1041,7 @@ impl Kernel {
         inherit: Inherit,
         ask: ModelAsk,
         parent_token: &CancellationToken,
+        task_id: Option<&crate::TaskId>,
     ) -> Result<AgentRun> {
         let parent = self
             .store
@@ -1235,14 +1249,14 @@ impl Kernel {
         );
         self.store.insert_branch(&child)?;
         self.push("branch.updated", json!({ "branch": child }));
+        // A background sub-agent's task names its branch from now on, so it
+        // can be messaged while it works.
+        if let Some(id) = task_id {
+            self.set_task_child(id, &child.id);
+        }
 
-        // The first seeded node starts the child's transcript address.
-        let mut first: Option<NodeId> = None;
         for body in initial {
-            let node = self.append_body(&child.id, body, None).await?;
-            if first.is_none() {
-                first = Some(node.id);
-            }
+            self.append_body(&child.id, body, None).await?;
         }
 
         // The child runs concurrently with other branches; its token is a
@@ -1304,16 +1318,14 @@ impl Kernel {
         };
         let summary = agent_summary(&outcome, header);
         let text = format!(
-            "{summary}\n\n[transcript: {RUMU_WORKSPACE}:/sessions/{}/{}..{}]",
-            parent.session,
-            first.unwrap_or_default(),
-            b.head
+            "{summary}\n\n[sub-agent: {} — `read` it for its transcript, `invoke` `branch.send` \
+             on it to message it; its replies come back here]",
+            rumu_core::branch_address(&parent.session, &b.id)
         );
-        let child = child.id;
         Ok(if interrupted {
-            AgentRun::Interrupted { text, child }
+            AgentRun::Interrupted(text)
         } else {
-            AgentRun::Summary { text, child }
+            AgentRun::Summary(text)
         })
     }
 
@@ -1338,14 +1350,11 @@ impl Kernel {
 
 /// What a sub-agent run produced.
 pub(crate) enum AgentRun {
-    Summary {
-        text: String,
-        /// The child branch the sub-agent ran on.
-        child: BranchId,
-    },
+    /// Its reply, and the address of its branch.
+    Summary(String),
     /// The child branch was cancelled before it finished (the user stopped
-    /// it, or its parent / task was cancelled); `text` is its partial summary.
-    Interrupted { text: String, child: BranchId },
+    /// it, or its parent / task was cancelled): its partial summary.
+    Interrupted(String),
     /// The parent was aborted while waiting for a concurrency permit.
     Aborted,
     /// A limit refused the call before any child branch existed.

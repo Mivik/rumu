@@ -85,6 +85,10 @@ impl Runtime for KernelRuntime {
         Ok(self.0.wait_idle(target).await?)
     }
 
+    async fn send(&self, target: &BranchId, content: rumu_core::Content) -> Result<()> {
+        Ok(self.0.send(target, content).await?)
+    }
+
     async fn kill_task(&self, branch: &BranchId, id: &TaskId) -> Result<TaskInfo> {
         Ok(self.0.kill_task_from(branch, id).await?)
     }

@@ -13,6 +13,17 @@ use typed_path::{Utf8TypedPath, Utf8TypedPathBuf, Utf8UnixPath, Utf8UnixPathBuf}
 /// preset name, so no user workspace can ever collide with it.
 pub const RUMU_WORKSPACE: &str = "@rumu";
 
+/// How many leading characters of a branch id its address shows; an address
+/// names a branch by any prefix unique in its session.
+pub const BRANCH_ABBR: usize = 8;
+
+/// The `@rumu` address of `branch` in `session`: read it for the branch's own
+/// transcript, `branch.send` on it to message the agent there.
+pub fn branch_address(session: &crate::SessionId, branch: &crate::BranchId) -> String {
+    let short: String = branch.0.chars().take(BRANCH_ABBR).collect();
+    format!("{RUMU_WORKSPACE}:/sessions/{session}/branches/{short}")
+}
+
 /// The session's scratch workspace: a real local directory of its own
 /// (`RUMU_HOME/scratch/<session id>`), created on first use and removed with
 /// the session. The default when no other workspace is. Like `@rumu`, its

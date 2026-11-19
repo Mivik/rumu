@@ -408,17 +408,20 @@ impl Kernel {
         let fork_call = call_id.to_owned();
         tokio::spawn(async move {
             let outcome = match kernel
-                .run_agent(&owner, &fork_call, None, &task, inherit, ask, &token)
+                .run_agent(
+                    &owner,
+                    &fork_call,
+                    None,
+                    &task,
+                    inherit,
+                    ask,
+                    &token,
+                    Some(&task_id),
+                )
                 .await
             {
-                Ok(AgentRun::Summary { text, child }) => {
-                    kernel.set_task_child(&task_id, &child);
-                    TaskOutcome::Result(Ok(ToolOutput::ok(text)))
-                }
-                Ok(AgentRun::Interrupted { text, child }) => {
-                    kernel.set_task_child(&task_id, &child);
-                    TaskOutcome::Cancelled(text)
-                }
+                Ok(AgentRun::Summary(text)) => TaskOutcome::Result(Ok(ToolOutput::ok(text))),
+                Ok(AgentRun::Interrupted(text)) => TaskOutcome::Cancelled(text),
                 Ok(AgentRun::Aborted) => TaskOutcome::Cancelled(String::new()),
                 Ok(AgentRun::Refused(message)) => TaskOutcome::Result(Ok(ToolOutput::err(message))),
                 Err(e) => TaskOutcome::Result(Ok(ToolOutput::err(format!("agent failed: {e}")))),
@@ -496,7 +499,7 @@ impl Kernel {
     }
 
     /// Record which branch a background agent got.
-    fn set_task_child(&self, id: &TaskId, child: &BranchId) {
+    pub(crate) fn set_task_child(&self, id: &TaskId, child: &BranchId) {
         let info = {
             let mut inner = self.inner.lock().unwrap();
             let Some(entry) = inner.tasks.get_mut(id) else {
