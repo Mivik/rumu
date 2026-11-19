@@ -320,10 +320,11 @@ function addSearched(): void {
   if (rule) addRule(rule)
 }
 
-/** A searched id nothing listed matches, to add by hand. */
+/** A searched id the provider does not list, to add by hand (some serve
+ *  more than they list). */
 const customId = computed(() => {
   const id = q.value
-  if (!id || /[*!]/.test(id) || form.models.includes(id) || rows.value.ids.length) return null
+  if (!id || /[*!]/.test(id) || form.models.includes(id) || listed.value.includes(id)) return null
   return id
 })
 
