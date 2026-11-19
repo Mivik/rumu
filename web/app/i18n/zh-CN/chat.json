@@ -154,6 +154,7 @@
     "custom": "其他回答…",
     "note": "补充说明（可选）…",
     "addNote": "选中并添加说明",
+    "closeNote": "关闭说明",
     "expiresMin": "{n} 分钟后自动跳过",
     "expiresSec": "{n} 秒后自动跳过",
     "answer": "输入你的回答…",

@@ -154,6 +154,7 @@
     "custom": "Something else…",
     "note": "Add a note (optional)…",
     "addNote": "Pick and add a note",
+    "closeNote": "Close the note",
     "expiresMin": "Skips in {n} min",
     "expiresSec": "Skips in {n}s",
     "answer": "Type your answer…",

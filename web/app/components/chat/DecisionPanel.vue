@@ -18,12 +18,14 @@
 // (and answers already typed stay put), while the conversation above gets
 // the room back. A request that arrives afterwards unfolds it again.
 //
-// Questions with a clock show how long until they are withdrawn; the clock
-// stops once the user starts on them (QuestionsForm holds them).
+// A request with a clock shows how long until it is withdrawn, and the first
+// real touch of the panel stops the clock for good: reading the request is
+// not the same as leaving it, so folding the panel down, scrolling it or
+// typing in it all keep it waiting (Escape answers it, so it does not).
 import { computed, onBeforeUnmount, onMounted, ref, shallowRef, watch } from 'vue'
 import { t } from '../../i18n'
 import { catOf } from '../../lib/assistantFace'
-import { answerDecision, state } from '../../lib/store'
+import { answerDecision, holdDecision, state } from '../../lib/store'
 import type { DecisionScope, PendingDecision } from '../../lib/types'
 import RumuCat from '../brand/RumuCat.vue'
 import Icon from '../ui/Icon.vue'
@@ -159,6 +161,16 @@ function answer(allow: boolean, scope: DecisionScope = 'once'): void {
   if (current.value) void answerDecision(current.value.id, { allow, scope })
 }
 
+/** Any interaction with the panel stops the shown request's clock: touching
+ *  it at all — scrolling the detail, typing an answer, or just folding the
+ *  panel down to its title — means the user is on it, so it waits for them
+ *  rather than being withdrawn. Escape answers it instead, so not that key. */
+function hold(e: Event): void {
+  if (e instanceof KeyboardEvent && e.key === 'Escape') return
+  const d = current.value
+  if (d) holdDecision(d.id)
+}
+
 /** A request no lasting answer may cover (a change to a deck's grants):
  *  only "allow once" is offered. */
 const onceOnly = computed(() => {
@@ -195,6 +207,9 @@ onBeforeUnmount(() => window.removeEventListener('keydown', onKey, true))
     class="grid cursor-auto overflow-hidden rounded-t-[inherit] transition-[grid-template-rows] duration-300 ease-soft"
     :class="current ? 'grid-rows-[1fr]' : 'grid-rows-[0fr]'"
     :inert="!current"
+    @pointerdown.capture="hold"
+    @keydown.capture="hold"
+    @wheel.capture="hold"
   >
     <!-- min-w-0: the folded title is one nowrap line, and without it the row
          sizes the panel to that line instead of the sheet's width -->
