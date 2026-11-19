@@ -94,7 +94,13 @@ pub(crate) trait Backend: Send + Sync {
     ) -> Result<ExecOutput>;
 }
 
-/// Read one child pipe to EOF, forwarding chunks to the aggregator.
+/// How long output is still read after the shell exits: a process it left
+/// running (`cmd &`, a dev server) can hold the pipe open forever.
+const DRAIN_AFTER_EXIT: Duration = Duration::from_secs(1);
+
+/// Read one child pipe to EOF, forwarding chunks to the aggregator. Once the
+/// aggregator has stopped listening, the rest is read and discarded, so a
+/// process still writing to the pipe does not die of `SIGPIPE`.
 async fn read_pipe<R>(
     mut reader: R,
     is_stderr: bool,
@@ -105,13 +111,10 @@ async fn read_pipe<R>(
     let mut buf = [0u8; 4096];
     loop {
         match reader.read(&mut buf).await {
-            Ok(0) => break,
+            Ok(0) | Err(_) => break,
             Ok(n) => {
-                if tx.send((is_stderr, buf[..n].to_vec())).is_err() {
-                    break;
-                }
+                let _ = tx.send((is_stderr, buf[..n].to_vec()));
             }
-            Err(_) => break,
         }
     }
 }
@@ -202,7 +205,9 @@ impl Drop for ProcessTree {
     }
 }
 
-/// Pump a spawned child's stdout/stderr through `on_chunk` and aggregate them.
+/// Pump a spawned child's stdout/stderr through `on_chunk` and aggregate them
+/// until the shell exits and the pipes close, or [`DRAIN_AFTER_EXIT`] after
+/// the exit when something it started still holds them.
 async fn collect_stream(
     tree: &mut ProcessTree,
     on_chunk: &mut (dyn for<'a> FnMut(&'a str) + Send),
@@ -217,7 +222,31 @@ async fn collect_stream(
     drop(tx);
     let (mut stdout, mut stderr) = (Vec::new(), Vec::new());
     let (mut stdout_text, mut stderr_text) = (Utf8Chunks::default(), Utf8Chunks::default());
-    while let Some((is_stderr, bytes)) = rx.recv().await {
+    let mut status = None;
+    let mut deadline = None;
+    let mut lingering = false;
+    loop {
+        let drain = async {
+            match deadline {
+                Some(at) => tokio::time::sleep_until(at).await,
+                None => std::future::pending().await,
+            }
+        };
+        let (is_stderr, bytes) = tokio::select! {
+            msg = rx.recv() => match msg {
+                Some(msg) => msg,
+                None => break,
+            },
+            s = tree.wait(), if status.is_none() => {
+                status = Some(s.map_err(|source| IoError::op("waiting for the shell", source))?);
+                deadline = Some(tokio::time::Instant::now() + DRAIN_AFTER_EXIT);
+                continue;
+            }
+            () = drain => {
+                lingering = true;
+                break;
+            }
+        };
         let (buf, decoder) = if is_stderr {
             (&mut stderr, &mut stderr_text)
         } else {
@@ -234,10 +263,19 @@ async fn collect_stream(
             on_chunk(&text);
         }
     }
-    let status = tree
-        .wait()
-        .await
-        .map_err(|source| IoError::op("waiting for the shell", source))?;
+    let status = match status {
+        Some(s) => s,
+        None => tree
+            .wait()
+            .await
+            .map_err(|source| IoError::op("waiting for the shell", source))?,
+    };
+    if lingering {
+        let note =
+            "\n[processes it started are still running; their later output is not captured]\n";
+        stdout.extend_from_slice(note.as_bytes());
+        on_chunk(note);
+    }
     Ok((stdout, stderr, status.code().unwrap_or(-1)))
 }
 
@@ -669,6 +707,27 @@ mod tests {
         let mut decoder = Utf8Chunks::default();
         assert_eq!(decoder.push(b"x\xffy\xe4\xb8"), "x\u{fffd}y");
         assert_eq!(decoder.finish(), "\u{fffd}");
+    }
+
+    #[cfg(unix)]
+    #[tokio::test]
+    async fn exec_returns_while_a_started_process_holds_the_pipe() {
+        let dir = tempfile::tempdir().unwrap();
+        let backend = LocalBackend {
+            root: dir.path().to_owned(),
+        };
+        let started = std::time::Instant::now();
+        let out = backend
+            .exec("sleep 5 & echo started", &mut |_| {})
+            .await
+            .unwrap();
+        assert!(started.elapsed() < Duration::from_secs(4));
+        assert_eq!(out.code, 0);
+        assert!(out.combined.starts_with("started\n"), "{}", out.combined);
+        assert!(out.combined.contains("still running"), "{}", out.combined);
+        // A command that leaves nothing behind gets no notice.
+        let out = backend.exec("echo done", &mut |_| {}).await.unwrap();
+        assert_eq!(out.combined, "done\n");
     }
 
     #[test]
