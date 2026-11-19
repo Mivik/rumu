@@ -74,6 +74,7 @@
   "yes": "支持",
   "no": "不支持",
   "notInCatalog": "models.dev 未收录",
+  "knownAs": "models.dev 未收录，参照 {id}（不含价格）",
   "enable_exclude_prefix": "排除以 {q} 开头的 {n} 个",
   "enable_exclude_contains": "排除包含 {q} 的 {n} 个",
   "roleCompact": "上下文压缩",

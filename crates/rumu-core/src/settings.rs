@@ -411,8 +411,13 @@ pub struct ModelInfo {
     pub image_input: bool,
     /// USD per million input / output tokens.
     pub cost: Option<ModelCost>,
-    /// Whether the catalog lists it (otherwise the protocol's defaults).
+    /// Whether the catalog lists it, or a model it extends (otherwise the
+    /// protocol's defaults).
     pub known: bool,
+    /// The model it extends, whose facts (not price) it is given when the
+    /// catalog does not list it: `glm-5.3` for `glm-5.3-highspeed`.
+    #[ts(optional)]
+    pub known_as: Option<String>,
     /// What an alias stands for; what is known is of that model.
     #[ts(optional)]
     pub target: Option<ModelAlias>,

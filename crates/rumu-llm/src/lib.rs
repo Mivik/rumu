@@ -232,7 +232,11 @@ pub fn model_info(
 ) -> ModelInfo {
     let protocol = protocol_for(catalog, p, endpoints, id);
     let home = p.preset.as_deref().map(presets::home);
-    let known = catalog.lookup(home, id);
+    let found = catalog.lookup(home, id);
+    let known = found.map(|(_, m)| m);
+    // A variant's price is its own (fast tiers cost more); the rest is the
+    // model's it extends.
+    let known_as = found.map(|(s, _)| s).filter(|s| *s != id);
     ModelInfo {
         model_ref: format!("{provider}/{id}"),
         id: id.to_owned(),
@@ -247,8 +251,9 @@ pub fn model_info(
         context: known.and_then(|m| m.context),
         output: known.and_then(|m| m.output),
         image_input: known.is_none_or(|m| m.image_input),
-        cost: known.and_then(|m| m.cost),
+        cost: known.filter(|_| known_as.is_none()).and_then(|m| m.cost),
         known: known.is_some(),
+        known_as: known_as.map(str::to_owned),
         target: None,
     }
 }

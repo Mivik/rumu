@@ -35,9 +35,15 @@ output: number | null, image_input: boolean,
  */
 cost: ModelCost | null, 
 /**
- * Whether the catalog lists it (otherwise the protocol's defaults).
+ * Whether the catalog lists it, or a model it extends (otherwise the
+ * protocol's defaults).
  */
 known: boolean, 
+/**
+ * The model it extends, whose facts (not price) it is given when the
+ * catalog does not list it: `glm-5.3` for `glm-5.3-highspeed`.
+ */
+known_as?: string, 
 /**
  * What an alias stands for; what is known is of that model.
  */

@@ -165,6 +165,20 @@ fn bare(id: &str) -> &str {
     id.rsplit('/').next().unwrap_or(id)
 }
 
+/// `id`, then the ids it extends, cut at a `-` while a version is left:
+/// `g/glm-5.3-highspeed`, `g/glm-5.3` (not `g/glm`, which may well be
+/// another model).
+fn stems(id: &str) -> impl Iterator<Item = &str> {
+    let start = id.len() - bare(id).len();
+    let mut cut = Some(id.len());
+    std::iter::from_fn(move || {
+        let end = cut?;
+        cut = id[start..end].rfind('-').map(|i| start + i);
+        Some(&id[..end])
+    })
+    .take_while(move |s| s.len() == id.len() || s[start..].contains(|c: char| c.is_ascii_digit()))
+}
+
 /// `aion-3.0-mini` as "Aion 3.0 Mini", `gpt-x` as "GPT X".
 fn words(s: &str) -> String {
     s.split(['-', '_'])
@@ -269,10 +283,17 @@ impl Catalog {
             .map(|(id, p)| (id.as_str(), p))
     }
 
-    /// What the catalog knows about model `id`, from the first of these
-    /// that lists it (as is, or without a vendor prefix): `home`, the
+    /// What the catalog knows about model `id`, else about the nearest
+    /// model it extends (`glm-5.3-highspeed` as `glm-5.3`), with the id it
+    /// was found as.
+    pub fn lookup<'a>(&self, home: Option<&str>, id: &'a str) -> Option<(&'a str, &CatalogModel)> {
+        stems(id).find_map(|s| self.listed(home, s).map(|m| (s, m)))
+    }
+
+    /// What the catalog knows about model `id` itself, from the first of
+    /// these that lists it (as is, or without a vendor prefix): `home`, the
     /// first-party providers, any provider.
-    pub fn lookup(&self, home: Option<&str>, id: &str) -> Option<&CatalogModel> {
+    fn listed(&self, home: Option<&str>, id: &str) -> Option<&CatalogModel> {
         let listing = |key: &str| self.index.get(key).map(Vec::as_slice).unwrap_or_default();
         // Of any provider, the first (in id order) that lists it.
         let any = listing(id)
@@ -290,7 +311,7 @@ impl Catalog {
     pub fn name(&self, home: Option<&str>, id: &str) -> String {
         // A catalog name that is only the id is none.
         let named = |id: &str| {
-            self.lookup(home, id)
+            self.listed(home, id)
                 .map(|m| m.name.as_str())
                 .filter(|n| *n != id && *n != bare(id))
         };
@@ -309,9 +330,10 @@ impl Catalog {
     }
 
     /// The protocol model `id`'s vendor serves it on: from the first-party
-    /// provider that lists it, else by its family.
+    /// provider that lists it (or the model it extends), else by its family.
     pub fn native(&self, id: &str) -> Option<Protocol> {
-        self.find(first_party(), id)
+        stems(id)
+            .find_map(|s| self.find(first_party(), s))
             .and_then(|(p, _)| p.protocol)
             .or_else(|| native_by_name(bare(id)))
     }
@@ -356,12 +378,12 @@ mod tests {
     #[test]
     fn looks_models_up_and_places_their_protocol() {
         let c = Catalog::parse(SAMPLE.as_bytes()).unwrap();
-        let m = c.lookup(None, "claude-x").unwrap();
+        let m = c.lookup(None, "claude-x").unwrap().1;
         assert_eq!(m.efforts, [Effort::Low, Effort::Medium, Effort::High]);
         assert_eq!((m.context, m.image_input), (Some(200_000), true));
         assert!(c.lookup(None, "claude-embed").is_none());
         assert_eq!(
-            c.lookup(None, "r").unwrap().efforts,
+            c.lookup(None, "r").unwrap().1.efforts,
             [Effort::None, Effort::High]
         );
 
@@ -369,12 +391,24 @@ mod tests {
         assert_eq!(
             c.lookup(Some("openrouter"), "anthropic/claude-x")
                 .unwrap()
+                .1
                 .name,
             "Claude X via OR"
         );
-        assert_eq!(c.lookup(None, "vendor/claude-x").unwrap().name, "Claude X");
+        assert_eq!(
+            c.lookup(None, "vendor/claude-x").unwrap().1.name,
+            "Claude X"
+        );
         // Any provider, as a last resort.
         assert!(c.lookup(None, "glm-z").is_some());
+
+        // A variant is known as the model it extends, while a version is
+        // left to match.
+        let (as_, m) = c.lookup(None, "g/MiniMax-M9-highspeed-1").unwrap();
+        assert_eq!((as_, m.name.as_str()), ("g/MiniMax-M9", "MiniMax-M9"));
+        assert!(c.lookup(None, "claude-x-fast").is_none());
+        assert!(c.lookup(None, "g/r-lite").is_none());
+        assert_eq!(c.native("MiniMax-M9-highspeed"), Some(Protocol::Anthropic));
 
         assert_eq!(c.native("anthropic/claude-x"), Some(Protocol::Anthropic));
         assert_eq!(c.native("gpt-x"), Some(Protocol::OpenaiResponses));

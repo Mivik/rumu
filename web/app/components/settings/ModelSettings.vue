@@ -92,7 +92,16 @@ const facts = computed(() => {
           <dd class="text-ink-2 tabular-nums">{{ f.value }}</dd>
         </template>
       </dl>
-      <p v-else-if="m" class="text-meta text-ink-3 italic">{{ t('settings.notInCatalog') }}</p>
+      <p v-if="m?.known_as" class="text-meta text-ink-3 italic">
+        <i18n-t keypath="settings.knownAs" scope="global" tag="span">
+          <template #id>
+            <span class="font-mono not-italic">{{ m.known_as }}</span>
+          </template>
+        </i18n-t>
+      </p>
+      <p v-else-if="m && !facts.length" class="text-meta text-ink-3 italic">
+        {{ t('settings.notInCatalog') }}
+      </p>
 
       <div v-if="usable.length" class="flex flex-col gap-1 border-t border-line-soft pt-2">
         <span class="field-label">{{ t('settings.protocol') }}</span>
