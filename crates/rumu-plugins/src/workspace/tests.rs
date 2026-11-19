@@ -2056,7 +2056,7 @@ fn staged_session() -> (rumu_core::SessionInfo, Vec<Node>, Vec<rumu_core::Branch
     let info = rumu_core::SessionInfo {
         id: sid,
         title: "config hunting".into(),
-        active_branch: main.id.clone(),
+        main_branch: main.id.clone(),
         created_at: 1000,
         updated_at: 8000,
         touched_at: 8000,
@@ -2468,7 +2468,7 @@ async fn session_nodes_show_image_placeholders() {
     let info = rumu_core::SessionInfo {
         id: sid.clone(),
         title: "with images".into(),
-        active_branch: rumu_core::BranchId::from("B1"),
+        main_branch: rumu_core::BranchId::from("B1"),
         created_at: 0,
         updated_at: 0,
         touched_at: 0,
@@ -2590,7 +2590,7 @@ fn staged_tree(sid: &str, nodes: Vec<Node>, head: &str) -> std::sync::Arc<FakeRu
     let info = rumu_core::SessionInfo {
         id: rumu_core::SessionId::from(sid),
         title: "staged".into(),
-        active_branch: rumu_core::BranchId::from("B"),
+        main_branch: rumu_core::BranchId::from("B"),
         created_at: 1,
         updated_at: nodes.iter().map(|n| n.at).max().unwrap_or(0),
         touched_at: 0,
@@ -3155,7 +3155,7 @@ fn search_sessions() -> std::sync::Arc<FakeRuntime> {
     let info = |sid: &str, title: &str, updated: i64| rumu_core::SessionInfo {
         id: rumu_core::SessionId::from(sid),
         title: title.into(),
-        active_branch: rumu_core::BranchId::from("B"),
+        main_branch: rumu_core::BranchId::from("B"),
         created_at: 1,
         updated_at: updated,
         touched_at: updated,
@@ -3465,7 +3465,7 @@ async fn search_sessions_snippet_cjk_queries() {
     let info = rumu_core::SessionInfo {
         id: sid.clone(),
         title: "服务器".into(),
-        active_branch: rumu_core::BranchId::from("B"),
+        main_branch: rumu_core::BranchId::from("B"),
         created_at: 1,
         updated_at: 1,
         touched_at: 1,
@@ -3542,7 +3542,7 @@ async fn search_downweights_tool_results_and_breaks_ties_by_time() {
     let info = rumu_core::SessionInfo {
         id: sid.clone(),
         title: "line one \"quoted\"\nline two, long enough to be cut off here".into(),
-        active_branch: rumu_core::BranchId::from("B"),
+        main_branch: rumu_core::BranchId::from("B"),
         created_at: 1,
         updated_at: 1,
         touched_at: 1,
@@ -5302,7 +5302,7 @@ async fn sessions_belong_to_their_project_or_assistant_deck() {
     let session = |id: &str, assistant: &str, project: Option<&str>| rumu_core::SessionInfo {
         id: rumu_core::SessionId::from(id),
         title: id.into(),
-        active_branch: Default::default(),
+        main_branch: Default::default(),
         created_at: 1,
         updated_at: 2,
         touched_at: 2,

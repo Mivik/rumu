@@ -55,10 +55,6 @@ pub enum Error {
     #[error("busy: a turn is already running on this branch")]
     TurnBusy,
 
-    /// The session's active branch is busy.
-    #[error("busy: the active branch has a running turn")]
-    ActiveBranchBusy,
-
     /// An internal call needs a running turn on the branch.
     #[error("no running turn on branch {branch}")]
     NoRunningTurn { branch: BranchId },
@@ -82,10 +78,14 @@ pub enum Error {
     #[error("the prompt is no longer queued")]
     NotQueued,
 
-    /// `activate` or `side` was given a branch that is not a main line (a
+    /// `branch.move` or `side` was given a branch that is not a main line (a
     /// sub-agent's or a side question's).
     #[error("branch {0} is not a main line")]
     NotMainLine(BranchId),
+
+    /// `branch.move` was given a node a sub-agent or side question added.
+    #[error("node {0} is not on the main line")]
+    OffTheLine(NodeId),
 
     /// The per-branch running-task limit was reached.
     #[error("branch already has {running} running tasks (limit {limit})")]

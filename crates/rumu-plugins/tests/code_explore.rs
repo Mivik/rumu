@@ -119,7 +119,7 @@ async fn setup_async(llm: Arc<AgentLlm>) -> (Arc<Kernel>, SessionId, BranchId) {
     )
     .unwrap();
     let (session, _) = kernel.create_session("assistant".into()).await.unwrap();
-    let branch = BranchId::from(session.active_branch.0.as_str());
+    let branch = BranchId::from(session.main_branch.0.as_str());
     (kernel, session.id, branch)
 }
 

@@ -76,7 +76,7 @@ async fn agent_transcript_address_is_readable() {
     )
     .unwrap();
     let (session, _) = kernel.create_session("assistant".into()).await.unwrap();
-    let branch = session.active_branch.clone();
+    let branch = session.main_branch.clone();
     let mut rx = kernel.tap_pushes();
     kernel.prompt(&branch, "look around").await.unwrap();
     loop {

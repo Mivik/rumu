@@ -146,7 +146,7 @@ impl WorkspacePlugin {
         .into())
     }
 
-    /// `session.wait`: wait until the session's active branch is idle, then
+    /// `session.wait`: wait until the session's main line is idle, then
     /// return its final reply. A session this one started may be waited on
     /// even when its transcript is not visible here (another assistant's,
     /// outside any project): its reply was asked for.
@@ -166,7 +166,7 @@ impl WorkspacePlugin {
         if !visible && !started {
             return Err(missing());
         }
-        let branch = info.active_branch;
+        let branch = info.main_branch;
         at.cx
             .wait_idle(&branch)
             .await

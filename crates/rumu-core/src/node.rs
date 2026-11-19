@@ -699,9 +699,9 @@ pub struct Branch {
 #[serde(tag = "type", rename_all = "snake_case")]
 #[ts(export)]
 pub enum BranchKind {
-    /// The session's one user-visible conversation line. Every edit or
-    /// regenerate forks a new one and activates it; the branch it replaces
-    /// stays reachable through the message variant switcher.
+    /// The session's one user-visible conversation line. An edit or a
+    /// regenerate moves its head; the reply it replaces stays in the tree,
+    /// reachable through the message variant switcher.
     Main,
     Agent {
         task: String,
@@ -776,7 +776,11 @@ pub enum BranchStatus {
 pub struct SessionInfo {
     pub id: SessionId,
     pub title: String,
-    pub active_branch: BranchId,
+    /// The session's main line: the one branch the user talks to. Its head
+    /// moves to an edit, a regenerate or another variant; the id stays.
+    /// Journals from before it was one read their active branch here.
+    #[serde(alias = "active_branch")]
+    pub main_branch: BranchId,
     pub created_at: Timestamp,
     pub updated_at: Timestamp,
     /// When the user last moved the session on: created it, sent on its main
@@ -790,7 +794,7 @@ pub struct SessionInfo {
     pub seen_at: Option<Timestamp>,
     /// The assistant the session runs as.
     pub assistant: String,
-    /// The project deck of the active branch (the deck mounted at
+    /// The project deck of the main line (the deck mounted at
     /// [`crate::PROJECT_MOUNT`]); `None` outside any project.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     #[ts(optional)]

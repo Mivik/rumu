@@ -44,7 +44,7 @@ impl Kernel {
             .store
             .get_session(id)?
             .ok_or_else(|| Error::SessionNotFound(id.clone()))?;
-        let (nodes, _) = self.branch_path(&session.active_branch)?;
+        let (nodes, _) = self.branch_path(&session.main_branch)?;
         let prompt = nodes.iter().find_map(|n| match &n.body {
             NodeBody::User { content } if !content.text.trim().is_empty() => {
                 Some(content.text.clone())

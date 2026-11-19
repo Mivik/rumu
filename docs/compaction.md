@@ -193,7 +193,7 @@ in either case:
 ## Manual
 
 `/compact [focus]` in the composer (the `branch.compact` WS method)
-compacts the active branch now (reason `Manual`), as a turn of its own: it
+compacts the branch shown now (reason `Manual`), as a turn of its own: it
 runs while the branch is idle and can be stopped like any turn. It keeps the
 usual tail.
 
@@ -204,15 +204,15 @@ usual tail.
 - `compact.started` / `compact.done` pushes show "compacting context…" on the
   live turn; `compact.failed` is a toast (the turn carries on uncompacted).
 - The `compact` role is picked in Settings → Defaults.
-- An undo is a fork: a new main branch from the compaction's parent has the
-  full history. The variant switcher already covers it.
+- An undo is a move: the main line moved back to the compaction's parent
+  has the full history. The variant switcher already covers it.
 
 ## Agents and branches
 
 Sub-agent branches compact on their own with the same rule. A
 `mode: "fork"` child forks from the parent's path, so it inherits the
-parent's view. Regenerating or editing a node before a compaction forks a
-branch without that compaction.
+parent's view. Regenerating or editing a node before a compaction moves
+the main line to a path without that compaction.
 
 ## Not now
 

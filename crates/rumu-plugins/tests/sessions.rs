@@ -229,7 +229,7 @@ async fn scout_turn(
 ) -> (String, usize) {
     let scout = deck_id(home, "scout");
     let (session, _) = kernel.create_session(scout).await.unwrap();
-    let branch = session.active_branch.clone();
+    let branch = session.main_branch.clone();
     let mut rx = kernel.tap_pushes();
     kernel.prompt(&branch, "ask ledger").await.unwrap();
     let (done, asked) = run(kernel, &mut rx, &branch, answer).await;
@@ -339,7 +339,7 @@ async fn aborting_the_turn_cancels_the_question() {
     let kernel = kernel(home.path()).await;
     let scout = deck_id(home.path(), "scout");
     let (session, _) = kernel.create_session(scout).await.unwrap();
-    let branch = session.active_branch.clone();
+    let branch = session.main_branch.clone();
     let mut rx = kernel.tap_pushes();
     kernel.prompt(&branch, "ask ledger").await.unwrap();
     while let Some(v) = rx.recv().await {
@@ -422,7 +422,7 @@ async fn a_started_session_outlives_the_turn_that_started_it() {
     let kernel = kernel_on(home.path(), Arc::new(StuckLlm)).await;
     let scout = deck_id(home.path(), "scout");
     let (session, _) = kernel.create_session(scout).await.unwrap();
-    let scout = session.active_branch.clone();
+    let scout = session.main_branch.clone();
     let mut rx = kernel.tap_pushes();
     kernel.prompt(&scout, "ask ledger").await.unwrap();
     let mut ledger = None;

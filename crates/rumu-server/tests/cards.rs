@@ -133,7 +133,7 @@ async fn update_notices_only_follow_actual_reads() {
     .unwrap();
 
     let (a, _) = kernel.create_session(main.clone()).await.unwrap();
-    let ba = a.active_branch.clone();
+    let ba = a.main_branch.clone();
     run_turn(&kernel, &ba, "read card x").await;
     let (nodes_a, _) = kernel.branch_path(&ba).unwrap();
 
@@ -156,7 +156,7 @@ async fn update_notices_only_follow_actual_reads() {
 
     // B (fresh session, same home) never read the card → no notice.
     let (b, _) = kernel.create_session(main.clone()).await.unwrap();
-    let bb = b.active_branch.clone();
+    let bb = b.main_branch.clone();
     run_turn(&kernel, &bb, "hello without reading anything").await;
     let (nodes_b, _) = kernel.branch_path(&bb).unwrap();
     assert!(
@@ -210,7 +210,7 @@ async fn update_notices_only_follow_actual_reads() {
         .unwrap()
         .id
         .clone();
-    let forked = kernel.fork(&before_read).await.unwrap();
+    let forked = kernel.move_head(&ba, &before_read).await.unwrap();
     run_turn(&kernel, &forked.id, "fresh start").await;
     let (nodes_f, _) = kernel.branch_path(&forked.id).unwrap();
     assert!(
@@ -272,7 +272,7 @@ async fn script_edits_count_as_reads() {
     )
     .unwrap();
     let (s, _) = kernel.create_session(main).await.unwrap();
-    let b = s.active_branch.clone();
+    let b = s.main_branch.clone();
     run_turn(&kernel, &b, "edit card x").await;
     run_turn(&kernel, &b, "again").await;
 

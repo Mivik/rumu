@@ -738,7 +738,7 @@ impl Kernel {
         let info = SessionInfo {
             id: session.clone(),
             title: String::new(),
-            active_branch: branch.id.clone(),
+            main_branch: branch.id.clone(),
             created_at: at,
             updated_at: at,
             touched_at: at,
@@ -830,7 +830,7 @@ impl Kernel {
             .store
             .get_session(session)?
             .ok_or_else(|| Error::SessionNotFound(session.clone()))?;
-        let branch = info.active_branch;
+        let branch = info.main_branch;
         let state = derive_state(&self.pending_path_nodes(&branch)?);
         if state.project == mount.as_ref().map(|m| m.deck.clone()) {
             return Ok(());
@@ -980,30 +980,6 @@ impl Kernel {
         Ok(())
     }
 
-    /// Make `branch` the session's active one — the message variant
-    /// switcher's pick among the branches that share a parent. Sub-agent and
-    /// side-question branches are refused: they hang off a main line, they
-    /// are not one.
-    pub fn activate_branch(&self, branch: &BranchId) -> Result<()> {
-        let b = self
-            .store
-            .get_branch(branch)?
-            .ok_or_else(|| Error::BranchNotFound(branch.clone()))?;
-        if !matches!(b.kind, BranchKind::Main) {
-            return Err(Error::NotMainLine(b.id.clone()));
-        }
-        let mut session = self
-            .store
-            .get_session(&b.session)?
-            .ok_or_else(|| Error::SessionNotFound(b.session.clone()))?;
-        session.active_branch = b.id.clone();
-        session.project = derive_state(&self.path_nodes(&b.id)?).project;
-        session.updated_at = now();
-        self.store.update_session(&session)?;
-        self.push("session.updated", json!({ "session": session }));
-        Ok(())
-    }
-
     // ---- node append ----
 
     /// Append a node as the branch tail, move the head, push events. This is
@@ -1047,13 +1023,13 @@ impl Kernel {
         b.head = node.id.clone();
         self.push("node.appended", json!({ "branch": branch, "node": node }));
 
-        // The session is listed under its active branch's project.
+        // The session is listed under its main line's project.
         if let Some(project) = project_change(&body) {
             let mut session = self
                 .store
                 .get_session(&b.session)?
                 .ok_or_else(|| Error::SessionNotFound(b.session.clone()))?;
-            if session.active_branch == b.id && session.project != project {
+            if session.main_branch == b.id && session.project != project {
                 session.project = project;
                 self.store.update_session(&session)?;
                 self.push("session.updated", json!({ "session": session }));
@@ -1599,39 +1575,44 @@ impl Kernel {
 
     // ---- UI tree ops ----
 
-    /// `branch.fork` WS method: a new branch at `node`, made the session's
-    /// active one — how an edited prompt or a regenerate steps away from the
-    /// turn it replaces. The branch left behind keeps its nodes and stays
-    /// reachable through the message variant switcher. Refused while the
-    /// session's active branch is running, so nothing is forked out from
-    /// under a live turn.
-    pub async fn fork(self: &Arc<Self>, node: &NodeId) -> Result<Branch> {
+    /// `branch.move` WS method: move the main line `branch` to `node` — just
+    /// before a message being edited, onto a prompt being regenerated, to
+    /// another variant's end. What it leaves stays in the tree, reachable
+    /// through the message variant switcher. Refused while the branch works,
+    /// at an assistant node with calls still open, and at a node a sub-agent
+    /// or side question added (it is not part of the line).
+    pub async fn move_head(self: &Arc<Self>, branch: &BranchId, node: &NodeId) -> Result<Branch> {
+        let mut b = self
+            .store
+            .get_branch(branch)?
+            .ok_or_else(|| Error::BranchNotFound(branch.clone()))?;
+        if !matches!(b.kind, BranchKind::Main) {
+            return Err(Error::NotMainLine(b.id.clone()));
+        }
         let n = self
             .store
             .get_node(node)?
+            .filter(|n| n.session == b.session)
             .ok_or_else(|| Error::NodeNotFound(node.clone()))?;
         Self::check_safe_point(&n)?;
+        if self.inner.lock().unwrap().running.contains_key(branch) {
+            return Err(Error::TurnBusy);
+        }
+        if self.off_line_nodes(&b.session)?.contains(node) {
+            return Err(Error::OffTheLine(node.clone()));
+        }
+        self.store.set_branch_head(branch, node)?;
+        b.head = n.id.clone();
+        self.push("branch.updated", json!({ "branch": b.clone() }));
+        // The session is listed under the project its main line is now in.
         let mut session = self
             .store
-            .get_session(&n.session)?
-            .ok_or_else(|| Error::SessionNotFound(n.session.clone()))?;
-        if self
-            .inner
-            .lock()
-            .unwrap()
-            .running
-            .contains_key(&session.active_branch)
-        {
-            return Err(Error::ActiveBranchBusy);
-        }
-        let b = Self::make_branch(&n.session, n.id.clone(), BranchKind::Main);
-        self.store.insert_branch(&b)?;
-        session.active_branch = b.id.clone();
-        session.project = derive_state(&self.path_nodes(&b.id)?).project;
+            .get_session(&b.session)?
+            .ok_or_else(|| Error::SessionNotFound(b.session.clone()))?;
+        session.project = derive_state(&self.path_nodes(branch)?).project;
         session.updated_at = now();
         self.store.update_session(&session)?;
         self.push("session.updated", json!({ "session": session }));
-        self.push("branch.updated", json!({ "branch": b.clone() }));
 
         let mut ev = self.make_event(
             kind::BRANCH_FORK,
@@ -1641,6 +1622,26 @@ impl Kernel {
         )?;
         self.dispatch(&mut ev, false).await?;
         Ok(b)
+    }
+
+    /// The nodes of `session` its sub-agents and side questions added: each
+    /// such branch's own, from its head up to the node it forked from.
+    fn off_line_nodes(&self, session: &SessionId) -> Result<HashSet<NodeId>> {
+        let nodes = self.store.nodes_of_session(session)?;
+        let parent: HashMap<&NodeId, Option<&NodeId>> =
+            nodes.iter().map(|n| (&n.id, n.parent.as_ref())).collect();
+        let mut off = HashSet::new();
+        for b in self.store.branches_of_session(session)? {
+            if matches!(b.kind, BranchKind::Main) {
+                continue;
+            }
+            let mut cur = Some(&b.head);
+            while let Some(id) = cur.filter(|id| Some(*id) != b.forked_from.as_ref()) {
+                off.insert(id.clone());
+                cur = parent.get(id).copied().flatten();
+            }
+        }
+        Ok(off)
     }
 
     /// `session.fork` WS method: copy the root→`node` path into a new
@@ -1693,7 +1694,7 @@ impl Kernel {
         let info = SessionInfo {
             id: session.clone(),
             title: src.title.clone(),
-            active_branch: branch.id.clone(),
+            main_branch: branch.id.clone(),
             created_at: at,
             updated_at: at,
             touched_at: at,

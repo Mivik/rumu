@@ -640,7 +640,7 @@ async fn setup_with_workspaces(
         kernel,
         llm,
         session.id.clone(),
-        BranchId::from(session.active_branch.0.as_str()),
+        BranchId::from(session.main_branch.0.as_str()),
     )
 }
 
@@ -705,12 +705,7 @@ async fn setup_in_project(
         })
         .await
         .unwrap();
-    (
-        kernel,
-        llm,
-        session.id.clone(),
-        session.active_branch.clone(),
-    )
+    (kernel, llm, session.id.clone(), session.main_branch.clone())
 }
 
 /// Drive pushes until `turn.done`/`turn.error` for `branch` (or any branch
@@ -1243,7 +1238,7 @@ async fn flaky_setup(
     )
     .unwrap();
     let (session, _) = kernel.create_session("assistant".into()).await.unwrap();
-    (kernel, llm, session.active_branch.clone())
+    (kernel, llm, session.main_branch.clone())
 }
 
 /// A transient failure with nothing streamed yet is replayed: one
@@ -1357,7 +1352,7 @@ async fn failure_after_a_delta_is_not_retried() {
     )
     .unwrap();
     let (session, _) = kernel.create_session("assistant".into()).await.unwrap();
-    let branch = session.active_branch.clone();
+    let branch = session.main_branch.clone();
     let mut rx = kernel.tap_pushes();
 
     kernel.prompt(&branch, "hello").await.unwrap();
@@ -1513,7 +1508,7 @@ async fn retry_refused_when_answered_or_busy() {
     )
     .unwrap();
     let (session, _) = kernel.create_session("assistant".into()).await.unwrap();
-    let branch = session.active_branch.clone();
+    let branch = session.main_branch.clone();
     kernel.prompt(&branch, "go").await.unwrap();
     started_rx.recv().await.expect("first LLM call in flight");
     let err = kernel.retry(&branch, Default::default()).await.unwrap_err();
@@ -1549,7 +1544,7 @@ async fn retry_works_behind_a_hook_note() {
     )
     .unwrap();
     let (session, _) = kernel.create_session("assistant".into()).await.unwrap();
-    let branch = session.active_branch.clone();
+    let branch = session.main_branch.clone();
     let mut rx = kernel.tap_pushes();
 
     kernel.prompt(&branch, "hello").await.unwrap();
@@ -2435,7 +2430,7 @@ async fn agent_concurrency_limit_serialises_script_fanout() {
     )
     .unwrap();
     let (session, _) = kernel.create_session("assistant".into()).await.unwrap();
-    let branch = BranchId::from(session.active_branch.0.as_str());
+    let branch = BranchId::from(session.main_branch.0.as_str());
     kernel.set_agent_concurrency(1);
 
     run_turn_on(&kernel, &branch, "go").await;
@@ -2484,7 +2479,7 @@ async fn abort_while_waiting_for_an_agent_permit_creates_no_child() {
     )
     .unwrap();
     let (session, _) = kernel.create_session("assistant".into()).await.unwrap();
-    let branch = BranchId::from(session.active_branch.0.as_str());
+    let branch = BranchId::from(session.main_branch.0.as_str());
     kernel.set_agent_concurrency(1);
     let mut rx = kernel.tap_pushes();
     kernel.prompt(&branch, "go").await.unwrap();
@@ -2614,7 +2609,7 @@ async fn every_workspace_is_addressable_and_the_project_mounts_its_own() {
     // Outside a project: the whole registry is addressable, none is mounted,
     // `@scratch` is the default.
     let (s, _) = kernel.create_session("assistant".into()).await.unwrap();
-    let (_, st) = kernel.branch_path(&s.active_branch).unwrap();
+    let (_, st) = kernel.branch_path(&s.main_branch).unwrap();
     assert_eq!(workspace_names(&st), ["app", "lib", "proj", "@scratch"]);
     assert!(st.mounted.is_empty() && st.project.is_none());
     assert_eq!(st.default_workspace.as_deref(), Some(SCRATCH_WORKSPACE));
@@ -2697,7 +2692,7 @@ async fn move_project_records_markers_default_and_note() {
     );
     let (kernel, _llm) = kernel_with(vec![], vec![], registry);
     let (s, _) = kernel.create_session("assistant".into()).await.unwrap();
-    let branch = s.active_branch.clone();
+    let branch = s.main_branch.clone();
     let text = "The user moved this session into project `proj-deck`.";
     let mut rx = kernel.tap_pushes();
 
@@ -2724,7 +2719,7 @@ async fn move_project_records_markers_default_and_note() {
     );
     let info = kernel.session_tree(&s.id).unwrap().0;
     assert_eq!(info.project.as_deref(), Some("proj-deck"));
-    // The active branch's new project is announced.
+    // The main line's new project is announced.
     assert!(std::iter::from_fn(|| rx.try_recv().ok()).any(|v| {
         v["method"] == "session.updated" && v["params"]["session"]["project"] == "proj-deck"
     }));
@@ -2758,10 +2753,11 @@ async fn move_project_records_markers_default_and_note() {
     assert_eq!(kernel.branch_path(&branch).unwrap().0.len(), len);
 }
 
-/// `SessionInfo.project` tracks the active branch: created, moved, switched,
-/// forked and copied by `fork_session`.
+/// `SessionInfo.project` tracks the main line: created, moved into a
+/// project, moved back before that and forward again, and copied by
+/// `fork_session`.
 #[tokio::test]
-async fn session_project_follows_the_active_branch() {
+async fn session_project_follows_the_main_line() {
     let registry = registry_with(
         &[("app", "/s/app"), ("proj", "/p/proj")],
         "proj-deck",
@@ -2769,15 +2765,10 @@ async fn session_project_follows_the_active_branch() {
     );
     let (kernel, _llm) = kernel_with(vec![], vec![], registry);
     let (s, _) = kernel.create_session("assistant".into()).await.unwrap();
-    let main = s.active_branch.clone();
+    let main = s.main_branch.clone();
     let root = kernel.branch_path(&main).unwrap().0[0].id.clone();
 
-    // A branch forked at the root stays outside the project.
-    let outside = kernel.fork(&root).await.unwrap();
-    assert_eq!(kernel.session_tree(&s.id).unwrap().0.project, None);
-
-    // Moving the main branch in is recorded on the session.
-    kernel.activate_branch(&main).unwrap();
+    // Moving the main line into a project is recorded on the session.
     kernel
         .move_project(&s.id, Some(project_mount("proj-deck")), "in".into())
         .await
@@ -2787,7 +2778,6 @@ async fn session_project_follows_the_active_branch() {
         Some("proj-deck")
     );
 
-    // A branch forked from the moved head starts in that project.
     let head = kernel
         .branch_path(&main)
         .unwrap()
@@ -2796,16 +2786,12 @@ async fn session_project_follows_the_active_branch() {
         .unwrap()
         .id
         .clone();
-    let inside = kernel.fork(&head).await.unwrap();
-    assert_eq!(
-        kernel.session_tree(&s.id).unwrap().0.project.as_deref(),
-        Some("proj-deck")
-    );
 
-    // Switching branches switches the project with it.
-    kernel.activate_branch(&outside.id).unwrap();
+    // Moving the head back before it leaves the project; forward again
+    // returns to it.
+    kernel.move_head(&main, &root).await.unwrap();
     assert_eq!(kernel.session_tree(&s.id).unwrap().0.project, None);
-    kernel.activate_branch(&inside.id).unwrap();
+    kernel.move_head(&main, &head).await.unwrap();
     assert_eq!(
         kernel.session_tree(&s.id).unwrap().0.project.as_deref(),
         Some("proj-deck")
@@ -3530,10 +3516,10 @@ async fn host_call_tool_outside_a_batch_errors() {
     assert!(format!("{err:#}").contains("no running turn"), "{err:#}");
 }
 
-/// Regenerate forks at the prompt, replies again, and does not append the
-/// user message a second time.
+/// Regenerate moves the main line onto the prompt, replies again, and does
+/// not append the user message a second time.
 #[tokio::test]
-async fn regenerate_forks_at_the_prompt_and_does_not_duplicate_it() {
+async fn regenerate_replies_from_the_prompt_without_duplicating_it() {
     let (kernel, llm, _s, branch) = setup(
         vec![],
         vec![
@@ -3556,8 +3542,7 @@ async fn regenerate_forks_at_the_prompt_and_does_not_duplicate_it() {
         .regenerate(&prompt, Default::default())
         .await
         .unwrap();
-    assert_eq!(regenerated.forked_from.as_ref(), Some(&prompt));
-    assert!(matches!(regenerated.kind, rumu_core::BranchKind::Main));
+    assert_eq!(regenerated.id, branch);
     wait_turn(&mut rx, Some(regenerated.id.0.as_str())).await;
 
     let (path, _) = kernel.branch_path(&regenerated.id).unwrap();
@@ -3588,11 +3573,10 @@ async fn regenerate_forks_at_the_prompt_and_does_not_duplicate_it() {
     assert_eq!(body_kinds(&old), vec!["marker[root]", "user", "assistant"]);
 }
 
-/// Regenerating replaces the branch it regenerates: the session's active
-/// branch is the new one; the old keeps its nodes and stays reachable as a
-/// variant.
+/// Regenerating moves the main line onto the prompt: the same branch goes on
+/// from there, and the old reply stays in the tree as a variant.
 #[tokio::test]
-async fn regenerate_switches_the_active_branch() {
+async fn regenerate_moves_the_main_line() {
     let (kernel, _llm, session, branch) = setup(
         vec![],
         vec![
@@ -3617,23 +3601,29 @@ async fn regenerate_switches_the_active_branch() {
         .unwrap();
     wait_turn(&mut rx, Some(regenerated.id.0.as_str())).await;
 
-    let (info, _, branches) = kernel.session_tree(&session).unwrap();
-    let status = |id: &BranchId| {
-        branches
-            .iter()
-            .find(|b| &b.id == id)
-            .unwrap_or_else(|| panic!("branch {id} missing"))
-            .status
-    };
-    assert_eq!(info.active_branch, regenerated.id);
-    assert_eq!(status(&branch), BranchStatus::Active);
-    assert_eq!(status(&regenerated.id), BranchStatus::Active);
+    let (info, nodes, branches) = kernel.session_tree(&session).unwrap();
+    assert_eq!(regenerated.id, branch);
+    assert_eq!(info.main_branch, branch);
+    assert_eq!(branches.len(), 1);
+    let replies: Vec<&str> = nodes
+        .iter()
+        .filter_map(|n| match &n.body {
+            NodeBody::Assistant { content, .. } if n.parent.as_ref() == Some(&prompt) => {
+                Some(content.text.as_str())
+            }
+            _ => None,
+        })
+        .collect();
+    assert_eq!(replies.len(), 2, "both replies hang off the prompt");
+    let (path, _) = kernel.branch_path(&branch).unwrap();
+    assert!(matches!(&path.last().unwrap().body,
+        NodeBody::Assistant { content, .. } if content.text == "second reply"));
 }
 
-/// A plain fork becomes the session's active branch; the one it forked from
-/// is left exactly as it was.
+/// Moving the main line keeps every node: back to the prompt, then on to
+/// the reply it left, and the head is where it was.
 #[tokio::test]
-async fn plain_fork_activates_without_disturbing_the_old_branch() {
+async fn moving_the_main_line_keeps_what_it_leaves() {
     let (kernel, _llm, session, branch) = setup(vec![], vec![LlmResponse::text("reply")]).await;
 
     let (_, nodes, _) = run_turn(&kernel, &branch, "hello").await;
@@ -3643,26 +3633,29 @@ async fn plain_fork_activates_without_disturbing_the_old_branch() {
         .expect("the turn appended a user node")
         .id
         .clone();
+    let reply = nodes.last().unwrap().id.clone();
 
-    let forked = kernel.fork(&prompt).await.unwrap();
+    let moved = kernel.move_head(&branch, &prompt).await.unwrap();
+    assert_eq!(
+        (moved.id.clone(), moved.head.clone()),
+        (branch.clone(), prompt.clone())
+    );
+    let (_, all, _) = kernel.session_tree(&session).unwrap();
+    assert!(all.iter().any(|n| n.id == reply));
+    assert_eq!(
+        kernel.branch_path(&branch).unwrap().0.last().unwrap().id,
+        prompt
+    );
 
-    let (info, _, branches) = kernel.session_tree(&session).unwrap();
-    let status = |id: &BranchId| {
-        branches
-            .iter()
-            .find(|b| &b.id == id)
-            .unwrap_or_else(|| panic!("branch {id} missing"))
-            .status
-    };
-    assert_eq!(info.active_branch, forked.id);
-    assert_eq!(status(&branch), BranchStatus::Active);
-    assert_eq!(status(&forked.id), BranchStatus::Active);
+    kernel.move_head(&branch, &reply).await.unwrap();
+    let ids = |ns: &[Node]| ns.iter().map(|n| n.id.clone()).collect::<Vec<_>>();
+    assert_eq!(ids(&kernel.branch_path(&branch).unwrap().0), ids(&nodes));
 }
 
-/// `branch.activate` refuses a sub-agent branch before anything changes, and
-/// otherwise is a plain switch of the session's active branch.
+/// `branch.move` refuses a sub-agent's branch and a node a sub-agent added,
+/// before anything changes.
 #[tokio::test]
-async fn activate_refuses_agent_branches_and_switches_variants() {
+async fn move_refuses_sub_agents_and_their_nodes() {
     let plugin = Arc::new(plugin_with(
         "branch",
         &["agent"],
@@ -3684,12 +3677,7 @@ async fn activate_refuses_agent_branches_and_switches_variants() {
     )
     .await;
     let (_, nodes, _) = run_turn_on(&kernel, &main, "go").await;
-    let prompt = nodes
-        .iter()
-        .find(|n| matches!(n.body, NodeBody::User { .. }))
-        .expect("the turn appended a user node")
-        .id
-        .clone();
+    let head = nodes.last().unwrap().id.clone();
 
     let tree = || kernel.session_tree(&session).unwrap();
     let status = |id: &BranchId| {
@@ -3700,31 +3688,23 @@ async fn activate_refuses_agent_branches_and_switches_variants() {
             .unwrap_or_else(|| panic!("branch {id} missing"))
             .status
     };
-    let active = || tree().0.active_branch.clone();
-
-    // A sub-agent branch is refused, leaving the session untouched.
     let child = tree()
         .2
         .into_iter()
         .find(|b| matches!(&b.kind, rumu_core::BranchKind::Agent { .. }))
-        .expect("agent branch exists")
-        .id
-        .clone();
-    let err = kernel.activate_branch(&child).unwrap_err();
-    assert!(matches!(err, rumu_kernel::Error::NotMainLine(_)), "{err:#}");
-    assert_eq!(active(), main);
-    assert_eq!(status(&main), BranchStatus::Active);
-    assert_eq!(status(&child), BranchStatus::Done);
+        .expect("agent branch exists");
 
-    // Switching between forks moves the active branch and disturbs nothing.
-    let fork1 = kernel.fork(&prompt).await.unwrap();
-    let fork2 = kernel.fork(&prompt).await.unwrap();
-    kernel.activate_branch(&fork1.id).unwrap();
-    assert_eq!(active(), fork1.id);
-    assert_eq!(status(&fork1.id), BranchStatus::Active);
-    assert_eq!(status(&fork2.id), BranchStatus::Active);
-    kernel.activate_branch(&fork2.id).unwrap();
-    assert_eq!(active(), fork2.id);
+    // The sub-agent's own branch is not a main line.
+    let err = kernel.move_head(&child.id, &child.head).await.unwrap_err();
+    assert!(matches!(err, rumu_kernel::Error::NotMainLine(_)), "{err:#}");
+    // Nor is the main line moved onto the sub-agent's reply.
+    let err = kernel.move_head(&main, &child.head).await.unwrap_err();
+    assert!(matches!(err, rumu_kernel::Error::OffTheLine(_)), "{err:#}");
+    assert_eq!(
+        kernel.branch_path(&main).unwrap().0.last().unwrap().id,
+        head
+    );
+    assert_eq!(status(&child.id), BranchStatus::Done);
 }
 
 /// `session.fork` copies the root→node path into a new session: fresh node
@@ -3753,7 +3733,7 @@ async fn fork_session_copies_the_path_into_a_new_session() {
     )
     .unwrap();
     let (session, _) = kernel.create_session("assistant".into()).await.unwrap();
-    let branch = BranchId::from(session.active_branch.0.as_str());
+    let branch = BranchId::from(session.main_branch.0.as_str());
     let (_, nodes, _) = run_turn_on(&kernel, &branch, "hello").await;
     let result = nodes
         .iter()
@@ -3791,7 +3771,7 @@ async fn fork_session_copies_the_path_into_a_new_session() {
         5,
         "root, user, assistant+calls, tool result, invoke"
     );
-    let main = store.get_branch(&session.active_branch).unwrap().unwrap();
+    let main = store.get_branch(&session.main_branch).unwrap().unwrap();
     store
         .insert_branch(&rumu_core::Branch {
             id: BranchId::new(),
@@ -3852,11 +3832,11 @@ async fn fork_session_copies_the_path_into_a_new_session() {
     // One plain branch heading at the copied node; the agent branch stayed.
     assert!(matches!(new_branch.kind, rumu_core::BranchKind::Main));
     assert_eq!(new_branch.head, chain.last().unwrap().id);
-    assert_eq!(info.active_branch, new_branch.id);
+    assert_eq!(info.main_branch, new_branch.id);
 
     // The source session is untouched.
     let (src_info, src_nodes, src_branches) = kernel.session_tree(&session.id).unwrap();
-    assert_eq!(src_info.active_branch, session.active_branch);
+    assert_eq!(src_info.main_branch, session.main_branch);
     assert_eq!(src_nodes.len(), path.len() + 1);
     assert_eq!(src_branches.len(), 2);
 
@@ -4391,7 +4371,7 @@ async fn steering_prompt_starts_a_new_turn_if_the_turn_ended_first() {
     )
     .unwrap();
     let (session, _) = kernel.create_session("assistant".into()).await.unwrap();
-    let branch = session.active_branch.clone();
+    let branch = session.main_branch.clone();
     kernel.set_wake_debounce(Duration::from_millis(5));
     let mut rx = kernel.tap_pushes();
 
@@ -4661,7 +4641,7 @@ async fn setup_split(
     let llm = Arc::new(SplitLlm::new(parent, child));
     let kernel = Kernel::new(Arc::new(store), llm, plugins, Workspaces::default()).unwrap();
     let (session, _) = kernel.create_session("assistant".into()).await.unwrap();
-    let branch = BranchId::from(session.active_branch.0.as_str());
+    let branch = BranchId::from(session.main_branch.0.as_str());
     (kernel, session.id, branch)
 }
 
@@ -5236,7 +5216,7 @@ async fn restart_reports_a_lost_task_once() {
     ]));
     let kernel = Kernel::new(store.clone(), llm, vec![plugin], Workspaces::default()).unwrap();
     let (session, _) = kernel.create_session("assistant".into()).await.unwrap();
-    let branch = session.active_branch.clone();
+    let branch = session.main_branch.clone();
     run_turn(&kernel, &branch, "go").await;
     let id = kernel.tasks(&session.id).unwrap()[0].id.clone();
     assert!(kernel.tasks(&session.id).unwrap()[0].status.is_running());
@@ -5620,7 +5600,7 @@ async fn kernel_start_closes_out_active_agent_branches() {
     )
     .unwrap();
     let (session, _) = kernel.create_session("assistant".into()).await.unwrap();
-    let main = store.get_branch(&session.active_branch).unwrap().unwrap();
+    let main = store.get_branch(&session.main_branch).unwrap().unwrap();
     let child = rumu_core::Branch {
         id: BranchId::new(),
         session: session.id.clone(),
@@ -5778,7 +5758,7 @@ async fn live_turns_snapshot_the_stream_in_flight() {
     )
     .unwrap();
     let (session, _) = kernel.create_session("assistant".into()).await.unwrap();
-    let branch = session.active_branch.clone();
+    let branch = session.main_branch.clone();
     let mut rx = kernel.tap_pushes();
     kernel.prompt(&branch, "hi").await.unwrap();
 
@@ -6037,12 +6017,12 @@ async fn side_question_forks_at_the_head_and_leaves_the_main_line_alone() {
     let (after, _) = kernel.branch_path(&main).unwrap();
     assert_eq!(after.len(), before.len());
     let session = kernel.list_sessions().unwrap().remove(0);
-    assert_eq!(session.active_branch, main);
+    assert_eq!(session.main_branch, main);
     assert_eq!(session.title, "how does tcp start?");
 
     // It hangs off the main line, it is not one.
     assert!(matches!(
-        kernel.activate_branch(&side.id),
+        kernel.move_head(&side.id, &side.head).await,
         Err(rumu_kernel::Error::NotMainLine(_))
     ));
     assert!(matches!(

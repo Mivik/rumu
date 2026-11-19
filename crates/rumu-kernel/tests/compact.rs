@@ -136,7 +136,7 @@ async fn setup(llm: Arc<Scripted>) -> (Arc<Kernel>, BranchId, UnboundedReceiver<
     )
     .unwrap();
     let (session, _) = kernel.create_session("assistant".into()).await.unwrap();
-    let branch = BranchId::from(session.active_branch.0.as_str());
+    let branch = BranchId::from(session.main_branch.0.as_str());
     let rx = kernel.tap_pushes();
     (kernel, branch, rx)
 }

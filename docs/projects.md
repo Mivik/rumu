@@ -69,7 +69,7 @@ An assistant works in any project.
   one.
 - The first-call note names the project and lists its workspaces (name,
   location, read-only), the default first.
-- A session is listed under the project of its active branch.
+- A session is listed under the project of its main line.
 
 ## Memory boundary
 

@@ -843,7 +843,7 @@ mod tests {
         let info = SessionInfo {
             id: session.clone(),
             title: String::new(),
-            active_branch: branch.clone(),
+            main_branch: branch.clone(),
             created_at: 0,
             updated_at: 0,
             touched_at: 0,

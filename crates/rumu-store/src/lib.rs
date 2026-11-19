@@ -5,11 +5,12 @@
 //! Each line is one tagged JSON record, event-sourced style:
 //!
 //! ```text
-//! {"t":"session","id":"7c9e…","title":"","active_branch":"7c9e…","created_at":1,"updated_at":1}
+//! {"t":"session","id":"7c9e…","title":"","main_branch":"7c9e…","created_at":1,"updated_at":1}
 //! {"t":"branch","id":"7c9e…","session":"7c9e…","head":"7c9e…","forked_from":null,"kind":{"type":"main"},"status":"active","created_at":1}
 //! {"t":"node","id":"7c9e…","parent":null,"session":"7c9e…","at":1,"body":{"type":"note","source":"system","content":{"text":"","data":{"tag":"root","v":1,"data":{}}}}}
 //! {"t":"node","branch":"7c9e…","id":"5d1a…","parent":"7c9e…","session":"7c9e…","at":2,"body":{"type":"user","content":{"text":"hi"}}}
 //! {"t":"branch_update","id":"7c9e…","status":"done"}
+//! {"t":"branch_update","id":"7c9e…","head":"5d1a…"}
 //! {"t":"task","id":"t-1a2b3c4d","session":"7c9e…","branch":"7c9e…","status":"running",…}
 //! {"t":"meta","title":"refactor","updated_at":3}
 //! ```
@@ -20,12 +21,19 @@
 //! directory, rewritten whole on every change.
 //!
 //! Loading a file folds the records into memory: `session` is the header
-//! (the initial [`SessionInfo`]), `meta` patches it (title /
-//! active_branch / project / updated_at — whatever the mutating call changed),
+//! (the initial [`SessionInfo`]), `meta` patches it (title / project /
+//! updated_at — whatever the mutating call changed),
 //! `branch` adds a branch and `branch_update` moves its head/status, `node`
 //! adds a node — with `branch`, it is also that branch's new head — and `task`
 //! adds or updates one background task (the kernel writes one when a task
 //! starts and when it ends, so a restart knows what it lost).
+//!
+//! Older journals gave every edit and regenerate a main branch of its own and
+//! named the current one `active_branch` (in the header, then in `meta`).
+//! Folding such a file keeps that one as the session's main line and drops
+//! the others: their nodes stay in the tree as variants, and whatever named
+//! them (a sub-agent's or side question's parent, a task) now names the main
+//! line (see [`SessionState::merge_main_lines`]).
 //! A session's `updated_at` is never older than its newest node; its
 //! `touched_at` follows the user's prompts on main lines and project moves.
 //! Optional fields are `#[serde(default)]` and
@@ -91,6 +99,7 @@ enum Record {
     Meta {
         #[serde(default, skip_serializing_if = "Option::is_none")]
         title: Option<String>,
+        /// Older journals only: the main branch the user switched to.
         #[serde(default, skip_serializing_if = "Option::is_none")]
         active_branch: Option<BranchId>,
         /// The session's project: an absent field leaves it unchanged, an
@@ -292,7 +301,7 @@ impl Store {
         }
         let rec = Record::Meta {
             title: Some(s.title.clone()),
-            active_branch: Some(s.active_branch.clone()),
+            active_branch: None,
             project: Some(s.project.clone()),
             updated_at: Some(s.updated_at),
         };
@@ -384,6 +393,26 @@ impl Store {
             id: id.clone(),
             head: None,
             status: Some(status),
+        };
+        self.append(&sid, &rec)?;
+        st.apply(&sid, rec);
+        Ok(())
+    }
+
+    /// Move a branch's head to `head`, a node already in its session (an
+    /// edit, a regenerate, another variant picked).
+    pub fn set_branch_head(&self, id: &BranchId, head: &NodeId) -> Result<()> {
+        let mut st = self.state.lock().unwrap();
+        let Some(sid) = st.branch_owner.get(id).cloned() else {
+            return Ok(()); // a no-op on unknown branches
+        };
+        if st.loaded(&sid)?.is_none() {
+            return Ok(());
+        }
+        let rec = Record::BranchUpdate {
+            id: id.clone(),
+            head: Some(head.clone()),
+            status: None,
         };
         self.append(&sid, &rec)?;
         st.apply(&sid, rec);
@@ -662,7 +691,8 @@ impl StoreState {
         self.branch_owner.extend(branch_owner);
         let key = sid.clone().unwrap_or(SessionId(stem));
         match (state, corrupt) {
-            (Some(state), None) => {
+            (Some(mut state), None) => {
+                state.merge_main_lines();
                 self.sessions.insert(key, Entry::Loaded(Box::new(state)));
             }
             (_, Some(msg)) => {
@@ -705,7 +735,7 @@ impl SessionState {
                     self.info.title = v;
                 }
                 if let Some(v) = active_branch {
-                    self.info.active_branch = v;
+                    self.info.main_branch = v;
                 }
                 if let Some(v) = updated_at {
                     self.info.updated_at = self.info.updated_at.max(v);
@@ -746,6 +776,38 @@ impl SessionState {
                 self.tasks.insert(info.id.clone(), *info);
             }
             Record::Unknown => {}
+        }
+    }
+}
+
+impl SessionState {
+    /// Fold an older journal's main branches into one (see the crate docs):
+    /// the session's main line stays, the other main branches go, and what
+    /// named them names the main line. A no-op on a journal with one.
+    fn merge_main_lines(&mut self) {
+        let main = self.info.main_branch.clone();
+        let gone: HashSet<BranchId> = self
+            .branches
+            .values()
+            .filter(|b| matches!(b.kind, BranchKind::Main) && b.id != main)
+            .map(|b| b.id.clone())
+            .collect();
+        if gone.is_empty() {
+            return;
+        }
+        self.branches.retain(|id, _| !gone.contains(id));
+        for b in self.branches.values_mut() {
+            if let BranchKind::Agent { parent_branch, .. } | BranchKind::Side { parent_branch, .. } =
+                &mut b.kind
+                && gone.contains(parent_branch)
+            {
+                *parent_branch = main.clone();
+            }
+        }
+        for t in self.tasks.values_mut() {
+            if gone.contains(&t.branch) {
+                t.branch = main.clone();
+            }
         }
     }
 }
@@ -868,7 +930,7 @@ mod tests {
         let session = SessionInfo {
             id: root.session.clone(),
             title: String::new(),
-            active_branch: branch.id.clone(),
+            main_branch: branch.id.clone(),
             created_at: root.at,
             updated_at: root.at,
             touched_at: root.at,
@@ -1143,6 +1205,65 @@ mod tests {
         assert_eq!(session.id, SessionId::from(sid));
         assert_eq!(session.updated_at, 3);
         assert_eq!(store.nodes_of_session(&session.id).unwrap().len(), 2);
+        std::fs::remove_dir_all(&dir).ok();
+    }
+
+    /// A journal from before the main line was one branch: the branch it was
+    /// last switched to is the main line, the other main branch goes (its
+    /// node stays, a variant), and the sub-agent forked on it reports to the
+    /// main line. A head moved afterwards survives a reopen.
+    #[test]
+    fn older_main_branches_fold_into_the_main_line() {
+        let dir = temp_dir("main-lines");
+        let sid = "01MAINLINES0000000000000000";
+        let node = |id: &str, parent: &str, at: u32| {
+            format!(
+                r#"{{"t":"node","id":"{id}","parent":"{parent}","session":"{sid}","at":{at},"body":{{"type":"user","content":{{"text":"{id}"}}}}}}"#
+            )
+        };
+        let content = [
+            format!(
+                r#"{{"t":"session","id":"{sid}","title":"","active_branch":"B1","created_at":1,"updated_at":1,"assistant":"A"}}"#
+            ),
+            format!(
+                r#"{{"t":"branch","id":"B1","session":"{sid}","head":"N0","forked_from":null,"kind":{{"type":"main"}},"status":"active","created_at":1}}"#
+            ),
+            format!(
+                r#"{{"t":"node","id":"N0","parent":null,"session":"{sid}","at":1,"body":{{"type":"note","source":"system","content":{{"text":"","data":{{"tag":"root","v":1,"data":{{"assistant":"A"}}}}}}}}}}"#
+            ),
+            node("N1", "N0", 2).replacen(r#"{"t":"node","#, r#"{"t":"node","branch":"B1","#, 1),
+            format!(
+                r#"{{"t":"branch","id":"G","session":"{sid}","head":"N1","forked_from":"N1","kind":{{"type":"agent","task":"t","parent_branch":"B1","call_id":"c"}},"status":"done","created_at":3}}"#
+            ),
+            format!(
+                r#"{{"t":"branch","id":"B2","session":"{sid}","head":"N0","forked_from":"N0","kind":{{"type":"main"}},"status":"active","created_at":4}}"#
+            ),
+            node("N2", "N0", 5).replacen(r#"{"t":"node","#, r#"{"t":"node","branch":"B2","#, 1),
+            r#"{"t":"meta","active_branch":"B2","updated_at":5}"#.to_owned(),
+        ]
+        .map(|l| l + "\n")
+        .concat();
+        std::fs::write(dir.join(format!("{sid}.jsonl")), content).unwrap();
+        let sid = SessionId::from(sid);
+
+        let store = Store::open(&dir, &dir.join("seen.json")).unwrap();
+        let session = store.get_session(&sid).unwrap().expect("session loads");
+        assert_eq!(session.main_branch, BranchId::from("B2"));
+        let branches = store.branches_of_session(&sid).unwrap();
+        let ids: Vec<&str> = branches.iter().map(|b| b.id.0.as_str()).collect();
+        assert_eq!(ids, ["G", "B2"]);
+        assert!(matches!(&branches[0].kind,
+            BranchKind::Agent { parent_branch, .. } if parent_branch.0 == "B2"));
+        assert_eq!(branches[1].head, NodeId::from("N2"));
+        assert_eq!(store.nodes_of_session(&sid).unwrap().len(), 3);
+
+        store
+            .set_branch_head(&BranchId::from("B2"), &NodeId::from("N1"))
+            .unwrap();
+        drop(store);
+        let store = Store::open(&dir, &dir.join("seen.json")).unwrap();
+        let main = store.get_branch(&BranchId::from("B2")).unwrap().unwrap();
+        assert_eq!(main.head, NodeId::from("N1"));
         std::fs::remove_dir_all(&dir).ok();
     }
 

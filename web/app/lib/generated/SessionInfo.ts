@@ -2,7 +2,13 @@
 import type { BranchId } from "./BranchId";
 import type { SessionId } from "./SessionId";
 
-export type SessionInfo = { id: SessionId, title: string, active_branch: BranchId, created_at: number, updated_at: number, 
+export type SessionInfo = { id: SessionId, title: string, 
+/**
+ * The session's main line: the one branch the user talks to. Its head
+ * moves to an edit, a regenerate or another variant; the id stays.
+ * Journals from before it was one read their active branch here.
+ */
+main_branch: BranchId, created_at: number, updated_at: number, 
 /**
  * When the user last moved the session on: created it, sent on its main
  * line, or moved it to another project. Session lists order by it, so
@@ -19,7 +25,7 @@ seen_at?: number | null,
  */
 assistant: string, 
 /**
- * The project deck of the active branch (the deck mounted at
+ * The project deck of the main line (the deck mounted at
  * [`crate::PROJECT_MOUNT`]); `None` outside any project.
  */
 project?: string, };

@@ -109,7 +109,7 @@ async fn scoped_child_cannot_read_an_out_of_scope_workspace() {
     )
     .unwrap();
     let (session, _) = kernel.create_session("assistant".into()).await.unwrap();
-    let branch = BranchId::from(session.active_branch.0.as_str());
+    let branch = BranchId::from(session.main_branch.0.as_str());
     let mut rx = kernel.tap_pushes();
     kernel.prompt(&branch, "go").await.unwrap();
     let done = wait_turn(&mut rx, &branch.0).await;

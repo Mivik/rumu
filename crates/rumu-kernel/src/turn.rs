@@ -184,13 +184,13 @@ impl Kernel {
         self.inner.lock().unwrap().storm.remove(branch);
     }
 
-    /// `branch.regenerate` WS method: fork at the user message `node` and run
-    /// the step loop again on the new branch, which becomes the session's
-    /// active one. The prompt event is replayed so hooks and memory injection
-    /// behave as they did the first time, but the message itself is not
-    /// appended again. `choice` is applied to the new branch first, so the
-    /// reply runs on the composer's current workspaces and model. Progress
-    /// arrives via pushes; the new branch is returned immediately.
+    /// `branch.regenerate` WS method: move the session's main line onto the
+    /// user message `node` and run the step loop again from there. The
+    /// prompt event is replayed so hooks and memory injection behave as they
+    /// did the first time, but the message itself is not appended again.
+    /// `choice` is applied first, so the reply runs on the composer's current
+    /// workspaces and model. Progress arrives via pushes; the main line is
+    /// returned immediately.
     pub async fn regenerate(self: &Arc<Self>, node: &NodeId, choice: Choice) -> Result<Branch> {
         let n = self
             .store
@@ -200,7 +200,11 @@ impl Kernel {
             NodeBody::User { content } => content.clone(),
             _ => return Err(Error::NotAUserMessage),
         };
-        let branch = self.fork(&n.id).await?;
+        let session = self
+            .store
+            .get_session(&n.session)?
+            .ok_or_else(|| Error::SessionNotFound(n.session.clone()))?;
+        let branch = self.move_head(&session.main_branch, &n.id).await?;
         self.apply_choice(&branch.id, choice).await?;
         let token = self.begin_loop(&branch.id)?;
         self.spawn_turn(branch.id.clone(), token, TurnKind::Regenerate(content));

@@ -1002,9 +1002,12 @@ async fn dispatch(state: &AppState, method: &str, p: &Value) -> Result<Value> {
             Ok(json!({}))
         }
 
-        "branch.fork" => {
+        // Move the main line `branch` to `node`: an edit's starting point,
+        // another variant's end.
+        "branch.move" => {
+            let branch: BranchId = str_param(p, "branch")?.into();
             let node: NodeId = str_param(p, "node")?.into();
-            let branch = kernel.fork(&node).await?;
+            let branch = kernel.move_head(&branch, &node).await?;
             Ok(json!({ "branch": branch }))
         }
 
@@ -1039,9 +1042,9 @@ async fn dispatch(state: &AppState, method: &str, p: &Value) -> Result<Value> {
 
         // Rewind to the user message `node` on `branch`: revert the picked
         // `files` ({ws, path}) of its plan, planned afresh, and with
-        // `conversation` fork a branch from just before the message (the
-        // edit's fork; the branch left stays a variant). The model is told on
-        // the branch that goes on. Refused while `branch` works.
+        // `conversation` move the branch to just before the message (an
+        // edit's move; what it leaves stays a variant). The model is told on
+        // the branch. Refused while `branch` works.
         "branch.rewind" => {
             let branch: BranchId = str_param(p, "branch")?.into();
             let node: NodeId = str_param(p, "node")?.into();
@@ -1061,8 +1064,10 @@ async fn dispatch(state: &AppState, method: &str, p: &Value) -> Result<Value> {
                     "`{node}` is not a user message"
                 )));
             };
-            let forked = match (conversation, &first.parent) {
-                (true, Some(before)) => Some(kernel.fork(before).await?),
+            // The files are reverted on the path they were written on.
+            let (_, path_state) = kernel.branch_path(&branch)?;
+            let moved = match (conversation, &first.parent) {
+                (true, Some(before)) => Some(kernel.move_head(&branch, before).await?),
                 (true, None) => {
                     return Err(ServerError::InvalidParams(
                         "the first message has nothing before it".into(),
@@ -1070,7 +1075,6 @@ async fn dispatch(state: &AppState, method: &str, p: &Value) -> Result<Value> {
                 }
                 (false, _) => None,
             };
-            let (_, path_state) = kernel.branch_path(&branch)?;
             let (plan, done) = rumu_plugins::revert_files(&path_state, &nodes, &files).await;
             let reverted: Vec<rumu_core::FileRef> = done
                 .iter()
@@ -1080,16 +1084,15 @@ async fn dispatch(state: &AppState, method: &str, p: &Value) -> Result<Value> {
                     path: f.path.clone(),
                 })
                 .collect();
-            let text = rumu_plugins::revert_note(&content.text, forked.is_some(), &plan, &done);
-            if let Some(text) = text.filter(|_| forked.is_some() || !reverted.is_empty()) {
+            let text = rumu_plugins::revert_note(&content.text, moved.is_some(), &plan, &done);
+            if let Some(text) = text.filter(|_| moved.is_some() || !reverted.is_empty()) {
                 let marker = rumu_core::FilesReverted {
                     since: first.at,
                     files: reverted,
                 };
-                let on = forked.as_ref().map_or(&branch, |b| &b.id);
-                kernel.record_revert(on, text, &marker).await?;
+                kernel.record_revert(&branch, text, &marker).await?;
             }
-            Ok(json!({ "files": done, "branch": forked }))
+            Ok(json!({ "files": done, "branch": moved }))
         }
 
         "branch.retry" => {
@@ -1102,12 +1105,6 @@ async fn dispatch(state: &AppState, method: &str, p: &Value) -> Result<Value> {
             let branch: BranchId = str_param(p, "branch")?.into();
             let focus = p.get("focus").and_then(Value::as_str).map(str::to_owned);
             kernel.compact(&branch, focus).await?;
-            Ok(json!({}))
-        }
-
-        "branch.activate" => {
-            let branch: BranchId = str_param(p, "branch")?.into();
-            kernel.activate_branch(&branch)?;
             Ok(json!({}))
         }
 
@@ -1380,26 +1377,29 @@ fn str_param<'a>(p: &'a Value, key: &str) -> Result<&'a str> {
         .ok_or_else(|| ServerError::MissingParam(key.to_owned()))
 }
 
-/// The nodes on the path of some branch that is not a sub-agent: every main
-/// line (the variant switcher walks them all) and side question.
+/// The nodes no sub-agent added: the main line with every variant it left
+/// (the variant switcher walks them all) and the side questions. A
+/// sub-agent's own nodes run from its head up to the node it forked from.
 fn line_nodes(nodes: &[rumu_core::Node], branches: &[rumu_core::Branch]) -> HashSet<NodeId> {
     let parent: HashMap<&NodeId, Option<&NodeId>> =
         nodes.iter().map(|n| (&n.id, n.parent.as_ref())).collect();
-    let mut lines = HashSet::new();
+    let mut agents = HashSet::new();
     for b in branches {
-        if matches!(b.kind, rumu_core::BranchKind::Agent { .. }) {
+        if !matches!(b.kind, rumu_core::BranchKind::Agent { .. }) {
             continue;
         }
         let mut cur = Some(&b.head);
-        while let Some(id) = cur {
-            let Some(up) = parent.get(id) else { break };
-            if !lines.insert(id.clone()) {
-                break;
-            }
-            cur = *up;
+        while let Some(id) = cur.filter(|id| Some(*id) != b.forked_from.as_ref()) {
+            agents.insert(id);
+            cur = parent.get(id).copied().flatten();
         }
     }
-    lines
+    nodes
+        .iter()
+        .map(|n| &n.id)
+        .filter(|id| !agents.contains(id))
+        .cloned()
+        .collect()
 }
 
 /// Token totals over every model call in `nodes`.
@@ -1488,8 +1488,8 @@ mod tests {
         }
     }
 
-    /// Main lines (every variant) and side questions stay; what only a
-    /// sub-agent reaches, nested ones included, is left out.
+    /// The main line (every variant) and side questions stay; what a
+    /// sub-agent added, nested ones included, is left out.
     #[test]
     fn line_nodes_leave_out_only_sub_agents() {
         let nodes = vec![
@@ -1510,7 +1510,6 @@ mod tests {
         };
         let branches = vec![
             branch("main", "a", None, BranchKind::Main),
-            branch("var", "v", Some("r"), BranchKind::Main),
             branch(
                 "side",
                 "q",
