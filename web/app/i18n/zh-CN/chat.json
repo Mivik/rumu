@@ -48,6 +48,9 @@
     "chip": "{name} · {size}",
     "untitled": "文档"
   },
+  "drop": {
+    "hint": "放开以添加附件"
+  },
   "header": {
     "sessions": "会话",
     "openSessions": "打开会话列表",

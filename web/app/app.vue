@@ -9,6 +9,7 @@ import LibraryPage from './components/pages/LibraryPage.vue'
 import ProjectsPage from './components/pages/ProjectsPage.vue'
 import SettingsPage from './components/pages/SettingsPage.vue'
 import Lightbox from './components/Lightbox.vue'
+import DropOverlay from './components/DropOverlay.vue'
 import AgentPanel from './components/chat/AgentPanel.vue'
 import ArtifactPanel from './components/chat/ArtifactPanel.vue'
 import TaskOutputPanel from './components/chat/TaskOutputPanel.vue'
@@ -150,6 +151,8 @@ onBeforeUnmount(() => {
     </Modal>
     <Lightbox />
     <Toasts />
+    <!-- a file dropped anywhere in the app lands in the composer -->
+    <DropOverlay />
 
     <Transition
       enter-active-class="transition-opacity duration-300"

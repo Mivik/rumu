@@ -48,6 +48,9 @@
     "chip": "{name} · {size}",
     "untitled": "document"
   },
+  "drop": {
+    "hint": "Drop to attach"
+  },
   "header": {
     "sessions": "Sessions",
     "openSessions": "Open sessions",
