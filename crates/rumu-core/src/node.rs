@@ -602,10 +602,6 @@ impl Structured for CardUnmount {
 pub struct SessionRoot {
     /// The deck id of the assistant the session runs as.
     pub assistant: String,
-    /// The assistant deck whose `agent` call this session works for. Every
-    /// path carries it: a delegated session hands nothing further on.
-    #[serde(default, skip_serializing_if = "Option::is_none")]
-    pub delegated_by: Option<String>,
     /// The deck's `deck.yaml` mounts, seeded at session start (the session's
     /// own deck is implicit at `/cards/self`), and the project the session
     /// starts in at [`crate::PROJECT_MOUNT`].
@@ -831,10 +827,6 @@ pub struct PathState {
     pub default_workspace: Option<String>,
     /// The assistant from the session's root.
     pub assistant: String,
-    /// The assistant whose `agent` call this session works for, from the
-    /// session's root.
-    #[serde(default, skip_serializing_if = "Option::is_none")]
-    pub delegated_by: Option<String>,
     /// The branch's card mount table (root defaults + `deck.mount` markers).
     #[serde(default)]
     pub mounts: Vec<CardMount>,

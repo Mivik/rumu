@@ -40,11 +40,6 @@ default_workspace?: string | null,
  */
 assistant: string, 
 /**
- * The assistant whose `agent` call this session works for, from the
- * session's root.
- */
-delegated_by?: string | null, 
-/**
  * The branch's card mount table (root defaults + `deck.mount` markers).
  */
 mounts: Array<CardMount>, 

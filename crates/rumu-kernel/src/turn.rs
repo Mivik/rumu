@@ -8,10 +8,9 @@ use crate::{Error, Result};
 use rumu_core::kind;
 use rumu_core::{
     Branch, BranchId, BranchKind, BranchStatus, CODE_DENIED_TOOLS, Call, CallStats, CompactReason,
-    Content, Cx, DELEGATE_TOOL, Effort, FILE_PATCH_TAG, Inherit, InheritContext, InnerCall, Invoke,
-    ModelPick, ModelUse, NodeBody, NodeId, Plugin, RUMU_WORKSPACE, SYSTEM_SOURCE, SessionId,
-    ToolCall, ToolError, ToolOutput, TurnError, WorkspaceSet, WorkspaceUse, parse_args,
-    truncate_output,
+    Content, Cx, Effort, FILE_PATCH_TAG, Inherit, InheritContext, InnerCall, Invoke, ModelPick,
+    ModelUse, NodeBody, NodeId, Plugin, RUMU_WORKSPACE, SYSTEM_SOURCE, SessionId, ToolCall,
+    ToolError, ToolOutput, TurnError, WorkspaceSet, WorkspaceUse, parse_args, truncate_output,
 };
 use schemars::JsonSchema;
 use serde::Deserialize;
@@ -694,14 +693,7 @@ impl Kernel {
                     .get("background")
                     .and_then(Value::as_bool)
                     .unwrap_or(name == "agent" && matches!(caller, Caller::Model));
-                // `agent` in a session of its own is the plugin's `delegate`.
-                let name = if name == "agent" && args.get("mode") == Some(&json!("session")) {
-                    DELEGATE_TOOL.to_owned()
-                } else {
-                    name
-                };
-                let background_tool = name == DELEGATE_TOOL
-                    || self.tools.iter().any(|t| t.name == name && t.background);
+                let background_tool = self.tools.iter().any(|t| t.name == name && t.background);
                 let strip_background = |args: &mut Value| {
                     if let Some(obj) = args.as_object_mut() {
                         obj.remove("background");
@@ -1377,7 +1369,7 @@ fn args_summary(name: &str, args: &Value) -> String {
             .filter_map(|key| args.get(*key).and_then(Value::as_str))
             .find(|text| !text.trim().is_empty())
             .unwrap_or_default(),
-        "agent" | DELEGATE_TOOL => args.get("task").and_then(Value::as_str).unwrap_or_default(),
+        "agent" => args.get("task").and_then(Value::as_str).unwrap_or_default(),
         _ => "",
     };
     let text = if text.is_empty() {
@@ -1403,15 +1395,13 @@ fn args_summary(name: &str, args: &Value) -> String {
 pub(crate) struct AgentArgs {
     /// what the sub-agent should do, 1-2 sentences
     task: String,
-    /// fresh (default): a clean branch here that sees only the task; fork: continue from here with this whole conversation; session: a session of its own that sees only the task
+    /// fresh (default): a clean branch here that sees only the task; fork: continue from here with this whole conversation
     mode: Option<Mode>,
-    /// session only: the assistant's id (default: yourself)
-    assistant: Option<String>,
     /// a model alias (`rumu/<name>`) to run on; not with fork
     model: Option<String>,
     /// the reasoning effort to run at
     effort: Option<Effort>,
-    /// fork / fresh only: "all" (default) or an array of workspace names it may use
+    /// "all" (default) or an array of workspace names it may use
     workspaces: Option<Workspaces>,
     /// true (default): run in the background, returning a task id now and a notification when it finishes; false: wait here for its summary
     background: Option<bool>,
@@ -1419,21 +1409,17 @@ pub(crate) struct AgentArgs {
 
 impl AgentArgs {
     /// Split into the run's `(task, inherit, model)`, rejecting a blank task.
-    /// `mode: "session"` never gets here: the kernel routes it to `delegate`.
     fn into_parts(self) -> std::result::Result<(String, Inherit, ModelAsk), &'static str> {
         // `background` is a kernel affordance acted on before this point; it
         // is parsed only so `deny_unknown_fields` accepts it.
         let _ = self.background;
-        if self.assistant.is_some() {
-            return Err("agent: `assistant` goes with mode \"session\"");
-        }
         let task = self.task.trim();
         if task.is_empty() {
             return Err("agent: `task` must not be empty");
         }
         let context = match self.mode.unwrap_or_default() {
             Mode::Fork => InheritContext::Full,
-            Mode::Fresh | Mode::Session => InheritContext::None,
+            Mode::Fresh => InheritContext::None,
         };
         let workspaces = match self.workspaces {
             Some(Workspaces::Names(names)) => Some(names),
@@ -1502,7 +1488,6 @@ enum Mode {
     Fork,
     #[default]
     Fresh,
-    Session,
 }
 
 // `"all"` or an explicit workspace-name list.

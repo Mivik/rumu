@@ -88,7 +88,7 @@ struct Acp {
     /// Whether the client takes form elicitations.
     elicit: AtomicBool,
     /// The session prompted last: a decision of a session this connection
-    /// did not open (a delegated assistant's) is put to its client.
+    /// did not open (one a `session.create` started) is put to its client.
     last: Mutex<Option<String>>,
 }
 

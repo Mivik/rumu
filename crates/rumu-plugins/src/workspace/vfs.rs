@@ -28,7 +28,7 @@ use super::cards::{Card, CardsDir};
 use super::decks::{DeckFile, DecksDir};
 use super::history::{CardHistory, HistoryRoot};
 use super::registry::{Entry, WorkspacesDir};
-use super::session::{ByAssistant, Session, Sessions};
+use super::session::{AssistantSessions, ByAssistant, Session, SessionPart, Sessions};
 use super::task::{Task, TaskOutput, Tasks};
 use super::tools::slice_lines;
 
@@ -48,9 +48,9 @@ const ROUTES: &[(&str, &dyn Node)] = &[
     ("/history/cards/{*path}", &CardHistory),
     ("/sessions", &Sessions),
     ("/sessions/by-assistant", &ByAssistant),
-    ("/sessions/by-assistant/{id}", &Sessions),
+    ("/sessions/by-assistant/{id}", &AssistantSessions),
     ("/sessions/{sid}", &Session),
-    ("/sessions/{sid}/{what}", &Session),
+    ("/sessions/{sid}/{what}", &SessionPart),
     ("/skills", &SkillFiles),
     ("/skills/{name}", &SkillFiles),
     ("/skills/{name}/{*rest}", &SkillFiles),
@@ -640,6 +640,8 @@ mod tests {
             [
                 "deck.mount /decks/{name}",
                 "deck.unmount /decks/{name}",
+                "session.create /sessions",
+                "session.wait /sessions/{sid}",
                 "task.kill /tasks/{id}",
                 "workspace.use /workspaces/{name}"
             ]

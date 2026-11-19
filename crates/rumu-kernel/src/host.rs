@@ -5,8 +5,8 @@ use std::time::Duration;
 
 use async_trait::async_trait;
 use rumu_core::{
-    Branch, BranchId, Delegation, DelegationReply, History, InnerCall, Node, PathState, Progress,
-    ProgressSink, Result, Runtime, SessionId, SessionInfo, TaskId, TaskInfo,
+    Branch, BranchId, History, InnerCall, NewSession, Node, PathState, Progress, ProgressSink,
+    Result, Runtime, SessionId, SessionInfo, TaskId, TaskInfo,
 };
 use serde_json::{Value, json};
 
@@ -73,8 +73,16 @@ impl Runtime for KernelRuntime {
         Ok(self.0.decide(branch, call_id, request, timeout).await?)
     }
 
-    async fn delegate(&self, branch: &BranchId, delegation: Delegation) -> Result<DelegationReply> {
-        Ok(self.0.delegate(branch, delegation).await?)
+    async fn start_session(
+        &self,
+        branch: &BranchId,
+        new: NewSession,
+    ) -> Result<(SessionId, BranchId)> {
+        Ok(self.0.start_session(branch, new).await?)
+    }
+
+    async fn wait_idle(&self, target: &BranchId) -> Result<()> {
+        Ok(self.0.wait_idle(target).await?)
     }
 
     async fn kill_task(&self, branch: &BranchId, id: &TaskId) -> Result<TaskInfo> {

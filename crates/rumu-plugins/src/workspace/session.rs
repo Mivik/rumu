@@ -1,5 +1,6 @@
 //! The `@rumu:/sessions` part of the `@rumu` workspace: read-only views of
-//! past conversations, rendered from `Cx::history`.
+//! past conversations, rendered from `Cx::history`; the actions that start
+//! and wait on sessions are in [`super::start`].
 //!
 //! - `list /sessions` — every session of this assistant, most recently updated first;
 //! - `list|read /sessions/<s>` — the session overview (branches with
@@ -31,7 +32,7 @@ use serde_json::Value;
 
 use super::WorkspacePlugin;
 use super::time::iso_local;
-use super::vfs::{self, At, Out, bad_scope};
+use super::vfs::{self, ActionSpec, Approval, At, NoArgs, Out, bad_scope};
 
 /// The `@rumu` result prefix.
 const WS: &str = RUMU_WORKSPACE;
@@ -64,16 +65,17 @@ fn owner(info: &SessionInfo) -> &str {
 /// Whether this path may see `info`'s session: its owning deck is mounted on
 /// the branch. A session's conversation is part of its project's memory, or
 /// of its assistant's when it has no project.
-fn can_see(state: &PathState, info: &SessionInfo) -> bool {
+pub(super) fn can_see(state: &PathState, info: &SessionInfo) -> bool {
     state.mounts.iter().any(|m| m.deck == owner(info))
 }
 
 /// The directory of per-assistant session listings.
 const BY_ASSISTANT: &str = "by-assistant";
 
-/// `/sessions` and `/sessions/by-assistant/<deck id>`: one line per visible
-/// session (or one assistant's), most recently updated first. The session
-/// this call runs in is marked `(current)`.
+/// `/sessions` (and, through [`AssistantSessions`],
+/// `/sessions/by-assistant/<deck id>`): one line per visible session (or one
+/// assistant's), most recently updated first. The session this call runs in
+/// is marked `(current)`.
 pub(super) struct Sessions;
 
 #[async_trait]
@@ -82,16 +84,13 @@ impl vfs::Node for Sessions {
         "past conversations you can see: yours and the mounted decks'"
     }
 
-    fn doc(&self, at: &At<'_>) -> &'static str {
-        if at.opt("id").is_some() {
-            return "";
-        }
+    fn doc(&self, _at: &At<'_>) -> &'static str {
         "Past conversations you can see (those of the mounted decks: this project's, or your \
          own outside any project), most recently updated first. `@rumu:/sessions/<session>` is \
          one's overview with its branches as node ranges; `.../<node>` reads one node in full, \
          `.../<from>..<to>` a stretch of a branch (long bodies clipped). A node is named by \
          its id or an unambiguous prefix of 4+ characters. `search` with this scope (or a \
-         session's) finds nodes. Read-only."
+         session's) finds nodes. Read-only; `session.create` starts a new one."
     }
 
     async fn list(&self, at: &At<'_>) -> Out {
@@ -122,6 +121,40 @@ impl vfs::Node for Sessions {
         let limit = limit.unwrap_or(10);
         at.p.session_search(query, at.opt("id"), "", limit, at.cx)
             .await
+    }
+
+    fn actions(&self) -> &'static [ActionSpec] {
+        &[ActionSpec {
+            name: "session.create",
+            about: "start a session of an assistant (yourself by default, unasked) on `prompt`, \
+                    with its own mounts and this project; it runs on by itself, and \
+                    `session.wait` gets its reply",
+            args: rumu_core::tool_schema::<super::start::CreateArgs>,
+            approval: Approval::Asks(rumu_cards::deck::Action::Ask),
+        }]
+    }
+
+    async fn invoke(&self, at: &At<'_>, spec: &ActionSpec, args: Value) -> Out {
+        at.p.create_session(at, spec.parse(args)?).await
+    }
+}
+
+/// `/sessions/by-assistant/<deck id>`: one assistant's sessions, listed as
+/// [`Sessions`] lists them (its actions stay on `/sessions`).
+pub(super) struct AssistantSessions;
+
+#[async_trait]
+impl vfs::Node for AssistantSessions {
+    fn about(&self) -> &'static str {
+        Sessions.about()
+    }
+
+    async fn list(&self, at: &At<'_>) -> Out {
+        Sessions.list(at).await
+    }
+
+    async fn search(&self, at: &At<'_>, query: &str, limit: Option<usize>) -> Out {
+        Sessions.search(at, query, limit).await
     }
 }
 
@@ -215,11 +248,42 @@ impl vfs::Node for Session {
     }
 
     async fn search(&self, at: &At<'_>, query: &str, limit: Option<usize>) -> Out {
-        if at.opt("what").is_some() {
-            return Err(bad_scope());
-        }
         let (sid, limit) = (at.param("sid"), limit.unwrap_or(10));
         at.p.session_search(query, None, sid, limit, at.cx).await
+    }
+
+    fn actions(&self) -> &'static [ActionSpec] {
+        &[ActionSpec {
+            name: "session.wait",
+            about: "wait until it is idle and return its final reply; with `background: true`, \
+                    a note brings the reply when it is done",
+            args: rumu_core::tool_schema::<NoArgs>,
+            approval: Approval::Never,
+        }]
+    }
+
+    async fn invoke(&self, at: &At<'_>, spec: &ActionSpec, args: Value) -> Out {
+        let NoArgs {} = spec.parse(args)?;
+        at.p.wait_session(at).await
+    }
+}
+
+/// `/sessions/<session>/<node or range>`: read as [`Session`] reads it (its
+/// actions stay on the session).
+pub(super) struct SessionPart;
+
+#[async_trait]
+impl vfs::Node for SessionPart {
+    fn about(&self) -> &'static str {
+        Session.about()
+    }
+
+    async fn list(&self, at: &At<'_>) -> Out {
+        Session.list(at).await
+    }
+
+    async fn search(&self, _at: &At<'_>, _query: &str, _limit: Option<usize>) -> Out {
+        Err(bad_scope())
     }
 }
 

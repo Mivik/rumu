@@ -32,6 +32,7 @@ mod patch;
 mod registry;
 mod revert;
 mod session;
+mod start;
 mod task;
 mod time;
 mod tools;
@@ -85,6 +86,9 @@ pub struct WorkspacePlugin {
     inbox: std::sync::OnceLock<std::sync::Arc<dyn Inbox>>,
     /// When a watch posts its pending output.
     watch_timing: watch::WatchTiming,
+    /// `(starter, started)` session pairs `session.create` made since boot:
+    /// the starter may wait on the started one even when it cannot see it.
+    started: Mutex<std::collections::HashSet<(rumu_core::SessionId, rumu_core::SessionId)>>,
 }
 
 impl WorkspacePlugin {
@@ -101,6 +105,7 @@ impl WorkspacePlugin {
             skills: None,
             inbox: std::sync::OnceLock::new(),
             watch_timing: Default::default(),
+            started: Mutex::new(std::collections::HashSet::new()),
         }
     }
 

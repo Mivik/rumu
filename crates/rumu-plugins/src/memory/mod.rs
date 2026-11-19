@@ -264,25 +264,21 @@ another deck, write a link card in this deck (`link: @rumu:/cards/<path>`) and l
 update the charter (what each directory holds, what to read first). Keep no separate index card: \
 the catalog lists the cards.",
         );
-        if state.delegated_by.is_none() {
-            let others: Vec<String> = self
-                .decks
-                .assistants()
-                .into_iter()
-                .filter(|d| {
-                    d.id() != deck.id() && self.decks.visible(d.id(), deck.id(), &state.mounts)
-                })
-                .map(|d| match d.summary() {
-                    Some(s) => format!("`{}` (id {}: {s})", d.meta.name, d.id()),
-                    None => format!("`{}` (id {})", d.meta.name, d.id()),
-                })
-                .collect();
-            if !others.is_empty() {
-                text.push_str(&format!(
-                    "\n\nOther assistants (`agent` with mode \"session\" takes the id as `assistant`): {}.",
-                    others.join(", ")
-                ));
-            }
+        let others: Vec<String> = self
+            .decks
+            .assistants()
+            .into_iter()
+            .filter(|d| d.id() != deck.id() && self.decks.visible(d.id(), deck.id(), &state.mounts))
+            .map(|d| match d.summary() {
+                Some(s) => format!("`{}` (id {}: {s})", d.meta.name, d.id()),
+                None => format!("`{}` (id {})", d.meta.name, d.id()),
+            })
+            .collect();
+        if !others.is_empty() {
+            text.push_str(&format!(
+                "\n\nOther assistants (`session.create` on `@rumu:/sessions` takes the id as `assistant`): {}.",
+                others.join(", ")
+            ));
         }
         let mut pinned = Vec::new();
         // Each pinned card shown is a use of its revision, so a later change

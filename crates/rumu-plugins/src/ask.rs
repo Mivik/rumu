@@ -1,20 +1,16 @@
-//! `ask`: questions to the user; and `delegate`, an `agent` call handed to
-//! another assistant deck.
+//! `ask`: questions to the user.
 //!
 //! The user gets up to four questions at once, each with optional options
-//! to choose from, through a decision (`kind: "questions"`). Another deck gets
-//! a task, with the user's approval (see [`crate::approve`]), done in a session
-//! of its own; `allow_ask` in its `deck.yaml` grants it up front.
+//! to choose from, through a decision (`kind: "questions"`).
 //!
 //! Questions are withdrawn after a while (`timeout`) so that a user away from
 //! the screen does not stall the turn, unless the user has started on them.
 
 use async_trait::async_trait;
-use rumu_cards::deck::{Action, DeckMount};
+use rumu_cards::deck::DeckMount;
 use rumu_cards::{Deck, Decks};
 use rumu_core::{
-    CardMount, Content, Cx, DELEGATE_TOOL, Delegation, Effort, Manifest, ToolError, ToolOutput,
-    ToolResult, ToolResultExt, ToolSpec, tool_schema,
+    Cx, Manifest, ToolError, ToolOutput, ToolResult, ToolResultExt, ToolSpec, tool_schema,
 };
 use schemars::JsonSchema;
 use serde::{Deserialize, Serialize};
@@ -86,29 +82,6 @@ struct AskArgs {
 /// How long `ask` waits for the user by default, and an approval at all
 /// (seconds).
 pub(crate) const ASK_TIMEOUT: u64 = 600;
-
-/// `delegate` arguments: an `agent` call with `mode: "session"`.
-#[derive(Debug, Deserialize, JsonSchema)]
-#[serde(deny_unknown_fields)]
-struct DelegateArgs {
-    /// what it should do, self-contained: it sees nothing of this conversation
-    task: String,
-    /// always "session" (what routed the call here)
-    #[allow(dead_code)]
-    mode: String,
-    /// the id of the assistant deck; yourself when absent
-    #[serde(default)]
-    assistant: Option<String>,
-    /// a model alias (`rumu/<name>`) to run on instead of its own model
-    #[serde(default)]
-    model: Option<String>,
-    /// the reasoning effort to run at
-    #[serde(default)]
-    effort: Option<Effort>,
-    /// refused: a session uses its own mounts' workspaces
-    #[serde(default)]
-    workspaces: Option<Value>,
-}
 
 /// One question of an `ask`.
 #[derive(Debug, Serialize, Deserialize, JsonSchema)]
@@ -266,121 +239,6 @@ impl AskPlugin {
         self.ask_user(from, args.questions, timeout, cx).await
     }
 
-    /// `agent` with `mode: "session"`: an assistant (yourself by default;
-    /// another one with the user's approval) does the task in a session of
-    /// its own, with its own mounts (and the project), cards it may write and
-    /// its own model.
-    async fn delegate(&self, args: &Value, cx: &Cx) -> ToolResult<ToolOutput> {
-        let args: DelegateArgs = serde_json::from_value(args.clone())
-            .map_err(|e| ToolError::model(format!("agent: invalid arguments: {e}")))?;
-        let state = cx.state()?;
-        let from = state.assistant.clone();
-        if state.delegated_by.is_some() {
-            return Err(
-                "agent: this session does a handed-over task; do it here (mode \"fresh\" or \"fork\")"
-                    .into(),
-            );
-        }
-        if args.workspaces.is_some() {
-            return Err("agent: a session uses its own workspaces; leave `workspaces` out".into());
-        }
-        let task = args.task.trim();
-        if task.is_empty() {
-            return Err("agent: `task` must not be empty".into());
-        }
-        let Some(from_deck) = self.decks.get(&from) else {
-            return Err(ToolError::model(format!(
-                "agent: this session's assistant deck `{from}` is gone"
-            )));
-        };
-        let to_id = args.assistant.unwrap_or_else(|| from.clone());
-        let own = to_id == from;
-        let Some(to) = self
-            .decks
-            .get(&to_id)
-            .filter(|d| d.assistant() && self.decks.visible(d.id(), &from, &state.mounts))
-        else {
-            let names: Vec<String> = self
-                .decks
-                .assistants()
-                .into_iter()
-                .filter(|d| d.id() != from && self.decks.visible(d.id(), &from, &state.mounts))
-                .map(|d| format!("`{}` ({})", d.id(), d.meta.name))
-                .collect();
-            return Err(ToolError::model(format!(
-                "agent: no assistant with id `{to_id}` (assistants: {})",
-                if names.is_empty() {
-                    "none".into()
-                } else {
-                    names.join(", ")
-                }
-            )));
-        };
-        // Yourself needs no approval: a session of your own gets nothing a new
-        // one would not.
-        let prompt = if own {
-            format!(
-                "You handed yourself this task from another session:\n\n{task}\n\n\
-                 Do the work, then reply with a concise summary: your final reply goes back to \
-                 that session as the result."
-            )
-        } else {
-            let request = json!({
-                "kind": "ask",
-                "from": from_deck.meta.name,
-                "from_id": from,
-                "to": to.meta.name,
-                "to_id": to.id(),
-                "task": task,
-            });
-            let allowed = crate::approve::approve(&self.decks, cx, Action::Ask, to.id(), request)
-                .await
-                .map_err(|e| ToolError::model(format!("agent: {e}")))?;
-            if !allowed {
-                return Err(ToolError::model(format!(
-                    "agent: the user declined to hand the task to `{}`",
-                    to.meta.name
-                )));
-            }
-            format!(
-                "The assistant `{}` hands you this task, with the user's permission:\n\n{task}\n\n\
-                 Do the work, then reply with a concise summary: your final reply goes back to `{}` \
-                 as the result.",
-                from_deck.meta.name, from_deck.meta.name
-            )
-        };
-        // Its own default mounts, and the project the task belongs to.
-        let mut mounts: Vec<CardMount> = self.decks.default_mounts(to.id());
-        if let Some(project) = &state.project {
-            mounts.push(CardMount {
-                deck: project.clone(),
-                at: rumu_core::PROJECT_MOUNT.into(),
-            });
-        }
-        mounts.sort_by(|a, b| a.at.cmp(&b.at));
-        let reply = cx
-            .delegate(Delegation {
-                assistant: to.id().to_owned(),
-                delegated_by: from.clone(),
-                mounts,
-                model: args.model,
-                effort: args.effort,
-                prompt: Content::text(prompt),
-            })
-            .await
-            .map_err(|e| ToolError::model(format!("agent: {e}")))?;
-        let text = reply
-            .text
-            .filter(|t| !t.trim().is_empty())
-            .unwrap_or_else(|| "(it stopped without a final reply)".into());
-        Ok(ToolOutput::ok(format!(
-            "`{}` reports:\n\n{text}\n\n[transcript: {}:/sessions/{}]",
-            to.meta.name,
-            rumu_core::RUMU_WORKSPACE,
-            reply.session
-        )))
-    }
-
     async fn ask_user(
         &self,
         from: Deck,
@@ -430,22 +288,13 @@ impl rumu_core::Plugin for AskPlugin {
 answers. Use it when you need a decision or a fact only the user has, not to ask leave for an \
 action. Offer `options` when the likely answers are known (a short label, with a description \
 when the label needs one; put a recommended option first); the user can always answer in their \
-own words instead. If nobody answers within `timeout`, you get told and go on without them. To have another assistant do something, use `agent` with mode \"session\" and `assistant`.\n\n\
+own words instead. If nobody answers within `timeout`, you get told and go on without them. To have another assistant do something, `invoke` `session.create` on `@rumu:/sessions`.\n\n\
 Answers are not saved: if one will matter later, write it into a card yourself."
                         .into(),
                     schema: tool_schema::<AskArgs>(),
                     background: false,
                     output_schema: None,
                     parallel: false,
-                },
-                // Routed from `agent`, never listed to the model.
-                ToolSpec {
-                    name: DELEGATE_TOOL.into(),
-                    description: "`agent` in a session of its own.".into(),
-                    schema: tool_schema::<DelegateArgs>(),
-                    background: true,
-                    output_schema: None,
-                    parallel: true,
                 },
             ],
             hooks: vec![],
@@ -455,7 +304,6 @@ Answers are not saved: if one will matter later, write it into a card yourself."
     async fn call_tool(&self, name: &str, args: Value, cx: &Cx) -> rumu_core::Result<ToolOutput> {
         match name {
             "ask" => self.ask(&args, cx).await.finish(),
-            DELEGATE_TOOL => self.delegate(&args, cx).await.finish(),
             other => Ok(ToolOutput::err(format!(
                 "plugin `ask` has no tool `{other}`"
             ))),

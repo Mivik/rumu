@@ -212,7 +212,7 @@ actions:
 |----------|-------------------------------------------------|----------------------------------------|
 | `mount`  | mount the deck (makes it readable)              | an entry in its `deck.yaml` mounts     |
 | `write`  | write, move into or out of, or delete its cards | a `deck.yaml` mount with `write: true` |
-| `ask`    | ask the assistant deck a question               | `allow_ask` in the asked deck          |
+| `ask`    | start a session of the assistant deck           | `allow_ask` in the asked deck          |
 | `link`   | link one of its cards from another deck         | nothing                                |
 | `create` | create a deck through `@rumu:/decks`           | nothing                                |
 | `configure` | change a deck's configuration (see below)   | nothing                                |
@@ -359,22 +359,27 @@ History is git. There is no other log.
   edited mid-session, say), or a mounted deck has one the branch has not
   seen, the next model call gets its text in full.
 
-## Asking another assistant
+## Handing work to another session
 
-`ask(to, questions)` asks the user (`to: "user"`) or another assistant deck.
-The user gets up to four questions at once, each with optional options (a
-label and a description) and always room for their own words, through a
-`questions` decision. Another assistant gets exactly one question, without
-options:
+`ask` only asks the user. Work goes to a session of its own through two
+actions on `@rumu:/sessions`:
 
-1. Assistant A calls `ask(to: "<ledger's id>", questions: [{ question: "..." }])`.
-2. Unless `allow_ask` in B's `deck.yaml` or an "always allow" in `grants.json`
-   permits it, the user is asked (`decision.requested`).
-3. B answers in a new session of its own, with its default mounts and its own
-   deck, and cannot write cards there. The root records `asked_by: <A's id>`; `ask`
-   is refused on that session. `to` must be an assistant
-   deck's id; the first-call note lists the other assistants with their ids.
-4. The answer returns to A as the tool result. Nothing is saved automatically.
+1. `invoke session.create` on `@rumu:/sessions` with `{ prompt, assistant?,
+   model?, effort? }` starts a session of `assistant` (an assistant deck's id;
+   yourself when absent) with its default mounts and the caller's project, and
+   sends `prompt` as its first message. It returns the new session's address at
+   once; the session runs on by itself, like one the user started.
+2. Another assistant's session asks the user first (action `ask`), unless
+   `allow_ask` in its `deck.yaml` or an "always allow" in `grants.json`
+   permits it. A session of your own is never asked about.
+3. `invoke session.wait` on `@rumu:/sessions/<id>` waits until that session is
+   idle and returns its final reply; with `background: true` it is a task whose
+   completion note brings the reply. It works on any session the caller can
+   see, and on one it started even when it cannot (another assistant's,
+   outside any project) — until a restart.
+4. Nothing ties the two sessions together: stopping the caller stops only its
+   wait, and a started session may start sessions in turn. The started session
+   writes its own deck's cards like any other.
 
 ## Not in scope
 

@@ -431,7 +431,6 @@ async fn dispatch(state: &AppState, method: &str, p: &Value) -> Result<Value> {
             let (session, branch) = kernel
                 .create_rooted_session(SessionRoot {
                     assistant: deck.id().to_owned(),
-                    delegated_by: None,
                     mounts,
                 })
                 .await?;

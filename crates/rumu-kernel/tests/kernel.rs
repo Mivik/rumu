@@ -701,7 +701,6 @@ async fn setup_in_project(
     let (session, _) = kernel
         .create_rooted_session(SessionRoot {
             assistant: "assistant".into(),
-            delegated_by: None,
             mounts: vec![project_mount(deck)],
         })
         .await

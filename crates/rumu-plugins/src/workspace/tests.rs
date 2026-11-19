@@ -3933,6 +3933,7 @@ async fn invoke_runs_declared_actions_and_explains_the_rest() {
             .unwrap(),
         "no action `task.pause`; `@rumu:/tasks/t1` has `task.kill`; rumu's actions: \
          `deck.mount` on `@rumu:/decks/<name>`, `deck.unmount` on `@rumu:/decks/<name>`, \
+         `session.create` on `@rumu:/sessions`, `session.wait` on `@rumu:/sessions/<sid>`, \
          `task.kill` on `@rumu:/tasks/<id>`",
     );
     // Arguments the action does not take come back with its schema.

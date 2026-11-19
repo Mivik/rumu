@@ -461,13 +461,17 @@ pub trait Runtime: History {
     ) -> Result<Option<Value>> {
         Err(Error::msg("this host cannot ask the user"))
     }
-    /// Run `delegation` as a session of its own (see [`Cx::delegate`]).
-    async fn delegate(
+    /// Start `new` as a session of its own (see [`Cx::start_session`]).
+    async fn start_session(
         &self,
         _branch: &BranchId,
-        _delegation: Delegation,
-    ) -> Result<DelegationReply> {
+        _new: NewSession,
+    ) -> Result<(SessionId, BranchId)> {
         Err(Error::msg("this host cannot start sessions"))
+    }
+    /// Wait until `target` is idle (see [`Cx::wait_idle`]).
+    async fn wait_idle(&self, _target: &BranchId) -> Result<()> {
+        Err(Error::msg("this host cannot wait on branches"))
     }
     /// Cancel the task `id` if `branch` owns it (see [`Cx::kill_task`]).
     async fn kill_task(&self, _branch: &BranchId, _id: &TaskId) -> Result<TaskInfo> {
@@ -475,32 +479,18 @@ pub trait Runtime: History {
     }
 }
 
-/// The plugin tool an `agent` call naming another `assistant` runs as. The
-/// kernel routes to it and never lists it to the model.
-pub const DELEGATE_TOOL: &str = "delegate";
-
-/// Another assistant's session run on behalf of a tool call (`Cx::delegate`):
-/// an `agent` handed to it.
+/// A session a tool call starts (`Cx::start_session`): who runs it, what it
+/// mounts, the model asked for, and its first prompt.
 #[derive(Debug, Clone)]
-pub struct Delegation {
+pub struct NewSession {
     /// The assistant deck the session runs as.
     pub assistant: String,
-    /// The assistant deck that hands the task over, recorded on the root.
-    pub delegated_by: String,
     /// Its mounts: the deck's defaults and the project.
     pub mounts: Vec<crate::CardMount>,
     /// The model alias asked for, and the effort.
     pub model: Option<String>,
     pub effort: Option<crate::Effort>,
     pub prompt: Content,
-}
-
-/// What a delegated session answered.
-#[derive(Debug, Clone)]
-pub struct DelegationReply {
-    pub session: SessionId,
-    /// The final reply; `None` when the turn ended without one (abort).
-    pub text: Option<String>,
 }
 
 /// Where a tool call's progress goes, chosen by the kernel when it builds the
@@ -660,10 +650,16 @@ impl Cx {
             .await
     }
 
-    /// Run a session of its own (another assistant doing a task) and wait for
-    /// its final reply. Aborting this call aborts that session's turn.
-    pub async fn delegate(&self, delegation: Delegation) -> Result<DelegationReply> {
-        self.runtime.delegate(&self.branch, delegation).await
+    /// Start a session of its own and prompt it; it runs on by itself, like
+    /// one the user started. Returns its id and main branch.
+    pub async fn start_session(&self, new: NewSession) -> Result<(SessionId, BranchId)> {
+        self.runtime.start_session(&self.branch, new).await
+    }
+
+    /// Wait until the branch `target` (of any session) is idle: no turn
+    /// running or about to, no sub-agent still at work.
+    pub async fn wait_idle(&self, target: &BranchId) -> Result<()> {
+        self.runtime.wait_idle(target).await
     }
 
     /// Cancel the background task `id` and return its final status. Only a

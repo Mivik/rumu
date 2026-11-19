@@ -1,7 +1,8 @@
-//! `agent` handed to another assistant, end to end: the real kernel and
-//! plugins, an LLM that answers by the assistant it runs as. scout hands ledger
-//! a task; the user approves through a decision, and ledger does it in a
-//! session of its own, from its own library, keeping a card of its own.
+//! `session.create` + `session.wait` end to end: the real kernel and
+//! plugins, an LLM that answers by the assistant it runs as. scout starts a
+//! session of ledger; the user approves through a decision, ledger does the
+//! task from its own library, keeping a card of its own, and scout waits for
+//! its reply.
 
 use std::sync::Arc;
 
@@ -14,7 +15,7 @@ use serde_json::{Value, json};
 use tokio::sync::mpsc;
 
 /// Plays both assistants. Whichever runs is read off the first user message: the
-/// delegated session's prompt starts with "The assistant `scout` hands you".
+/// started session's prompt starts with "The assistant `scout` sends this".
 struct AssistantsLlm;
 
 fn first_user(nodes: &[Node]) -> String {
@@ -34,6 +35,35 @@ fn last_result(nodes: &[Node]) -> Option<String> {
     })
 }
 
+fn results(nodes: &[Node]) -> usize {
+    nodes
+        .iter()
+        .filter(|n| matches!(n.body, NodeBody::ToolResult { .. }))
+        .count()
+}
+
+/// The starter's side: start a session with `create`'s arguments, wait on it,
+/// then report what came back (or the refusal).
+fn starter(nodes: &[Node], create: Value) -> LlmResponse {
+    let result = last_result(nodes);
+    match (results(nodes), result) {
+        (0, _) => LlmResponse::calls([ToolCall::new(
+            "c1",
+            "invoke",
+            json!({ "action": "session.create", "path": "@rumu:/sessions", "args": create }),
+        )]),
+        (1, Some(started)) if started.starts_with("started session") => {
+            let path = started.split('`').nth(1).unwrap().to_owned();
+            LlmResponse::calls([ToolCall::new(
+                "w1",
+                "invoke",
+                json!({ "action": "session.wait", "path": path }),
+            )])
+        }
+        (_, result) => LlmResponse::text(format!("scout heard: {}", result.unwrap_or_default())),
+    }
+}
+
 #[async_trait]
 impl Llm for AssistantsLlm {
     async fn complete(
@@ -45,7 +75,7 @@ impl Llm for AssistantsLlm {
         _on_delta: Option<OnDelta>,
     ) -> std::result::Result<LlmResponse, rumu_kernel::LlmError> {
         let prompt = first_user(nodes);
-        if prompt.starts_with("The assistant `scout` hands you") {
+        if prompt.starts_with("The assistant `scout` sends this") {
             // ledger: keep a card of its own, then answer from the card
             // recall gave it.
             return Ok(match last_result(nodes) {
@@ -61,11 +91,7 @@ impl Llm for AssistantsLlm {
                 }
             });
         }
-        // scout: hand the task over once, then report what came back.
-        Ok(match last_result(nodes) {
-            None => LlmResponse::calls([ToolCall::new("a1", "agent", task())]),
-            Some(result) => LlmResponse::text(format!("scout heard: {result}")),
-        })
+        Ok(starter(nodes, task()))
     }
 }
 
@@ -81,12 +107,12 @@ fn deck_id(home: &std::path::Path, name: &str) -> String {
         .to_owned()
 }
 
-/// The `ledger` deck id written by [`home`]; `agent` names decks by id.
+/// The `ledger` deck id written by [`home`]; `session.create` names decks by id.
 const LEDGER: &str = "0193a2f1-0000-7000-8000-000000000003";
 
-/// scout's `agent` call for ledger.
+/// scout's `session.create` arguments for ledger.
 fn task() -> Value {
-    json!({ "background": false, "mode": "session", "assistant": LEDGER, "task": "find the monthly budget" })
+    json!({ "assistant": LEDGER, "prompt": "find the monthly budget" })
 }
 
 fn home() -> tempfile::TempDir {
@@ -231,9 +257,11 @@ async fn an_approved_task_is_done_by_the_other_assistant() {
 
     let (reply, asked) = scout_turn(&kernel, home.path(), json!({ "allow": true })).await;
     assert_eq!(asked, 1);
-    assert!(reply.contains("`ledger` reports"), "{reply}");
+    assert!(reply.contains("of `ledger` is idle"), "{reply}");
     assert!(reply.contains("budget 300"), "{reply}");
-    assert!(reply.contains("[transcript: @rumu:/sessions/"), "{reply}");
+    // Outside any project ledger's session is its own: scout gets the reply
+    // it waited for, not the transcript.
+    assert!(!reply.contains("[transcript:"), "{reply}");
     // ledger worked from its own library…
     assert!(reply.contains("recalled: true"), "{reply}");
     // …and kept a card of its own.
@@ -241,7 +269,7 @@ async fn an_approved_task_is_done_by_the_other_assistant() {
     let ledger_deck = ledger_deck.get(LEDGER).unwrap();
     assert!(ledger_deck.read("noted").unwrap().is_some(), "{reply}");
 
-    // The task ran as a session of ledger.
+    // The task ran in a session of ledger.
     let sessions = kernel.list_sessions().unwrap();
     let ledger = deck_id(home.path(), "ledger");
     let assistants: Vec<&str> = sessions.iter().map(|s| s.assistant.as_str()).collect();
@@ -329,7 +357,7 @@ async fn aborting_the_turn_cancels_the_question() {
     assert!(kernel.decisions().is_empty());
 }
 
-/// scout hands a task to itself: `mode: "session"` without `assistant`.
+/// scout starts a session of its own: `session.create` without `assistant`.
 struct SelfLlm;
 
 #[async_trait]
@@ -342,38 +370,33 @@ impl Llm for SelfLlm {
         nodes: &[Node],
         _on_delta: Option<OnDelta>,
     ) -> std::result::Result<LlmResponse, rumu_kernel::LlmError> {
-        if first_user(nodes).starts_with("You handed yourself this task") {
+        if first_user(nodes).starts_with("You sent this to yourself") {
             return Ok(LlmResponse::text("done on my own"));
         }
-        Ok(match last_result(nodes) {
-            None => LlmResponse::calls([ToolCall::new(
-                "a1",
-                "agent",
-                json!({ "background": false, "mode": "session", "task": "tidy up" }),
-            )]),
-            Some(result) => LlmResponse::text(format!("scout heard: {result}")),
-        })
+        Ok(starter(nodes, json!({ "prompt": "tidy up" })))
     }
 }
 
 #[tokio::test]
-async fn a_task_handed_to_yourself_runs_unasked_in_a_new_session() {
+async fn a_session_of_your_own_starts_unasked() {
     let home = home();
     let kernel = kernel_on(home.path(), Arc::new(SelfLlm)).await;
     let (reply, asked) = scout_turn(&kernel, home.path(), json!({ "allow": false })).await;
     assert_eq!(asked, 0);
-    assert!(reply.contains("`scout` reports"), "{reply}");
+    assert!(reply.contains("of `scout` is idle"), "{reply}");
     assert!(reply.contains("done on my own"), "{reply}");
+    // Your own session you can see.
+    assert!(reply.contains("[transcript: @rumu:/sessions/"), "{reply}");
     let scout = deck_id(home.path(), "scout");
     let sessions = kernel.list_sessions().unwrap();
     assert_eq!(
         sessions.iter().filter(|s| s.assistant == scout).count(),
         2,
-        "the handing session and its own"
+        "the starting session and the started one"
     );
 }
 
-/// scout hands the task over; ledger thinks forever.
+/// scout starts ledger's session and waits; ledger thinks forever.
 struct StuckLlm;
 
 #[async_trait]
@@ -386,15 +409,15 @@ impl Llm for StuckLlm {
         nodes: &[Node],
         _on_delta: Option<OnDelta>,
     ) -> std::result::Result<LlmResponse, rumu_kernel::LlmError> {
-        if first_user(nodes).starts_with("The assistant `scout` hands you") {
+        if first_user(nodes).starts_with("The assistant `scout` sends this") {
             return std::future::pending().await;
         }
-        Ok(LlmResponse::calls([ToolCall::new("a1", "agent", task())]))
+        Ok(starter(nodes, task()))
     }
 }
 
 #[tokio::test]
-async fn aborting_the_hand_over_winds_the_delegated_turn_down() {
+async fn a_started_session_outlives_the_turn_that_started_it() {
     let home = home();
     let kernel = kernel_on(home.path(), Arc::new(StuckLlm)).await;
     let scout = deck_id(home.path(), "scout");
@@ -406,22 +429,24 @@ async fn aborting_the_hand_over_winds_the_delegated_turn_down() {
     let finished = tokio::time::timeout(std::time::Duration::from_secs(5), async {
         while let Some(v) = rx.recv().await {
             let params = &v["params"];
+            let branch = params["branch"].as_str();
             match v["method"].as_str().unwrap_or_default() {
                 "decision.requested" => kernel
                     .answer_decision(params["id"].as_str().unwrap(), json!({ "allow": true }))
                     .unwrap(),
-                "turn.started" if params["reason"] == "delegate" => {
-                    ledger = params["branch"].as_str().map(str::to_owned);
+                "turn.started" if branch != Some(&scout.0) => {
+                    ledger = branch.map(str::to_owned);
                     kernel.abort(&scout).unwrap();
                 }
-                "turn.done" if params["branch"].as_str() == ledger.as_deref() => return,
+                "turn.done" | "turn.error" if branch == Some(&scout.0) => return,
                 _ => {}
             }
         }
     })
     .await;
-    assert!(finished.is_ok(), "the delegated turn never finished");
-    // Its loop guard is gone: a new prompt on it starts a turn, not a steer.
-    let ledger = BranchId::from(ledger.unwrap().as_str());
-    assert!(!kernel.is_running(&ledger));
+    assert!(finished.is_ok(), "scout's turn never finished");
+    // Stopping scout stopped only its wait: ledger works on.
+    let ledger = BranchId::from(ledger.expect("ledger's turn started").as_str());
+    assert!(kernel.is_running(&ledger));
+    kernel.stop(&ledger).unwrap();
 }

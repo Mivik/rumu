@@ -101,9 +101,9 @@ sets where it runs:\n\
 - \"fresh\" (default): a clean branch of this session that sees only the task; any `model`.\n\
 - \"fork\": continues from this exact point and sees everything you see; it stays on this \
 model, only `effort` may change.\n\
-- \"session\": a session of its own that sees only the task, run by `assistant` (an assistant's \
-id; default yourself) with its own mounts and model; any `model`.\n\
-`workspaces` (fork / fresh) restricts which workspaces it may use (omit for all). `model` is a \
+To hand work to a session of its own (yours or another assistant's), `invoke` `session.create` on \
+`@rumu:/sessions` instead.\n\
+`workspaces` restricts which workspaces it may use (omit for all). `model` is a \
 model alias (`rumu/<name>`). Use for open-ended work whose details don't need to stay here."
             .into(),
         schema: tool_schema::<turn::AgentArgs>(),
@@ -352,7 +352,7 @@ impl Kernel {
         // never listed.
         system.push_str("\n\n");
         system.push_str(TASK_INSTRUCTIONS);
-        tools.retain(|t| t.name != "agent" && t.name != rumu_core::DELEGATE_TOOL);
+        tools.retain(|t| t.name != "agent");
         tools.push(agent_tool());
         // Advertise `background` only on tools that may run as a task.
         for t in &mut tools {
@@ -701,14 +701,13 @@ impl Kernel {
     ) -> Result<(SessionInfo, Branch)> {
         self.create_rooted_session(SessionRoot {
             assistant,
-            delegated_by: None,
             mounts: Vec::new(),
         })
         .await
     }
 
-    /// Create a session from a fully populated root marker (the deck id, the
-    /// delegating assistant, and the default mounts, the project included).
+    /// Create a session from a fully populated root marker (the deck id and
+    /// the default mounts, the project included).
     pub async fn create_rooted_session(
         self: &Arc<Self>,
         root_data: SessionRoot,

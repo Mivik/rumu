@@ -14,7 +14,6 @@ const ICONS: Record<string, string> = {
   search: 'search',
   code: 'code',
   agent: 'agent',
-  delegate: 'agent',
   ask: 'ask',
   // A background task's own name; those are MCP calls in practice.
   invoke: 'mcp',

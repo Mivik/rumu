@@ -1,5 +1,5 @@
 //! Questions put to the user on behalf of a tool call (`Cx::decide`), and
-//! other assistants' sessions run on behalf of one (`Cx::delegate`).
+//! sessions a tool call starts (`Cx::start_session`).
 //!
 //! A decision is runtime-only: a `decision.requested` push the client answers
 //! with `decision.answer` (by id), resolved with a `decision.resolved` push.
@@ -12,7 +12,7 @@
 use std::sync::Arc;
 use std::time::Duration;
 
-use rumu_core::{BranchId, Content, Delegation, DelegationReply, SessionRoot};
+use rumu_core::{BranchId, NewSession, SessionId, SessionRoot};
 use serde_json::{Value, json};
 use tokio::sync::oneshot;
 use tokio_util::sync::CancellationToken;
@@ -166,81 +166,37 @@ impl Kernel {
         list.into_iter().map(|(_, v)| v).collect()
     }
 
-    /// Run `delegation` as a new session of its assistant: one prompt, one
-    /// loop. Its token is a child of `from`'s loop, so aborting the handing
-    /// turn aborts it. The turn is spawned: an abort drops the handing tool
-    /// call, and this future with it, while the turn still has to wind down.
-    pub(crate) async fn delegate(
+    /// Start `new` as a session of its own, prompted like one the user
+    /// started: it runs on by itself, and nothing of `from` stops it.
+    pub(crate) async fn start_session(
         self: &Arc<Self>,
         from: &BranchId,
-        delegation: Delegation,
-    ) -> Result<DelegationReply> {
-        // Its own model unless the call asks for another; handed to yourself,
-        // the model this path runs on.
+        new: NewSession,
+    ) -> Result<(SessionId, BranchId)> {
+        // Its own model unless the call asks for another; your own session
+        // runs on the model this path runs on.
         let parent = self.state_of_nodes(&self.pending_path_nodes(from)?);
-        let own = parent.assistant == delegation.assistant;
+        let own = parent.assistant == new.assistant;
         let base = if own {
             self.model_of(&parent)
         } else {
             let lookup = self.inner.lock().unwrap().assistant_model.clone();
-            lookup(&delegation.assistant)
+            lookup(&new.assistant)
         };
         let model = self
-            .model_override(delegation.model, delegation.effort, base.as_ref())
+            .model_override(new.model, new.effort, base.as_ref())
             .map_err(Error::ModelPick)?
             .or_else(|| parent.model.filter(|_| own));
-        let token = self.loop_token(from).child_token();
         let (info, branch) = self
             .create_rooted_session(SessionRoot {
-                assistant: delegation.assistant,
-                delegated_by: Some(delegation.delegated_by),
-                mounts: delegation.mounts,
+                assistant: new.assistant,
+                mounts: new.mounts,
             })
             .await?;
         if model.is_some() {
             self.use_model(&branch.id, model).await?;
         }
-        self.inner
-            .lock()
-            .unwrap()
-            .running
-            .insert(branch.id.clone(), token.clone());
-        let (tx, rx) = oneshot::channel();
-        let kernel = self.clone();
-        tokio::spawn(async move {
-            let run = kernel
-                .delegated_turn(&branch.id, delegation.prompt, &token)
-                .await;
-            let (text, failure) = match run {
-                Ok(text) => (Ok(text), None),
-                Err(e) => (Err(e.to_string()), Some(e)),
-            };
-            kernel.finish_turn(branch.id, failure).await;
-            let _ = tx.send(text);
-        });
-        let text = rx
-            .await
-            .map_err(|_| Error::Internal("delegated turn vanished".into()))?
-            .map_err(|e| Error::Internal(format!("delegated session failed: {e}")))?;
-        Ok(DelegationReply {
-            session: info.id,
-            text,
-        })
-    }
-
-    /// The delegated session's turn: its final reply, or `None` when a hook
-    /// blocked the prompt or the turn was aborted.
-    async fn delegated_turn(
-        self: &Arc<Self>,
-        branch: &BranchId,
-        prompt: Content,
-        token: &CancellationToken,
-    ) -> Result<Option<String>> {
-        if self.open_turn(branch, prompt, true, "delegate").await? {
-            return Ok(None);
-        }
-        let outcome = self.run_loop(branch.clone(), token).await?;
-        self.push("turn.done", json!({ "branch": branch }));
-        Ok((!outcome.stopped_early).then_some(outcome.last_text))
+        self.prompt(&branch.id, new.prompt).await?;
+        Ok((info.id, branch.id))
     }
 }
