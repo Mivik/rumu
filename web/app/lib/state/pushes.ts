@@ -131,7 +131,8 @@ function onNodeAppended(p: NodeAppendedPush): void {
     node.body.type === 'tool_result' &&
     !node.body.is_error &&
     artifactOf(node.body.content) &&
-    (state.artifact || (!state.taskDetail && window.matchMedia('(min-width: 80rem)').matches))
+    (state.artifact ||
+      (!state.agentView && !state.taskDetail && window.matchMedia('(min-width: 80rem)').matches))
   ) {
     state.artifact = node.id
     state.taskDetail = null
@@ -249,7 +250,8 @@ function onTurnError(p: TurnErrorPush): void {
   // be (`owedReply`, from its marker on the path). A branch that is not on
   // screen has no row to land in, and an unrecorded failure no marker, so
   // those still need a toast.
-  if (!p.recorded || p.branch !== state.activeBranch) toast('error', p.message)
+  if (!p.recorded || (p.branch !== state.activeBranch && p.branch !== state.agentView))
+    toast('error', p.message)
 }
 
 /** `prompt.blocked`: a steering prompt was refused by a hook while the turn

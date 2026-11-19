@@ -8,13 +8,12 @@
 // ("Worked for 3m 12s · 27 calls"); only answer text and context pills stand
 // on their own.
 
-import { computed } from 'vue'
-import type { BranchId, Node, ToolCall } from '../types'
+import type { Branch, BranchId, Node, ToolCall } from '../types'
 import type { Compaction } from '../generated/Compaction'
 import { CATALOG_TAG, TURN_ERROR_TAG, reasoningText } from '../types'
 import { contentText } from '../util'
 import { artifactOf } from '../artifacts'
-import { callsOnPath, pathNodes } from './derived'
+import type { callsOnPath } from './derived'
 import { state } from './state'
 
 /** Injected at `llm.pre`, so it belongs to the assistant turn, not the user row. */
@@ -174,24 +173,20 @@ export function compactionOf(n: Node): Compaction | null {
 
 type CallsOnPath = typeof callsOnPath.value
 
-/** The nodes the chat shows: the active branch's path, or a sub-agent's own
- *  part of it from its goal prompt on, the prompt showing the task as it was
- *  given (the kernel's sub-agent framing is the model's, not the reader's;
- *  what was seeded before it is the parent's). */
-const shownNodes = computed<Node[]>(() => {
-  const b = state.activeBranch ? state.branches[state.activeBranch] : undefined
-  if (b?.kind.type !== 'agent') return pathNodes.value
+/** The nodes a conversation shows of branch `b` (`path` its path): all
+ *  of it, or of a sub-agent its own part from its goal prompt on, the prompt
+ *  showing the task as it was given (the kernel's sub-agent framing is the
+ *  model's, not the reader's; what was seeded before it is the parent's). */
+export function shownOf(b: Branch | null, path: Node[]): Node[] {
+  if (b?.kind.type !== 'agent') return path
   const task = b.kind.task
-  const own = pathNodes.value.slice(pathNodes.value.findIndex((n) => n.id === b.forked_from) + 1)
+  const own = path.slice(path.findIndex((n) => n.id === b.forked_from) + 1)
   const at = own.findIndex((n) => n.body.type === 'user')
   const prompt = own[at]
   if (!prompt || prompt.body.type !== 'user') return own
   const shown: Node = { ...prompt, body: { ...prompt.body, content: { ...prompt.body.content, text: task } } }
   return [shown, ...own.slice(at + 1)]
-})
-
-/** The timeline of the branch the chat shows. */
-export const timeline = computed(() => buildTimeline(shownNodes.value, callsOnPath.value, state.activeBranch))
+}
 
 /** Group `nodes` (a branch's path, or the part of it to show) into timeline
  *  entries, with `branch`'s live stream attached. */

@@ -2,8 +2,8 @@
 // Center column, the one paper sheet on the canvas: the shell around the
 // open session's view. The shell owns the header (who the session runs as,
 // its title, view tabs, and beside them the project it works in) and the
-// composer card at the foot; the view between them is the conversation
-// (ConversationView), the raw trajectory (TraceView) or its usage
+// composer card at the foot (BranchChat); the view between them is the
+// conversation (ConversationView), the raw trajectory (TraceView) or its usage
 // statistics (StatsView). The
 // content column is capped at --col-max (main.css), centered. On phones and
 // in portrait the sheet drops its card edges and becomes the page (main.css).
@@ -12,31 +12,26 @@
 // their own above the composer. On a phone the composer sits at the foot of
 // the page, where it stays once the session opens; wider, the hero and the
 // composer are centered together.
-import { computed, ref } from 'vue'
+import { computed } from 'vue'
 import { t } from '../../i18n'
 import { assistantCat } from '../../lib/assistantFace'
-import { connected, currentBranch, isBusy, openAgentView, queuedPrompts, state } from '../../lib/store'
+import { connected, isBusy, state } from '../../lib/store'
 import { layout, toggleSidebar } from '../../lib/layout'
 import { openPage } from '../../lib/router'
+import BranchChat from './BranchChat.vue'
 import CardDrawer from './CardDrawer.vue'
 import Composer from './Composer.vue'
 import ConversationView from './ConversationView.vue'
-import TasksPanel from './TasksPanel.vue'
 import TraceView from './TraceView.vue'
 import StatsView from './StatsView.vue'
 import ViewTabs from './ViewTabs.vue'
 import SidePop from './SidePop.vue'
-import SelectionBar from './SelectionBar.vue'
 import Welcome from './Welcome.vue'
 import SessionPickers from './SessionPickers.vue'
 import AssistantAvatar from '../brand/AssistantAvatar.vue'
 import RumuMark from '../brand/RumuMark.vue'
 import ProjectSeal from '../brand/ProjectSeal.vue'
 import Icon from '../ui/Icon.vue'
-
-const composerEl = ref<HTMLElement | null>(null)
-/** The composer takes queued prompts back (their keys sit above it). */
-const composer = ref<InstanceType<typeof Composer> | null>(null)
 
 /** The open session's assistant and project, by name. */
 const scope = computed(() => {
@@ -53,22 +48,6 @@ const scope = computed(() => {
     projectInfo: project ?? null,
   }
 })
-
-/** The sub-agent the chat shows, and where its back button goes: the
- *  sub-agent above it, or the session's active branch. */
-const agent = computed(() => {
-  const k = currentBranch.value?.kind
-  if (k?.type !== 'agent') return null
-  const up = state.branches[k.parent_branch]
-  return { task: k.task, parent: up?.kind.type === 'agent' ? up.id : null }
-})
-
-/** The view reads the composer through a getter: a template ref passed
- *  straight through a prop trips vue-tsc's HTMLElement unwrap, hence the
- *  cast. */
-function composerRoot(): HTMLElement | null {
-  return composerEl.value as unknown as HTMLElement | null
-}
 </script>
 
 <template>
@@ -113,21 +92,7 @@ function composerRoot(): HTMLElement | null {
           leave-active-class="transition duration-150"
           leave-to-class="opacity-0"
         >
-          <span v-if="agent" key="agent" class="flex min-w-0 items-center gap-1.5">
-            <button
-              class="icon-btn size-7 flex-none"
-              :title="t('chat.agentView.back')"
-              :aria-label="t('chat.agentView.back')"
-              @click="openAgentView(agent.parent)"
-            >
-              <Icon name="back" :size="14" />
-            </button>
-            <Icon name="agent" :size="16" class="flex-none text-agent" />
-            <span class="flex-none text-title font-bold">{{ t('chat.agentView.title') }}</span>
-            <span class="min-w-0 truncate text-meta text-ink-3" :title="agent.task">{{ agent.task }}</span>
-          </span>
           <span
-            v-else
             :key="state.sessionId ?? ''"
             class="min-w-0 truncate text-title font-bold"
             :title="state.session?.title"
@@ -199,56 +164,20 @@ function composerRoot(): HTMLElement | null {
       </div>
 
       <!-- the open session: its view + the composer at the foot of the sheet -->
-      <div v-else key="chat" class="relative flex min-h-0 flex-1 flex-col">
-        <!-- a view switch: the new view settles in, the old one goes at once -->
-        <Transition
-          enter-active-class="transition-[opacity,translate] duration-300 ease-soft"
-          enter-from-class="translate-y-1.5 opacity-0"
-        >
-          <ConversationView v-if="state.view === 'chat'" :composer-of="composerRoot" />
-          <TraceView v-else-if="state.view === 'trace'" />
-          <StatsView v-else />
-        </Transition>
-        <SidePop v-if="state.view === 'chat'" />
-
-        <!-- min-h-0: a tall decision panel shrinks into the room left above the
-             sheet's foot instead of pushing the send row past its edge -->
-        <div ref="composerEl" class="relative flex min-h-0 flex-col px-3 pt-1 pb-3 sm:px-6 sm:pb-5">
-          <!-- a selection's keys float over the conversation's foot -->
-          <div
-            class="pointer-events-none absolute inset-x-3 bottom-full z-10 flex justify-center pb-1 sm:inset-x-6 [&>*]:pointer-events-auto"
+      <BranchChat v-else key="chat">
+        <template #default="{ composerOf }">
+          <!-- a view switch: the new view settles in, the old one goes at once -->
+          <Transition
+            enter-active-class="transition-[opacity,translate] duration-300 ease-soft"
+            enter-from-class="translate-y-1.5 opacity-0"
           >
-            <SelectionBar />
-          </div>
-          <!-- steering prompts accepted while busy, until they are written -->
-          <div
-            v-if="queuedPrompts.length"
-            class="mx-auto mb-1.5 flex w-full max-w-[var(--col-max)] flex-col gap-1"
-          >
-            <div
-              v-for="q in queuedPrompts"
-              :key="q.id"
-              class="ml-auto flex w-fit max-w-[85%] items-start gap-1 rounded-sheet rounded-br-xs border border-dashed border-brand/40 bg-brand-soft/50 py-2 pr-2 pl-4 text-message text-ink-3 sm:max-w-[70%]"
-            >
-              <span class="min-w-0 flex-1"
-                ><span class="mr-1.5 text-micro font-semibold text-ink-2">{{ t('chat.header.queued') }}</span
-                >{{ q.text }}</span
-              >
-              <button
-                class="icon-btn size-6 flex-none"
-                :title="t('chat.header.takeBack')"
-                :aria-label="t('chat.header.takeBack')"
-                @click="composer?.takeBack(q.id)"
-              >
-                <Icon name="close" :size="13" />
-              </button>
-            </div>
-          </div>
-          <!-- background tasks of this branch: a tab on the composer's edge -->
-          <TasksPanel />
-          <Composer ref="composer" />
-        </div>
-      </div>
+            <ConversationView v-if="state.view === 'chat'" :composer-of="composerOf" />
+            <TraceView v-else-if="state.view === 'trace'" />
+            <StatsView v-else />
+          </Transition>
+          <SidePop v-if="state.view === 'chat'" />
+        </template>
+      </BranchChat>
     </Transition>
 
     <CardDrawer />

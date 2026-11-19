@@ -9,6 +9,7 @@ import LibraryPage from './components/pages/LibraryPage.vue'
 import ProjectsPage from './components/pages/ProjectsPage.vue'
 import SettingsPage from './components/pages/SettingsPage.vue'
 import Lightbox from './components/Lightbox.vue'
+import AgentPanel from './components/chat/AgentPanel.vue'
 import ArtifactPanel from './components/chat/ArtifactPanel.vue'
 import TaskOutputPanel from './components/chat/TaskOutputPanel.vue'
 import { openArtifact } from './lib/artifacts'
@@ -57,9 +58,18 @@ function onKey(e: KeyboardEvent): void {
 
 /** An artifact is open beside the chat (the session is showing). */
 const artifactOpen = computed(() => !sheetPage.value && !!state.sessionId && !!openArtifact.value)
+/** A sub-agent is open beside the chat instead. */
+const agentOpen = computed(
+  () => !sheetPage.value && !artifactOpen.value && !!state.agentView && !!state.branches[state.agentView],
+)
 /** Or a background task's output. */
 const taskOpen = computed(
-  () => !sheetPage.value && !artifactOpen.value && !!state.taskDetail && !!state.tasks[state.taskDetail],
+  () =>
+    !sheetPage.value &&
+    !artifactOpen.value &&
+    !agentOpen.value &&
+    !!state.taskDetail &&
+    !!state.tasks[state.taskDetail],
 )
 
 onMounted(() => {
@@ -78,7 +88,7 @@ onBeforeUnmount(() => {
 <template>
   <AuthGate v-if="auth.status !== 'ready'" />
   <!-- Two sheets of paper on the canvas (three while an artifact or a
-       task's output is open at xl): the sessions (a card at lg, the
+       sub-agent or a task's output is open at xl): the sessions (a card at lg, the
        drawer below it) and the chat — the one the conversation is written on.
        Everything about the open session (branches, cards in play, diagnostics)
        lives in that sheet's header; below lg the sidebar overlays the chat,
@@ -97,7 +107,7 @@ onBeforeUnmount(() => {
     v-else
     class="desk grid h-full grid-cols-1 transition-[grid-template-columns] duration-350 ease-in-out lg:grid-cols-[280px_minmax(0,1fr)] lg:gap-x-4 lg:pr-4 xl:overflow-x-clip xl:pr-0"
     :class="
-      artifactOpen || taskOpen
+      artifactOpen || agentOpen || taskOpen
         ? 'xl:grid-cols-[280px_minmax(0,1fr)_minmax(0,1fr)]'
         : 'xl:grid-cols-[280px_minmax(0,1fr)_minmax(0,0fr)]'
     "
@@ -120,10 +130,11 @@ onBeforeUnmount(() => {
         class="col-start-1 row-start-1 lg:col-start-2"
       />
     </Transition>
-    <!-- the third sheet at xl, over the chat below it: an open artifact or a
-         background task's output -->
+    <!-- the third sheet at xl, over the chat below it: an open artifact, a
+         sub-agent, or a background task's output -->
     <Transition v-bind="SIDE_SHEET">
       <ArtifactPanel v-if="artifactOpen" key="artifact" :class="SIDE" />
+      <AgentPanel v-else-if="agentOpen" key="agent" :class="SIDE" />
       <TaskOutputPanel v-else-if="taskOpen" key="task" :class="SIDE" />
     </Transition>
     <!-- settings at lg: a dialog over the desk, which stays as it was -->

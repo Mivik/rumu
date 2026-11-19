@@ -1,18 +1,11 @@
 <script setup lang="ts">
-// The active branch's running background tasks, as a tab on the composer's
+// The shown branch's running background tasks, as a tab on the composer's
 // top edge: one task shows itself; more fold into a count that opens the
-// list. A row opens its sub-agent's transcript or the task's output beside
-// the chat (TaskOutputPanel).
+// list. A row opens its sub-agent (AgentPanel) or the task's output
+// (TaskOutputPanel) beside the chat.
 import { computed, onBeforeUnmount, onMounted, ref, watch } from 'vue'
 import { t } from '../../i18n'
-import {
-  killTask,
-  nestedRunningCount,
-  openTaskDetail,
-  runningTasks,
-  state,
-  stopAllTasks,
-} from '../../lib/store'
+import { killTask, openTaskDetail, state, stopAllTasks, taskChild, useBranchView } from '../../lib/store'
 import { taskElapsed, taskLabel } from '../../lib/tasks'
 import { toolIcon } from '../../lib/toolIcon'
 import type { TaskInfo } from '../../lib/types'
@@ -25,6 +18,10 @@ onMounted(() => {
   timer = setInterval(() => (now.value = Date.now()), 1000)
 })
 onBeforeUnmount(() => clearInterval(timer))
+
+const view = useBranchView()
+const runningTasks = view.tasks
+const nestedRunningCount = view.nestedTasks
 
 const expanded = ref(false)
 /** Rows for the branch's own tasks; its sub-agents' only add to the count. */
@@ -40,11 +37,13 @@ watch(folds, (on) => {
 })
 function confirmStopAll(): void {
   confirming.value = false
-  void stopAllTasks()
+  void stopAllTasks(view.branch.value)
 }
 
 function isOpen(tk: TaskInfo): boolean {
-  return state.taskDetail === tk.id
+  if (tk.kind.type !== 'agent') return state.taskDetail === tk.id
+  const child = taskChild(tk.id)
+  return !!child && state.agentView === child
 }
 </script>
 

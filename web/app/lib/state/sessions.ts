@@ -144,6 +144,7 @@ export async function openSession(id: SessionId, opts: { history?: OpenHistory }
     if (state.sessionId !== tree.session.id) {
       // Panels beside the chat belong to the session that opened them.
       state.artifact = null
+      state.agentView = null
       state.taskDetail = null
     }
     state.sessionId = tree.session.id
@@ -222,6 +223,7 @@ export function closeSession(): void {
   state.tasks = {}
   state.taskOutput = {}
   state.taskDetail = null
+  state.agentView = null
   state.artifact = null
 }
 
@@ -256,16 +258,18 @@ export function taskChild(id: TaskId): BranchId | null {
   return tk.kind.child_branch ?? findAgentChild(tk.call_id)?.id ?? null
 }
 
-/** Open a task: a sub-agent in the chat, another task's output beside it
- *  (toggled; it replaces an open artifact). */
+/** Toggle a task beside the chat (it replaces an open artifact or sub-agent):
+ *  a sub-agent's conversation, or another task's output. */
 export function openTaskDetail(id: TaskId): void {
   if (state.tasks[id]?.kind.type === 'agent') {
     const child = taskChild(id)
-    if (child) openAgentView(child)
+    if (child) openAgentView(state.agentView === child ? null : child)
     return
   }
   state.taskDetail = state.taskDetail === id ? null : id
-  if (state.taskDetail) state.artifact = null
+  if (!state.taskDetail) return
+  state.artifact = null
+  state.agentView = null
 }
 
 /** Start a session of the landing picks: who it runs as and the project it
@@ -370,13 +374,14 @@ function settlePicks(): void {
  * state), start a new session first and send the text as its first prompt.
  * `attachments` name already-uploaded images the text places with
  * `[Image #N]` anchors (empty text is allowed when there is one). `choice`
- * is the composer's pick, taken before any fork. Returns whether the prompt
- * was accepted.
+ * is the composer's pick, taken before any fork. `to` is the branch it goes
+ * to (the main line by default). Returns whether the prompt was accepted.
  */
 export async function sendPrompt(
   text: string,
   attachments: PromptAttachment[] = [],
   choice: Choice = composerChoice(),
+  to: BranchId | null = null,
 ): Promise<boolean> {
   if (!text.trim() && !attachments.length) return false
   if (!state.sessionId) {
@@ -384,7 +389,7 @@ export async function sendPrompt(
     // The new session's root holds who and where already.
     choice = { model: choice.model }
   }
-  const branch = state.activeBranch
+  const branch = to ?? state.activeBranch
   if (!branch) return false
   state.busy[branch] = true
   try {
@@ -429,8 +434,7 @@ export async function regenerateFrom(nodeId: NodeId): Promise<void> {
  * retries on the new one. The server refuses branches that already have
  * their reply.
  */
-export async function retryBranch(): Promise<boolean> {
-  const branch = state.activeBranch
+export async function retryBranch(branch = state.activeBranch): Promise<boolean> {
   if (!branch) return false
   state.busy[branch] = true
   try {
@@ -519,8 +523,7 @@ export async function compactBranch(focus: string): Promise<boolean> {
 
 /** `branch.stop`: stop this branch's reply; background tasks it started keep
  *  running (kill them from the composer's task tab). */
-export async function stopTurn(): Promise<void> {
-  const branch = state.activeBranch
+export async function stopTurn(branch = state.activeBranch): Promise<void> {
   if (!branch) return
   try {
     await rumu.request('branch.stop', { branch })
@@ -531,8 +534,7 @@ export async function stopTurn(): Promise<void> {
 
 /** `task.kill_all`: cancel every background task the branch (or a sub-agent
  *  below it) started, leaving its reply running — the task tab's "stop all". */
-export async function stopAllTasks(): Promise<void> {
-  const branch = state.activeBranch
+export async function stopAllTasks(branch = state.activeBranch): Promise<void> {
   if (!branch) return
   try {
     await rumu.request('task.kill_all', { branch })
@@ -543,8 +545,7 @@ export async function stopAllTasks(): Promise<void> {
 
 /** `prompt.cancel`: take back a steering prompt still queued on the active
  * branch, returning its content; null once it has been written (or failed). */
-export async function takeBackPrompt(node: NodeId): Promise<Content | null> {
-  const branch = state.activeBranch
+export async function takeBackPrompt(node: NodeId, branch = state.activeBranch): Promise<Content | null> {
   if (!branch) return null
   try {
     const res = await rumu.request<{ content: Content }>('prompt.cancel', { branch, node })

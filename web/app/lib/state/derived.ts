@@ -64,17 +64,16 @@ export interface OwedReply {
   message: string
 }
 
-/** The active branch's unanswered failure, shown as the error row at the end
+/** `branch`'s unanswered failure (`path` its nodes), shown as the error row at the end
  * of the conversation while the branch is idle. Read from the path, so it
  * survives a reload: a `turn.error` marker behind the head's last real node
  * (a user message or tool result still owed its reply). The same rule the
  * server's `branch.retry` accepts. An answered or re-prompted failure is
  * history and stays quiet; a hook-refused prompt records nothing (a toast). */
-export const owedReply = computed<OwedReply | null>(() => {
-  const branch = state.activeBranch
+export function owedOf(branch: BranchId | null, path: Node[]): OwedReply | null {
   if (!branch || state.busy[branch]) return null
   let failure: OwedReply | null = null
-  for (const n of [...pathNodes.value].reverse()) {
+  for (const n of [...path].reverse()) {
     if (n.body.type !== 'note') {
       const owes = n.body.type === 'user' || n.body.type === 'tool_result'
       return owes ? failure : null
@@ -85,29 +84,19 @@ export const owedReply = computed<OwedReply | null>(() => {
     }
   }
   return null
-})
+}
 
-/** Steering prompts waiting to be written on the active branch. */
-export const queuedPrompts = computed(() =>
-  state.activeBranch ? (state.queuedPrompts[state.activeBranch] ?? []) : [],
-)
-
-/** Tasks owned by the active branch, oldest first. */
-export const branchTasks = computed<TaskInfo[]>(() => {
-  const branch = state.activeBranch
+/** Still-running tasks owned by `branch`, oldest first. */
+export function runningOf(branch: BranchId | null): TaskInfo[] {
   if (!branch) return []
   return Object.values(state.tasks)
-    .filter((t) => t.branch === branch)
+    .filter((t) => t.branch === branch && t.status === 'running')
     .sort((a, b) => a.started_at - b.started_at)
-})
+}
 
-/** Still-running tasks of the active branch. */
-export const runningTasks = computed(() => branchTasks.value.filter((t) => t.status === 'running'))
-
-/** How many tasks the active branch's sub-agents (at any depth) are still
+/** How many tasks the sub-agents of `root` (at any depth) are still
  *  running: no row shows them, but "stop all" takes them down too. */
-export const nestedRunningCount = computed(() => {
-  const root = state.activeBranch
+export function nestedRunningOf(root: BranchId | null): number {
   if (!root) return 0
   const below = (id: BranchId): boolean => {
     for (let b = state.branches[id], guard = 0; b && guard++ < 1000;) {
@@ -118,7 +107,7 @@ export const nestedRunningCount = computed(() => {
     return false
   }
   return Object.values(state.tasks).filter((t) => t.status === 'running' && below(t.branch)).length
-})
+}
 
 export interface SiblingAlternative {
   /** Where the main line moves when it is picked: the newest end of its

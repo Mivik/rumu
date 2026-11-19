@@ -23,7 +23,7 @@
 // pointing at the rail, and fades out otherwise; the hit strip stays live.
 import { computed, onBeforeUnmount, onMounted, ref, shallowRef, watch } from 'vue'
 import { t } from '../../i18n'
-import { isBusy, timeline } from '../../lib/store'
+import { useBranchView } from '../../lib/store'
 import type { TimelineUserEntry } from '../../lib/store'
 import { preview } from '../../lib/util'
 import { contentSegments } from '../../lib/attachments'
@@ -42,6 +42,8 @@ const props = withDefaults(
   { reveal: false },
 )
 const emit = defineEmits<{ jump: [i: number] }>()
+const view = useBranchView()
+const { timeline, busy: isBusy } = view
 
 const scrollEl = computed(() => props.scrollOf())
 const innerEl = computed(() => props.columnOf())
@@ -668,6 +670,9 @@ function onKeydown(e: KeyboardEvent): void {
   }
   if (!e.altKey || (e.key !== 'ArrowUp' && e.key !== 'ArrowDown')) return
   const t = e.target
+  // With a sub-agent open beside the chat, its rail takes the keys pressed
+  // in its panel and the chat's rail the rest.
+  if ((t instanceof Element && !!t.closest('[data-agent-panel]')) !== view.sub) return
   if (t instanceof HTMLElement) {
     if (t.tagName === 'INPUT' || t.tagName === 'TEXTAREA') {
       if ((t as HTMLInputElement).value !== '') return

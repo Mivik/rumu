@@ -10,7 +10,7 @@ import { computed, ref } from 'vue'
 import { t } from '../../i18n'
 import { catOf } from '../../lib/assistantFace'
 import type { OwedReply } from '../../lib/store'
-import { retryBranch, state } from '../../lib/store'
+import { retryBranch, state, useBranchView } from '../../lib/store'
 import { vEnter } from '../../lib/motion'
 import RumuCat from '../brand/RumuCat.vue'
 
@@ -22,12 +22,13 @@ defineProps<{ owed: OwedReply }>()
 const sadPose = { squint: 1, mouthGrey: 0.5 }
 const cat = computed(() => (state.session ? catOf(state.assistants, state.session.assistant) : undefined))
 
+const view = useBranchView()
 const retrying = ref(false)
 async function onRetry(): Promise<void> {
   if (retrying.value) return
   retrying.value = true
   try {
-    await retryBranch()
+    await retryBranch(view.branch.value)
   } finally {
     retrying.value = false
   }

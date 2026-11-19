@@ -15,7 +15,6 @@ export type { CardWindow } from './state/state'
 
 export {
   activeDelta,
-  branchTasks,
   callsOf,
   callsOnPath,
   connected,
@@ -23,21 +22,17 @@ export {
   hookTraceForSession,
   isBusy,
   isUnseen,
-  nestedRunningCount,
-  owedReply,
   pathNodes,
   pathOf,
-  queuedPrompts,
-  runningTasks,
   siblingAlternatives,
   sortedSessions,
 } from './state/derived'
 export type { OwedReply, SiblingAlternative } from './state/derived'
 
-export { buildTimeline, compactionOf, timeline } from './state/timeline'
+export { buildTimeline, compactionOf } from './state/timeline'
 export { callRate, repliesOf, summarize } from './state/stats'
 export type { CallStat, ReplyStat, Summary } from './state/stats'
-export { openAgentView, useBranchView } from './state/branchView'
+export { openAgentView, provideBranchView, subView, useBranchView } from './state/branchView'
 export type { BranchView } from './state/branchView'
 export { trace } from './state/trace'
 export type { TraceKind, TraceRow } from './state/trace'

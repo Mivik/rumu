@@ -190,7 +190,8 @@
   },
   "agentView": {
     "title": "Sub-agent",
-    "back": "Back to parent"
+    "back": "Parent sub-agent",
+    "close": "Close"
   },
   "side": {
     "title": "Aside",

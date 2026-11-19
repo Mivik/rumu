@@ -190,7 +190,8 @@
   },
   "agentView": {
     "title": "子代理",
-    "back": "返回上级"
+    "back": "返回上级子代理",
+    "close": "关闭"
   },
   "side": {
     "title": "题外话",

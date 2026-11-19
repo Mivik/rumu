@@ -37,28 +37,31 @@
 // draft set aside until the edit is resent or cancelled; sending forks from
 // just before the message (store.editPrompt).
 //
-// A steering prompt still queued (shown above the sheet, ChatView) comes back
-// into the writing on its key or on ↑ at the writing's start, unsent
+// A steering prompt still queued (shown above the sheet, BranchChat) comes
+// back into the writing on its key or on ↑ at the writing's start, unsent
 // (store.takeBackPrompt).
-import { computed, nextTick, onBeforeUnmount, onMounted, reactive, ref, watch } from 'vue'
+//
+// It writes to the shown branch (`useBranchView`). Beside the chat, in a
+// sub-agent's panel, it only talks to the sub-agent: its own unsaved draft,
+// no model, edit, quotes, side questions or decisions (those stay with the
+// main composer).
+import { computed, nextTick, onBeforeUnmount, onMounted, reactive, ref, shallowRef, watch } from 'vue'
 import { t } from '../../i18n'
 import {
   compactBranch,
-  currentBranch,
   editPrompt,
-  isBusy,
   landingAssistant,
-  queuedPrompts,
   sendPrompt,
   state,
   stopTurn,
   takeBackPrompt,
+  useBranchView,
 } from '../../lib/store'
 import type { PromptAttachment } from '../../lib/store'
-import type { Content, Node as TreeNode } from '../../lib/types'
+import type { Content, Quote, Node as TreeNode } from '../../lib/types'
 import { typedText, uploadBlob, withLeadingAnchors } from '../../lib/attachments'
-import { composerFocus, editTarget, openLightbox, toast } from '../../lib/state/ui'
-import { askSide, openSide, quoteBlock, quotes } from '../../lib/state/side'
+import { composerFocus, editTarget as mainEdit, openLightbox, toast } from '../../lib/state/ui'
+import { askSide, openSide, quoteBlock, quotes as mainQuotes } from '../../lib/state/side'
 import {
   activeDraft,
   nextImageId,
@@ -75,10 +78,18 @@ import QuoteTray from './QuoteTray.vue'
 
 const MAX_IMAGES = 20
 
+const view = useBranchView()
+const { busy: isBusy, queued: queuedPrompts } = view
+/** A sub-agent's composer never edits or quotes: these stay empty there. */
+const editTarget = view.sub ? shallowRef<TreeNode | null>(null) : mainEdit
+const quotes = view.sub ? ref<Quote[]>([]) : mainQuotes
+/** A sub-agent's composer writes on a draft of its own, kept while it is open. */
+const subDraft: Draft | null = view.sub ? reactive({ text: '', images: [] }) : null
+
 /** The message being edited, held apart from the session's draft. */
 const editing = ref<Draft | null>(null)
 /** What the sheet shows: the edit, else the open session's draft (lib/state/drafts). */
-const current = computed(() => editing.value ?? activeDraft.value)
+const current = computed(() => editing.value ?? subDraft ?? activeDraft.value)
 const draft = computed({
   get: () => current.value.text,
   set: (text) => (current.value.text = text),
@@ -100,7 +111,9 @@ const canSend = computed(
       attachments.value.some((a) => a.status === 'done')),
 )
 /** The draft asks on the side (`/btw`), not in the conversation. */
-const btw = computed(() => !!state.sessionId && !editTarget.value && /^\/btw(\s|$)/.test(draft.value))
+const btw = computed(
+  () => !view.sub && !!state.sessionId && !editTarget.value && /^\/btw(\s|$)/.test(draft.value),
+)
 
 async function run(item: PendingImage): Promise<void> {
   if (!item.file) return
@@ -242,6 +255,7 @@ onMounted(() => document.addEventListener('click', onTapAnywhere, true))
 onBeforeUnmount(() => {
   document.removeEventListener('click', onTapAnywhere, true)
   endEdit()
+  for (const item of subDraft?.images ?? []) releaseImage(item)
 })
 
 // ---- editing a sent message ----
@@ -301,7 +315,7 @@ async function submit(): Promise<void> {
   const landing = !state.sessionId
   // `/compact [focus]` compacts the open session's branch instead.
   const compact = /^\/compact(?:\s+([\s\S]*))?$/.exec(text)
-  if (compact && !target && !items.length && state.sessionId) {
+  if (compact && !view.sub && !target && !items.length && state.sessionId) {
     draft.value = ''
     if (!(await compactBranch(compact[1]?.trim() ?? ''))) draft.value = text
     return
@@ -309,7 +323,7 @@ async function submit(): Promise<void> {
   // `/btw [question]` asks on the side instead, about the first quoted
   // passage if there is one; bare, it opens the side questions.
   const aside = /^\/btw(?:\s+([\s\S]*))?$/.exec(text)
-  if (aside && !target && !items.length && state.sessionId) {
+  if (aside && !view.sub && !target && !items.length && state.sessionId) {
     const question = aside[1]?.trim() ?? ''
     const quote = quotes.value.shift() ?? null
     draft.value = ''
@@ -327,7 +341,9 @@ async function submit(): Promise<void> {
   draft.value = ''
   quotes.value = []
   attachments.value = []
-  const ok = target ? await editPrompt(target, body, sent) : await sendPrompt(body, sent)
+  const ok = target
+    ? await editPrompt(target, body, sent)
+    : await sendPrompt(body, sent, view.sub ? {} : undefined, view.branch.value)
   if (ok) {
     for (const item of items) releaseImage(item)
     if (target && editTarget.value === target) editTarget.value = null
@@ -359,8 +375,8 @@ async function submit(): Promise<void> {
  *  in progress is dropped for it. */
 async function takeBack(id = queuedPrompts.value.at(-1)?.id): Promise<void> {
   if (!id) return
-  const into = activeDraft.value
-  const content = await takeBackPrompt(id)
+  const into = subDraft ?? activeDraft.value
+  const content = await takeBackPrompt(id, view.branch.value)
   if (!content) return
   if (editTarget.value) editTarget.value = null
   const images = content.attachments ?? []
@@ -434,19 +450,21 @@ function focusComposer(): void {
 
 onMounted(() => void nextTick(focusComposer))
 // Landing → chat mounts a fresh composer, but switching between open sessions
-// keeps this one mounted, so session changes focus it too.
-watch(
-  () => state.sessionId,
-  () => void nextTick(focusComposer),
-)
-// The sidebar's home and new-session keys land on the landing page without a
-// session change when it is already open, so their request focuses it here.
-watch(composerFocus, () => void nextTick(focusComposer))
+// keeps this one mounted, so session changes focus it too. The sidebar's home
+// and new-session keys land on the landing page without a session change when
+// it is already open, so their request focuses it here.
+if (!view.sub) {
+  watch(
+    () => state.sessionId,
+    () => void nextTick(focusComposer),
+  )
+  watch(composerFocus, () => void nextTick(focusComposer))
+}
 
 /** Whom the message goes to: the sub-agent shown, the session's assistant,
  * or the one picked on the landing page. */
 const recipient = computed(() => {
-  if (currentBranch.value?.kind.type === 'agent') return t('chat.agentView.title')
+  if (view.sub) return t('chat.agentView.title')
   const id = state.session?.assistant ?? landingAssistant.value
   return state.assistants.find((a) => a.id === id)?.name ?? 'rumu'
 })
@@ -482,7 +500,7 @@ const sendLabel = computed(() =>
     @dragleave="onDragleave"
     @drop="onDrop"
   >
-    <DecisionPanel />
+    <DecisionPanel v-if="!view.sub" />
     <div v-if="editTarget" class="flex items-center gap-2 pt-2 pr-2 pl-4 text-meta text-ink-2">
       <Icon name="edit" :size="13" />
       <span class="flex-1">{{ t('chat.user.edit') }}</span>
@@ -541,7 +559,7 @@ const sendLabel = computed(() =>
         </button>
       </div>
     </div>
-    <QuoteTray />
+    <QuoteTray v-if="!view.sub" />
     <textarea
       ref="textareaEl"
       v-model="draft"
@@ -569,7 +587,7 @@ const sendLabel = computed(() =>
         :title="t('chat.composer.stop')"
         :aria-label="t('chat.composer.stop')"
         @pointerdown.stop
-        @click="stopTurn()"
+        @click="stopTurn(view.branch.value)"
       >
         <Icon name="stop" :size="16" />
       </button>
@@ -583,8 +601,10 @@ const sendLabel = computed(() =>
           class="flex min-w-0 items-center gap-1.5 pt-0.5 pr-2 pb-2 pl-3"
           @click.self="textareaEl?.focus()"
         >
-          <ModelPicker />
-          <ContextMeter />
+          <template v-if="!view.sub">
+            <ModelPicker />
+            <ContextMeter />
+          </template>
           <span class="flex-1" @click.self="textareaEl?.focus()" />
           <input
             ref="fileEl"
@@ -614,7 +634,7 @@ const sendLabel = computed(() =>
               class="composer-stop"
               :title="t('chat.composer.stop')"
               :aria-label="t('chat.composer.stop')"
-              @click="stopTurn()"
+              @click="stopTurn(view.branch.value)"
             >
               <Icon name="stop" :size="16" />
             </button>

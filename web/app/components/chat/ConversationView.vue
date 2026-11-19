@@ -1,5 +1,6 @@
 <script setup lang="ts">
-// The conversation view: the grouped timeline of the active path. Entries come from the store's `timeline`
+// The conversation view: the grouped timeline of the shown branch (the main
+// line, or a sub-agent beside it — `useBranchView`). Entries come from its `timeline`
 // computed (user / context pills / assistant group); the content
 // column is capped at --col-max (main.css), centered. On phones and in
 // portrait the sheet drops its card edges and becomes the page (main.css).
@@ -28,7 +29,7 @@
 // jumping; the composer below belongs to the shell (ChatView), which lends
 // it to the rail through `composerOf`.
 import { computed, nextTick, onBeforeUnmount, ref, watch, watchEffect } from 'vue'
-import { currentBranch, ensureAgentNodes, isBusy, owedReply, state, timeline } from '../../lib/store'
+import { ensureAgentNodes, state, useBranchView } from '../../lib/store'
 import { prefersReduced, timelineLive, vEnter } from '../../lib/motion'
 import type { TimelineEntry } from '../../lib/store'
 import type { Node } from '../../lib/types'
@@ -43,6 +44,9 @@ const props = defineProps<{
   /** The shell's composer, where the rail stops. */
   composerOf: () => HTMLElement | null
 }>()
+
+const view = useBranchView()
+const { timeline, busy: isBusy, owed: owedReply } = view
 
 const scrollEl = ref<HTMLElement | null>(null)
 const innerEl = ref<HTMLElement | null>(null)
@@ -303,33 +307,27 @@ function resetView(): void {
   })
 }
 
-/** The sub-agent shown, if any ('' for the session's own line). */
-const shownAgent = computed(() => (currentBranch.value?.kind.type === 'agent' ? currentBranch.value.id : ''))
-
 // The tree leaves a sub-agent's nodes out until it is shown (and a replaced
 // tree drops them again).
 watchEffect(() => {
-  if (shownAgent.value) void ensureAgentNodes(shownAgent.value)
+  if (view.sub && view.branch.value) void ensureAgentNodes(view.branch.value)
 })
 
-// A session switch remounts the timeline column (keyed by session below): the
-// sheet fades in as one and opens on its latest message. The end scroll waits
-// for the scroller if this view is still mounting (landing → session), so a
-// session always opens at the end. Entering or leaving a sub-agent is the
-// same: another conversation.
+// A session switch remounts the timeline column (keyed by session and branch
+// below): the sheet fades in as one and opens on its latest message. The end
+// scroll waits for the scroller if this view is still mounting (landing →
+// session), so a session always opens at the end. Another sub-agent in the
+// panel is the same: another conversation. A variant switch (the inline
+// switcher) only moves the head: the path before it stays mounted and the
+// swapped tail renders in place.
 watch(
-  () => [state.sessionId, shownAgent.value],
+  () => [state.sessionId, view.branch.value],
   () => {
     resetView()
     requestEndScroll()
   },
   { flush: 'pre', immediate: true },
 )
-
-// A variant switch (the inline switcher) keeps the sheet and your place in
-// it: the path before the fork is not remounted, and the swapped tail renders
-// as history — an instant swap, no fade, no jump.
-watch(() => state.activeBranch, resetView, { flush: 'pre' })
 
 /** Node id for data-node-id (entry keys). */
 function dataId(e: TimelineEntry): string {
@@ -383,7 +381,7 @@ function jumpTo(i: number): void {
   <div class="flex min-h-0 flex-1 flex-col">
     <div ref="scrollEl" class="tl-scroll scroll-fade flex-1 overflow-y-auto pt-4 pb-2" @scroll="onScroll">
       <div
-        :key="`${state.sessionId ?? ''}:${shownAgent}`"
+        :key="`${state.sessionId ?? ''}:${view.branch.value ?? ''}`"
         ref="innerEl"
         class="tl-col view-in relative mx-auto flex max-w-[var(--col-max)] flex-col gap-5"
       >
