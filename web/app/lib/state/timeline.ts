@@ -174,8 +174,24 @@ export function compactionOf(n: Node): Compaction | null {
 
 type CallsOnPath = typeof callsOnPath.value
 
-/** The timeline of the active branch. */
-export const timeline = computed(() => buildTimeline(pathNodes.value, callsOnPath.value, state.activeBranch))
+/** The nodes the chat shows: the active branch's path, or a sub-agent's own
+ *  part of it from its goal prompt on, the prompt showing the task as it was
+ *  given (the kernel's sub-agent framing is the model's, not the reader's;
+ *  what was seeded before it is the parent's). */
+const shownNodes = computed<Node[]>(() => {
+  const b = state.activeBranch ? state.branches[state.activeBranch] : undefined
+  if (b?.kind.type !== 'agent') return pathNodes.value
+  const task = b.kind.task
+  const own = pathNodes.value.slice(pathNodes.value.findIndex((n) => n.id === b.forked_from) + 1)
+  const at = own.findIndex((n) => n.body.type === 'user')
+  const prompt = own[at]
+  if (!prompt || prompt.body.type !== 'user') return own
+  const shown: Node = { ...prompt, body: { ...prompt.body, content: { ...prompt.body.content, text: task } } }
+  return [shown, ...own.slice(at + 1)]
+})
+
+/** The timeline of the branch the chat shows. */
+export const timeline = computed(() => buildTimeline(shownNodes.value, callsOnPath.value, state.activeBranch))
 
 /** Group `nodes` (a branch's path, or the part of it to show) into timeline
  *  entries, with `branch`'s live stream attached. */

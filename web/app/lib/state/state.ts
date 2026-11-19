@@ -171,6 +171,8 @@ const initial = {
   agentNodes: {} as Record<BranchId, 'loading' | 'loaded'>,
   /** Token totals over every model call of the open session. */
   usage: { calls: 0, input: 0, cached: 0, output: 0 } as SessionUsage,
+  /** The branch the chat shows: the session's active branch, or a sub-agent
+   *  opened from it (`openAgentView`; the server's stays put). */
   activeBranch: null as BranchId | null,
   pathState: null as PathState | null,
 
@@ -211,8 +213,6 @@ const initial = {
   /** The open artifact: the `show` result node it was recorded by, or a
    *  file a link opened that no `show` on the path recorded. */
   artifact: null as NodeId | Artifact | null,
-  /** The sub-agent branch open beside the chat. */
-  agentView: null as BranchId | null,
 }
 
 // Cast off Vue's `UnwrapNestedRefs`: the wire payloads embed a recursive JSON

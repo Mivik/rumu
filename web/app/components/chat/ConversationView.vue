@@ -27,8 +27,8 @@
 // owns its measurement and drawing. This file owns the scroll state and
 // jumping; the composer below belongs to the shell (ChatView), which lends
 // it to the rail through `composerOf`.
-import { computed, nextTick, onBeforeUnmount, ref, watch } from 'vue'
-import { isBusy, owedReply, state, timeline } from '../../lib/store'
+import { computed, nextTick, onBeforeUnmount, ref, watch, watchEffect } from 'vue'
+import { currentBranch, ensureAgentNodes, isBusy, owedReply, state, timeline } from '../../lib/store'
 import { prefersReduced, timelineLive, vEnter } from '../../lib/motion'
 import type { TimelineEntry } from '../../lib/store'
 import type { Node } from '../../lib/types'
@@ -303,12 +303,22 @@ function resetView(): void {
   })
 }
 
+/** The sub-agent shown, if any ('' for the session's own line). */
+const shownAgent = computed(() => (currentBranch.value?.kind.type === 'agent' ? currentBranch.value.id : ''))
+
+// The tree leaves a sub-agent's nodes out until it is shown (and a replaced
+// tree drops them again).
+watchEffect(() => {
+  if (shownAgent.value) void ensureAgentNodes(shownAgent.value)
+})
+
 // A session switch remounts the timeline column (keyed by session below): the
 // sheet fades in as one and opens on its latest message. The end scroll waits
 // for the scroller if this view is still mounting (landing → session), so a
-// session always opens at the end.
+// session always opens at the end. Entering or leaving a sub-agent is the
+// same: another conversation.
 watch(
-  () => state.sessionId,
+  () => [state.sessionId, shownAgent.value],
   () => {
     resetView()
     requestEndScroll()
@@ -373,7 +383,7 @@ function jumpTo(i: number): void {
   <div class="flex min-h-0 flex-1 flex-col">
     <div ref="scrollEl" class="tl-scroll scroll-fade flex-1 overflow-y-auto pt-4 pb-2" @scroll="onScroll">
       <div
-        :key="state.sessionId ?? ''"
+        :key="`${state.sessionId ?? ''}:${shownAgent}`"
         ref="innerEl"
         class="tl-col view-in relative mx-auto flex max-w-[var(--col-max)] flex-col gap-5"
       >

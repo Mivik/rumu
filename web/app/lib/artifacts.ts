@@ -58,10 +58,7 @@ export const openArtifact = computed<Pick<ArtifactVersion, 'artifact' | 'version
 
 export function showArtifact(open: string | Artifact | null): void {
   state.artifact = open
-  if (open) {
-    state.agentView = null
-    state.taskDetail = null
-  }
+  if (open) state.taskDetail = null
 }
 
 /** Kinds whose blob is text the panel fetches and renders itself. */

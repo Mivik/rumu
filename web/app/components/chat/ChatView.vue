@@ -15,7 +15,7 @@
 import { computed, ref } from 'vue'
 import { t } from '../../i18n'
 import { assistantCat } from '../../lib/assistantFace'
-import { connected, isBusy, queuedPrompts, state } from '../../lib/store'
+import { connected, currentBranch, isBusy, openAgentView, queuedPrompts, state } from '../../lib/store'
 import { layout, toggleSidebar } from '../../lib/layout'
 import { openPage } from '../../lib/router'
 import CardDrawer from './CardDrawer.vue'
@@ -52,6 +52,15 @@ const scope = computed(() => {
     projectName: project?.name ?? s.project ?? null,
     projectInfo: project ?? null,
   }
+})
+
+/** The sub-agent the chat shows, and where its back button goes: the
+ *  sub-agent above it, or the session's active branch. */
+const agent = computed(() => {
+  const k = currentBranch.value?.kind
+  if (k?.type !== 'agent') return null
+  const up = state.branches[k.parent_branch]
+  return { task: k.task, parent: up?.kind.type === 'agent' ? up.id : null }
 })
 
 /** The view reads the composer through a getter: a template ref passed
@@ -104,7 +113,21 @@ function composerRoot(): HTMLElement | null {
           leave-active-class="transition duration-150"
           leave-to-class="opacity-0"
         >
+          <span v-if="agent" key="agent" class="flex min-w-0 items-center gap-1.5">
+            <button
+              class="icon-btn size-7 flex-none"
+              :title="t('chat.agentView.back')"
+              :aria-label="t('chat.agentView.back')"
+              @click="openAgentView(agent.parent)"
+            >
+              <Icon name="back" :size="14" />
+            </button>
+            <Icon name="agent" :size="16" class="flex-none text-agent" />
+            <span class="flex-none text-title font-bold">{{ t('chat.agentView.title') }}</span>
+            <span class="min-w-0 truncate text-meta text-ink-3" :title="agent.task">{{ agent.task }}</span>
+          </span>
           <span
+            v-else
             :key="state.sessionId ?? ''"
             class="min-w-0 truncate text-title font-bold"
             :title="state.session?.title"

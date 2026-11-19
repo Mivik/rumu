@@ -145,7 +145,7 @@ function liveTaskOutput(id: string | null): string {
         </span>
         <span class="ml-auto flex flex-none items-center gap-2">
           <Chip
-            v-if="v.agentChild && !v.taskId && state.agentView !== v.agentChild.id"
+            v-if="v.agentChild && !v.taskId"
             icon="agent"
             tone="agent"
             clickable

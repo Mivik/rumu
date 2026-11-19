@@ -144,7 +144,6 @@ export async function openSession(id: SessionId, opts: { history?: OpenHistory }
     if (state.sessionId !== tree.session.id) {
       // Panels beside the chat belong to the session that opened them.
       state.artifact = null
-      state.agentView = null
       state.taskDetail = null
     }
     state.sessionId = tree.session.id
@@ -223,7 +222,6 @@ export function closeSession(): void {
   state.tasks = {}
   state.taskOutput = {}
   state.taskDetail = null
-  state.agentView = null
   state.artifact = null
 }
 
@@ -258,18 +256,16 @@ export function taskChild(id: TaskId): BranchId | null {
   return tk.kind.child_branch ?? findAgentChild(tk.call_id)?.id ?? null
 }
 
-/** Toggle a task beside the chat (it replaces an open artifact or sub-agent):
- *  a sub-agent's transcript, or another task's output. */
+/** Open a task: a sub-agent in the chat, another task's output beside it
+ *  (toggled; it replaces an open artifact). */
 export function openTaskDetail(id: TaskId): void {
   if (state.tasks[id]?.kind.type === 'agent') {
     const child = taskChild(id)
-    if (child) openAgentView(state.agentView === child ? null : child)
+    if (child) openAgentView(child)
     return
   }
   state.taskDetail = state.taskDetail === id ? null : id
-  if (!state.taskDetail) return
-  state.artifact = null
-  state.agentView = null
+  if (state.taskDetail) state.artifact = null
 }
 
 /** Start a session of the landing picks: who it runs as and the project it

@@ -53,7 +53,6 @@ const rows = computed(() => {
       call,
       args,
       child,
-      childOpen: !!child && state.agentView === child.id,
       open: opened.has(call.call_id),
       description: typeof args?.description === 'string' ? args.description.trim() : '',
       target: argSummary(call),
@@ -133,7 +132,7 @@ function tail(text: string): string {
         </template>
         <span class="ml-auto flex flex-none items-center gap-2">
           <Chip
-            v-if="r.child && !r.childOpen"
+            v-if="r.child"
             icon="agent"
             tone="agent"
             clickable

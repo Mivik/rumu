@@ -131,8 +131,7 @@ function onNodeAppended(p: NodeAppendedPush): void {
     node.body.type === 'tool_result' &&
     !node.body.is_error &&
     artifactOf(node.body.content) &&
-    (state.artifact ||
-      (!state.agentView && !state.taskDetail && window.matchMedia('(min-width: 80rem)').matches))
+    (state.artifact || (!state.taskDetail && window.matchMedia('(min-width: 80rem)').matches))
   ) {
     state.artifact = node.id
     state.taskDetail = null
@@ -208,9 +207,14 @@ function onSessionUpdated(p: SessionUpdatedPush): void {
   // The model can create a project; learn it when a session names one.
   if (s.project && !state.projects.some((x) => x.id === s.project)) void refreshProjects().catch(() => {})
   if (state.sessionId === s.id) {
+    // Follow the server's active branch; a sub-agent shown here (one it
+    // does not know about) only gives way when that branch moves.
+    const moved = s.active_branch !== state.session?.active_branch
+    const onAgent = state.branches[state.activeBranch ?? '']?.kind.type === 'agent'
     state.session = s
     markSeen()
     if (
+      (moved || !onAgent) &&
       s.active_branch !== state.activeBranch &&
       state.branches[s.active_branch] &&
       !state.busy[state.activeBranch ?? '']

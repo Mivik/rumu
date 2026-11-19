@@ -19,6 +19,7 @@ export {
   callsOf,
   callsOnPath,
   connected,
+  currentBranch,
   hookTraceForSession,
   isBusy,
   isUnseen,
@@ -36,7 +37,7 @@ export type { OwedReply, SiblingAlternative } from './state/derived'
 export { buildTimeline, compactionOf, timeline } from './state/timeline'
 export { callRate, repliesOf, summarize } from './state/stats'
 export type { CallStat, ReplyStat, Summary } from './state/stats'
-export { openAgentView, provideBranchView, useBranchView } from './state/branchView'
+export { openAgentView, useBranchView } from './state/branchView'
 export type { BranchView } from './state/branchView'
 export { trace } from './state/trace'
 export type { TraceKind, TraceRow } from './state/trace'

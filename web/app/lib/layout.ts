@@ -72,7 +72,6 @@ export function closePanels(): void {
   if (layout.sidebarOpen) layout.sidebarOpen = false
   else {
     state.artifact = null
-    state.agentView = null
     state.taskDetail = null
   }
 }

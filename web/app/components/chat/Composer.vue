@@ -44,6 +44,7 @@ import { computed, nextTick, onBeforeUnmount, onMounted, reactive, ref, watch } 
 import { t } from '../../i18n'
 import {
   compactBranch,
+  currentBranch,
   editPrompt,
   isBusy,
   landingAssistant,
@@ -442,9 +443,10 @@ watch(
 // session change when it is already open, so their request focuses it here.
 watch(composerFocus, () => void nextTick(focusComposer))
 
-/** Whom the message goes to: the session's assistant, or the one picked on
- * the landing page. */
+/** Whom the message goes to: the sub-agent shown, the session's assistant,
+ * or the one picked on the landing page. */
 const recipient = computed(() => {
+  if (currentBranch.value?.kind.type === 'agent') return t('chat.agentView.title')
   const id = state.session?.assistant ?? landingAssistant.value
   return state.assistants.find((a) => a.id === id)?.name ?? 'rumu'
 })

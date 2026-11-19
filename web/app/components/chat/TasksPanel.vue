@@ -12,7 +12,6 @@ import {
   runningTasks,
   state,
   stopAllTasks,
-  taskChild,
 } from '../../lib/store'
 import { taskElapsed, taskLabel } from '../../lib/tasks'
 import { toolIcon } from '../../lib/toolIcon'
@@ -45,9 +44,7 @@ function confirmStopAll(): void {
 }
 
 function isOpen(tk: TaskInfo): boolean {
-  if (tk.kind.type !== 'agent') return state.taskDetail === tk.id
-  const child = taskChild(tk.id)
-  return !!child && state.agentView === child
+  return state.taskDetail === tk.id
 }
 </script>
 

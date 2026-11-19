@@ -1,13 +1,14 @@
-// Which branch a timeline renders. The chat shows the active branch; the
-// sub-agent panel shows a child branch beside it without switching to it.
-// The timeline's components read their branch through `useBranchView`, so
-// one set of components serves both.
+// Which branch the chat shows: the session's active branch, or a sub-agent
+// opened from it. Opening one is client-side only — the server's active
+// branch (`state.session.active_branch`) stays put, and the chat (timeline,
+// composer, stop, tasks) simply works on the sub-agent's branch, as on any.
 
-import { computed, inject, provide, type ComputedRef, type InjectionKey } from 'vue'
+import { computed, type ComputedRef } from 'vue'
 import type { BranchId, Node } from '../types'
 import type { DeltaBuffer } from './state'
 import { state } from './state'
-import { activeDelta, isBusy, pathNodes } from './derived'
+import { activeDelta, currentBranch, isBusy, pathNodes } from './derived'
+import { loadPath } from './tree'
 
 export interface BranchView {
   branch: ComputedRef<BranchId | null>
@@ -15,33 +16,31 @@ export interface BranchView {
   nodes: ComputedRef<Node[]>
   delta: ComputedRef<DeltaBuffer | null>
   busy: ComputedRef<boolean>
-  /** A sub-agent's transcript: read-only, so no edit, regenerate or fork. */
-  sub: boolean
+  /** A sub-agent's branch: it belongs to the call that started it, so its
+   *  turns offer no edit, regenerate or fork. */
+  readonly sub: boolean
 }
-
-const KEY: InjectionKey<BranchView> = Symbol('branch-view')
 
 const mainView: BranchView = {
   branch: computed(() => state.activeBranch),
   nodes: pathNodes,
   delta: activeDelta,
   busy: isBusy,
-  sub: false,
-}
-
-export function provideBranchView(view: BranchView): void {
-  provide(KEY, view)
+  get sub() {
+    return currentBranch.value?.kind.type === 'agent'
+  },
 }
 
 export function useBranchView(): BranchView {
-  return inject(KEY, mainView)
+  return mainView
 }
 
-/** Open the sub-agent branch `id` beside the chat (it replaces an open
- *  artifact or task output). */
+/** Show the sub-agent branch `id` in the chat; `null` goes back to the
+ *  session's active branch. */
 export function openAgentView(id: BranchId | null): void {
-  state.agentView = id
-  if (!id) return
-  state.artifact = null
-  state.taskDetail = null
+  const target = id ?? state.session?.active_branch ?? null
+  if (!target || target === state.activeBranch) return
+  state.activeBranch = target
+  state.pathState = null
+  void loadPath(target)
 }

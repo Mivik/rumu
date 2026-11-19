@@ -1,7 +1,7 @@
 <script setup lang="ts">
 // A sub-agent the turn started, outside the folded activity run: its task
 // and how it is doing — a finished call's row (`view`), or a call still
-// waiting on its sub-agent (`call`). Click → its transcript beside the chat.
+// waiting on its sub-agent (`call`). Click → the chat shows the sub-agent.
 import { computed } from 'vue'
 import { t } from '../../i18n'
 import { findAgentChild, openAgentView, state } from '../../lib/store'
@@ -20,7 +20,6 @@ const task = computed(() => {
 const child = computed(() =>
   props.view ? props.view.agentChild : props.call ? findAgentChild(props.call.call_id) : null,
 )
-const open = computed(() => !!child.value && state.agentView === child.value.id)
 
 /** Running while its call, its task or its branch is; otherwise the task's outcome. */
 const running = computed(
@@ -47,10 +46,9 @@ const statusText = computed(() => {
     type="button"
     :data-path-node="view?.row.result.id"
     class="agent-card"
-    :class="{ 'is-open': open }"
     :disabled="!child"
     :title="task"
-    @click="child && openAgentView(open ? null : child.id)"
+    @click="child && openAgentView(child.id)"
   >
     <span class="agent-card-icon">
       <Icon name="agent" :size="16" />
@@ -89,10 +87,6 @@ const statusText = computed(() => {
 }
 .agent-card:not(:disabled):hover {
   border-color: color-mix(in srgb, var(--agent) 45%, var(--line));
-}
-.agent-card.is-open {
-  border-color: var(--agent);
-  box-shadow: 0 0 0 1px var(--agent);
 }
 .agent-card-icon {
   display: flex;
