@@ -18,9 +18,14 @@ export function taskStatusWord(status: TaskStatus): string {
   return t(`tools.status.${key}`)
 }
 
-/** `started task t-1a2b3c4d (bash: rm -rf dist)` → the task id. */
+/** The task id of a background call's result: `started task t-1a2b3c4d (…)`,
+ * or `still running after 60s, so it moved to the background as task t-1a2b3c4d (…)`. */
 export function taskIdOf(output: string): string | null {
-  return /^started task (t-[0-9a-f]{8})/.exec(output)?.[1] ?? null
+  return (
+    /^(?:started task|still running after [\d.]+s, so it moved to the background as task) (t-[0-9a-f]{8})/.exec(
+      output,
+    )?.[1] ?? null
+  )
 }
 
 /** Compact elapsed time for a running/finished task: `4s`, `1m 05s`. */

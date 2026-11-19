@@ -4736,6 +4736,86 @@ async fn background_tool_returns_task_id_and_completion_wakes_idle_branch() {
     assert_eq!(tasks[0].result.as_ref().unwrap().text, "all done");
 }
 
+/// A model's foreground call of a background-capable tool still running at
+/// its `timeout` moves to the background: the result names the task and the
+/// output so far, and the same work finishes there. One that ends in time is
+/// an ordinary result; a script's call is stopped instead.
+#[tokio::test]
+async fn foreground_call_moves_to_the_background_at_its_timeout() {
+    let plugin = Arc::new(background_plugin(
+        "bg",
+        &["bgwork"],
+        vec![],
+        noop_hooks(),
+        noop_tools(),
+    ));
+    let host = Arc::new(script_host(&[], vec![], noop_hooks(), noop_tools()));
+    let (kernel, _llm, session, branch) = setup(
+        vec![plugin, host],
+        vec![
+            LlmResponse::calls(vec![
+                ToolCall::new("quick", "bgwork", json!({ "ms": 10, "timeout": 5 })),
+                ToolCall::new(
+                    "slow",
+                    "bgwork",
+                    json!({ "ms": 400, "out": "all done", "timeout": 0.1 }),
+                ),
+                ToolCall::new(
+                    "script",
+                    "script",
+                    json!({ "calls": [
+                        { "name": "bgwork", "args": { "ms": 400, "timeout": 0.1 } }
+                    ] }),
+                ),
+            ]),
+            LlmResponse::text("moved"),
+            LlmResponse::text("woken up"),
+        ],
+    )
+    .await;
+    kernel.set_wake_debounce(Duration::from_millis(10));
+    let mut rx = kernel.tap_pushes();
+
+    let (_, nodes, _) = turn(&kernel, &branch, &mut rx, "go").await;
+    assert_eq!(
+        result_text(&nodes, "quick"),
+        ("finished work".into(), false)
+    );
+    let tasks = kernel.tasks(&session).unwrap();
+    assert_eq!(tasks.len(), 1, "{tasks:?}");
+    let id = tasks[0].id.clone();
+    assert_eq!(tasks[0].call_id, "slow");
+    let (text, err) = result_text(&nodes, "slow");
+    assert!(!err, "{text}");
+    assert!(
+        text.contains(&format!(
+            "still running after 0.1s, so it moved to the background as task {id}"
+        )),
+        "{text}"
+    );
+    assert!(
+        text.contains("output so far:\nline one\nline two\n"),
+        "{text}"
+    );
+    let (text, _) = result_text(&nodes, "script");
+    assert!(text.contains("timed out after 0.1s"), "{text}");
+
+    // The work goes on as the task: its buffer has the output from before
+    // the move, and its completion note the result.
+    let note = wait_push(
+        &mut rx,
+        |v| pushed_note_tag(v) == Some("kernel.task"),
+        "task completion note",
+    )
+    .await;
+    let note_text = pushed_note_text(&note).unwrap();
+    assert!(note_text.contains("finished: ok\nall done"), "{note_text}");
+    let (_, output) = kernel.task(&id).unwrap().unwrap();
+    assert!(output.starts_with("line one\nline two\n"), "{output}");
+    let (done, _) = collect_turn(&mut rx, &branch.0).await;
+    assert_eq!(done["method"], "turn.done");
+}
+
 /// A completion while the owner is busy is written at the next safe point and
 /// seen by that turn's next LLM call (no extra wake turn).
 #[tokio::test]

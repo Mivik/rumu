@@ -2,8 +2,6 @@
 //! implementations over the workspace backends. Paths in the `@rumu`
 //! virtual workspace are routed to their nodes by [`super::vfs`].
 
-use std::time::Duration;
-
 use rumu_cards::Cards;
 use rumu_core::{
     Artifact, ArtifactKind, Effect, INVOKE_OUTPUT_LIMIT, Manifest, PathState, Progress,
@@ -111,8 +109,6 @@ impl From<BashOutcome> for ToolOutput {
     }
 }
 
-const BASH_TIMEOUT_DEFAULT: u64 = 60;
-const BASH_TIMEOUT_MAX: u64 = 600;
 pub(super) const LIST_LIMIT: usize = 100;
 /// The largest text file `show` snapshots (it renders in the page).
 const ARTIFACT_MAX_BYTES: usize = 5 * 1024 * 1024;
@@ -212,8 +208,9 @@ struct BashArgs {
     description: Option<String>,
     /// workspace name; default: the branch default
     workspace: Option<String>,
-    /// seconds, default 60, max 600; with `watch`: its lifetime, default
-    /// 1800, max 86400
+    /// seconds, default 60, max 600: a call still running then moves to the
+    /// background (in `code`: is stopped); with `watch`: its lifetime,
+    /// default 1800, max 86400
     timeout: Option<u64>,
     /// return only the last N lines of output; the user still sees all of it
     /// live, and the exit code stays the command's (unlike `| tail`)
@@ -324,8 +321,9 @@ path holds, then its `files:` and `actions:`."
                 name: "bash".into(),
                 description: "Run a command with `bash -c` in a workspace's root \
 directory (`workspace` argument; default = the default workspace). Returns combined \
-stdout+stderr (truncated to ~20k chars) and the exit code. Default timeout 60s (max \
-600s). Disabled on read-only workspaces and on the `@rumu` workspace. Give every call a \
+stdout+stderr (truncated to ~20k chars) and the exit code. A call still running after \
+`timeout` (default 60s, max 600s) moves to the background. Disabled on read-only \
+workspaces and on the `@rumu` workspace. Give every call a \
 `description` (5-10 words, active voice): the transcript shows it as the call's summary. \
 `watch` (with `background: true`) delivers new output lines (with `every`: lines changed \
 between reruns) as notes that wake you, until the command exits, `until` matches, `task.kill` \
@@ -994,16 +992,13 @@ impl WorkspacePlugin {
             Some(w) => Some(self.watch_for(cx, w, args.timeout, args.description.as_deref())?),
             None => None,
         };
-        let timeout = args
-            .timeout
-            .unwrap_or(BASH_TIMEOUT_DEFAULT)
-            .clamp(1, BASH_TIMEOUT_MAX);
         let effects = self.maybe_inject_agents(cx, &ws).await;
         let backend = self.backend_for(&ws);
         // Stream every chunk to the UI (tool.progress) / the task buffer
-        // (task.progress), and to the watch. Background bash without `watch`
-        // has no timeout of its own: it ends when the command exits,
-        // kills it (`task.kill`), or its owner aborts.
+        // (task.progress), and to the watch. The kernel applies `timeout` to a
+        // foreground call (moving it to the background); a background one
+        // without `watch` ends when the command exits, `task.kill` kills it,
+        // or its owner aborts.
         let mut on_chunk = |chunk: &str| {
             cx.progress(Progress::Append(chunk.to_owned()));
             if let Some(watch) = &watch {
@@ -1025,24 +1020,8 @@ impl WorkspacePlugin {
                 Ok(exec) => exec,
                 Err(ended) => return Ok(ToolOutput::ok(ended).with_effects(effects)),
             }
-        } else if cx.call().is_some_and(|c| c.background) {
-            backend.exec(&args.command, &mut on_chunk).await
         } else {
-            match tokio::time::timeout(
-                Duration::from_secs(timeout),
-                backend.exec(&args.command, &mut on_chunk),
-            )
-            .await
-            {
-                Ok(r) => r,
-                Err(_) => {
-                    return Err(ToolError::model(format!(
-                        "`{}` timed out after {timeout}s",
-                        args.command
-                    ))
-                    .with_effects(effects));
-                }
-            }
+            backend.exec(&args.command, &mut on_chunk).await
         };
         match exec {
             Ok(out) => Ok(BashOutcome {

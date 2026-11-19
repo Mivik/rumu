@@ -10,7 +10,9 @@
 //! the table back: ended tasks as they ended, and the ones still running as
 //! [`TaskStatus::Lost`], with the completion note they never got to post.
 
-use std::sync::Arc;
+use std::future::Future;
+use std::pin::Pin;
+use std::sync::{Arc, Mutex};
 use std::time::{Duration, Instant};
 
 use crate::{Error, Kernel, PostRequest, Result, TASK_OUTPUT_LIMIT, turn::AgentRun};
@@ -47,6 +49,91 @@ pub(crate) struct TaskEntry {
     /// Cancelled by [`crate::Kernel::abort`] or with its stopped sub-agent:
     /// the completion note is written with `wake: false`.
     pub quiet: bool,
+}
+
+/// A plugin tool's work, owned so it can outlive the call that started it.
+pub(crate) type ToolWork = Pin<Box<dyn Future<Output = rumu_core::Result<ToolOutput>> + Send>>;
+
+/// How long a foreground call of a background-capable tool runs before it
+/// moves to the background, unless its `timeout` argument says otherwise.
+const FOREGROUND_TIMEOUT: Duration = Duration::from_secs(60);
+/// The longest `timeout` a foreground call may ask for, in seconds.
+const FOREGROUND_TIMEOUT_MAX: f64 = 600.0;
+/// How much of a moved call's output so far its result shows.
+const MOVED_OUTPUT_CHARS: usize = 10_000;
+
+/// The foreground limit of a background-capable tool's call: its `timeout`
+/// argument in seconds (capped), else [`FOREGROUND_TIMEOUT`] when `default`.
+pub(crate) fn foreground_limit(args: &Value, default: bool) -> Option<Duration> {
+    match args.get("timeout").and_then(Value::as_f64) {
+        Some(secs) if secs > 0.0 => Some(Duration::from_secs_f64(secs.min(FOREGROUND_TIMEOUT_MAX))),
+        _ => default.then_some(FOREGROUND_TIMEOUT),
+    }
+}
+
+/// A foreground call [`Kernel::run_foreground`] runs: what the task it may
+/// become is made of.
+pub(crate) struct Foreground {
+    pub session: SessionId,
+    pub branch: BranchId,
+    pub call_id: String,
+    pub name: String,
+    pub summary: String,
+    pub source: String,
+    /// The call's progress sink, for a call that may move (a model's);
+    /// `None` stops it at its limit instead.
+    pub handoff: Option<Arc<Handoff>>,
+}
+
+/// The progress sink of a call that may move to the background: forwards to
+/// the call's own sink and keeps the text, until [`Handoff::switch`] sends
+/// the rest to its task.
+pub(crate) struct Handoff(Mutex<HandoffState>);
+
+enum HandoffState {
+    Call { sink: ProgressSink, output: String },
+    Task(TaskId),
+}
+
+impl Handoff {
+    pub(crate) fn new(sink: ProgressSink) -> Arc<Self> {
+        Arc::new(Self(Mutex::new(HandoffState::Call {
+            sink,
+            output: String::new(),
+        })))
+    }
+
+    /// The sink to give the call's [`Cx`].
+    pub(crate) fn sink(self: &Arc<Self>, kernel: &Arc<Kernel>) -> ProgressSink {
+        let handoff = self.clone();
+        let kernel = kernel.clone();
+        Arc::new(move |update| match &mut *handoff.0.lock().unwrap() {
+            HandoffState::Call { sink, output } => {
+                if let Progress::Append(text) = &update {
+                    output.push_str(text);
+                    keep_tail(output, TASK_OUTPUT_LIMIT);
+                }
+                sink(update);
+            }
+            HandoffState::Task(id) => kernel.task_progress(id, update),
+        })
+    }
+
+    /// Send the rest of the progress to task `id`, seeding its buffer with
+    /// the output so far, which is returned. Holding the lock throughout
+    /// keeps a chunk arriving meanwhile behind it.
+    fn switch(&self, kernel: &Kernel, id: &TaskId) -> String {
+        let mut state = self.0.lock().unwrap();
+        let so_far = match &mut *state {
+            HandoffState::Call { output, .. } => std::mem::take(output),
+            HandoffState::Task(_) => String::new(),
+        };
+        if !so_far.is_empty() {
+            kernel.task_progress(id, Progress::Append(so_far.clone()));
+        }
+        *state = HandoffState::Task(id.clone());
+        so_far
+    }
 }
 
 /// What a task's work returned.
@@ -183,21 +270,111 @@ impl Kernel {
             Arc::new(KernelRuntime(self.clone())),
         );
 
-        let kernel = self.clone();
-        let task_id = id.clone();
         let name = name.to_owned();
+        self.spawn_tool_work(
+            id.clone(),
+            token,
+            Box::pin(async move { plugin.call_tool(&name, args, &cx).await }),
+        );
+        Ok(ToolOutput::ok(started(&id, &label)))
+    }
+
+    /// Run a started tool's work as task `id` until it ends or is cancelled.
+    fn spawn_tool_work(self: &Arc<Self>, id: TaskId, token: CancellationToken, work: ToolWork) {
+        let kernel = self.clone();
         tokio::spawn(async move {
             let outcome = tokio::select! {
                 biased;
                 _ = token.cancelled() => TaskOutcome::Cancelled(String::new()),
-                r = plugin.call_tool(&name, args, &cx) => {
-                    TaskOutcome::Result(r.map_err(Error::from))
+                r = work => TaskOutcome::Result(r.map_err(Error::from)),
+            };
+            kernel.finish_task(&id, outcome).await;
+        });
+    }
+
+    /// Run a foreground call of a background-capable tool for at most
+    /// `limit`. A model's call still running then moves to the background as
+    /// a task, the same work continuing there; a plugin's call (`code`) is
+    /// stopped. While the call waits on the user (`Cx::decide`) the clock
+    /// stops for good: the decision has a timeout of its own. `None` when the
+    /// turn is aborted first.
+    pub(crate) async fn run_foreground(
+        self: &Arc<Self>,
+        mut work: ToolWork,
+        mut limit: Option<Duration>,
+        call: Foreground,
+        token: &CancellationToken,
+    ) -> Option<ToolOutput> {
+        let failed =
+            |e: rumu_core::Error| ToolOutput::err(format!("tool `{}` failed: {e}", call.name));
+        let after = loop {
+            let deadline = async {
+                match limit {
+                    Some(limit) => tokio::time::sleep(limit).await,
+                    None => std::future::pending().await,
                 }
             };
-            kernel.finish_task(&task_id, outcome).await;
-        });
+            tokio::select! {
+                // Abort wins even if the tool future is also ready (an
+                // internal call cancelled by the same token), and a call that
+                // ends right at its deadline is done, not moved.
+                biased;
+                _ = token.cancelled() => return None,
+                r = &mut work => return Some(r.unwrap_or_else(failed)),
+                () = deadline => {}
+            }
+            if !self.awaits_decision(&call.branch, &call.call_id) {
+                break limit.unwrap_or_default();
+            }
+            limit = None;
+        };
+        let secs = after.as_secs_f64();
+        let kind = TaskKind::Tool {
+            name: call.name.clone(),
+            args_summary: call.summary.clone(),
+        };
+        let label = kind.label("");
+        let Some(handoff) = call.handoff else {
+            return Some(ToolOutput::err(format!(
+                "`{label}` timed out after {secs}s"
+            )));
+        };
+        let created = self.create_task(
+            &call.session,
+            &call.branch,
+            &call.call_id,
+            kind,
+            call.summary,
+            call.source,
+        );
+        let (id, task_token) = match created {
+            Ok(v) => v,
+            Err(e) => {
+                return Some(ToolOutput::err(format!(
+                    "`{label}` timed out after {secs}s and could not move to the background: {e}"
+                )));
+            }
+        };
+        let so_far = handoff.switch(self, &id);
+        self.spawn_tool_work(id.clone(), task_token, work);
+        let mut text = format!(
+            "still running after {secs}s, so it moved to the background as task {id} ({label}) — {}",
+            follow(&id)
+        );
+        if !so_far.is_empty() {
+            text.push_str("\noutput so far:\n");
+            text.push_str(&last_chars(&so_far, MOVED_OUTPUT_CHARS));
+        }
+        Some(ToolOutput::ok(text))
+    }
 
-        Ok(ToolOutput::ok(started(&id, &label)))
+    /// Is a decision of this call waiting on the user?
+    fn awaits_decision(&self, branch: &BranchId, call_id: &str) -> bool {
+        let inner = self.inner.lock().unwrap();
+        inner
+            .decisions
+            .values()
+            .any(|d| d.params["branch"] == json!(branch) && d.params["call_id"] == call_id)
     }
 
     /// Start a sub-agent as a background task. The agent permit is acquired
@@ -710,24 +887,47 @@ impl Kernel {
 
 /// The result of a call started as a task: its id, and how to follow it.
 fn started(id: &TaskId, label: &str) -> String {
+    format!("started task {id} ({label}) — {}", follow(id))
+}
+
+/// How to follow a running task.
+fn follow(id: &TaskId) -> String {
     format!(
-        "started task {id} ({label}) — you will be notified when it finishes; \
-         `read {RUMU_WORKSPACE}:/tasks/{id}` shows how it is doing, `invoke` `task.kill` on it \
-         stops it"
+        "you will be notified when it finishes; `read {RUMU_WORKSPACE}:/tasks/{id}` shows how \
+         it is doing, `invoke` `task.kill` on it stops it"
     )
 }
 /// Keep the last [`TASK_OUTPUT_LIMIT`] bytes, on a char boundary.
 fn trim_buffer(entry: &mut TaskEntry) {
-    if entry.output.len() <= TASK_OUTPUT_LIMIT {
-        return;
+    let cut = keep_tail(&mut entry.output, TASK_OUTPUT_LIMIT);
+    if cut > 0 {
+        entry.dropped += cut as u64;
+        entry.info.truncated = true;
     }
-    let mut cut = entry.output.len() - TASK_OUTPUT_LIMIT;
-    while cut < entry.output.len() && !entry.output.is_char_boundary(cut) {
+}
+
+/// Drop the front of `text` down to its last `limit` bytes, on a char
+/// boundary; returns how many bytes went.
+fn keep_tail(text: &mut String, limit: usize) -> usize {
+    if text.len() <= limit {
+        return 0;
+    }
+    let mut cut = text.len() - limit;
+    while cut < text.len() && !text.is_char_boundary(cut) {
         cut += 1;
     }
-    entry.output.drain(..cut);
-    entry.dropped += cut as u64;
-    entry.info.truncated = true;
+    text.drain(..cut);
+    cut
+}
+
+/// The last `n` characters of `text`, marked when earlier ones were cut.
+fn last_chars(text: &str, n: usize) -> String {
+    let total = text.chars().count();
+    if total <= n {
+        return text.to_owned();
+    }
+    let tail: String = text.chars().skip(total - n).collect();
+    format!("[… {} earlier chars …]\n{tail}", total - n)
 }
 
 /// The completion note: one header line, then the (truncated) result.

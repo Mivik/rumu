@@ -1037,17 +1037,6 @@ async fn read_only_and_bash_behaviour() {
     assert!(capped.content.text.contains("[truncated"));
     assert!(capped.content.text.chars().count() < 22_000);
 
-    // Timeout: capped `timeout` argument applies.
-    let out = plugin
-        .call_tool("bash", json!({ "command": "sleep 5", "timeout": 1 }), &cx)
-        .await
-        .unwrap();
-    assert!(
-        out.is_error && out.content.text.contains("timed out after 1s"),
-        "{}",
-        out.content.text
-    );
-
     // `bash`'s `workspace` argument takes a bare name only.
     let out = plugin
         .call_tool(

@@ -83,7 +83,9 @@ and report failures plainly.";
 /// System-prompt instructions for the kernel's built-in task tools.
 pub const TASK_INSTRUCTIONS: &str = "Tools with a `background` argument may run as kernel tasks: \
 `background: true` returns a task id immediately, and a note with the result arrives when it \
-finishes — you are woken up for it, so to wait, just end your turn; don't poll. \
+finishes — you are woken up for it, so to wait, just end your turn; don't poll. A call \
+without it that is still running after a minute (or its `timeout`) moves to the background \
+the same way, its output so far in the result. \
 `read @rumu:/tasks/<id>` shows a task's status and the end of its output (`.../output` holds \
 all of it); `invoke` `task.kill` on it cancels it. A task does not survive rumu restarting: \
 its note then says `finished: lost`, and you can start it again.";

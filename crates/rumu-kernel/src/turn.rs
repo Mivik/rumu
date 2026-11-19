@@ -18,6 +18,7 @@ use serde::Deserialize;
 use serde_json::{Value, json};
 use tokio_util::sync::CancellationToken;
 
+use crate::task::{Foreground, Handoff, ToolWork, foreground_limit};
 use crate::{Choice, Delta, Kernel, MAX_INVOKE_DEPTH, MAX_LLM_RETRIES, host::KernelRuntime};
 
 /// Backoff before the first retry; doubles from there.
@@ -792,6 +793,22 @@ impl Kernel {
                             Some(&pi) => {
                                 let plugin: Arc<dyn Plugin> = self.plugins[pi].clone();
                                 let source = self.plugin_names[pi].clone();
+                                // A model's call of a background-capable tool
+                                // moves to the background at its limit; a
+                                // script's stops there, when the tool takes a
+                                // `timeout` (else the script's own bounds it).
+                                let model = matches!(caller, Caller::Model);
+                                let limit = background_tool
+                                    .then(|| {
+                                        foreground_limit(&args, model || self.takes_timeout(&name))
+                                    })
+                                    .flatten();
+                                let mut sink = self.tool_progress_sink(branch, &call.call_id);
+                                let handoff = (model && limit.is_some()).then(|| {
+                                    let handoff = Handoff::new(sink.clone());
+                                    sink = handoff.sink(self);
+                                    handoff
+                                });
                                 let cx = Cx::new(
                                     session.clone(),
                                     branch.clone(),
@@ -799,21 +816,30 @@ impl Kernel {
                                         call.call_id.clone(),
                                         parent_call.map(str::to_owned),
                                         false,
-                                        self.tool_progress_sink(branch, &call.call_id),
+                                        sink,
                                     )),
                                     Some(source.clone()),
                                     depth,
                                     Arc::new(KernelRuntime(self.clone())),
                                 );
-                                let out = tokio::select! {
-                                    // Abort wins even if the tool future is also ready
-                                    // (an internal call cancelled by the same token).
-                                    biased;
-                                    _ = token.cancelled() => return Ok(None),
-                                    r = plugin.call_tool(&name, args, &cx) => match r {
-                                        Ok(o) => o,
-                                        Err(e) => ToolOutput::err(format!("tool `{name}` failed: {e}")),
-                                    },
+                                let tool = name.clone();
+                                let work: ToolWork =
+                                    Box::pin(
+                                        async move { plugin.call_tool(&tool, args, &cx).await },
+                                    );
+                                let foreground = Foreground {
+                                    session: session.clone(),
+                                    branch: branch.clone(),
+                                    call_id: call.call_id.clone(),
+                                    name: name.clone(),
+                                    summary,
+                                    source: source.clone(),
+                                    handoff,
+                                };
+                                let Some(out) =
+                                    self.run_foreground(work, limit, foreground, token).await
+                                else {
+                                    return Ok(None);
                                 };
                                 effect_source = Some(source);
                                 out
@@ -1331,6 +1357,15 @@ pub(crate) enum AgentRun {
     Aborted,
     /// A limit refused the call before any child branch existed.
     Refused(String),
+}
+
+impl Kernel {
+    /// Does tool `name` take a `timeout` argument?
+    fn takes_timeout(&self, name: &str) -> bool {
+        self.tools
+            .iter()
+            .any(|t| t.name == name && t.schema["properties"].get("timeout").is_some())
+    }
 }
 
 /// A short, single-line summary of a background tool's arguments.
