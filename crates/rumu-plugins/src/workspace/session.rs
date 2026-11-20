@@ -5,8 +5,10 @@
 //! - `list /sessions` — every session of this assistant, most recently updated first;
 //! - `list|read /sessions/<s>` — the session overview (its branches, each
 //!   by its `@rumu:/sessions/<s>/branches/<b>` address);
+//! - `list /sessions/<s>/branches` — the overview's branch lines;
 //! - `read /sessions/<s>/branches/<b>` — the branch's own nodes, rendered as
-//!   a range; `branch.send` on it messages the agent there;
+//!   a range: its first node and as many of its latest as fit (`offset` /
+//!   `limit` page the whole); `branch.send` on it messages the agent there;
 //! - `read /sessions/<s>/<node>` — one node, fully rendered;
 //! - `read /sessions/<s>/<a>..<b>` — a path fragment from `a` down to `b`
 //!   (`a` must be `b` or one of its ancestors), root→head order.
@@ -24,16 +26,16 @@ use std::cmp::Reverse;
 use std::collections::HashSet;
 
 use async_trait::async_trait;
-use rumu_cards::json_quote;
 use rumu_cards::recall::{self, Doc};
 use rumu_core::{
-    Branch, BranchKind, Cx, Node, NodeBody, PathState, RUMU_WORKSPACE, SessionId, SessionInfo,
-    ToolCall, ToolError, ToolOutput, ToolResult,
+    Branch, BranchKind, Cx, Node, NodeBody, PathState, QUOTE_CHARS, RUMU_WORKSPACE, SessionId,
+    SessionInfo, ToolCall, ToolError, ToolOutput, ToolResult, quote,
 };
 use serde_json::Value;
 
 use super::WorkspacePlugin;
 use super::time::iso_local;
+use super::tools::slice_lines;
 use super::vfs::{self, ActionSpec, Approval, At, NoArgs, Out, bad_scope};
 
 /// The `@rumu` result prefix.
@@ -51,6 +53,13 @@ const RANGE_TAIL: usize = 1000;
 
 /// Range reads clip tool-call args beyond this many chars.
 const RANGE_CALL_ARGS: usize = 300;
+
+/// Characters an unpaged branch read keeps (its first node and its latest
+/// ones), under the tool output cap so the cap leaves it alone.
+const BRANCH_BUDGET: usize = 16_000;
+
+/// Latest nodes of a sub-agent a task summary shows.
+const TAIL_NODES: usize = 3;
 
 /// Shortest per-session node-id abbreviation.
 const MIN_ABBR: usize = 8;
@@ -289,6 +298,33 @@ impl vfs::Node for SessionPart {
     }
 }
 
+/// `/sessions/<session>/branches`: the session's branches, one line each
+/// (the overview's `branches:` part).
+pub(super) struct Branches;
+
+#[async_trait]
+impl vfs::Node for Branches {
+    fn about(&self) -> &'static str {
+        "the session's branches (main, sub-agents, side questions)"
+    }
+
+    async fn list(&self, at: &At<'_>) -> Out {
+        let sid = at.param("sid");
+        let (info, _, branches) = match at.cx.history().session_tree(&SessionId::from(sid)) {
+            Ok(t) => t,
+            Err(_) => return Err(ToolError::model(format!("no session `{sid}`"))),
+        };
+        if !can_see(at.state, &info) {
+            return Err(ToolError::model(format!("no session `{sid}`")));
+        }
+        Ok(branch_lines(&info, &branches).into())
+    }
+
+    async fn search(&self, _at: &At<'_>, _query: &str, _limit: Option<usize>) -> Out {
+        Err(bad_scope())
+    }
+}
+
 /// `/sessions/<session>/branches/<branch>`: one agent's branch — its own
 /// nodes to read, and `branch.send` to message it.
 pub(super) struct BranchNode;
@@ -296,22 +332,25 @@ pub(super) struct BranchNode;
 #[async_trait]
 impl vfs::Node for BranchNode {
     fn about(&self) -> &'static str {
-        "one agent's branch: its own transcript; `branch.send` messages it"
+        "one agent's branch: its own transcript (its task and latest nodes; `offset`/`limit` \
+         page the whole); `branch.send` messages it"
     }
 
+    /// The transcript in about [`BRANCH_BUDGET`] chars: its task and its
+    /// latest nodes.
     async fn list(&self, at: &At<'_>) -> Out {
-        let (sid, bid) = (at.param("sid"), at.param("bid"));
-        let (info, nodes, branches) = match at.cx.history().session_tree(&SessionId::from(sid)) {
-            Ok(t) => t,
-            Err(_) => return Err(ToolError::model(format!("no session `{sid}`"))),
-        };
-        if !can_see(at.state, &info) {
-            return Err(ToolError::model(format!("no session `{sid}`")));
+        Ok(branch_transcript(at, Some(BRANCH_BUDGET))?.into())
+    }
+
+    /// Unpaged, the listing; with `offset` / `limit`, lines of the whole
+    /// transcript.
+    async fn read(&self, at: &At<'_>, offset: Option<u64>, limit: Option<u64>) -> Out {
+        if offset.is_none() && limit.is_none() {
+            return self.listing(at).await;
         }
-        let b = find_branch(&branches, bid, sid)?;
-        Ok(SessionView::new(sid, &nodes)
-            .render(&own_nodes(&nodes, b), true)
-            .into())
+        slice_lines(branch_transcript(at, None)?, offset, limit)
+            .map(ToolOutput::ok)
+            .map_err(ToolError::model)
     }
 
     async fn search(&self, _at: &At<'_>, _query: &str, _limit: Option<usize>) -> Out {
@@ -331,6 +370,57 @@ impl vfs::Node for BranchNode {
     async fn invoke(&self, at: &At<'_>, spec: &ActionSpec, args: Value) -> Out {
         at.p.send_branch(at, spec.parse(args)?).await
     }
+}
+
+/// The branch `at` names, rendered as a range: all of it, or within
+/// `budget` chars ([`SessionView::render_fitting`]).
+fn branch_transcript(at: &At<'_>, budget: Option<usize>) -> ToolResult<String> {
+    let (sid, bid) = (at.param("sid"), at.param("bid"));
+    let (info, nodes, branches) = match at.cx.history().session_tree(&SessionId::from(sid)) {
+        Ok(t) => t,
+        Err(_) => return Err(ToolError::model(format!("no session `{sid}`"))),
+    };
+    if !can_see(at.state, &info) {
+        return Err(ToolError::model(format!("no session `{sid}`")));
+    }
+    let b = find_branch(&branches, bid, sid)?;
+    let own = own_nodes(&nodes, b);
+    let view = SessionView::new(sid, &nodes);
+    Ok(match budget {
+        Some(budget) => view.render_fitting(&own, budget),
+        None => view.render(&own, true),
+    })
+}
+
+/// The latest few nodes of a sub-agent's branch in this session, for a task
+/// summary: its words, calls and results (and system notes), as a range
+/// read renders them, oldest first; `None` without such nodes.
+pub(super) fn branch_tail(cx: &Cx, branch: &rumu_core::BranchId) -> ToolResult<Option<String>> {
+    let sid = cx.session.to_string();
+    let (_, nodes, branches) = cx
+        .history()
+        .session_tree(&cx.session)
+        .map_err(|e| ToolError::model(e.to_string()))?;
+    let Some(b) = branches.iter().find(|b| &b.id == branch) else {
+        return Ok(None);
+    };
+    let own = own_nodes(&nodes, b);
+    let shown: Vec<&Node> = own
+        .into_iter()
+        .filter(|n| match &n.body {
+            NodeBody::Note { source, content } => {
+                source == rumu_core::SYSTEM_SOURCE && !content.text.is_empty()
+            }
+            _ => true,
+        })
+        .collect();
+    if shown.is_empty() {
+        return Ok(None);
+    }
+    let from = shown.len().saturating_sub(TAIL_NODES);
+    Ok(Some(
+        SessionView::new(&sid, &nodes).render(&shown[from..], true),
+    ))
 }
 
 /// The sessions this path may see, optionally only `only`'s (an assistant
@@ -452,7 +542,7 @@ impl WorkspacePlugin {
             out.push(format!(
                 "session {WS}:/sessions/{}  {}{}",
                 info.id,
-                json_quote(&info.title, TITLE_CHARS),
+                quote(&info.title, TITLE_CHARS),
                 self.session_owner(info, cx)?
             ));
             let mut seen: Vec<(String, &str)> = Vec::new();
@@ -464,7 +554,7 @@ impl WorkspacePlugin {
                         Some((_, first)) => line.push_str(&format!("  (same as {first})")),
                         None => {
                             line.push_str("  ");
-                            line.push_str(&json_quote(&s, usize::MAX));
+                            line.push_str(&quote(&s, usize::MAX));
                             seen.push((s, &c.node));
                         }
                     }
@@ -583,6 +673,45 @@ impl<'a> SessionView<'a> {
             out.push_str(&self.render_node(n, range));
             out.push('\n');
         }
+        out
+    }
+
+    /// [`Self::render`] as a range, in at most about `budget` chars: when
+    /// the whole does not fit, the first node (a sub-agent's task) and as
+    /// many of the latest as fit, around an `<omitted>` element that
+    /// addresses the nodes left out as a range read. A transcript is read
+    /// for where it stands now, which a cut in the middle of the text loses.
+    fn render_fitting(&self, selected: &[&Node], budget: usize) -> String {
+        let rendered: Vec<String> = selected
+            .iter()
+            .map(|n| format!("{}\n", self.render_node(n, true)))
+            .collect();
+        let size = |s: &String| s.chars().count();
+        if rendered.iter().map(size).sum::<usize>() <= budget || rendered.len() < 3 {
+            return rendered.concat();
+        }
+        // Room for the omission element itself.
+        let mut used = size(&rendered[0]) + 200;
+        let mut from = rendered.len();
+        while from > 2 && used + size(&rendered[from - 1]) <= budget {
+            from -= 1;
+            used += size(&rendered[from]);
+        }
+        // Always keep the head itself, even when it alone is over budget.
+        if from == rendered.len() {
+            from -= 1;
+        }
+        let (a, b) = (&selected[1].id.0, &selected[from - 1].id.0);
+        let omitted = format!(
+            "<omitted nodes=\"{}\" read=\"{WS}:/sessions/{}/{}..{}\"/>\n",
+            from - 1,
+            self.sid,
+            self.short(a),
+            self.short(b)
+        );
+        let mut out = rendered[0].clone();
+        out.push_str(&omitted);
+        out.push_str(&rendered[from..].concat());
         out
     }
 
@@ -803,16 +932,23 @@ fn abbreviate(id: &str, len: usize) -> String {
     id.chars().take(len).collect()
 }
 
-/// The session overview: one header line plus one line per branch,
-/// sorted by `created_at`, each with its address.
+/// The session overview: `key: value` header lines plus one line per
+/// branch, sorted by `created_at`, each with its address.
 fn render_overview(info: &SessionInfo, branches: &[Branch]) -> String {
     let mut out = format!(
-        "session {} — \"{}\" · updated {}",
+        "session: {}\ntitle: {}\nupdated: {}\nbranches:\n",
         info.id,
-        info.title,
+        quote(&info.title, QUOTE_CHARS),
         iso_local(info.updated_at)
     );
-    out.push_str("\nbranches:");
+    out.push_str(&branch_lines(info, branches));
+    out
+}
+
+/// One line per branch of the session, sorted by `created_at`: kind,
+/// status, address, and a sub-agent's task.
+fn branch_lines(info: &SessionInfo, branches: &[Branch]) -> String {
+    let mut out = Vec::new();
     let mut sorted: Vec<&Branch> = branches.iter().collect();
     sorted.sort_by_key(|b| b.created_at);
     for b in sorted {
@@ -830,12 +966,11 @@ fn render_overview(info: &SessionInfo, branches: &[Branch]) -> String {
             rumu_core::branch_address(&info.id, &b.id)
         );
         if let BranchKind::Agent { task, .. } = &b.kind {
-            line.push_str(&format!("  task: {}", clip(task, 80)));
+            line.push_str(&format!("  task {}", quote(task, QUOTE_CHARS)));
         }
-        out.push('\n');
-        out.push_str(&line);
+        out.push(line);
     }
-    out
+    out.join("\n")
 }
 
 /// The branch's own nodes, root→head: from its head up to the node it
@@ -876,17 +1011,44 @@ pub(super) fn find_branch<'a>(
     }
 }
 
-/// Clip to `max` chars on a char boundary, appending an ellipsis when cut.
-fn clip(s: &str, max: usize) -> String {
-    if s.chars().count() <= max {
-        return s.to_owned();
-    }
-    let mut out: String = s.chars().take(max).collect();
-    out.push('…');
-    out
-}
-
 /// Compact single-line JSON (no spaces after `:` and `,`).
 fn one_line_json(v: &Value) -> String {
     serde_json::to_string(v).unwrap_or_default()
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    /// A long transcript keeps its first node and its latest ones, and
+    /// addresses what it leaves out as a range read.
+    #[test]
+    fn fitting_render_keeps_the_task_and_the_latest_nodes() {
+        let sid = SessionId::from("S");
+        let nodes: Vec<Node> = (0..10)
+            .map(|i| Node {
+                id: rumu_core::NodeId::from(format!("N{i}").as_str()),
+                parent: (i > 0).then(|| rumu_core::NodeId::from(format!("N{}", i - 1).as_str())),
+                session: sid.clone(),
+                at: i,
+                dur_ms: None,
+                body: NodeBody::User {
+                    content: rumu_core::Content::text(format!("{i}{}", "x".repeat(900))),
+                },
+            })
+            .collect();
+        let all: Vec<&Node> = nodes.iter().collect();
+        let view = SessionView::new("S", &nodes);
+        assert_eq!(view.render_fitting(&all, 100_000), view.render(&all, true));
+
+        let out = view.render_fitting(&all, 3_500);
+        assert!(out.starts_with("<node id=\"N0\""), "{out}");
+        assert!(
+            out.contains(
+                "<omitted nodes=\"7\" read=\"@rumu:/sessions/S/N1..N7\"/>\n<node id=\"N8\""
+            ),
+            "{out}"
+        );
+        assert!(out.trim_end().ends_with("</node>") && out.contains("id=\"N9\""));
+    }
 }

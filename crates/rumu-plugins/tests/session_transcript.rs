@@ -186,7 +186,7 @@ async fn agent_transcript_address_is_readable() {
         out.content
             .text
             .contains(&format!("agent    done       @rumu:/sessions/{sid}/"))
-            && out.content.text.contains("task: find the config file"),
+            && out.content.text.contains("task \"find the config file\""),
         "{}",
         out.content.text
     );
@@ -293,7 +293,10 @@ async fn branch_send_messages_a_sub_agent_and_its_reply_comes_back() {
         })
         .collect();
     assert!(
-        texts.iter().any(|t| t.starts_with("sub-agent (count the stars) replied:") && t.ends_with("43 now")),
+        texts
+            .iter()
+            .any(|t| t.starts_with("sub-agent \"count the stars\" replied:")
+                && t.ends_with("43 now")),
         "{texts:?}"
     );
     assert_eq!(texts.last().map(String::as_str), Some("noted"));

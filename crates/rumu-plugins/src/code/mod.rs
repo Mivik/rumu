@@ -373,7 +373,7 @@ fn format_outcome(
 
     // A script that finished just as the deadline fired has a real result.
     let is_timeout = timed_out && !matches!(outcome.outcome, ScriptOutcome::Done(_));
-    let stats = format!("{} · {dur_ms} ms", call_count(calls, seen.blocked));
+    let stats = format!("{} in {dur_ms} ms", call_count(calls, seen.blocked));
     let mut text = String::new();
     let mut is_error = true;
     match &outcome.outcome {
@@ -381,10 +381,10 @@ fn format_outcome(
         ScriptOutcome::Interrupted => text.push_str(&format!("[code] timeout after {timeout} s")),
         ScriptOutcome::Done(_) => {
             is_error = false;
-            text.push_str(&format!("[code] ok · {stats}"));
+            text.push_str(&format!("[code] ok, {stats}"));
         }
         ScriptOutcome::Error { .. } | ScriptOutcome::DidNotSettle => {
-            text.push_str(&format!("[code] error · {stats}"));
+            text.push_str(&format!("[code] error, {stats}"));
         }
     }
     if !outcome.console.is_empty() {

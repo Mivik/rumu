@@ -145,21 +145,14 @@ pub fn revert_note(
     if plan.files.is_empty() && plan.commands.is_empty() {
         return None;
     }
-    let snippet: String = prompt.chars().take(80).collect();
-    let ellipsis = if snippet.len() < prompt.len() {
-        "…"
-    } else {
-        ""
-    };
+    let snippet = rumu_core::quote(prompt, rumu_core::QUOTE_CHARS);
     let mut out = if rewound {
         format!(
-            "The user rewound the conversation to before their message \"{snippet}{ellipsis}\". \
+            "The user rewound the conversation to before their message {snippet}. \
              Of the file changes made after it:"
         )
     } else {
-        format!(
-            "The user reverted the file changes made since their message \"{snippet}{ellipsis}\":"
-        )
+        format!("The user reverted the file changes made since their message {snippet}:")
     };
     let ok = |a: RevertAction| {
         done.iter()

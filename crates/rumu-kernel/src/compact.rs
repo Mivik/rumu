@@ -182,14 +182,14 @@ fn instruction(tail: Option<&Node>, focus: Option<&str>) -> String {
     if let Some(n) = tail {
         let start: String = match &n.body {
             NodeBody::User { content } | NodeBody::Assistant { content, .. } => {
-                content.text.chars().take(160).collect()
+                content.text.trim().to_owned()
             }
             _ => String::new(),
         };
         s.push_str(&format!(
-            " The most recent messages, from the one that begins «{}», stay verbatim after the \
+            " The most recent messages, from the one that begins {}, stay verbatim after the \
              summary: summarize what comes before them.",
-            start.trim()
+            rumu_core::quote(&start, 160)
         ));
     }
     s.push_str(

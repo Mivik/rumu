@@ -130,7 +130,7 @@ const parsed = computed(() => {
         matching: silence.matching,
       })
     } else if (reply) {
-      // The text after the `sub-agent (…) replied:` line is the reply.
+      // The text after the `sub-agent "…" replied:` line is the reply.
       const text = b.content.text.slice(b.content.text.indexOf('\n') + 1)
       add({ kind: 'reply', key: `reply:${n.id}`, branch: reply.branch, label: reply.label, text })
     } else if (b.source === 'memory' && update) {

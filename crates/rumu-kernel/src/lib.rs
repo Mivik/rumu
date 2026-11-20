@@ -1443,10 +1443,11 @@ impl Kernel {
             _ => String::new(),
         };
         let label = rumu_core::agent_label(&task);
+        let quoted = rumu_core::quote(task.trim(), rumu_core::QUOTE_CHARS);
         let note = NodeBody::Note {
             source: SYSTEM_SOURCE.into(),
             content: Content::note_with(
-                format!("sub-agent ({label}) replied:\n{text}"),
+                format!("sub-agent {quoted} replied:\n{text}"),
                 &rumu_core::AgentReply {
                     branch: branch.clone(),
                     label,

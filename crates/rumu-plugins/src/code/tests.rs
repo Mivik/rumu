@@ -64,7 +64,7 @@ async fn result_shapes_and_console() {
     .await;
     assert!(!out.is_error, "{}", out.content.text);
     assert!(
-        out.content.text.starts_with("[code] ok · 0 calls · "),
+        out.content.text.starts_with("[code] ok, 0 calls in "),
         "{}",
         out.content.text
     );
@@ -144,7 +144,7 @@ async fn tool_errors_and_blocked_errors() {
     assert!(
         out.content
             .text
-            .starts_with("[code] ok · 1 call (1 blocked) · "),
+            .starts_with("[code] ok, 1 call (1 blocked) in "),
         "{}",
         out.content.text
     );
@@ -162,7 +162,7 @@ async fn tool_errors_and_blocked_errors() {
         .unwrap();
     assert!(out.is_error);
     assert!(
-        out.content.text.contains("[code] error · 1 call · "),
+        out.content.text.contains("[code] error, 1 call in "),
         "{}",
         out.content.text
     );

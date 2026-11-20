@@ -2143,28 +2143,39 @@ async fn session_listing_and_overview() {
             .await
             .unwrap();
         assert!(!out.is_error, "{}", out.content.text);
-        let header = out.content.text.lines().next().unwrap();
-        assert!(
-            header.starts_with(
-                "session 01STESTSSESSION0000000000000 — \"config hunting\" · updated "
-            ),
-            "{header}"
-        );
-        assert_stamp(header.rsplit_once(" · updated ").unwrap().1, 8000);
-        assert_eq!(out.content.text.lines().nth(1), Some("branches:"));
-        let main_line = out.content.text.lines().nth(2).unwrap();
+        let mut lines = out.content.text.lines();
+        assert_eq!(lines.next(), Some("session: 01STESTSSESSION0000000000000"));
+        assert_eq!(lines.next(), Some("title: \"config hunting\""));
+        let updated = lines.next().unwrap();
+        assert_stamp(updated.strip_prefix("updated: ").unwrap(), 8000);
+        assert_eq!(lines.next(), Some("branches:"));
+        let main_line = out.content.text.lines().nth(4).unwrap();
         assert!(
             main_line.starts_with(
                 "  main     active     @rumu:/sessions/01STESTSSESSION0000000000000/branches/BMAIN"
             ),
             "{main_line}"
         );
-        let agent_line = out.content.text.lines().nth(3).unwrap();
+        let agent_line = out.content.text.lines().nth(5).unwrap();
         assert!(
-            agent_line.starts_with("  agent    done       @rumu:/sessions/01STESTSSESSION0000000000000/branches/BEXP  task: find the config file"),
+            agent_line.starts_with("  agent    done       @rumu:/sessions/01STESTSSESSION0000000000000/branches/BEXP  task \"find the config file"),
             "{agent_line}"
         );
     }
+
+    // `…/branches` lists the overview's branch lines.
+    let out = plugin
+        .call_tool(
+            "list",
+            json!({ "path": "@rumu:/sessions/01STESTSSESSION0000000000000/branches" }),
+            &cx,
+        )
+        .await
+        .unwrap();
+    assert!(!out.is_error, "{}", out.content.text);
+    let lines: Vec<&str> = entries(&out.content.text).lines().collect();
+    assert_eq!(lines.len(), 2, "{}", out.content.text);
+    assert!(lines[1].contains("/branches/BEXP  task \"find the config file\""));
 
     // Unknown sessions error clearly.
     let out = plugin
@@ -3627,10 +3638,11 @@ async fn search_downweights_tool_results_and_breaks_ties_by_time() {
         ],
         "lookup-tool args are not indexed: {text}"
     );
-    // The title is a JSON literal cut to 48 chars, `…` outside the quotes.
+    // The title is a JSON literal cut to 48 chars, the cut marked outside
+    // the quotes.
     assert!(
         text.starts_with(&format!(
-            "session @rumu:/sessions/{sid}  \"line one \\\"quoted\\\"\\nline two, long enough to be cu\"…\n"
+            "session @rumu:/sessions/{sid}  \"line one \\\"quoted\\\"\\nline two, long enough to be cu\"…(+10 chars)\n"
         )),
         "{text}"
     );
@@ -3813,7 +3825,10 @@ async fn task_read_renders_status_and_output() {
         .unwrap();
     assert!(!out.is_error, "{}", out.content.text);
     let text = &out.content.text;
-    assert!(text.starts_with("task t1 · ok · bash: ls"), "{text}");
+    assert!(
+        text.starts_with("task: t1\nstatus: ok after 0s\nwhat: bash \"ls\"\nstarted: "),
+        "{text}"
+    );
     assert!(
         text.contains(
             "\n\noutput, lines 11–30 of 30 (all of it: `@rumu:/tasks/t1/output`):\nline 11\n"
@@ -3871,6 +3886,99 @@ async fn task_read_renders_status_and_output() {
     );
 }
 
+/// A sub-agent's tasks nest under its own in `list @rumu:/tasks`, and its
+/// summary says what it is doing now: its tasks and its latest nodes.
+#[tokio::test]
+async fn sub_agent_tasks_nest_and_summarize_the_sub_agent() {
+    use rumu_core::{BranchId, TaskId, TaskInfo, TaskKind, TaskStatus};
+    let (info, nodes, branches) = staged_session();
+    let sid = info.id.clone();
+    let host = session_host(info, nodes, branches);
+    let cx = host.cx_for(sid.clone());
+    let plugin = session_plugin();
+    let task = |id: &str, branch: &str, kind: TaskKind, summary: &str| TaskInfo {
+        id: TaskId::from(id),
+        session: sid.clone(),
+        branch: BranchId::from(branch),
+        call_id: format!("call-{id}"),
+        kind,
+        summary: summary.into(),
+        status: TaskStatus::Running,
+        started_at: 0,
+        ended_at: None,
+        truncated: false,
+        is_error: false,
+        result: None,
+        data: None,
+    };
+    let bash = |summary: &str| TaskKind::Tool {
+        name: "bash".into(),
+        args_summary: summary.into(),
+    };
+    let long_task = format!(
+        "find the config file\n{}",
+        "and then some more. ".repeat(20)
+    );
+    let agent = TaskKind::Agent {
+        child_branch: Some(BranchId::from("BEXP")),
+    };
+    host.tasks.lock().unwrap().extend([
+        (task("t-agent", "BMAIN", agent, &long_task), String::new()),
+        (
+            task("t-fetch", "BEXP", bash("fetch the docs"), ""),
+            String::new(),
+        ),
+        (task("t-later", "BMAIN", bash("sleep 9"), ""), String::new()),
+    ]);
+
+    let out = plugin
+        .call_tool("list", json!({ "path": "@rumu:/tasks" }), &cx)
+        .await
+        .unwrap();
+    let lines: Vec<&str> = entries(&out.content.text).lines().collect();
+    assert_eq!(lines.len(), 3, "{}", out.content.text);
+    assert!(
+        lines[0].starts_with("@rumu:/tasks/t-agent  running")
+            && lines[0].contains("agent \"find the config file\\nand then")
+            && lines[0].contains("…(+")
+            && lines[0]
+                .ends_with("(on @rumu:/sessions/01STESTSSESSION0000000000000/branches/BMAIN)"),
+        "{}",
+        lines[0]
+    );
+    assert!(
+        lines[1].starts_with("  @rumu:/tasks/t-fetch  running")
+            && lines[1].ends_with("bash \"fetch the docs\""),
+        "the sub-agent's task nests under it: {}",
+        lines[1]
+    );
+    assert!(lines[2].starts_with("@rumu:/tasks/t-later"), "{}", lines[2]);
+
+    let out = plugin
+        .call_tool("read", json!({ "path": "@rumu:/tasks/t-agent" }), &cx)
+        .await
+        .unwrap();
+    let text = &out.content.text;
+    assert!(
+        text.starts_with("task: t-agent\nstatus: running for "),
+        "{text}"
+    );
+    assert!(
+        text.contains("\nsub-agent: @rumu:/sessions/01STESTSSESSION0000000000000/branches/BEXP"),
+        "{text}"
+    );
+    assert!(
+        text.contains("\n\nits tasks:\n  @rumu:/tasks/t-fetch  running"),
+        "{text}"
+    );
+    assert!(
+        text.contains("\n\nits latest nodes (the whole transcript: `read ")
+            && text.contains("config lives in /etc/rumu"),
+        "{text}"
+    );
+    assert!(!text.contains("no output yet"), "{text}");
+}
+
 /// `invoke` runs an object's action, checked against what its node declares.
 #[tokio::test]
 async fn invoke_runs_declared_actions_and_explains_the_rest() {
@@ -3924,6 +4032,11 @@ async fn invoke_runs_declared_actions_and_explains_the_rest() {
             .await
             .unwrap(),
         "`task.kill` acts on `@rumu:/tasks/<id>`; `@rumu:/workspaces/@rumu` has `workspace.use`",
+    );
+    // An unknown `….list` points at the `list` tool.
+    refused(
+        invoke(json!({ "action": "task.list" })).await.unwrap(),
+        "no action `task.list`; to list them, `list @rumu:/tasks`; rumu's actions:",
     );
     // An unknown action lists rumu's.
     refused(

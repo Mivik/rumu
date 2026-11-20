@@ -161,6 +161,21 @@ impl TaskInfo {
     pub fn label(&self) -> String {
         self.kind.label(&self.summary)
     }
+
+    /// What it runs, for a model-facing view: the tool (or `agent`), then
+    /// its summary through [`crate::quote`] — `bash "rm -rf dist"`,
+    /// `agent "find the config"…(+120 chars)`.
+    pub fn what(&self) -> String {
+        let (name, text) = match &self.kind {
+            TaskKind::Tool { name, args_summary } => (name.as_str(), args_summary.as_str()),
+            TaskKind::Agent { .. } => ("agent", self.summary.as_str()),
+        };
+        if text.is_empty() {
+            name.to_owned()
+        } else {
+            format!("{name} {}", crate::quote(text.trim(), crate::QUOTE_CHARS))
+        }
+    }
 }
 
 /// Structured payload of a task-completion note (`task.done` v1), carried in

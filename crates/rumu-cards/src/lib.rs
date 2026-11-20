@@ -23,7 +23,7 @@
 
 use std::collections::BTreeMap;
 
-use rumu_core::{RUMU_WORKSPACE, ToolError, ToolOutput, ToolResult};
+use rumu_core::{RUMU_WORKSPACE, ToolError, ToolOutput, ToolResult, quote};
 use serde_json::Value;
 
 pub mod card;
@@ -74,10 +74,10 @@ pub fn search_text(cards: &Cards, query: &str, args: &Value) -> ToolResult<ToolO
     for hit in hits.iter().take(limit) {
         let mut block = format!("card {}", card_uri(&hit.card.path));
         if let Some(m) = hit.card.summary() {
-            block.push_str(&format!("  {}", json_quote(&m, SUMMARY_CHARS)));
+            block.push_str(&format!("  {}", quote(&m, SUMMARY_CHARS)));
         }
         if let Some(s) = body_snippet(&hit.card.body, &terms) {
-            block.push_str(&format!("\n  {}", json_quote(&s, usize::MAX)));
+            block.push_str(&format!("\n  {}", quote(&s, usize::MAX)));
         }
         out.push(block);
     }
@@ -90,18 +90,6 @@ pub fn search_text(cards: &Cards, query: &str, args: &Value) -> ToolResult<ToolO
 
 /// Summary chars shown on a card-search hit line.
 const SUMMARY_CHARS: usize = 80;
-
-/// `s` cut to `max` chars, as a JSON string literal; a cut appends `…`
-/// outside the quotes so the literal stays the text's exact prefix. The
-/// quoting of titles, summaries and snippets in `search` output.
-pub fn json_quote(s: &str, max: usize) -> String {
-    let cut: String = s.chars().take(max).collect();
-    let mut q = serde_json::to_string(&cut).unwrap_or_default();
-    if cut.len() < s.len() {
-        q.push('…');
-    }
-    q
-}
 
 /// `@rumu:/cards/<path>` — the canonical address of a card in the mounted
 /// space (`<path>` is `self/dev/x`).
@@ -315,12 +303,5 @@ mod tests {
             "{}",
             out.content.text
         );
-    }
-
-    #[test]
-    fn json_quote_escapes_and_cuts_outside_the_quotes() {
-        assert_eq!(json_quote("a \"b\"\nc", 10), r#""a \"b\"\nc""#);
-        assert_eq!(json_quote("什么都可以", 3), "\"什么都\"…");
-        assert_eq!(json_quote("abc", 3), "\"abc\"");
     }
 }

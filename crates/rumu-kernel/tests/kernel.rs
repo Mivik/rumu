@@ -4819,7 +4819,7 @@ async fn a_message_to_a_finished_sub_agent_reports_back_to_the_parent() {
     let note = nodes
         .iter()
         .find_map(|n| match &n.body {
-            NodeBody::Note { content, .. } if content.text.starts_with("sub-agent (look)") => {
+            NodeBody::Note { content, .. } if content.text.starts_with("sub-agent \"look\"") => {
                 Some(content.text.clone())
             }
             _ => None,
@@ -4935,7 +4935,7 @@ async fn background_tool_returns_task_id_and_completion_wakes_idle_branch() {
     .await;
     let note_text = pushed_note_text(&note).unwrap();
     assert!(
-        note_text.contains(&format!("task {id} (bgwork: ")),
+        note_text.contains(&format!("task {id} (bgwork ")),
         "{note_text}"
     );
     assert!(note_text.contains("finished: ok"), "{note_text}");
@@ -5443,7 +5443,7 @@ async fn restart_reports_a_lost_task_once() {
     let reported = notes(&second);
     assert_eq!(reported.len(), 1, "{reported:?}");
     assert!(
-        reported[0].starts_with(&format!("task {id} (bgwork: "))
+        reported[0].starts_with(&format!("task {id} (bgwork "))
             && reported[0].contains("finished: lost"),
         "{}",
         reported[0]
@@ -5585,7 +5585,7 @@ async fn agent_runs_in_background_by_default() {
     let text = pushed_note_text(&note).unwrap();
     let id = kernel.tasks(&session).unwrap()[0].id.clone();
     assert!(
-        text.contains(&format!("task {id} (agent: find it) finished: ok")),
+        text.contains(&format!("task {id} (agent \"find it\") finished: ok")),
         "{text}"
     );
     assert!(text.contains("child summary"), "{text}");

@@ -347,9 +347,7 @@ impl Backend for LocalBackend {
         script: &str,
         on_chunk: &mut (dyn for<'a> FnMut(&'a str) + Send),
     ) -> Result<ExecOutput> {
-        // A leading `exec 2>&1` merges stderr into stdout for the whole script
-        // (appending `2>&1` would lose to redirections inside the command).
-        let script = format!("exec 2>&1\n{script}");
+        let script = format!("{EXEC_PRELUDE}{script}");
         let shell = if has_bash() { "bash" } else { "sh" };
         let mut command = Command::new(shell);
         command
@@ -494,12 +492,19 @@ fn remote_failure(
     }
 }
 
+/// What every exec script starts with. A leading `exec 2>&1` merges stderr
+/// into stdout for the whole script (appending `2>&1` would lose to
+/// redirections inside the command). `PYTHONUNBUFFERED`: Python writing to
+/// our pipe would otherwise hold its output until 8 KiB pile up or it exits,
+/// so a background task shows nothing for minutes.
+const EXEC_PRELUDE: &str = "exec 2>&1\nexport PYTHONUNBUFFERED=1\n";
+
 /// `bash -c <quoted script>` — the script rides as one argv element, quoted
 /// whole, so the remote default shell only ever sees our single-quoted string.
 /// It starts in the workspace root (ssh lands in the login directory).
 pub(crate) fn remote_exec_cmd(root: &Utf8UnixPath, script: &str) -> String {
     let script = format!(
-        "exec 2>&1\ncd {} || exit 1\n{script}",
+        "{EXEC_PRELUDE}cd {} || exit 1\n{script}",
         sh_quote(root.as_str())
     );
     format!("bash -c {}", sh_quote(&script))
@@ -767,7 +772,7 @@ mod tests {
         // the workspace root.
         assert_eq!(
             remote_exec_cmd(Utf8UnixPath::new("/srv/app"), "echo 'hi' >&2"),
-            "bash -c 'exec 2>&1\ncd '\\''/srv/app'\\'' || exit 1\necho '\\''hi'\\'' >&2'"
+            "bash -c 'exec 2>&1\nexport PYTHONUNBUFFERED=1\ncd '\\''/srv/app'\\'' || exit 1\necho '\\''hi'\\'' >&2'"
         );
     }
 

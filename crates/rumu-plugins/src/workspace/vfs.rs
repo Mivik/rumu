@@ -27,7 +27,9 @@ use super::WorkspacePlugin;
 use super::cards::{Card, CardsDir};
 use super::decks::{DeckFile, DecksDir};
 use super::registry::{Entry, WorkspacesDir};
-use super::session::{AssistantSessions, BranchNode, ByAssistant, Session, SessionPart, Sessions};
+use super::session::{
+    AssistantSessions, BranchNode, Branches, ByAssistant, Session, SessionPart, Sessions,
+};
 use super::task::{Task, TaskOutput, Tasks};
 use super::tools::slice_lines;
 
@@ -48,6 +50,7 @@ const ROUTES: &[(&str, &dyn Node)] = &[
     ("/sessions/by-assistant/{id}", &AssistantSessions),
     ("/sessions/{sid}", &Session),
     ("/sessions/{sid}/{what}", &SessionPart),
+    ("/sessions/{sid}/branches", &Branches),
     ("/sessions/{sid}/branches/{bid}", &BranchNode),
     ("/skills", &SkillFiles),
     ("/skills/{name}", &SkillFiles),
@@ -295,9 +298,27 @@ fn unknown_action(action: &str, here: &str) -> ToolError {
     } else {
         format!("{here}; ")
     };
+    // `task.list` and the like: what lists things is the `list` tool.
+    let listing = action
+        .strip_suffix(".list")
+        .and_then(|kind| {
+            Some(match kind {
+                "task" => "/tasks",
+                "session" => "/sessions",
+                "branch" => "/sessions/<sid>/branches",
+                "deck" => "/decks",
+                "card" => "/cards",
+                "workspace" => "/workspaces",
+                "skill" => "/skills",
+                "mcp" => "/mcp",
+                _ => return None,
+            })
+        })
+        .map(|path| format!("to list them, `list {RUMU_WORKSPACE}:{path}`; "))
+        .unwrap_or_default();
     ToolError::model(format!(
-        "no action `{action}`; {here}rumu's actions: {} (`list` an object to see its own). An \
-         MCP tool is `<server>/<tool>`.",
+        "no action `{action}`; {listing}{here}rumu's actions: {} (`list` an object to see its \
+         own). An MCP tool is `<server>/<tool>`.",
         known_actions()
     ))
 }
@@ -621,6 +642,7 @@ mod tests {
         assert_eq!(params("/sessions/by-assistant/a1"), "id=a1");
         assert_eq!(params("/sessions/s1/a..b"), "sid=s1 what=a..b");
         // `branches` is a static segment beside `{what}`: it wins.
+        assert_eq!(params("/sessions/s1/branches"), "sid=s1");
         assert_eq!(params("/sessions/s1/branches/b1"), "sid=s1 bid=b1");
         assert_eq!(params("/cards/self/notes/x.md"), "path=self/notes/x.md");
         assert!(ROUTER.at("/sessions/s1/a/b").is_err());

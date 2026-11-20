@@ -108,7 +108,7 @@ fn render_version(
     };
     let display = shown(cards, deck, path);
     let mut text = format!(
-        "card {display} · {op} by {} at {}",
+        "card {display}: {op} by {} at {}",
         commit.author,
         iso_local(commit.at * 1000)
     );

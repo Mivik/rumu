@@ -932,7 +932,7 @@ fn completion_text(info: &TaskInfo, content: &Content) -> String {
     let mut text = format!(
         "task {} ({}) finished: {}",
         info.id,
-        info.label(),
+        info.what(),
         info.status.label()
     );
     if !content.text.is_empty() {

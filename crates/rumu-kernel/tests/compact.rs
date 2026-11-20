@@ -206,7 +206,7 @@ async fn an_outgrown_view_is_compacted_before_the_next_call() {
     );
     let instruction = texts(&ask[ask.len() - 1..]).remove(0);
     assert!(
-        instruction.contains("<summary>") && instruction.contains("«aaaa"),
+        instruction.contains("<summary>") && instruction.contains("begins \"aaaa"),
         "{instruction}"
     );
 
