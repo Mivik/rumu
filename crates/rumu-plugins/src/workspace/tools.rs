@@ -325,8 +325,7 @@ stdout+stderr (truncated to ~20k chars) and the exit code. A call still running 
 `timeout` (default 60s, max 600s) moves to the background. Disabled on read-only \
 workspaces and on the `@rumu` workspace. Give every call a \
 `description` (5-10 words, active voice): the transcript shows it as the call's summary. \
-`watch` (with `background: true`) delivers new output lines (with `every`: lines changed \
-between reruns) as notes that wake you, until the command exits, `until` matches, `task.kill` \
+`watch` (with `background: true`) delivers new output lines as notes that wake you, until the command exits, `until` matches, `task.kill` \
 or its lifetime ends. Prefer `match`/`until` \
 to piping into grep (pipes buffer lines), and make `match` cover failures too (Traceback, \
 Error, Killed): silence is not success. Use `tail`, not `| tail`, to keep only the end of \
@@ -1006,17 +1005,8 @@ impl WorkspacePlugin {
             }
         };
         let exec: std::result::Result<ExecOutput, BackendError> = if let Some(watch) = &watch {
-            let ended = match watch.every() {
-                Some(every) => {
-                    let rounds = watch.poll(backend.as_ref(), &args.command, every, cx);
-                    watch.run(rounds, cx).await
-                }
-                None => {
-                    let exec = backend.exec(&args.command, &mut on_chunk);
-                    watch.run(exec, cx).await
-                }
-            };
-            match ended {
+            let exec = backend.exec(&args.command, &mut on_chunk);
+            match watch.run(exec, cx).await {
                 Ok(exec) => exec,
                 Err(ended) => return Ok(ToolOutput::ok(ended).with_effects(effects)),
             }

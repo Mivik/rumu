@@ -3,22 +3,20 @@
 //! they arrive (`match` picks the event lines, `until` ends the watch),
 //! batched (a quiet gap or a longest wait) and posted through the plugin's
 //! inbox as notes, under a token-bucket rate limit that defers batches
-//! rather than dropping them. With `every`, the command is rerun in rounds
-//! instead and the lines that changed since the last round are the events;
-//! with `silence`, a stretch without events is one. The batch still pending
+//! rather than dropping them. With `silence`, a stretch without events is one. The batch still pending
 //! when the watch ends is
 //! not posted: it is the task's result, so the kernel's completion note
 //! carries it once. Dropping the run (`task.kill`, an abort) drops the
 //! batching with it, so nothing is posted afterwards.
 
-use std::collections::{HashMap, VecDeque};
+use std::collections::VecDeque;
 use std::future::Future;
 use std::sync::{Arc, Mutex};
 use std::time::Duration;
 
 use regex::Regex;
 use rumu_core::{
-    BranchKind, Content, Cx, Inbox, Post, Progress, RUMU_WORKSPACE, Structured, TaskId, ToolError,
+    BranchKind, Content, Cx, Inbox, Post, RUMU_WORKSPACE, Structured, TaskId, ToolError,
     ToolResult, truncate_middle,
 };
 use schemars::JsonSchema;
@@ -28,8 +26,6 @@ use tokio::time::Instant;
 use tracing::warn;
 
 use super::WorkspacePlugin;
-use super::backend::{Backend, BackendError, ExecOutput};
-use super::time::iso_local;
 
 /// `bash`'s `watch` argument (`{}` watches every line).
 #[derive(Debug, Default, Deserialize, JsonSchema)]
@@ -41,23 +37,14 @@ pub(super) struct WatchArgs {
     filter: Option<String>,
     /// regex: a matching line is the last event; the command is then killed
     until: Option<String>,
-    /// seconds (min 1): rerun the command this often; the events are the
-    /// lines that changed since the last run
-    every: Option<u64>,
     /// seconds: an event when no new output (matching lines with `match`)
-    /// came for this long; not with `every`
+    /// came for this long
     silence: Option<u64>,
 }
 
 /// A watch's lifetime (`bash`'s `timeout` in watch mode), in seconds.
 pub(super) const LIFETIME_DEFAULT: u64 = 1800;
 pub(super) const LIFETIME_MAX: u64 = 86_400;
-
-/// The longest an `every` round may run: its interval, but at least
-/// [`ROUND_MIN`] (a slow remote command at `every: 1` still finishes) and at
-/// most [`ROUND_MAX`].
-const ROUND_MIN: Duration = Duration::from_secs(10);
-const ROUND_MAX: Duration = Duration::from_secs(60);
 
 /// Posts the rate limit lets through in a burst.
 const BUCKET: u32 = 10;
@@ -77,7 +64,7 @@ const LINE_MAX: usize = 64 * 1024;
 /// When a batch is flushed (after `quiet` without new event lines, or `max`
 /// after its first, whichever comes first) and the rate limit: one post per
 /// `refill` beyond a burst of [`BUCKET`]; batches deferred for longer than
-/// `flood` end the watch. `second` is the unit of `every` and `silence`.
+/// `flood` end the watch. `second` is the unit of `silence`.
 #[derive(Debug, Clone, Copy)]
 pub(super) struct WatchTiming {
     pub quiet: Duration,
@@ -273,7 +260,6 @@ pub(super) struct Watch {
     filter: Option<Regex>,
     until: Option<Regex>,
     lifetime: Duration,
-    every: Option<Duration>,
     /// The `silence` argument, and as a duration.
     silence: Option<(u64, Duration)>,
     scan: Mutex<Scan>,
@@ -303,21 +289,13 @@ impl WorkspacePlugin {
         };
         let filter = regex("match", args.filter)?;
         let until = regex("until", args.until)?;
-        let second = self.watch_timing.second;
-        let secs = |name: &str, s: Option<u64>| match s {
-            Some(0) => Err(ToolError::model(format!(
-                "`watch.{name}` must be at least 1"
-            ))),
-            s => Ok(s.map(|s| (s, second * u32::try_from(s).unwrap_or(u32::MAX)))),
+        let silence = match args.silence {
+            Some(0) => return Err(ToolError::model("`watch.silence` must be at least 1")),
+            s => s.map(|s| {
+                let d = self.watch_timing.second * u32::try_from(s).unwrap_or(u32::MAX);
+                (s, d)
+            }),
         };
-        let every = secs("every", args.every)?.map(|(_, d)| d);
-        let silence = secs("silence", args.silence)?;
-        if every.is_some() && silence.is_some() {
-            return Err(ToolError::model(
-                "`watch.every` and `watch.silence` do not go together: a rerun command has no \
-                 silence of its own",
-            ));
-        }
         let inbox = self
             .inbox
             .get()
@@ -352,7 +330,6 @@ impl WorkspacePlugin {
             filter,
             until,
             lifetime: Duration::from_secs(lifetime),
-            every,
             silence,
             scan: Mutex::default(),
             notify: Notify::new(),
@@ -424,112 +401,6 @@ impl Watch {
             s.heard(now);
         }
         false
-    }
-
-    /// The `every` interval, when the command is rerun in rounds.
-    pub(super) fn every(&self) -> Option<Duration> {
-        self.every
-    }
-
-    /// Rerun `command` `every` after each round ends, appending each round
-    /// to the task's output and batching what changed (see
-    /// [`Watch::round`]). Ends only when a run cannot start; otherwise the
-    /// watch's own end drops it.
-    pub(super) async fn poll(
-        &self,
-        backend: &dyn Backend,
-        command: &str,
-        every: Duration,
-        cx: &Cx,
-    ) -> Result<ExecOutput, BackendError> {
-        let limit = every.clamp(ROUND_MIN, ROUND_MAX);
-        let mut last: Option<(String, Option<i32>)> = None;
-        let mut n = 0;
-        loop {
-            n += 1;
-            let started = rumu_core::now();
-            let mut output = String::new();
-            let mut collect = |chunk: &str| output.push_str(chunk);
-            let run = backend.exec(command, &mut collect);
-            let code = match tokio::time::timeout(limit, run).await {
-                Ok(out) => Some(out?.code),
-                Err(_) => None,
-            };
-            let status = match code {
-                Some(code) => format!("exit {code}"),
-                None => format!("timed out after {}s", limit.as_secs()),
-            };
-            let header = match &last {
-                None => format!(
-                    "--- round 1 (initial) · {} · {status} ---",
-                    iso_local(started)
-                ),
-                Some((_, was)) if *was != code => {
-                    let was = was.map_or("timed out".to_owned(), |c| format!("exit {c}"));
-                    format!(
-                        "--- round {n} · {} · {status} (was {was}) ---",
-                        iso_local(started)
-                    )
-                }
-                Some(_) => format!("--- round {n} · {} · {status} ---", iso_local(started)),
-            };
-            self.round(
-                &header,
-                &output,
-                last.as_ref().map(|(o, c)| (o.as_str(), *c != code)),
-                cx,
-            );
-            last = Some((output, code));
-            tokio::time::sleep(every).await;
-        }
-    }
-
-    /// Append one round to the task's output (`header`, then `output`) and
-    /// batch it when it is an event: the first round, a changed exit status
-    /// (`last`: the previous output, and whether the status changed), or
-    /// lines new since the last round that `match` picks. Its lines are
-    /// the header and those.
-    fn round(&self, header: &str, output: &str, last: Option<(&str, bool)>, cx: &Cx) {
-        let mut text = format!("{header}\n{output}");
-        if !output.is_empty() && !output.ends_with('\n') {
-            text.push('\n');
-        }
-        cx.progress(Progress::Append(text));
-        let now = Instant::now();
-        let mut scan = self.scan.lock().unwrap();
-        let s = &mut *scan;
-        let at = s.seen + 1;
-        s.seen += 1 + output.lines().count();
-        if s.until.is_some() {
-            return;
-        }
-        let mut before: HashMap<&str, usize> = HashMap::new();
-        for line in last.map_or("", |(o, _)| o).lines() {
-            *before.entry(line).or_default() += 1;
-        }
-        let mut lines = Vec::new();
-        for (i, line) in output.lines().enumerate() {
-            if let Some(n) = before.get_mut(line).filter(|n| **n > 0) {
-                *n -= 1;
-                continue;
-            }
-            let until = self.until.as_ref().is_some_and(|re| re.is_match(line));
-            if until || self.filter.as_ref().is_none_or(|re| re.is_match(line)) {
-                lines.push((at + 1 + i, line));
-            }
-            if until {
-                s.until = Some(at + 1 + i);
-                break;
-            }
-        }
-        if last.is_none_or(|(_, changed)| changed) || !lines.is_empty() {
-            s.batch.push(at, header, now);
-            for (n, line) in lines {
-                s.batch.push(n, line, now);
-            }
-        }
-        drop(scan);
-        self.notify.notify_one();
     }
 
     /// Drive `exec` to its end, posting each batch once it is due and the
@@ -1153,79 +1024,6 @@ mod tests {
         assert!(data.truncated);
     }
 
-    /// Wait until `inbox` holds `n` posts and return the last one's text.
-    async fn nth_post(inbox: &FakeInbox, n: usize) -> String {
-        for _ in 0..200 {
-            if inbox.posts().len() >= n {
-                return texts(inbox)[n - 1].clone();
-            }
-            tokio::time::sleep(20 * MS).await;
-        }
-        panic!("no post {n}: {:?}", texts(inbox));
-    }
-
-    /// With `every`, the first round is one event, later rounds only their
-    /// changed lines or a changed exit status (behind the round's header
-    /// line, which the task view has too); `until` ends the rounds.
-    #[tokio::test]
-    async fn watch_every_reports_changes_between_rounds() {
-        let dir = tempfile::tempdir().unwrap();
-        let state = dir.path().join("state");
-        // Replaced whole, so no round reads it half-written.
-        let set = |text: &str| {
-            let tmp = dir.path().join("state.tmp");
-            std::fs::write(&tmp, text).unwrap();
-            std::fs::rename(&tmp, &state).unwrap();
-        };
-        set("a\nb\n");
-        let (plugin, _host, inbox, cx, _home) = setup(dir.path(), BranchKind::Main);
-        let args = json!({
-            "command": "cat state; test ! -e fail",
-            "description": "poll state",
-            "watch": { "every": 2, "until": "done" },
-        });
-        let run = {
-            let (plugin, cx) = (plugin.clone(), cx.clone());
-            tokio::spawn(async move { watch(&plugin, &cx, args).await })
-        };
-        let body = |note: &str| note.lines().skip(1).map(str::to_owned).collect::<Vec<_>>();
-        let first = nth_post(&inbox, 1).await;
-        assert!(
-            first.starts_with("watch t-w (poll state): +3 lines (L 1–3)\n--- round 1 (initial) · "),
-            "{first}"
-        );
-        assert!(first.ends_with(" · exit 0 ---\na\nb"), "{first}");
-
-        set("a\nc\n");
-        let changed = nth_post(&inbox, 2).await;
-        let lines = body(&changed);
-        assert!(lines[0].starts_with("--- round "), "{changed}");
-        assert_eq!(lines[1..], ["c"], "{changed}");
-
-        std::fs::write(dir.path().join("fail"), "").unwrap();
-        let failed = nth_post(&inbox, 3).await;
-        assert_eq!(body(&failed).len(), 1, "{failed}");
-        assert!(failed.ends_with(" · exit 1 (was exit 0) ---"), "{failed}");
-
-        set("a\nc\ndone\n");
-        let out = tokio::time::timeout(Duration::from_secs(10), run)
-            .await
-            .unwrap()
-            .unwrap();
-        assert!(out.starts_with("watch ended: `until` matched"), "{out}");
-        assert!(out.ends_with(" ---\ndone"), "{out}");
-        // Every round is in the task output, header first.
-        let read = plugin
-            .call_tool(
-                "read",
-                json!({ "path": "@rumu:/tasks/t-w/output", "offset": 1, "limit": 3 }),
-                &cx,
-            )
-            .await
-            .unwrap();
-        assert!(read.content.text.ends_with(" · exit 0 ---\na\nb"));
-    }
-
     /// `silence` posts once per stretch without events, counting only
     /// matching lines with `match`.
     #[tokio::test]
@@ -1302,12 +1100,18 @@ mod tests {
             "{}",
             out.content.text
         );
-        for (watch, want) in [
-            (json!({ "until": "(" }), "`watch.until`"),
-            (json!({ "every": 0 }), "`watch.every` must be at least 1"),
-            (json!({ "every": 5, "silence": 5 }), "do not go together"),
+        for (extra, want) in [
+            (json!({ "watch": { "until": "(" } }), "`watch.until`"),
+            (
+                json!({ "watch": { "silence": 0 } }),
+                "`watch.silence` must be at least 1",
+            ),
+            (json!({ "watch": { "every": 5 } }), "unknown field"),
         ] {
-            let bad = json!({ "command": "echo hi", "watch": watch });
+            let mut bad = json!({ "command": "echo hi" });
+            bad.as_object_mut()
+                .unwrap()
+                .extend(extra.as_object().unwrap().clone());
             let out = plugin.call_tool("bash", bad, &cx).await.unwrap();
             assert!(out.is_error);
             assert!(out.content.text.contains(want), "{}", out.content.text);
