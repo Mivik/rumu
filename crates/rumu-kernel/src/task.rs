@@ -795,15 +795,9 @@ impl Kernel {
     pub fn is_idle(&self, branch: &BranchId) -> Result<bool> {
         let subtree = self.branch_subtree(branch)?;
         let inner = self.inner.lock().unwrap();
-        let loops = subtree.iter().any(|b| {
-            inner.running.contains_key(b) || inner.wake_pending.get(b).is_some_and(|p| p.active)
-        });
-        let tasks = inner.tasks.values().any(|e| {
-            matches!(e.info.kind, TaskKind::Agent { .. })
-                && subtree.contains(&e.info.branch)
-                && (e.info.status.is_running() || !e.post_done)
-        });
-        Ok(!loops && !tasks)
+        Ok(!Self::wakers_locked(&inner, &subtree)
+            .iter()
+            .any(|w| !matches!(w.kind, crate::waker::WakerKind::Task { agent: false, .. })))
     }
 
     /// Wait until `branch` [is idle](Self::is_idle), then push `branch.idle`:

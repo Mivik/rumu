@@ -15,6 +15,7 @@ mod state;
 mod task;
 mod title;
 mod turn;
+mod waker;
 
 pub use error::{Error, Result};
 pub use fields::extract_fields;
@@ -29,6 +30,7 @@ use std::time::Duration;
 
 use crate::host::KernelRuntime;
 use crate::title::TITLE_CHARS;
+use crate::waker::{Waker, WakerKind};
 use rumu_core::kind;
 use rumu_core::{
     Branch, BranchId, BranchKind, BranchStatus, Content, Effect, Event, FilesReverted, HookSpec,
@@ -1425,7 +1427,9 @@ impl Kernel {
 
     /// Close a turn a finished sub-agent ran again (see
     /// [`finish_turn`](Self::finish_turn)): the branch back to Done, and its
-    /// reply to the parent as a note that wakes it.
+    /// reply to the parent as a note that wakes it — unless the parent is the
+    /// main line and has moved off the call that started the sub-agent: the
+    /// reply then stays in the sub-agent's own branch.
     async fn close_agent_turn(
         self: &Arc<Self>,
         branch: &BranchId,
@@ -1440,6 +1444,12 @@ impl Kernel {
         let Some(text) = reply.filter(|_| !followed) else {
             return Ok(());
         };
+        if let Some(main) = self.store.get_branch(parent)?
+            && matches!(main.kind, BranchKind::Main)
+            && self.detached(branch, &main)?
+        {
+            return Ok(());
+        }
         let task = match self.store.get_branch(branch)?.map(|b| b.kind) {
             Some(BranchKind::Agent { task, .. }) => task,
             _ => String::new(),
@@ -1584,11 +1594,13 @@ impl Kernel {
     /// `branch.move` WS method: move the main line `branch` to `node` — just
     /// before a message being edited, onto a prompt being regenerated, to
     /// another variant's end. What it leaves stays in the tree, reachable
-    /// through the message variant switcher. Refused while the branch works,
-    /// while a background task or sub-agent below it still runs (its result
-    /// would land on a line that no longer holds its call), at an assistant
-    /// node with calls still open, and at a node a sub-agent or side question
-    /// added (it is not part of the line).
+    /// through the message variant switcher. Refused while the branch works
+    /// or a wake waits to start it, while a background task or sub-agent
+    /// below it that came from a call the new line would not hold still runs
+    /// (its result would land on a line that no longer holds its call; one
+    /// from a call the line keeps does not block), at an assistant node with
+    /// calls still open, and at a node a sub-agent or side question added (it
+    /// is not part of the line).
     pub async fn move_head(self: &Arc<Self>, branch: &BranchId, node: &NodeId) -> Result<Branch> {
         let mut b = self
             .store
@@ -1607,22 +1619,36 @@ impl Kernel {
             return Err(Error::OffTheLine(node.clone()));
         }
         let subtree = self.branch_subtree(branch)?;
+        let anchors = self.anchors(&b)?;
+        let kept = self.ancestry(node)?;
         {
             // Checked and moved under one lock: no turn or task starts between.
             let inner = self.inner.lock().unwrap();
-            if inner.running.contains_key(branch) {
+            let wakers = Self::wakers_locked(&inner, &subtree);
+            if wakers
+                .iter()
+                .any(|w| &w.branch == branch && matches!(w.kind, WakerKind::Loop | WakerKind::Wake))
+            {
                 return Err(Error::TurnBusy);
             }
-            let agents = subtree.iter().any(|id| {
-                id != branch
-                    && (inner.running.contains_key(id)
-                        || inner.wake_pending.get(id).is_some_and(|p| p.active))
-            });
-            let tasks = inner.tasks.values().any(|e| {
-                subtree.contains(&e.info.branch) && (e.info.status.is_running() || !e.post_done)
-            });
-            if agents || tasks {
-                return Err(Error::LineBusy);
+            let left: Vec<&Waker> = wakers
+                .iter()
+                .filter(|w| !anchors.of(branch, w).is_some_and(|a| kept.contains(a)))
+                .collect();
+            if !left.is_empty() {
+                // Name the tasks; a sub-agent's loop shows only when no task
+                // (its own among them) does.
+                let tasks: Vec<&&Waker> = left
+                    .iter()
+                    .filter(|w| matches!(w.kind, WakerKind::Task { .. }))
+                    .collect();
+                let mut labels: Vec<String> = if tasks.is_empty() {
+                    left.iter().map(|w| anchors.label(w)).collect()
+                } else {
+                    tasks.iter().map(|w| anchors.label(w)).collect()
+                };
+                labels.dedup();
+                return Err(Error::LineBusy(labels.join(", ")));
             }
             self.store.set_branch_head(branch, node)?;
         }
@@ -1652,20 +1678,8 @@ impl Kernel {
     /// such branch's own, from its head up to the node it forked from.
     fn off_line_nodes(&self, session: &SessionId) -> Result<HashSet<NodeId>> {
         let nodes = self.store.nodes_of_session(session)?;
-        let parent: HashMap<&NodeId, Option<&NodeId>> =
-            nodes.iter().map(|n| (&n.id, n.parent.as_ref())).collect();
-        let mut off = HashSet::new();
-        for b in self.store.branches_of_session(session)? {
-            if matches!(b.kind, BranchKind::Main) {
-                continue;
-            }
-            let mut cur = Some(&b.head);
-            while let Some(id) = cur.filter(|id| Some(*id) != b.forked_from.as_ref()) {
-                off.insert(id.clone());
-                cur = parent.get(id).copied().flatten();
-            }
-        }
-        Ok(off)
+        let branches = self.store.branches_of_session(session)?;
+        Ok(Self::off_line_of(&nodes, &branches))
     }
 
     /// `session.fork` WS method: copy the root→`node` path into a new

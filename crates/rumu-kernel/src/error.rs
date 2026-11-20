@@ -83,9 +83,13 @@ pub enum Error {
     #[error("branch {0} is not a main line")]
     NotMainLine(BranchId),
 
-    /// `branch.move` while background tasks or sub-agents of the line run.
-    #[error("busy: background tasks or sub-agents of this line are still running; stop them first")]
-    LineBusy,
+    /// `branch.move` while background tasks or sub-agents run that came from
+    /// a call the new line would not hold.
+    #[error(
+        "busy: these came from a call the line would leave and are still running: {0}; stop \
+         them first"
+    )]
+    LineBusy(String),
 
     /// `branch.move` was given a node a sub-agent or side question added.
     #[error("node {0} is not on the main line")]

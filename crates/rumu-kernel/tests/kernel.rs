@@ -3689,10 +3689,59 @@ async fn moving_the_main_line_waits_for_its_tasks() {
     let head = nodes.last().unwrap().id.clone();
 
     let err = kernel.move_head(&branch, &prompt).await.unwrap_err();
-    assert!(matches!(err, rumu_kernel::Error::LineBusy), "{err:#}");
+    assert!(matches!(err, rumu_kernel::Error::LineBusy(_)), "{err:#}");
+    assert!(err.to_string().contains("bgwork"), "{err:#}");
     assert_eq!(
         kernel.branch_path(&branch).unwrap().0.last().unwrap().id,
         head
+    );
+    kernel.abort_tasks(&branch, true);
+}
+
+/// A task from a call the moved line still holds does not hold it back: its
+/// note lands on a line that made the call.
+#[tokio::test]
+async fn moving_the_main_line_keeps_tasks_of_the_part_it_keeps() {
+    let plugin = Arc::new(background_plugin(
+        "bg",
+        &["bgwork"],
+        vec![],
+        noop_hooks(),
+        noop_tools(),
+    ));
+    let (kernel, _llm, _session, branch) = setup(
+        vec![plugin],
+        vec![
+            LlmResponse::calls(vec![ToolCall::new(
+                "c1",
+                "bgwork",
+                json!({ "ms": 60_000, "background": true }),
+            )]),
+            LlmResponse::text("started"),
+            LlmResponse::text("second"),
+        ],
+    )
+    .await;
+
+    let (_, first, _) = run_turn(&kernel, &branch, "go").await;
+    let (_, second, _) = run_turn(&kernel, &branch, "next").await;
+    let prompt = |nodes: &[Node], text: &str| {
+        nodes
+            .iter()
+            .find(|n| matches!(&n.body, NodeBody::User { content } if content.text == text))
+            .expect("the turn's prompt")
+            .id
+            .clone()
+    };
+    let go = prompt(&first, "go");
+    let next = prompt(&second, "next");
+
+    let err = kernel.move_head(&branch, &go).await.unwrap_err();
+    assert!(matches!(err, rumu_kernel::Error::LineBusy(_)), "{err:#}");
+    kernel.move_head(&branch, &next).await.unwrap();
+    assert_eq!(
+        kernel.branch_path(&branch).unwrap().0.last().unwrap().id,
+        next
     );
     kernel.abort_tasks(&branch, true);
 }
@@ -4744,6 +4793,61 @@ async fn a_message_to_a_finished_sub_agent_reports_back_to_the_parent() {
     assert!(note.ends_with("child follow-up"), "{note}");
     assert!(nodes.iter().any(|n| matches!(&n.body,
         NodeBody::Assistant { content, .. } if content.text == "parent read the follow-up")));
+    let child = agent_branches(&kernel, &session).remove(0);
+    assert_eq!(child.status, BranchStatus::Done);
+}
+
+/// Once the main line has moved off the call that started a finished
+/// sub-agent, a message still runs it, but its reply stays in its own branch:
+/// the line it would reach never made that call.
+#[tokio::test]
+async fn a_sub_agent_the_main_line_moved_off_keeps_its_reply() {
+    let (kernel, session, branch) = setup_split(
+        vec![],
+        vec![
+            LlmResponse::calls(vec![ToolCall::new(
+                "a1",
+                "agent",
+                json!({ "background": false, "task": "look" }),
+            )]),
+            LlmResponse::text("parent done"),
+        ],
+        vec![
+            LlmResponse::text("child summary"),
+            LlmResponse::text("child follow-up"),
+        ],
+    )
+    .await;
+    kernel.set_wake_debounce(Duration::from_millis(10));
+    let (_, nodes, _) = run_turn_on(&kernel, &branch, "go").await;
+    let child = agent_branches(&kernel, &session).remove(0);
+    let prompt = nodes
+        .iter()
+        .find(|n| matches!(n.body, NodeBody::User { .. }))
+        .expect("the prompt")
+        .id
+        .clone();
+    kernel.move_head(&branch, &prompt).await.unwrap();
+
+    let mut rx = kernel.tap_pushes();
+    kernel.prompt(&child.id, "one more thing").await.unwrap();
+    let (done, _) = collect_turn(&mut rx, &child.id.0).await;
+    assert_eq!(done["method"], "turn.done");
+    tokio::time::sleep(Duration::from_millis(50)).await;
+    tokio::time::timeout(Duration::from_secs(5), kernel.wait_idle(&branch))
+        .await
+        .expect("the main line stays idle")
+        .unwrap();
+
+    let (nodes, _) = kernel.branch_path(&branch).unwrap();
+    assert_eq!(
+        nodes.last().unwrap().id,
+        prompt,
+        "nothing reached the main line"
+    );
+    let (own, _) = kernel.branch_path(&child.id).unwrap();
+    assert!(own.iter().any(|n| matches!(&n.body,
+        NodeBody::Assistant { content, .. } if content.text == "child follow-up")));
     let child = agent_branches(&kernel, &session).remove(0);
     assert_eq!(child.status, BranchStatus::Done);
 }
