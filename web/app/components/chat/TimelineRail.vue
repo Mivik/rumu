@@ -26,7 +26,7 @@ import { t } from '../../i18n'
 import { useBranchView } from '../../lib/store'
 import type { TimelineUserEntry } from '../../lib/store'
 import { preview } from '../../lib/util'
-import { contentSegments } from '../../lib/attachments'
+import { contentSegments, kindOf } from '../../lib/attachments'
 import type { Node as RumuNode } from '../../lib/types'
 
 // The scroller, the content column and the composer arrive as getters
@@ -112,9 +112,10 @@ const railHover = ref(false)
 const railFocus = ref(false)
 const dragging = ref(false)
 
-/** A prompt's one-line label: the words the user typed, with images left out
- *  of the text (their count stands in for an image-only prompt). The
- *  `[image: …]` placeholders belong to text-only readers, not the wheel. */
+/** A prompt's one-line label: the words the user typed, with the
+ *  attachments left out of the text (their count stands in for a prompt that
+ *  carries nothing else). The `[image: …]` placeholders belong to text-only
+ *  readers, not the wheel. */
 function promptLabel(e: TimelineUserEntry): string {
   const content = (e.node.body as Extract<RumuNode['body'], { type: 'user' }>).content
   const text = preview(
@@ -123,9 +124,14 @@ function promptLabel(e: TimelineUserEntry): string {
       .join(''),
     80,
   )
-  const images = content.attachments?.length ?? 0
-  if (text || !images) return text
-  return t('chat.timeline.images', { count: images })
+  const attachments = content.attachments ?? []
+  if (text || !attachments.length) return text
+  const images = attachments.filter((a) => kindOf(a) === 'image').length
+  const documents = attachments.filter((a) => kindOf(a) === 'document').length
+  if (images && documents) return t('chat.timeline.attachments', { count: attachments.length })
+  return images
+    ? t('chat.timeline.images', { count: images })
+    : t('chat.timeline.documents', { count: documents })
 }
 
 /** Only the last group can be the one streaming. */

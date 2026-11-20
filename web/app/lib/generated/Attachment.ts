@@ -2,7 +2,8 @@
 import type { AttachmentKind } from "./AttachmentKind";
 
 /**
- * A reference to normalized media in the blob store.
+ * A reference to media in the blob store: a normalized image, or a document
+ * kept whole.
  */
 export type Attachment = { 
 /**
@@ -14,13 +15,21 @@ kind: AttachmentKind,
  */
 hash: string, 
 /**
- * MIME type of the stored bytes (`image/png`, `image/jpeg`).
+ * MIME type of the stored bytes (`image/png`, `text/markdown`).
  */
 mime: string, 
 /**
  * Original file name, for display.
  */
-name?: string | null, width: number, height: number, 
+name?: string | null, 
+/**
+ * Pixel size of an image; a document has none, so it is 0.
+ */
+width: number, 
+/**
+ * Pixel size of an image; a document has none, so it is 0.
+ */
+height: number, 
 /**
  * Stored size in bytes.
  */

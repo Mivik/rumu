@@ -2,7 +2,7 @@
 
 use rumu_core::IoError;
 
-/// A blob-store or image-ingest failure.
+/// A blob-store or ingest failure.
 #[derive(Debug, thiserror::Error)]
 pub enum Error {
     /// A filesystem operation on the blob directory failed.
@@ -22,8 +22,12 @@ pub enum Error {
     Unsupported,
 
     /// The input is larger than ingest accepts.
-    #[error("image is {size} bytes; the limit is {limit}")]
+    #[error("input is {size} bytes; the limit is {limit}")]
     TooLarge { size: usize, limit: usize },
+
+    /// The bytes are not a text document: not valid UTF-8, or a NUL byte.
+    #[error("not a text document")]
+    NotText,
 
     /// The image could not be decoded.
     #[error("decoding image: {0}")]

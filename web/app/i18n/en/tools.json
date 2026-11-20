@@ -63,6 +63,7 @@
     "args": "Args",
     "output": "Output",
     "images": "Images",
+    "documents": "Documents",
     "outputError": "Output · error",
     "liveOutput": "Task output",
     "runningTag": "· running"

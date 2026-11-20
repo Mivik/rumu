@@ -25,7 +25,7 @@ import type { ModelUse } from '../generated/ModelUse'
 import type { FileRef } from '../generated/FileRef'
 import type { RevertFile } from '../generated/RevertFile'
 import type { RevertPlan } from '../generated/RevertPlan'
-import { activeDraft, dropDraft, landingWritten, pruneDrafts, storedImage } from './drafts'
+import { activeDraft, dropDraft, landingWritten, pruneDrafts, storedAttachment } from './drafts'
 import { typedText } from '../attachments'
 import { currentPick, models } from './models'
 import { isUnseen } from './derived'
@@ -372,10 +372,11 @@ function settlePicks(): void {
 /**
  * Send a message on the main line. With no session open (the landing
  * state), start a new session first and send the text as its first prompt.
- * `attachments` name already-uploaded images the text places with
- * `[Image #N]` anchors (empty text is allowed when there is one). `choice`
- * is the composer's pick, taken before any head move. `to` is the branch it goes
- * to (the main line by default). Returns whether the prompt was accepted.
+ * `attachments` name already-uploaded files the text places with `[Image #N]`
+ * and `[Document #N]` anchors (empty text is allowed when there is one).
+ * `choice` is the composer's pick, taken before any head move. `to` is the
+ * branch it goes to (the main line by default). Returns whether the prompt was
+ * accepted.
  */
 export async function sendPrompt(
   text: string,
@@ -498,10 +499,10 @@ export async function rewindTo(
 function putBack(node: Node): void {
   if (node.body.type !== 'user') return
   const draft = activeDraft.value
-  if (draft.text.trim() || draft.images.length) return
-  const images = node.body.content.attachments ?? []
-  draft.text = typedText(node.body.content.text, images.length)
-  draft.images = images.map((a) => storedImage(a))
+  if (draft.text.trim() || draft.attachments.length) return
+  const attachments = node.body.content.attachments ?? []
+  draft.text = typedText(node.body.content.text, attachments)
+  draft.attachments = attachments.map((a) => storedAttachment(a))
   requestComposerFocus()
 }
 

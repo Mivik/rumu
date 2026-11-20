@@ -1,11 +1,13 @@
-//! rumu-blob: the content-addressed blob store behind image attachments.
+//! rumu-blob: the content-addressed blob store behind attachments.
 //!
 //! A blob is a file `<dir>/<sha256-hex>` whose bytes never change once
 //! written, so a node's [`Attachment`] names it by hash and the model
 //! projection of that node stays byte-identical (the cache contract). Images
 //! are normalized once, at ingest ([`Blobs::ingest_image`]); what the model
 //! is sent is derived from that once more ([`Blobs::for_model`]) and kept
-//! beside it in `model/<hash>`.
+//! beside it in `model/<hash>`. A document is stored as it is
+//! ([`Blobs::ingest_document`]) and projected as its text, so there is
+//! nothing to derive.
 //!
 //! Reference tracking is split in two: the session store knows which hashes
 //! its nodes reference, and [`Blobs::gc`] deletes every other blob once it is
@@ -29,6 +31,9 @@ pub use error::{Error, Result};
 pub use normalize::{
     MAX_EDGE, MAX_INPUT_BYTES, MODEL_MAX_EDGE, MODEL_MAX_PIXELS, MODEL_PASSTHROUGH_BYTES,
 };
+
+/// Largest accepted document.
+pub const MAX_DOCUMENT_BYTES: usize = 10 << 20;
 
 /// Distinguishes concurrent temp files of one process.
 static TMP_SEQ: AtomicU64 = AtomicU64::new(0);
@@ -72,6 +77,51 @@ impl Blobs {
         })
     }
 
+    /// Store an upload, deciding from its bytes what it is: an image
+    /// [`ingest_image`](Self::ingest_image) takes is normalized, text is kept
+    /// as a document. An image in a format ingest does not take (HEIC, BMP,
+    /// TIFF, …) is [`Error::Unsupported`] rather than "not text"; text whose
+    /// first bytes happen to look like an image header is still text.
+    pub fn ingest(&self, bytes: &[u8], name: Option<String>) -> Result<Attachment> {
+        if is_image(bytes) {
+            return self.ingest_image(bytes, name);
+        }
+        if !is_text(bytes) && image::guess_format(bytes).is_ok() {
+            return Err(Error::Unsupported);
+        }
+        self.ingest_document(bytes, name)
+    }
+
+    /// Store a text document as it is — no normalization, no re-encoding —
+    /// and describe it. The model reads a document as text, so its bytes
+    /// must stay the ones the user sent. Bytes that are not text (not valid
+    /// UTF-8, or with a NUL in them) are refused: a binary file is not a
+    /// document.
+    pub fn ingest_document(&self, bytes: &[u8], name: Option<String>) -> Result<Attachment> {
+        if bytes.len() > MAX_DOCUMENT_BYTES {
+            return Err(Error::TooLarge {
+                size: bytes.len(),
+                limit: MAX_DOCUMENT_BYTES,
+            });
+        }
+        if !is_text(bytes) {
+            return Err(Error::NotText);
+        }
+        let hash = self.put(bytes)?;
+        Ok(Attachment {
+            kind: rumu_core::AttachmentKind::Document,
+            hash,
+            mime: name
+                .as_deref()
+                .map_or("text/plain", rumu_core::document_mime)
+                .to_owned(),
+            name,
+            width: 0,
+            height: 0,
+            size: bytes.len() as u64,
+        })
+    }
+
     /// Store `bytes` as-is and return their hash. Storing bytes that already
     /// exist refreshes the blob's age, so a re-uploaded orphan gets a full
     /// grace period again.
@@ -90,11 +140,16 @@ impl Blobs {
         Ok(hash)
     }
 
-    /// What the model is sent for the stored image `a`: MIME type and bytes.
-    /// A small blob goes as it is; any other becomes a JPEG scaled to
-    /// [`MODEL_MAX_EDGE`] / [`MODEL_MAX_PIXELS`], derived on first use and
-    /// kept in `model/<hash>`. CPU-bound on first use.
+    /// What the model is sent for the stored attachment `a`: MIME type and
+    /// bytes. A document goes as it is — it is read as text, so there is
+    /// nothing to derive. An image goes as it is when it is small; any other
+    /// becomes a JPEG scaled to [`MODEL_MAX_EDGE`] / [`MODEL_MAX_PIXELS`],
+    /// derived on first use and kept in `model/<hash>`. CPU-bound on first
+    /// use.
     pub fn for_model(&self, a: &Attachment) -> Result<(String, Vec<u8>)> {
+        if a.kind == rumu_core::AttachmentKind::Document {
+            return Ok((a.mime.clone(), self.get(&a.hash)?));
+        }
         let path = self.path(&a.hash)?;
         let small = fs::metadata(&path).is_ok_and(|m| m.len() <= MODEL_PASSTHROUGH_BYTES);
         if small {
@@ -160,19 +215,37 @@ impl Blobs {
         Ok(())
     }
 
-    /// The [`Attachment`] for a stored image, rebuilt from the blob itself
-    /// (format, size and dimensions), so a reference from the wire is
-    /// trusted for its hash and display name only.
+    /// The [`Attachment`] for a stored blob, rebuilt from the blob itself
+    /// (kind, format, size and dimensions), so a reference from the wire is
+    /// trusted for its hash and display name only. An image describes as an
+    /// image; anything else as a document — if it is text at all.
     pub fn describe(&self, hash: &str, name: Option<String>) -> Result<Attachment> {
         let bytes = self.get(hash)?;
-        let (mime, width, height) = normalize::probe(&bytes)?;
+        if is_image(&bytes) {
+            let (mime, width, height) = normalize::probe(&bytes)?;
+            return Ok(Attachment {
+                kind: rumu_core::AttachmentKind::Image,
+                hash: hash.to_owned(),
+                mime: mime.to_owned(),
+                name,
+                width,
+                height,
+                size: bytes.len() as u64,
+            });
+        }
+        if !is_text(&bytes) {
+            return Err(Error::NotText);
+        }
         Ok(Attachment {
-            kind: rumu_core::AttachmentKind::Image,
+            kind: rumu_core::AttachmentKind::Document,
             hash: hash.to_owned(),
-            mime: mime.to_owned(),
+            mime: name
+                .as_deref()
+                .map_or("text/plain", rumu_core::document_mime)
+                .to_owned(),
             name,
-            width,
-            height,
+            width: 0,
+            height: 0,
             size: bytes.len() as u64,
         })
     }
@@ -238,6 +311,12 @@ fn write_new(path: &Path, bytes: &[u8]) -> Result<()> {
 /// JPEG, GIF, WebP). A cheap magic-byte sniff; decoding may still fail.
 pub fn is_image(bytes: &[u8]) -> bool {
     normalize::accepted_format(bytes).is_some()
+}
+
+/// Whether `bytes` are text: valid UTF-8 and no NUL byte. A binary file
+/// (or a text file with a NUL in it) is not a document.
+pub fn is_text(bytes: &[u8]) -> bool {
+    std::str::from_utf8(bytes).is_ok() && !bytes.contains(&0)
 }
 
 /// Lowercase hex SHA-256 of `bytes`.

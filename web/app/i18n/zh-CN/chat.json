@@ -30,17 +30,26 @@
     "stop": "停止",
     "steer": "引导",
     "send": "发送",
-    "attach": "添加图片",
-    "removeImage": "移除图片",
+    "attach": "添加图片和文档",
     "retryUpload": "重试上传",
-    "tooManyImages": "最多 {max} 张图片",
-    "notAnImage": "只能附加图片文件",
-    "uploadFailed": "上传图片失败"
+    "uploadFailed": "上传文件失败",
+    "removeAttachment": "移除附件",
+    "tooManyAttachments": "最多 {max} 个附件",
+    "notAttachable": "只能附加图片和文本文件",
+    "tray": "附件"
   },
   "image": {
     "open": "查看图片",
     "close": "关闭图片",
     "alt": "图片"
+  },
+  "document": {
+    "open": "打开 {name}",
+    "chip": "{name} · {size}",
+    "untitled": "文档"
+  },
+  "drop": {
+    "hint": "放开以添加附件"
   },
   "header": {
     "sessions": "会话",
@@ -113,7 +122,9 @@
   "timeline": {
     "label": "对话时间线",
     "emptyPrompt": "（空提问）",
-    "images": "{count} 张图片"
+    "images": "{count} 张图片",
+    "documents": "{count} 个文档",
+    "attachments": "{count} 个附件"
   },
   "ask": {
     "title": "{from} 想请 {to} 完成任务",

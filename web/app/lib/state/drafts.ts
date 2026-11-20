@@ -2,7 +2,7 @@
 // landing page (key `''`), so switching sessions neither carries a draft
 // along nor drops it. Drafts outlive the composer (landing and chat mount
 // different ones) and, in this browser, a reload: the text and the uploaded
-// images go to localStorage; a file still uploading or failed does not
+// attachments go to localStorage; a file still uploading or failed does not
 // survive one. A session that is gone takes its draft with it.
 
 import { computed, reactive, watch } from 'vue'
@@ -10,13 +10,15 @@ import type { Attachment } from '../types'
 import { blobUrl } from '../attachments'
 import { state } from './state'
 
-/** One image being attached: the file, its local preview, and where its
- * upload stands. An image the edited message already carries has no file. */
-export interface PendingImage {
+/** One attachment waiting to be sent: an image or a text document. The file,
+ *  its local preview, and where its upload stands. An attachment the edited
+ *  message already carries has no file. */
+export interface PendingAttachment {
   id: number
   file?: File
   name: string
-  /** Object URL of the file's bytes, or the stored blob, for the tray's preview. */
+  /** Object URL of the file's bytes (an image, as a picture), or the stored
+   *  blob; a document has no picture and shows as a chip. */
   url: string
   status: 'uploading' | 'done' | 'failed'
   attachment?: Attachment
@@ -26,26 +28,29 @@ export interface PendingImage {
 
 export interface Draft {
   text: string
-  images: PendingImage[]
+  attachments: PendingAttachment[]
 }
 
 interface Stored {
   text: string
-  images: { name: string; attachment: Attachment }[]
+  attachments?: { name: string; attachment: Attachment }[]
+  /** The name `attachments` had before documents; a draft from then still
+   *  comes back. */
+  images?: { name: string; attachment: Attachment }[]
 }
 
 const KEY = 'rumu.drafts'
 
-let imageSeq = 0
+let attachmentSeq = 0
 
-export function nextImageId(): number {
-  return ++imageSeq
+export function nextAttachmentId(): number {
+  return ++attachmentSeq
 }
 
-/** A tile for an image already in the blob store. */
-export function storedImage(attachment: Attachment, name = attachment.name ?? ''): PendingImage {
-  return reactive<PendingImage>({
-    id: nextImageId(),
+/** A tile for an attachment already in the blob store. */
+export function storedAttachment(attachment: Attachment, name = attachment.name ?? ''): PendingAttachment {
+  return reactive<PendingAttachment>({
+    id: nextAttachmentId(),
     name,
     url: blobUrl(attachment.hash),
     status: 'done',
@@ -55,9 +60,9 @@ export function storedImage(attachment: Attachment, name = attachment.name ?? ''
 }
 
 /** Drop a tile: stop its upload and free its local preview. */
-export function releaseImage(item: PendingImage): void {
+export function releaseAttachment(item: PendingAttachment): void {
   item.ctrl.abort()
-  if (item.file) URL.revokeObjectURL(item.url)
+  if (item.file && item.url) URL.revokeObjectURL(item.url)
 }
 
 function load(): Record<string, Draft> {
@@ -66,7 +71,10 @@ function load(): Record<string, Draft> {
     return Object.fromEntries(
       Object.entries(raw).map(([k, d]) => [
         k,
-        { text: d.text, images: d.images.map((i) => storedImage(i.attachment, i.name)) },
+        {
+          text: d.text,
+          attachments: (d.attachments ?? d.images ?? []).map((i) => storedAttachment(i.attachment, i.name)),
+        },
       ]),
     )
   } catch {
@@ -77,7 +85,7 @@ function load(): Record<string, Draft> {
 const drafts = reactive<Record<string, Draft>>(load())
 
 export function draftFor(key: string): Draft {
-  return (drafts[key] ??= reactive({ text: '', images: [] }))
+  return (drafts[key] ??= reactive({ text: '', attachments: [] }))
 }
 
 const keyOf = (session: string | null): string => session ?? ''
@@ -92,14 +100,14 @@ export const activeDraft = computed(() => drafts[keyOf(state.sessionId)]!)
  *  its project, while other sessions are open. */
 export const landingWritten = computed(() => {
   const d = drafts['']
-  return !!d && (d.text.trim() !== '' || d.images.length > 0)
+  return !!d && (d.text.trim() !== '' || d.attachments.length > 0)
 })
 
 function stored(d: Draft): Stored | null {
-  const images = d.images
+  const attachments = d.attachments
     .filter((i) => i.status === 'done')
     .map((i) => ({ name: i.name, attachment: i.attachment! }))
-  return d.text.trim() || images.length ? { text: d.text, images } : null
+  return d.text.trim() || attachments.length ? { text: d.text, attachments } : null
 }
 
 let saveTimer: ReturnType<typeof setTimeout> | undefined
@@ -127,7 +135,7 @@ addEventListener('pagehide', () => saveTimer !== undefined && save())
 export function dropDraft(session: string): void {
   const d = drafts[session]
   if (!d || session === keyOf(state.sessionId)) return
-  for (const item of d.images) releaseImage(item)
+  for (const item of d.attachments) releaseAttachment(item)
   delete drafts[session]
 }
 

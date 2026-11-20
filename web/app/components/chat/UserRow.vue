@@ -10,8 +10,9 @@
 // before the message — the conversation, the files written since, or both
 // (RewindDialog).
 //
-// Images lead the message as thumbnails, the way the web composer sends them
-// (`withLeadingAnchors`); the text below is what was typed. An anchor placed
+// The message leads with its attachments, the way the web composer sends
+// them (`withLeadingAnchors`): images as thumbnails, documents as chips that
+// open the stored blob. The text below is what was typed. An anchor placed
 // elsewhere by another client stays visible as text.
 //
 // A long text folds to FOLD_PX with a fading bottom edge and a toggle under it;
@@ -22,12 +23,13 @@ import { t } from '../../i18n'
 import type { Node } from '../../lib/types'
 import { forkSession, isBusy, regenerateFrom, useBranchView } from '../../lib/store'
 import { renderMarkdown } from '../../lib/markdown'
-import { renderedContent, typedText } from '../../lib/attachments'
+import { blobUrl, kindOf, renderedContent, typedText } from '../../lib/attachments'
 import { copyText } from '../../lib/util'
 import { editTarget, toast } from '../../lib/state/ui'
 import Icon from '../ui/Icon.vue'
 import BranchSwitcher from './BranchSwitcher.vue'
 import ContextPills from './ContextPills.vue'
+import DocumentChip from './DocumentChip.vue'
 import ImageThumb from './ImageThumb.vue'
 import RewindDialog from './RewindDialog.vue'
 
@@ -35,8 +37,10 @@ const props = withDefaults(defineProps<{ node: Node; context?: Node[] }>(), { co
 const view = useBranchView()
 
 const content = computed(() => (props.node.body as Extract<Node['body'], { type: 'user' }>).content)
-const images = computed(() => content.value.attachments ?? [])
-const text = computed(() => typedText(content.value.text, images.value.length))
+const attachments = computed(() => content.value.attachments ?? [])
+const images = computed(() => attachments.value.filter((a) => kindOf(a) === 'image'))
+const documents = computed(() => attachments.value.filter((a) => kindOf(a) === 'document'))
+const text = computed(() => typedText(content.value.text, attachments.value))
 const editing = computed(() => editTarget.value?.id === props.node.id)
 
 const FOLD_PX = 320
@@ -117,6 +121,15 @@ const rewinding = ref(false)
             :max-h="120"
             :max-w="200"
             :tile="images.length > 1"
+          />
+        </div>
+        <div v-if="documents.length" class="flex flex-wrap items-end justify-end gap-1.5">
+          <DocumentChip
+            v-for="(a, i) in documents"
+            :key="`${a.hash}:${i}`"
+            :name="a.name ?? t('chat.document.untitled')"
+            :size="a.size"
+            :href="blobUrl(a.hash)"
           />
         </div>
         <div

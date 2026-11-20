@@ -30,17 +30,26 @@
     "stop": "Stop",
     "steer": "Steer",
     "send": "Send",
-    "attach": "Attach images",
-    "removeImage": "Remove image",
+    "attach": "Attach images and documents",
     "retryUpload": "Retry upload",
-    "tooManyImages": "Too many images (at most {max})",
-    "notAnImage": "Only image files can be attached",
-    "uploadFailed": "Couldn't upload image"
+    "uploadFailed": "Couldn't upload the file",
+    "removeAttachment": "Remove attachment",
+    "tooManyAttachments": "Too many attachments (at most {max})",
+    "notAttachable": "Only images and text documents can be attached",
+    "tray": "Attachments"
   },
   "image": {
     "open": "Open image",
     "close": "Close image",
     "alt": "image"
+  },
+  "document": {
+    "open": "Open {name}",
+    "chip": "{name} · {size}",
+    "untitled": "document"
+  },
+  "drop": {
+    "hint": "Drop to attach"
   },
   "header": {
     "sessions": "Sessions",
@@ -113,7 +122,9 @@
   "timeline": {
     "label": "Conversation timeline",
     "emptyPrompt": "(empty prompt)",
-    "images": "{count} image | {count} images"
+    "images": "{count} image | {count} images",
+    "documents": "{count} document | {count} documents",
+    "attachments": "{count} attachment | {count} attachments"
   },
   "ask": {
     "title": "{from} wants to hand {to} a task",

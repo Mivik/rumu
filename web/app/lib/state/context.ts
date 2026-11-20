@@ -4,7 +4,8 @@
 // the last reply's measured usage, plus a rough count of what came after it.
 
 import { computed } from 'vue'
-import type { Content, Node } from '../types'
+import type { Attachment, Content, Node } from '../types'
+import { kindOf } from '../attachments'
 import { textTokens } from '../util'
 import { pathNodes } from './derived'
 import { currentPick, models, resolvePick } from './models'
@@ -18,9 +19,21 @@ const RATIO = 0.85
 const RESERVE_REPLY = 20_000
 const RESERVE_BUFFER = 13_000
 const IMAGE_TOKENS = 1_200
+/** A document counts its bytes, four to a token, as the kernel counts them. */
+const BYTES_PER_TOKEN = 4
+/** The most of a document the model is sent (`DOCUMENT_TEXT_LIMIT` in
+ *  rumu-core). */
+const DOCUMENT_TEXT_LIMIT = 64 << 10
+
+/** What an attachment adds to the projection, roughly: an image is a fixed
+ *  price, a document is read — as much of it as the model is sent. */
+function attachmentTokens(a: Attachment): number {
+  if (kindOf(a) === 'document') return Math.ceil(Math.min(a.size, DOCUMENT_TEXT_LIMIT) / BYTES_PER_TOKEN)
+  return IMAGE_TOKENS
+}
 
 function contentTokens(c: Content): number {
-  return textTokens(c.text) + (c.attachments?.length ?? 0) * IMAGE_TOKENS
+  return textTokens(c.text) + (c.attachments ?? []).reduce((s, a) => s + attachmentTokens(a), 0)
 }
 
 function nodeTokens(n: Node): number {

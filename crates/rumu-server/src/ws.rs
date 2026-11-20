@@ -177,9 +177,10 @@ async fn ws_upgrade(State(state): State<AppState>, ws: WebSocketUpgrade) -> Resp
 }
 
 /// `POST /blobs?name=<url-encoded file name>`: the raw request body is the
-/// image bytes. They are normalized once (orientation, size, format) and
-/// stored; the JSON [`rumu_core::Attachment`] naming the stored blob comes
-/// back. A body the ingest refuses is a 400 naming why.
+/// file's bytes. An image is normalized once (orientation, size, format); a
+/// document is stored as it is. Either way the JSON
+/// [`rumu_core::Attachment`] naming the stored blob comes back. A body the
+/// ingest refuses is a 400 naming why.
 async fn blob_upload(
     State(state): State<AppState>,
     Query(params): Query<HashMap<String, String>>,
@@ -188,13 +189,13 @@ async fn blob_upload(
     let name = params.get("name").cloned().filter(|n| !n.trim().is_empty());
     let blobs = state.blobs.clone();
     // Normalization is CPU-bound: keep it off the async executor.
-    let ingested = tokio::task::spawn_blocking(move || blobs.ingest_image(&bytes, name)).await;
+    let ingested = tokio::task::spawn_blocking(move || blobs.ingest(&bytes, name)).await;
     match ingested {
         Ok(Ok(attachment)) => Json(attachment).into_response(),
         Ok(Err(e)) => blob_error(&e),
         Err(e) => (
             StatusCode::INTERNAL_SERVER_ERROR,
-            Json(json!({ "error": format!("image ingest failed: {e}") })),
+            Json(json!({ "error": format!("blob ingest failed: {e}") })),
         )
             .into_response(),
     }
@@ -288,7 +289,9 @@ async fn blob_media(
 fn blob_error(e: &rumu_blob::Error) -> Response {
     use rumu_blob::Error;
     let status = match e {
-        Error::Unsupported | Error::TooLarge { .. } | Error::Decode(_) => StatusCode::BAD_REQUEST,
+        Error::Unsupported | Error::TooLarge { .. } | Error::Decode(_) | Error::NotText => {
+            StatusCode::BAD_REQUEST
+        }
         Error::NotFound(_) => StatusCode::NOT_FOUND,
         Error::InvalidHash(_) => StatusCode::BAD_REQUEST,
         Error::Io(_) | Error::Encode(_) => StatusCode::INTERNAL_SERVER_ERROR,

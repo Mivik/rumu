@@ -10,24 +10,26 @@
 // (SessionPickers), so the footer is the same on the landing page and in a
 // session.
 // While rumu works, sending steers the turn and a stop button joins it.
-// The writing and its images are the open session's draft (or the landing
-// page's), kept per session across switches and reloads (lib/state/drafts).
+// The writing and its attachments are the open session's draft (or the
+// landing page's), kept per session across switches and reloads
+// (lib/state/drafts).
 //
 // A tool call waiting on the user's approval unfolds from the top of the
 // sheet (DecisionPanel), above the writing. The sheet is a column that may
 // shrink (min-h-0): a request taller than the room the sheet has scrolls
 // inside its panel instead of growing the sheet past the window's foot.
 //
-// Images attach three ways — paste, drop, the footer's picture key — and
-// upload the moment they arrive, into the tray above the writing; a failed
-// upload keeps its tile (the server's word arrived as a toast) until retried
-// or removed. The writing stays plain text: like the Claude and ChatGPT web
-// apps, the sent message leads with its images (`withLeadingAnchors`).
+// Attachments attach three ways — paste, drop, the footer's paperclip key —
+// and upload the moment they arrive, into the tray above the writing: an
+// image as a thumbnail, a text document as a chip. A failed upload keeps its
+// tile (the server's word arrived as a toast) until retried or removed. The
+// writing stays plain text: like the Claude and ChatGPT web apps, the sent
+// message leads with its attachments (`withLeadingAnchors`).
 //
 // On a phone the sheet folds to one line while you are elsewhere — a tap
 // on the transcript or the sidebar, not a scroll — and unfolds when touched
 // again. It stays
-// open while it holds images or a decision.
+// open while it holds attachments or a decision.
 //
 // Text selected in a reply offers itself above the writing (QuoteTray): as a
 // quote leading the message, or as a side question. `/btw` asks on the side
@@ -58,25 +60,27 @@ import {
   useBranchView,
 } from '../../lib/store'
 import type { PromptAttachment } from '../../lib/store'
-import type { Content, Quote, Node as TreeNode } from '../../lib/types'
-import { typedText, uploadBlob, withLeadingAnchors } from '../../lib/attachments'
+import type { Attachment, Content, Quote, Node as TreeNode } from '../../lib/types'
+import { kindOf, sniffFile, typedText, uploadBlob, withLeadingAnchors } from '../../lib/attachments'
 import { composerFocus, editTarget as mainEdit, openLightbox, toast } from '../../lib/state/ui'
 import { askSide, openSide, quoteBlock, quotes as mainQuotes } from '../../lib/state/side'
+import { dragging, setDropSink } from '../../lib/state/drops'
 import {
   activeDraft,
-  nextImageId,
-  releaseImage,
-  storedImage,
+  nextAttachmentId,
+  releaseAttachment,
+  storedAttachment,
   type Draft,
-  type PendingImage,
+  type PendingAttachment,
 } from '../../lib/state/drafts'
 import Icon from '../ui/Icon.vue'
 import DecisionPanel from './DecisionPanel.vue'
 import ContextMeter from './ContextMeter.vue'
+import DocumentChip from './DocumentChip.vue'
 import ModelPicker from './ModelPicker.vue'
 import QuoteTray from './QuoteTray.vue'
 
-const MAX_IMAGES = 20
+const MAX_ATTACHMENTS = 20
 
 const view = useBranchView()
 const { busy: isBusy, queued: queuedPrompts } = view
@@ -84,7 +88,7 @@ const { busy: isBusy, queued: queuedPrompts } = view
 const editTarget = view.sub ? shallowRef<TreeNode | null>(null) : mainEdit
 const quotes = view.sub ? ref<Quote[]>([]) : mainQuotes
 /** A sub-agent's composer writes on a draft of its own, kept while it is open. */
-const subDraft: Draft | null = view.sub ? reactive({ text: '', images: [] }) : null
+const subDraft: Draft | null = view.sub ? reactive({ text: '', attachments: [] }) : null
 
 /** The message being edited, held apart from the session's draft. */
 const editing = ref<Draft | null>(null)
@@ -95,8 +99,8 @@ const draft = computed({
   set: (text) => (current.value.text = text),
 })
 const attachments = computed({
-  get: () => current.value.images,
-  set: (images) => (current.value.images = images),
+  get: () => current.value.attachments,
+  set: (attachments) => (current.value.attachments = attachments),
 })
 const rootEl = ref<HTMLElement>()
 const textareaEl = ref<HTMLTextAreaElement>()
@@ -115,7 +119,7 @@ const btw = computed(
   () => !view.sub && !!state.sessionId && !editTarget.value && /^\/btw(\s|$)/.test(draft.value),
 )
 
-async function run(item: PendingImage): Promise<void> {
+async function run(item: PendingAttachment): Promise<void> {
   if (!item.file) return
   item.status = 'uploading'
   item.error = undefined
@@ -130,40 +134,57 @@ async function run(item: PendingImage): Promise<void> {
   }
 }
 
-function attachFiles(list: FileList | File[]): void {
+/** Take the files in, each as what its bytes say it is (`sniffFile`): an
+ *  image or a text document; anything else is refused with a word. */
+async function attachFiles(list: FileList | File[]): Promise<void> {
   const files = [...list]
-  const images = files.filter((f) => f.type.startsWith('image/'))
-  if (images.length < files.length) toast('error', t('chat.composer.notAnImage'))
-  const room = MAX_IMAGES - attachments.value.length
-  if (images.length > room) {
-    toast('error', t('chat.composer.tooManyImages', { max: MAX_IMAGES }))
-    images.length = Math.max(0, room)
+  // The buffer they land in is the one open now, not after the reads.
+  const into = current.value
+  const kinds = await Promise.all(files.map(sniffFile))
+  const take = files.flatMap((file, i) => (kinds[i] ? [{ file, kind: kinds[i] }] : []))
+  if (take.length < files.length) toast('error', t('chat.composer.notAttachable'))
+  const room = MAX_ATTACHMENTS - into.attachments.length
+  if (take.length > room) {
+    toast('error', t('chat.composer.tooManyAttachments', { max: MAX_ATTACHMENTS }))
   }
-  if (!images.length) return
-  for (const file of images) {
-    const item = reactive<PendingImage>({
-      id: nextImageId(),
+  for (const { file, kind } of take.slice(0, Math.max(0, room))) {
+    const item = reactive<PendingAttachment>({
+      id: nextAttachmentId(),
       file,
       name: file.name,
-      url: URL.createObjectURL(file),
+      // a document has no picture; only an image gets a local preview
+      url: kind === 'image' ? URL.createObjectURL(file) : '',
       status: 'uploading',
       ctrl: new AbortController(),
     })
-    attachments.value.push(item)
+    into.attachments.push(item)
     void run(item)
   }
 }
 
+/** Whether a tile shows as a picture: an image does, a document shows as a
+ *  chip. Before the upload answers, only an image has a local preview. */
+function picture(item: PendingAttachment): boolean {
+  if (item.attachment) return kindOf(item.attachment) === 'image'
+  return !!item.url
+}
+
+/** The size a chip shows: the stored bytes once uploaded, the file's own
+ *  before that. */
+function sizeOf(item: PendingAttachment): number {
+  return item.attachment?.size ?? item.file?.size ?? 0
+}
+
 /** Show a tile full-size: the stored image once uploaded, the local
  *  preview before that. */
-function preview(item: PendingImage): void {
+function preview(item: PendingAttachment): void {
   openLightbox(item.attachment ?? { src: item.url, name: item.name || null })
 }
 
 function removeAt(i: number): void {
   const item = attachments.value[i]
   if (!item) return
-  releaseImage(item)
+  releaseAttachment(item)
   attachments.value.splice(i, 1)
 }
 
@@ -171,42 +192,12 @@ function onPaste(e: ClipboardEvent): void {
   const files = e.clipboardData?.files
   if (!files?.length) return
   e.preventDefault()
-  attachFiles(files)
-}
-
-// ---- drop target (a counter: dragleave fires per child element) ----
-
-const dragDepth = ref(0)
-
-function hasFiles(e: DragEvent): boolean {
-  return !!e.dataTransfer?.types?.includes('Files')
-}
-
-function onDragenter(e: DragEvent): void {
-  if (!hasFiles(e)) return
-  e.preventDefault()
-  dragDepth.value++
-}
-
-function onDragover(e: DragEvent): void {
-  if (hasFiles(e)) e.preventDefault()
-}
-
-function onDragleave(): void {
-  dragDepth.value = Math.max(0, dragDepth.value - 1)
-}
-
-function onDrop(e: DragEvent): void {
-  if (!hasFiles(e)) return
-  e.preventDefault()
-  dragDepth.value = 0
-  const files = e.dataTransfer?.files
-  if (files?.length) attachFiles(files)
+  void attachFiles(files)
 }
 
 function onPick(e: Event): void {
   const input = e.target as HTMLInputElement
-  attachFiles(input.files ?? [])
+  void attachFiles(input.files ?? [])
   input.value = ''
 }
 
@@ -250,19 +241,28 @@ function onClickCapture(e: MouseEvent): void {
   textareaEl.value?.focus()
 }
 
-onMounted(() => document.addEventListener('click', onTapAnywhere, true))
+/** Unregisters this composer as the drop sink — and only this one. */
+let dropSinkOff: (() => void) | undefined
+
+onMounted(() => {
+  // The window answers the drag (lib/state/drops), so a file dropped
+  // anywhere in the app lands here.
+  dropSinkOff = setDropSink((files) => void attachFiles(files))
+  document.addEventListener('click', onTapAnywhere, true)
+})
 
 onBeforeUnmount(() => {
+  dropSinkOff?.()
   document.removeEventListener('click', onTapAnywhere, true)
   endEdit()
-  for (const item of subDraft?.images ?? []) releaseImage(item)
+  for (const item of subDraft?.attachments ?? []) releaseAttachment(item)
 })
 
 // ---- editing a sent message ----
 
 function endEdit(): void {
   if (!editing.value) return
-  for (const item of editing.value.images) releaseImage(item)
+  for (const item of editing.value.attachments) releaseAttachment(item)
   editing.value = null
 }
 
@@ -272,10 +272,10 @@ function userContent(node: TreeNode): Content {
 
 function beginEdit(node: TreeNode): void {
   const content = userContent(node)
-  const images = content.attachments ?? []
+  const attachments = content.attachments ?? []
   editing.value = reactive({
-    text: typedText(content.text, images.length),
-    images: images.map((a) => storedImage(a)),
+    text: typedText(content.text, attachments),
+    attachments: attachments.map((a) => storedAttachment(a)),
   })
   engaged.value = true
   void nextTick(() => {
@@ -306,9 +306,14 @@ async function submit(): Promise<void> {
   if (!canSend.value) return
   const items = [...attachments.value]
   // Tiles that never made it stay behind; they are not part of the message.
-  const sent: PromptAttachment[] = items
-    .filter((i) => i.status === 'done')
-    .map((i) => ({ hash: i.attachment!.hash, name: i.name || undefined }))
+  const done = items.filter((i) => i.status === 'done')
+  const sent: PromptAttachment[] = done.map((i) => ({
+    hash: i.attachment!.hash,
+    name: i.name || undefined,
+  }))
+  // The anchors name each attachment by its kind, so the whole attachment
+  // goes along, not just its hash.
+  const sentAttachments: Attachment[] = done.map((i) => i.attachment!)
   const text = draft.value.trim()
   const target = editTarget.value
   const origin = current.value
@@ -333,7 +338,10 @@ async function submit(): Promise<void> {
   }
   // Quoted passages lead the message, as markdown quotes.
   const quoted = quotes.value
-  const body = withLeadingAnchors([...quoted.map(quoteBlock), text].filter(Boolean).join('\n\n'), sent.length)
+  const body = withLeadingAnchors(
+    [...quoted.map(quoteBlock), text].filter(Boolean).join('\n\n'),
+    sentAttachments,
+  )
   if (target && unchanged(target, body, sent)) {
     editTarget.value = null
     return
@@ -345,7 +353,7 @@ async function submit(): Promise<void> {
     ? await editPrompt(target, body, sent)
     : await sendPrompt(body, sent, view.sub ? {} : undefined, view.branch.value)
   if (ok) {
-    for (const item of items) releaseImage(item)
+    for (const item of items) releaseAttachment(item)
     if (target && editTarget.value === target) editTarget.value = null
     return
   }
@@ -360,11 +368,11 @@ async function submit(): Promise<void> {
       ? activeDraft.value
       : origin
   if (!back) {
-    for (const item of items) releaseImage(item)
+    for (const item of items) releaseAttachment(item)
     return
   }
   back.text = text
-  back.images = items
+  back.attachments = items
   quotes.value = quoted
 }
 
@@ -379,10 +387,10 @@ async function takeBack(id = queuedPrompts.value.at(-1)?.id): Promise<void> {
   const content = await takeBackPrompt(id, view.branch.value)
   if (!content) return
   if (editTarget.value) editTarget.value = null
-  const images = content.attachments ?? []
-  const text = typedText(content.text, images.length)
+  const attachments = content.attachments ?? []
+  const text = typedText(content.text, attachments)
   into.text = [text, into.text].filter((s) => s.trim()).join('\n\n')
-  into.images = [...images.map((a) => storedImage(a)), ...into.images]
+  into.attachments = [...attachments.map((a) => storedAttachment(a)), ...into.attachments]
   engaged.value = true
   void nextTick(() => {
     const el = textareaEl.value
@@ -490,15 +498,11 @@ const sendLabel = computed(() =>
   <div
     ref="rootEl"
     class="composer relative mx-auto flex w-full max-w-[var(--col-max)] min-h-0 flex-col rounded-sheet"
-    :class="{ 'is-drag': dragDepth > 0, 'is-btw': btw }"
+    :class="{ 'is-drag': dragging, 'is-btw': btw }"
     @pointerdown="onPress"
     @click.capture="onClickCapture"
     @focusin="engaged = true"
     @click.self="textareaEl?.focus()"
-    @dragenter="onDragenter"
-    @dragover="onDragover"
-    @dragleave="onDragleave"
-    @drop="onDrop"
   >
     <DecisionPanel v-if="!view.sub" />
     <div v-if="editTarget" class="flex items-center gap-2 pt-2 pr-2 pl-4 text-meta text-ink-2">
@@ -513,9 +517,16 @@ const sendLabel = computed(() =>
         <Icon name="close" :size="13" />
       </button>
     </div>
-    <div v-if="attachments.length" class="flex flex-wrap gap-2 px-4" :class="editTarget ? 'pt-2' : 'pt-3'">
-      <div v-for="(item, i) in attachments" :key="item.id" class="relative">
+    <div
+      v-if="attachments.length"
+      class="flex flex-wrap items-center gap-2 px-4"
+      :class="editTarget ? 'pt-2' : 'pt-3'"
+      role="group"
+      :aria-label="t('chat.composer.tray')"
+    >
+      <div v-for="(item, i) in attachments" :key="item.id" class="relative flex items-center">
         <button
+          v-if="picture(item)"
           type="button"
           class="block rounded-control transition-opacity hover:opacity-90"
           :title="item.name || t('chat.image.open')"
@@ -532,6 +543,13 @@ const sendLabel = computed(() =>
             }"
           />
         </button>
+        <DocumentChip
+          v-else
+          class="h-14"
+          :class="{ 'opacity-60': item.status === 'uploading' }"
+          :name="item.name"
+          :size="sizeOf(item)"
+        />
         <span
           v-if="item.status === 'uploading'"
           class="pointer-events-none absolute inset-0 flex items-center justify-center"
@@ -551,8 +569,8 @@ const sendLabel = computed(() =>
         </button>
         <button
           class="absolute -top-1.5 -right-1.5 flex size-[18px] items-center justify-center rounded-full border border-line bg-surface text-ink-3 shadow-soft transition-colors hover:border-danger/50 hover:bg-danger-soft hover:text-danger"
-          :title="t('chat.composer.removeImage')"
-          :aria-label="t('chat.composer.removeImage')"
+          :title="t('chat.composer.removeAttachment')"
+          :aria-label="t('chat.composer.removeAttachment')"
           @click="removeAt(i)"
         >
           <Icon name="close" :size="12" />
@@ -609,7 +627,6 @@ const sendLabel = computed(() =>
           <input
             ref="fileEl"
             type="file"
-            accept="image/*"
             multiple
             class="hidden"
             :aria-label="t('chat.composer.attach')"
@@ -621,7 +638,7 @@ const sendLabel = computed(() =>
             :aria-label="t('chat.composer.attach')"
             @click="fileEl?.click()"
           >
-            <Icon name="image" :size="16" />
+            <Icon name="attach" :size="16" />
           </button>
           <Transition
             enter-active-class="transition duration-200 ease-spring"

@@ -3,7 +3,6 @@
 /**
  * What kind of media an [`Attachment`] holds. These are the primitives a
  * model can consume directly; video is not one (it is frames, optionally
- * with an audio track), and documents are compiled by the harness into page
- * images plus text.
+ * with an audio track).
  */
-export type AttachmentKind = "image" | "audio";
+export type AttachmentKind = "image" | "audio" | "document";

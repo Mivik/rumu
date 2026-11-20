@@ -6,8 +6,8 @@
 use std::sync::Arc;
 
 use rumu_core::{
-    BranchId, CompactReason, Compaction, Content, ModelPick, Node, NodeBody, Role, SYSTEM_SOURCE,
-    compaction_of, truncate_middle, view_order,
+    Attachment, AttachmentKind, BranchId, CompactReason, Compaction, Content, DOCUMENT_TEXT_LIMIT,
+    ModelPick, Node, NodeBody, Role, SYSTEM_SOURCE, compaction_of, truncate_middle, view_order,
 };
 use serde_json::json;
 use tokio_util::sync::CancellationToken;
@@ -47,9 +47,21 @@ fn text_tokens(text: &str) -> u64 {
     ascii.div_ceil(4) + other
 }
 
+/// What an attachment adds to a projection, roughly: an image costs a fixed
+/// amount, a document is read as text — as much of it as the model is sent
+/// ([`DOCUMENT_TEXT_LIMIT`]), not the whole file.
+fn attachment_tokens(a: &Attachment) -> u64 {
+    match a.kind {
+        AttachmentKind::Document => a.size.min(DOCUMENT_TEXT_LIMIT as u64).div_ceil(4),
+        AttachmentKind::Image | AttachmentKind::Audio => IMAGE_TOKENS,
+    }
+}
+
 /// What `node` adds to a projection, roughly.
 fn node_tokens(node: &Node) -> u64 {
-    let content = |c: &Content| text_tokens(&c.text) + c.attachments.len() as u64 * IMAGE_TOKENS;
+    let content = |c: &Content| {
+        text_tokens(&c.text) + c.attachments.iter().map(attachment_tokens).sum::<u64>()
+    };
     match &node.body {
         NodeBody::User { content: c } | NodeBody::Note { content: c, .. } => content(c),
         NodeBody::ToolResult {
@@ -617,6 +629,51 @@ mod tests {
         assert_eq!(estimate(&path), 1_010 + 100);
         // Chinese counts a token per char.
         assert_eq!(text_tokens("压缩上下文"), 5);
+    }
+
+    #[test]
+    fn an_attachment_is_worth_what_it_costs() {
+        let image = Attachment {
+            kind: AttachmentKind::Image,
+            hash: "0".repeat(64),
+            mime: "image/png".into(),
+            name: Some("a.png".into()),
+            width: 4,
+            height: 3,
+            size: 10,
+        };
+        let document = Attachment {
+            kind: AttachmentKind::Document,
+            hash: "1".repeat(64),
+            mime: "text/plain".into(),
+            name: Some("a.txt".into()),
+            width: 0,
+            height: 0,
+            size: 4_000,
+        };
+        let with = |a: Attachment| {
+            node(
+                "u",
+                NodeBody::User {
+                    content: Content::text("hi").with_attachments([a]),
+                },
+            )
+        };
+        // An image is a fixed cost; a document is read as text.
+        assert_eq!(node_tokens(&with(image)), text_tokens("hi") + IMAGE_TOKENS);
+        assert_eq!(
+            node_tokens(&with(document.clone())),
+            text_tokens("hi") + 1_000
+        );
+        // A long document counts only the part the model is sent.
+        let long = Attachment {
+            size: 10 << 20,
+            ..document
+        };
+        assert_eq!(
+            node_tokens(&with(long)),
+            text_tokens("hi") + (DOCUMENT_TEXT_LIMIT / 4) as u64
+        );
     }
 
     #[test]
