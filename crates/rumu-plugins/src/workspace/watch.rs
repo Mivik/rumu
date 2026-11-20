@@ -437,9 +437,12 @@ impl Watch {
             tokio::select! {
                 biased;
                 out = &mut exec => {
-                    return match self.scan.lock().unwrap().until {
-                        Some(_) => Err(self.ending(Ending::Until, posted, cx)),
-                        None => Ok(out),
+                    // Not `match self.scan.lock()…`: the guard would live
+                    // through the arms, and `ending` takes the lock again.
+                    let until = self.scan.lock().unwrap().until.is_some();
+                    return match until {
+                        true => Err(self.ending(Ending::Until, posted, cx)),
+                        false => Ok(out),
                     };
                 }
                 _ = &mut expiry => return Err(self.ending(Ending::Expired, posted, cx)),
@@ -939,6 +942,24 @@ mod tests {
              events before it)\nworking\nREADY"
         );
         assert_eq!(texts(&inbox), ["watch t-w: +1 lines (L 1–1)\nstart"]);
+    }
+
+    /// `until` matching a line the command printed as it exited (the line
+    /// and the exit seen in one poll) still ends the watch: this used to
+    /// deadlock on the scan lock, so the task could never end or be killed.
+    #[tokio::test]
+    async fn watch_until_on_the_last_line_ends() {
+        let dir = tempfile::tempdir().unwrap();
+        let (plugin, _host, _inbox, cx, _home) = setup(dir.path(), BranchKind::Main);
+        let args = serde_json::from_value(json!({ "until": "EXIT=" })).unwrap();
+        let watch = plugin.watch_for(&cx, args, None, None).unwrap();
+        let exec = async { watch.push("EXIT=0\n") };
+        let ended = watch.run(exec, &cx).await.unwrap_err();
+        assert_eq!(
+            ended,
+            "watch ended: `until` matched the last line below, and the command was killed (0 \
+             events before it)\nEXIT=0"
+        );
     }
 
     /// The lifetime (`timeout`) kills the command and says so; with nothing
