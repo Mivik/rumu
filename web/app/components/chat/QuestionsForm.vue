@@ -107,23 +107,22 @@ function pick(label: string, note = false): void {
   })
 }
 
-/** Typing chooses the row of the user's own words — for a single choice in
- *  place of the option picked; emptying it leaves the row. */
-function onCustomInput(e: Event): void {
+/** Clicking into the box of the user's own words, or typing in it, chooses
+ *  that row — for a single choice in place of the option picked. It counts as
+ *  an answer once something is written in it. */
+function chooseCustom(): void {
   const d = draft.value
-  d.useCustom = (e.target as HTMLInputElement).value.trim() !== ''
-  if (d.useCustom && !question.value.multiple) d.selected = []
+  d.useCustom = true
+  if (!question.value.multiple) d.selected = []
 }
 
 function toggleCustom(): void {
-  const d = draft.value
-  if (d.custom.trim() === '') customEl.value?.focus()
-  else if (question.value.multiple) d.useCustom = !d.useCustom
-  else {
-    d.useCustom = true
-    d.selected = []
-    customEl.value?.focus()
+  if (question.value.multiple && draft.value.useCustom) {
+    draft.value.useCustom = false
+    return
   }
+  chooseCustom()
+  customEl.value?.focus()
 }
 
 function go(i: number): void {
@@ -246,11 +245,11 @@ function onCustomKey(e: KeyboardEvent): void {
           </div>
         </div>
         <!-- the user's own words: one more box to tick, or one more radio -->
-        <div class="q-option" :class="{ 'is-on': customCounts(index) }">
+        <div class="q-option" :class="{ 'is-on': draft.useCustom }">
           <button
             type="button"
             :role="question.multiple ? 'checkbox' : 'radio'"
-            :aria-checked="customCounts(index)"
+            :aria-checked="draft.useCustom"
             :aria-label="t('chat.ask.custom')"
             class="q-mark"
             :class="question.multiple ? 'rounded-[5px]' : 'rounded-full'"
@@ -263,7 +262,8 @@ function onCustomKey(e: KeyboardEvent): void {
             v-model="draft.custom"
             class="min-w-0 flex-1 border-0 bg-transparent p-0 text-secondary focus:shadow-none"
             :placeholder="t('chat.ask.custom')"
-            @input="onCustomInput"
+            @click="chooseCustom"
+            @input="chooseCustom"
             @keydown="onCustomKey"
           />
         </div>
@@ -275,7 +275,6 @@ function onCustomKey(e: KeyboardEvent): void {
           v-model="draft.custom"
           class="min-w-0 flex-1 border-0 bg-transparent p-0 text-secondary focus:shadow-none"
           :placeholder="t('chat.ask.answer')"
-          @input="onCustomInput"
           @keydown="onCustomKey"
         />
       </div>
