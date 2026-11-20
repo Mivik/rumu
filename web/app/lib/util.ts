@@ -142,3 +142,16 @@ export function argSummary(call: { name: string; args: unknown } | null): string
   if (first !== undefined) return preview(JSON.stringify(first), 48)
   return ''
 }
+
+/** Drops case and the separators names and ids differ by (` -_./:`). */
+const searchForm = (s: string): string => s.toLowerCase().replace(/[\s\-_./:]+/g, '')
+
+/** Does a search find an item by its fields (name, id, …)? Each word of the
+ *  query must turn up in one field, case and separators aside: `glm 5.3` and
+ *  `glm5.3` find both `GLM-5.3 Highspeed` and `glm-5.3-highspeed`. */
+export function searchMatches(query: string, ...fields: (string | null | undefined)[]): boolean {
+  const words = query.split(/\s+/).map(searchForm).filter(Boolean)
+  if (!words.length) return true
+  const hay = fields.filter((f): f is string => !!f).map(searchForm)
+  return words.every((w) => hay.some((h) => h.includes(w)))
+}

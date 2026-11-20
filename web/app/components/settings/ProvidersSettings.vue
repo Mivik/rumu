@@ -9,6 +9,7 @@ import { t } from '../../i18n'
 import { rumu } from '../../lib/api'
 import { layout } from '../../lib/layout'
 import { SWAP } from '../../lib/motion'
+import { searchMatches } from '../../lib/util'
 import {
   ALIAS_PROVIDER,
   PROTOCOL_LABELS,
@@ -61,11 +62,9 @@ const presetInput = ref<HTMLInputElement | null>(null)
 /** The presets the search matches, by name, id or address; the server
  *  lists the common ones first. */
 const shownPresets = computed(() => {
-  const q = presetQuery.value.trim().toLowerCase()
+  const q = presetQuery.value.trim()
   if (!q) return presets.value
-  return presets.value.filter((p) =>
-    [p.name, p.id, ...Object.values(p.endpoints)].some((s) => s?.toLowerCase().includes(q)),
-  )
+  return presets.value.filter((p) => searchMatches(q, p.name, p.id, ...Object.values(p.endpoints)))
 })
 const form = reactive<Form>(blank())
 const pristine = ref('')
@@ -256,7 +255,7 @@ const matches = (id: string): boolean => {
   const s = term.value.toLowerCase()
   if (!s) return true
   if (s.includes('*')) return ruleMatches(s, id.toLowerCase())
-  return id.toLowerCase().includes(s) || !!name(id)?.toLowerCase().includes(s)
+  return searchMatches(s, id, name(id))
 }
 
 /** Every known id (listed, then added by hand), the enabled ones first.

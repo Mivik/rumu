@@ -7,6 +7,7 @@ import { computed, ref } from 'vue'
 import { t } from '../../i18n'
 import { editSettings, models } from '../../lib/state/models'
 import type { ModelInfo } from '../../lib/generated/ModelInfo'
+import { searchMatches } from '../../lib/util'
 import Icon from '../ui/Icon.vue'
 import NoProviders from '../settings/NoProviders.vue'
 
@@ -16,12 +17,14 @@ const emit = defineEmits<{ pick: [model: ModelInfo]; add: [] }>()
 const query = ref('')
 const settings = computed(() => models.settings)
 
-const q = computed(() => query.value.trim().toLowerCase())
-const matches = (s: string): boolean => !q.value || s.toLowerCase().includes(q.value)
+const q = computed(() => query.value.trim())
+/** A model the search finds by its name, id, ref or provider's name. */
+const matches = (m: ModelInfo, provider?: string): boolean =>
+  searchMatches(q.value, m.name, m.ref, m.id, provider)
 
 const aliases = computed(() =>
   props.aliases
-    ? (settings.value?.aliases ?? []).filter((m) => matches(m.name) || matches(m.target?.model ?? ''))
+    ? (settings.value?.aliases ?? []).filter((m) => searchMatches(q.value, m.name, m.target?.model))
     : [],
 )
 
@@ -34,12 +37,10 @@ const empty = computed(
 const groups = computed(() => {
   const providers = settings.value?.providers ?? []
   const list: { key: string; name: string; models: ModelInfo[] }[] = []
-  const pinned = providers
-    .flatMap((p) => p.models)
-    .filter((m) => m.pinned && (matches(m.name) || matches(m.ref)))
+  const pinned = providers.flatMap((p) => p.models.filter((m) => m.pinned && matches(m, p.name)))
   if (pinned.length) list.push({ key: 'pinned', name: t('settings.pinned'), models: pinned })
   for (const p of providers) {
-    const models = p.models.filter((m) => !m.pinned && (matches(m.name) || matches(m.ref)))
+    const models = p.models.filter((m) => !m.pinned && matches(m, p.name))
     if (models.length) list.push({ key: p.id, name: p.name, models })
   }
   return list
