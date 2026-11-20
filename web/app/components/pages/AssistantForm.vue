@@ -989,10 +989,8 @@ onBeforeUnmount(() => window.removeEventListener('keydown', onKey, true))
   line-height: 1.65;
 }
 
-@media (prefers-color-scheme: dark) {
-  .hero {
-    --k: 0.9;
-  }
+:global(html[data-theme='dark']) .hero {
+  --k: 0.9;
 }
 
 /* The look's color picks: a dot of each tone, ringed when chosen. */

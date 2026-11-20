@@ -30,6 +30,7 @@ import type { Node } from '../../lib/types'
 import type { PhrasePart, ToolRowView } from '../../lib/toolrows'
 import { fileEditsOf, isFileEdit, isRowOpen, toolPhrase, toolRowTitle, toolRowView } from '../../lib/toolrows'
 import { contentText, fmtThought } from '../../lib/util'
+import { appearance } from '../../lib/state/appearance'
 import { vEnter } from '../../lib/motion'
 import Icon from '../ui/Icon.vue'
 import AgentCard from './AgentCard.vue'
@@ -196,9 +197,10 @@ function stepKey(s: ActivityStep): string {
 }
 
 /** Tri-state: null = auto — open while it is the turn's frontier, folded
- *  once the model moves on. */
+ *  once the model moves on. The panel may say the work steps stay open
+ *  (they then do, whatever the turn does). */
 const manual = ref<boolean | null>(null)
-const open = computed(() => (manual.value !== null ? manual.value : props.current))
+const open = computed(() => (manual.value !== null ? manual.value : props.current || !appearance.foldWork))
 /** Blocks present when it opens reveal with it; later ones fade in. */
 const revealed = ref<Set<string>>(new Set())
 function toggleOpen(): void {
