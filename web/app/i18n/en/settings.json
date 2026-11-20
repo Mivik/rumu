@@ -1,6 +1,6 @@
 {
   "title": "Settings",
-  "defaults": "Titles & compaction",
+  "defaults": "Session behavior",
   "providers": "Providers",
   "aliases": "Aliases",
   "aliasName": "Name",
