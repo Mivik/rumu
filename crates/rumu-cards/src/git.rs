@@ -191,13 +191,14 @@ impl Repo {
                 message: format!("HEAD is detached in {}", self.dir.display()),
             });
         };
-        repo.reference(
-            name.as_bstr().to_string(),
-            commit,
-            PreviousValue::Any,
-            "commit",
-        )
-        .map_err(|e| error("update head", &self.dir, e))?;
+        // Only over the `HEAD` this commit was built on: a deck moved by
+        // anyone else meanwhile fails the commit instead of losing theirs.
+        let expected = match parent {
+            Some(parent) => PreviousValue::ExistingMustMatch(gix::refs::Target::Object(parent)),
+            None => PreviousValue::MustNotExist,
+        };
+        repo.reference(name.as_bstr().to_string(), commit, expected, "commit")
+            .map_err(|e| error("update head", &self.dir, e))?;
         Ok(true)
     }
 
