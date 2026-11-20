@@ -2,14 +2,19 @@
 //
 // - JSON text frames: requests carry an id, responses resolve/reject a promise.
 // - Pushes (frames without id) fan out to registered handlers.
-// - Auto-reconnect with capped exponential backoff. Pending requests are
-//   rejected on disconnect; callers (the store) re-fetch state on reconnect.
+// - Auto-reconnect with capped exponential backoff, cut short when the page
+//   comes back to the foreground or the network comes back. Pending requests
+//   are rejected on disconnect; callers (the store) re-fetch state on reconnect.
 
 import { ref, type Ref } from 'vue'
 import type { WsMessage } from './types'
 import { authorize } from './auth'
 
 export type PushHandler = (params: Record<string, unknown>) => void
+
+/** How long a foreground liveness ping may take before the socket counts as
+ *  dead. Too short only costs a needless reconnect (and resync). */
+const PROBE_TIMEOUT = 3000
 
 /** A JSON-RPC error response; `code` is the server's error code (the web
  *  checks `-32010` for a stale card write). */
@@ -45,6 +50,7 @@ export class RumuClient {
   private reconnectTimer: ReturnType<typeof setTimeout> | null = null
   private stopped = false
   private generation = 0
+  private probing = false
 
   constructor(url: string = defaultWsUrl()) {
     this.url = url
@@ -54,6 +60,61 @@ export class RumuClient {
   start(onReady: () => void): void {
     this.onConnected = onReady
     this.reconnect()
+    if (typeof document !== 'undefined') {
+      // Back in front, or back online: the user is looking now, so don't sit
+      // out a long backoff — retry at once and restart the backoff from 500ms.
+      // A socket that still looks open may have died while the page was
+      // suspended (mobile) without ever firing `close`: probe it.
+      document.addEventListener('visibilitychange', () => {
+        if (document.visibilityState !== 'visible') return
+        this.retryNow()
+        void this.probe()
+      })
+      window.addEventListener('online', () => {
+        this.retryNow()
+        void this.probe()
+      })
+    }
+  }
+
+  /** Cut a pending backoff short. No-op while connected, connecting, or
+   *  stopped (e.g. waiting for a token). */
+  retryNow(): void {
+    if (this.stopped || this.reconnectTimer === null) return
+    clearTimeout(this.reconnectTimer)
+    this.reconnectTimer = null
+    this.attempts = 0
+    void this.connect()
+  }
+
+  /** Ping an open socket; no answer within `PROBE_TIMEOUT` means it is dead:
+   *  drop it and connect again right away. */
+  private async probe(): Promise<void> {
+    const ws = this.ws
+    if (this.probing || !ws || ws.readyState !== WebSocket.OPEN) return
+    this.probing = true
+    let timer: ReturnType<typeof setTimeout> | undefined
+    const alive = await Promise.race([
+      // Any answer will do, an error too (a server without `ping`).
+      this.request('ping').then(
+        () => true,
+        (e: unknown) => e instanceof RpcError,
+      ),
+      new Promise<boolean>((resolve) => {
+        timer = setTimeout(() => resolve(false), PROBE_TIMEOUT)
+      }),
+    ])
+    clearTimeout(timer)
+    this.probing = false
+    // Closed meanwhile: the `close` handler has taken over.
+    if (alive || this.ws !== ws || this.stopped) return
+    // Detach first: closing a dead socket may not fire `close` for a while.
+    this.ws = null
+    this.connected.value = false
+    this.failPending(new Error('connection lost'))
+    ws.close()
+    this.attempts = 0
+    void this.connect()
   }
 
   reconnect(): void {

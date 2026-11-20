@@ -414,6 +414,10 @@ fn error_frame(id: Value, code: i64, message: String) -> Value {
 async fn dispatch(state: &AppState, method: &str, p: &Value) -> Result<Value> {
     let kernel = &state.kernel;
     match method {
+        // Liveness probe: the web sends it when the page comes back to the
+        // foreground, to catch a socket that died while it was suspended.
+        "ping" => Ok(json!({})),
+
         "session.list" => Ok(json!(kernel.list_sessions()?)),
 
         "session.create" => {
