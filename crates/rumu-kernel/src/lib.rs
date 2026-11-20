@@ -1585,8 +1585,10 @@ impl Kernel {
     /// before a message being edited, onto a prompt being regenerated, to
     /// another variant's end. What it leaves stays in the tree, reachable
     /// through the message variant switcher. Refused while the branch works,
-    /// at an assistant node with calls still open, and at a node a sub-agent
-    /// or side question added (it is not part of the line).
+    /// while a background task or sub-agent below it still runs (its result
+    /// would land on a line that no longer holds its call), at an assistant
+    /// node with calls still open, and at a node a sub-agent or side question
+    /// added (it is not part of the line).
     pub async fn move_head(self: &Arc<Self>, branch: &BranchId, node: &NodeId) -> Result<Branch> {
         let mut b = self
             .store
@@ -1601,13 +1603,29 @@ impl Kernel {
             .filter(|n| n.session == b.session)
             .ok_or_else(|| Error::NodeNotFound(node.clone()))?;
         Self::check_safe_point(&n)?;
-        if self.inner.lock().unwrap().running.contains_key(branch) {
-            return Err(Error::TurnBusy);
-        }
         if self.off_line_nodes(&b.session)?.contains(node) {
             return Err(Error::OffTheLine(node.clone()));
         }
-        self.store.set_branch_head(branch, node)?;
+        let subtree = self.branch_subtree(branch)?;
+        {
+            // Checked and moved under one lock: no turn or task starts between.
+            let inner = self.inner.lock().unwrap();
+            if inner.running.contains_key(branch) {
+                return Err(Error::TurnBusy);
+            }
+            let agents = subtree.iter().any(|id| {
+                id != branch
+                    && (inner.running.contains_key(id)
+                        || inner.wake_pending.get(id).is_some_and(|p| p.active))
+            });
+            let tasks = inner.tasks.values().any(|e| {
+                subtree.contains(&e.info.branch) && (e.info.status.is_running() || !e.post_done)
+            });
+            if agents || tasks {
+                return Err(Error::LineBusy);
+            }
+            self.store.set_branch_head(branch, node)?;
+        }
         b.head = n.id.clone();
         self.push("branch.updated", json!({ "branch": b.clone() }));
         // The session is listed under the project its main line is now in.

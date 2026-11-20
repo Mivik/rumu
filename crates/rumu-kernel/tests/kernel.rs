@@ -3655,6 +3655,48 @@ async fn moving_the_main_line_keeps_what_it_leaves() {
     assert_eq!(ids(&kernel.branch_path(&branch).unwrap().0), ids(&nodes));
 }
 
+/// The main line stays put while a background task of it runs: the task's
+/// note would land on a line that no longer holds its call.
+#[tokio::test]
+async fn moving_the_main_line_waits_for_its_tasks() {
+    let plugin = Arc::new(background_plugin(
+        "bg",
+        &["bgwork"],
+        vec![],
+        noop_hooks(),
+        noop_tools(),
+    ));
+    let (kernel, _llm, _session, branch) = setup(
+        vec![plugin],
+        vec![
+            LlmResponse::calls(vec![ToolCall::new(
+                "c1",
+                "bgwork",
+                json!({ "ms": 60_000, "background": true }),
+            )]),
+            LlmResponse::text("started"),
+        ],
+    )
+    .await;
+
+    let (_, nodes, _) = run_turn(&kernel, &branch, "go").await;
+    let prompt = nodes
+        .iter()
+        .find(|n| matches!(n.body, NodeBody::User { .. }))
+        .expect("the turn appended a user node")
+        .id
+        .clone();
+    let head = nodes.last().unwrap().id.clone();
+
+    let err = kernel.move_head(&branch, &prompt).await.unwrap_err();
+    assert!(matches!(err, rumu_kernel::Error::LineBusy), "{err:#}");
+    assert_eq!(
+        kernel.branch_path(&branch).unwrap().0.last().unwrap().id,
+        head
+    );
+    kernel.abort_tasks(&branch, true);
+}
+
 /// `branch.move` refuses a sub-agent's branch and a node a sub-agent added,
 /// before anything changes.
 #[tokio::test]
