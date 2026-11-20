@@ -6,11 +6,20 @@
 //! structurally — the new tree is the `HEAD` tree edited with exactly the
 //! paths the operation touched — and there is no worktree or index to keep in
 //! step.
+//!
+//! Reading goes through `gix`. The objects a commit creates are serialized by
+//! `gix` too, but written to disk here: gix renames a loose object file into
+//! place while it is still open, and a filesystem that refuses to move an open
+//! file to another directory (yrfs, behind `/home` on the training cluster,
+//! answers `EBUSY`) would fail every commit.
 
 use std::collections::BTreeMap;
+use std::io::Write;
 use std::path::{Path, PathBuf};
 
-use gix::objs::tree::EntryKind;
+use gix::objs::WriteTo;
+use gix::objs::tree::{EntryKind, EntryMode};
+use gix::refs::transaction::PreviousValue;
 
 use crate::{Error, Result};
 
@@ -121,56 +130,74 @@ impl Repo {
     pub fn commit(&self, author: &GitAuthor, subject: &str, trailers: &Trailers) -> Result<bool> {
         let repo = self.open()?;
         let mut head = repo.head().map_err(|e| error("head", &self.dir, e))?;
-        let (parent, base) = if head.is_unborn() {
-            (None, repo.empty_tree().id())
-        } else {
-            let commit = head
-                .peel_to_commit()
-                .map_err(|e| error("head commit", &self.dir, e))?;
-            (
-                Some(commit.id().detach()),
-                commit
+        let mut node = Node::default();
+        let (parent, base) = match head.id() {
+            Some(id) => {
+                let commit = head
+                    .peel_to_commit()
+                    .map_err(|e| error("head commit", &self.dir, e))?;
+                let tree = commit
                     .tree_id()
-                    .map_err(|e| error("head tree", &self.dir, e))?,
-            )
+                    .map_err(|e| error("head tree", &self.dir, e))?
+                    .detach();
+                self.read_tree(&repo, tree, &mut node)?;
+                (Some(id.detach()), tree)
+            }
+            None => (None, repo.empty_tree().id().detach()),
         };
-        let mut editor = repo
-            .edit_tree(base.detach())
-            .map_err(|e| error("edit tree", &self.dir, e))?;
         for (path, content) in trailers.changes {
             match content {
                 Some(text) => {
-                    let blob = repo
-                        .write_blob(text.as_bytes())
-                        .map_err(|e| error("write blob", &self.dir, e))?;
-                    editor
-                        .upsert(path.as_str(), EntryKind::Blob, blob.detach())
-                        .map_err(|e| error("tree upsert", &self.dir, e))?;
+                    let blob = self.write_object(gix::objs::Blob {
+                        data: text.as_bytes().to_vec(),
+                    })?;
+                    node.insert(path, EntryMode::from(EntryKind::Blob), blob);
                 }
                 None => {
-                    editor
-                        .remove(path.as_str())
-                        .map_err(|e| error("tree remove", &self.dir, e))?;
+                    node.remove(path);
                 }
             }
         }
-        let tree = editor
-            .write()
-            .map_err(|e| error("write tree", &self.dir, e))?
-            .detach();
-        if tree == base.detach() {
+        let tree = match self.write_tree(&node)? {
+            Some(tree) => tree,
+            None => repo.empty_tree().id().detach(),
+        };
+        if tree == base {
             return Ok(false);
         }
-        let message = commit_message(subject, trailers);
         let signature = gix::actor::Signature {
             name: author.name.clone().into(),
             email: author.email.clone().into(),
             time: gix::date::Time::now_local_or_utc(),
         };
-        let mut time_buf = gix::date::parse::TimeBuf::default();
-        let signature = signature.to_ref(&mut time_buf);
-        repo.commit_as(signature, signature, "HEAD", message, tree, parent)
-            .map_err(|e| error("commit", &self.dir, e))?;
+        let mut commit = gix::objs::Commit {
+            tree,
+            parents: Default::default(),
+            author: signature.clone(),
+            committer: signature,
+            encoding: None,
+            message: commit_message(subject, trailers).into(),
+            extra_headers: Default::default(),
+        };
+        if let Some(parent) = parent {
+            commit.parents.push(parent);
+        }
+        let commit = self.write_object(commit)?;
+        let Some(name) = repo
+            .head_name()
+            .map_err(|e| error("head name", &self.dir, e))?
+        else {
+            return Err(Error::Git {
+                message: format!("HEAD is detached in {}", self.dir.display()),
+            });
+        };
+        repo.reference(
+            name.as_bstr().to_string(),
+            commit,
+            PreviousValue::Any,
+            "commit",
+        )
+        .map_err(|e| error("update head", &self.dir, e))?;
         Ok(true)
     }
 
@@ -291,8 +318,147 @@ impl Repo {
         Ok(Some(String::from_utf8_lossy(&object.data).into_owned()))
     }
 
+    /// Write one loose object into the deck repository and return its id.
+    ///
+    /// The temporary file is closed before it is renamed into `objects/<shard>/`,
+    /// so the write works on filesystems that refuse to move an open file to
+    /// another directory.
+    fn write_object(&self, object: impl WriteTo) -> Result<gix::hash::ObjectId> {
+        let kind = object.kind();
+        let context = format!("{kind} object");
+        let mut data = Vec::new();
+        object
+            .write_to(&mut data)
+            .map_err(|e| error(&format!("serializing {context}"), &self.dir, e))?;
+        let id = gix::objs::compute_hash(gix::hash::Kind::Sha1, kind, &data)
+            .map_err(|e| error(&format!("hashing {context}"), &self.dir, e))?;
+        let hex = id.to_string();
+        let (shard, name) = hex.split_at(2);
+        let dir = self.dir.join("objects").join(shard);
+        let path = dir.join(name);
+        if path.is_file() {
+            return Ok(id);
+        }
+        std::fs::create_dir_all(&dir)
+            .map_err(|e| error("creating object directory", &self.dir, e))?;
+        let mut zlib = flate2::write::ZlibEncoder::new(Vec::new(), flate2::Compression::default());
+        zlib.write_all(&gix::objs::encode::loose_header(kind, data.len() as u64))
+            .map_err(|e| error(&format!("compressing {context}"), &self.dir, e))?;
+        zlib.write_all(&data)
+            .map_err(|e| error(&format!("compressing {context}"), &self.dir, e))?;
+        let compressed = zlib
+            .finish()
+            .map_err(|e| error(&format!("compressing {context}"), &self.dir, e))?;
+        let mut file = tempfile::Builder::new()
+            .prefix("obj-")
+            .tempfile_in(&dir)
+            .map_err(|e| error(&format!("creating {context} file"), &self.dir, e))?;
+        file.write_all(&compressed)
+            .map_err(|e| error(&format!("writing {context}"), &self.dir, e))?;
+        let file = file.into_temp_path();
+        std::fs::rename(&file, &path)
+            .map_err(|e| error(&format!("renaming {context}"), &self.dir, e))?;
+        Ok(id)
+    }
+
+    /// Read every file of `tree` into `node`, keyed by its deck-local path.
+    fn read_tree(
+        &self,
+        repo: &gix::Repository,
+        tree: gix::hash::ObjectId,
+        node: &mut Node,
+    ) -> Result<()> {
+        let tree = repo
+            .find_tree(tree)
+            .map_err(|e| error("read tree", &self.dir, e))?;
+        for entry in tree.iter() {
+            let entry = entry
+                .map_err(|e| error("read tree entry", &self.dir, e))?
+                .inner;
+            let name = entry.filename.to_string();
+            if entry.mode.is_tree() {
+                self.read_tree(
+                    repo,
+                    entry.oid.to_owned(),
+                    node.dirs.entry(name).or_default(),
+                )?;
+            } else {
+                node.files.insert(name, (entry.mode, entry.oid.to_owned()));
+            }
+        }
+        Ok(())
+    }
+
+    /// Write every tree `node` holds, bottom-up, and return the root tree's id.
+    /// `None` for a directory without files, which git has no object for.
+    fn write_tree(&self, node: &Node) -> Result<Option<gix::hash::ObjectId>> {
+        let mut entries = Vec::with_capacity(node.files.len() + node.dirs.len());
+        for (name, (mode, oid)) in &node.files {
+            entries.push(gix::objs::tree::Entry {
+                mode: *mode,
+                filename: name.as_str().into(),
+                oid: *oid,
+            });
+        }
+        for (name, dir) in &node.dirs {
+            if let Some(oid) = self.write_tree(dir)? {
+                entries.push(gix::objs::tree::Entry {
+                    mode: EntryMode::from(EntryKind::Tree),
+                    filename: name.as_str().into(),
+                    oid,
+                });
+            }
+        }
+        if entries.is_empty() {
+            return Ok(None);
+        }
+        entries.sort();
+        Ok(Some(self.write_object(gix::objs::Tree { entries })?))
+    }
+
     fn open(&self) -> Result<gix::Repository> {
         gix::open(&self.dir).map_err(|e| error("open", &self.dir, e))
+    }
+}
+
+/// The files of a deck tree, grouped by directory. Writing a commit edits this
+/// instead of a git index.
+#[derive(Default)]
+struct Node {
+    /// The files directly in this directory: name, mode and blob id.
+    files: BTreeMap<String, (EntryMode, gix::hash::ObjectId)>,
+    dirs: BTreeMap<String, Node>,
+}
+
+impl Node {
+    fn insert(&mut self, path: &str, mode: EntryMode, oid: gix::hash::ObjectId) {
+        match path.split_once('/') {
+            Some((dir, rest)) => self
+                .dirs
+                .entry(dir.to_owned())
+                .or_default()
+                .insert(rest, mode, oid),
+            None => {
+                self.files.insert(path.to_owned(), (mode, oid));
+            }
+        }
+    }
+
+    fn remove(&mut self, path: &str) {
+        match path.split_once('/') {
+            Some((dir, rest)) => {
+                let Some(node) = self.dirs.get_mut(dir) else {
+                    return;
+                };
+                node.remove(rest);
+                if node.files.is_empty() && node.dirs.is_empty() {
+                    self.dirs.remove(dir);
+                }
+            }
+            None => {
+                self.files.remove(path);
+            }
+        }
     }
 }
 

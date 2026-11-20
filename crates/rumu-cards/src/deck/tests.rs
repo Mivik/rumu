@@ -775,3 +775,66 @@ fn private_roundtrips_through_deck_yaml() {
     let again: DeckMeta = crate::yaml::from_str(&text).unwrap();
     assert_eq!(again, meta);
 }
+
+/// The objects a commit writes are ordinary git objects: the git binary reads
+/// the deck back, checks it strictly, and sees the same tree and history.
+#[test]
+fn git_reads_the_objects_a_commit_writes() {
+    if std::process::Command::new("git")
+        .arg("--version")
+        .output()
+        .is_err()
+    {
+        return;
+    }
+    let dir = tempfile::tempdir().unwrap();
+    let deck = create_deck(
+        dir.path(),
+        "main",
+        &[("a", "one\n"), ("notes/nested", "two\n")],
+    );
+    deck.write_file("notes/nested", "two!\n", &Author::user())
+        .unwrap();
+    deck.move_file("a", "b", &Author::user()).unwrap();
+    deck.remove_file("b", &Author::user()).unwrap();
+
+    let git = |args: &[&str]| {
+        let out = std::process::Command::new("git")
+            .arg(format!("--git-dir={}", deck.dir.display()))
+            .args(args)
+            .output()
+            .unwrap();
+        assert!(
+            out.status.success(),
+            "git {} failed: {}",
+            args.join(" "),
+            String::from_utf8_lossy(&out.stderr)
+        );
+        String::from_utf8(out.stdout).unwrap()
+    };
+
+    git(&["fsck", "--strict"]);
+
+    let mut theirs: Vec<String> = git(&["ls-tree", "-r", "--name-only", "HEAD"])
+        .lines()
+        .map(str::to_owned)
+        .collect();
+    theirs.sort();
+    let ours: Vec<String> = deck.repo().files().unwrap().into_keys().collect();
+    assert_eq!(theirs, ours);
+
+    let subjects: Vec<String> = git(&["log", "--format=%s"])
+        .lines()
+        .map(str::to_owned)
+        .collect();
+    let mine: Vec<String> = deck
+        .commits(usize::MAX)
+        .unwrap()
+        .into_iter()
+        .map(|commit| commit.subject)
+        .collect();
+    assert_eq!(subjects, mine);
+
+    let card = deck.read("notes/nested").unwrap().unwrap();
+    assert!(card.ends_with("two!\n"), "{card}");
+}
