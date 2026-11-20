@@ -2,7 +2,8 @@
 // The body of an expanded `bash` row: the whole command (selectable, with a
 // copy button) and its other args as a raw line, the output, and the exit code when it
 // isn't 0. A background call passes its task's output and `running` while
-// it goes. An output that never ran (a tool error, a hook block) reads in
+// it goes (the row above already says it's running, so nothing here does).
+// An output that never ran (a tool error, a hook block) reads in
 // danger.
 import { computed } from 'vue'
 import { t } from '../../i18n'
@@ -81,10 +82,7 @@ async function copy(): Promise<void> {
       :class="{ 'text-danger': failed && result.code === null }"
       >{{ result.body }}</pre>
     <div v-else-if="!running" class="term-foot">{{ t('common.noOutput') }}</div>
-    <div v-if="running" class="term-foot flex items-center gap-1.5">
-      <span class="dot-live size-1.5 rounded-full bg-brand" />{{ t('tools.status.running') }}
-    </div>
-    <div v-else-if="result.code" class="term-foot term-exit">
+    <div v-if="!running && result.code" class="term-foot term-exit">
       {{ t('tools.result.exit', { code: result.code }) }}
     </div>
   </div>
