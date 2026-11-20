@@ -81,6 +81,8 @@ const changed = computed(() => {
     for (const s of item.steps) {
       if (s.kind !== 'tools') continue
       for (const v of s.rows.flatMap(fileEditsOf)) {
+        // cards are memory, not the workspace files the turn changed
+        if (v.toolCardId) continue
         files.add(v.callFull)
         added += v.diff?.added ?? 0
         removed += v.diff?.removed ?? 0

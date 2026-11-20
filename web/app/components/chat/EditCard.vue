@@ -1,9 +1,9 @@
 <script setup lang="ts">
-// A file the model changed, standing in the conversation rather than folded
-// into its run: a header with the path (directory muted), the +/− counts
-// and, for a diff of several hunks, how many places it touched; under it the
-// diff itself, clipped when long (FileDiff `clip`). The header folds the
-// diff away and back.
+// A file or card the model changed, standing in the conversation rather than
+// folded into its run: a header with the path (directory muted), the +/−
+// counts and, for a diff of several hunks, how many places it touched; under
+// it the diff itself, clipped when long (FileDiff `clip`). The header folds
+// the diff away and back.
 import { computed, ref } from 'vue'
 import { t } from '../../i18n'
 import type { ToolRowView } from '../../lib/toolrows'
@@ -58,16 +58,24 @@ const hunks = computed(() => props.view.patch?.hunks?.length ?? 0)
         >
         <span v-if="view.diff.removed" class="ml-1 font-medium text-danger">−{{ view.diff.removed }}</span>
       </span>
-      <span v-if="hunks > 1" class="ml-auto flex-none text-micro text-ink-3">{{
-        t('tools.edit.hunks', { count: hunks })
-      }}</span>
-      <Icon
-        name="chevron"
-        :size="12"
-        class="flex-none text-ink-3/70 transition-transform duration-100"
-        :class="[{ 'rotate-90': open }, hunks > 1 ? '' : 'ml-auto']"
-      />
+      <span class="ml-auto flex flex-none items-center gap-2">
+        <span v-if="hunks > 1" class="text-micro text-ink-3">{{
+          t('tools.edit.hunks', { count: hunks })
+        }}</span>
+        <Icon
+          name="chevron"
+          :size="12"
+          class="text-ink-3/70 transition-transform duration-100"
+          :class="{ 'rotate-90': open }"
+        />
+      </span>
     </button>
-    <FileDiff v-if="open" clip :patch="view.patch" :path="view.callFull" :args="argsOf(view.row.call)" />
+    <FileDiff
+      v-if="open"
+      clip
+      :patch="view.patch"
+      :path="view.toolCardId ? 'card.md' : view.callFull"
+      :args="argsOf(view.row.call)"
+    />
   </div>
 </template>
