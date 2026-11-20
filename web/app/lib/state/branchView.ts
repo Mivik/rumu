@@ -56,7 +56,7 @@ function branchView(id: () => BranchId | null, sub: boolean): BranchView {
 
 const KEY: InjectionKey<BranchView> = Symbol('branch-view')
 
-const mainView = branchView(() => state.activeBranch, false)
+const mainView = branchView(() => state.mainBranch, false)
 
 /** The sub-agent open beside the chat. */
 export const subView = (): BranchView => branchView(() => state.agentView, true)

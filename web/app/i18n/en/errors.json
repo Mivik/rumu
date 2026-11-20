@@ -13,7 +13,7 @@
   "takeBack": "Couldn't take the message back",
   "editFirst": "Can't edit the first message",
   "loadingBranch": "Couldn't load branch",
-  "activate": "Couldn't switch branch",
+  "switchVariant": "Couldn't switch variant",
   "action": "Couldn't {label}",
   "regenerate": "Couldn't regenerate reply",
   "retry": "Couldn't retry the reply",

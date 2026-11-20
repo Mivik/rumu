@@ -14,7 +14,7 @@ export type { DeltaBuffer, HookTraceEntry, RetryState, Toast } from './state/sta
 export type { CardWindow } from './state/state'
 
 export {
-  activeDelta,
+  mainDelta,
   callsOf,
   callsOnPath,
   connected,

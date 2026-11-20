@@ -145,7 +145,7 @@ function openWorkspaceAddress(address: string): boolean {
   }
   const m = /^([^:]+):\/?$/.exec(address)
   if (m) return state.workspaces.some((w) => w.name === m[1]) && go('workspaces', m[1]!)
-  const branch = state.activeBranch
+  const branch = state.mainBranch
   if (!branch) return false
   rumu.request<{ artifact: Artifact }>('fs.snapshot', { branch, path: address }).then(
     ({ artifact }) => {

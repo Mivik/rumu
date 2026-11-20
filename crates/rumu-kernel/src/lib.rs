@@ -1639,10 +1639,10 @@ impl Kernel {
         self.push("session.updated", json!({ "session": session }));
 
         let mut ev = self.make_event(
-            kind::BRANCH_FORK,
+            kind::BRANCH_MOVE,
             n.session.clone(),
             b.id.clone(),
-            json!({ "from": n.id }),
+            json!({ "node": n.id }),
         )?;
         self.dispatch(&mut ev, false).await?;
         Ok(b)

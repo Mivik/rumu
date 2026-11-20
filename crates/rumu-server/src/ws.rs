@@ -442,7 +442,7 @@ async fn dispatch(state: &AppState, method: &str, p: &Value) -> Result<Value> {
         }
 
         // Move a session into the `project` deck, or out of its project
-        // (null): recorded on its active branch, the model told in a note.
+        // (null): recorded on its main line, the model told in a note.
         "session.move" => {
             let session: SessionId = str_param(p, "session")?.into();
             let project = project_param(state, p)?;

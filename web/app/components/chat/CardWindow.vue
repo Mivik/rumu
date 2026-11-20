@@ -36,7 +36,7 @@ const card = ref<Card | null>(null)
 const loaded = ref(false)
 let readSeq = 0
 watch(
-  () => [props.entry.cardId, state.cardsRev, state.activeBranch] as const,
+  () => [props.entry.cardId, state.cardsRev, state.mainBranch] as const,
   async ([id]) => {
     const seq = ++readSeq
     let next: Card | null = null

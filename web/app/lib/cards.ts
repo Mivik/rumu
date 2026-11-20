@@ -211,7 +211,7 @@ export function useIsCurrent(card: Card, use: CardUse): boolean {
  * assistant's own deck), longest point first so a nested mount wins over its
  * parent. */
 const cardMounts = computed(() => {
-  const live = state.activeBranch && state.pathState
+  const live = state.mainBranch && state.pathState
   const mounts = live
     ? state.pathState!.mounts
     : (state.assistants.find((a) => a.id === state.assistant)?.mounts ?? [])
@@ -256,7 +256,7 @@ export const mountedCardCount = computed(() => {
 /** The mounted card `id` (`self/dev/x`) as the open branch sees it (else the
  *  assistant in view); null when no card is there (a folder, or gone). */
 export function fetchCard(id: string): Promise<Card | null> {
-  const scope = state.activeBranch ? { branch: state.activeBranch } : { assistant: state.assistant }
+  const scope = state.mainBranch ? { branch: state.mainBranch } : { assistant: state.assistant }
   return rumu.request<Card | null>('card.get', { ...scope, id })
 }
 

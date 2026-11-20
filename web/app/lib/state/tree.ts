@@ -60,18 +60,18 @@ export async function loadPath(branch: BranchId): Promise<void> {
  * leaves stays reachable from the message's variant switcher. `label`
  * names the action in the error toast.
  */
-export async function moveHead(node: NodeId, label: 'activate' | 'edit' = 'activate'): Promise<boolean> {
+export async function moveHead(node: NodeId, label: 'switch' | 'edit' = 'switch'): Promise<boolean> {
   const branch = state.session?.main_branch
   if (!branch) return false
   try {
     // The head moves by the `branch.updated` push, which comes first.
     await rumu.request('branch.move', { branch, node })
-    state.activeBranch = branch
+    state.mainBranch = branch
     await loadPath(branch)
     return true
   } catch (err) {
     const message =
-      label === 'edit' ? t('errors.action', { label: t('errors.labels.edit') }) : t('errors.activate')
+      label === 'edit' ? t('errors.action', { label: t('errors.labels.edit') }) : t('errors.switchVariant')
     toast('error', message, (err as Error).message)
     return false
   }
@@ -79,16 +79,16 @@ export async function moveHead(node: NodeId, label: 'activate' | 'edit' = 'activ
 
 /**
  * The sub-agent branch spawned by the direct `agent` tool call `callId`
- * (recorded on the branch as `kind.call_id`). Prefers a child of the active
- * branch (the common case); falls back to any match (e.g. on a variant the
- * call's parent branch is no longer active).
+ * (recorded on the branch as `kind.call_id`). Prefers a child of the main
+ * line (the common case); falls back to any match (a call nested in another
+ * sub-agent).
  */
 export function findAgentChild(callId: string): Branch | null {
   if (!callId) return null
   const matches = Object.values(state.branches).filter(
     (b): b is Branch => b.kind.type === 'agent' && !b.kind.via_plugin && b.kind.call_id === callId,
   )
-  const isOwn = (b: Branch): boolean => b.kind.type === 'agent' && b.kind.parent_branch === state.activeBranch
+  const isOwn = (b: Branch): boolean => b.kind.type === 'agent' && b.kind.parent_branch === state.mainBranch
   matches.sort((x, y) => Number(isOwn(y)) - Number(isOwn(x)))
   return matches[0] ?? null
 }

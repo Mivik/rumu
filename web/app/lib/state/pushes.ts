@@ -89,7 +89,7 @@ function stateChanged(node: Node): boolean {
 function onWorkspacesUpdated(p: { workspaces: Workspace[]; projects: Record<string, string[]> }): void {
   state.workspaces = p.workspaces
   void refreshProjects().catch(() => {})
-  if (state.activeBranch) void loadPath(state.activeBranch)
+  if (state.mainBranch) void loadPath(state.mainBranch)
 }
 
 /** A deck's configuration or the roster changed (here, in another tab, or
@@ -102,7 +102,7 @@ function onDecksUpdated(): void {
 
 function onNodeAppended(p: NodeAppendedPush): void {
   const { branch, node } = p
-  if (branch === state.activeBranch && stateChanged(node)) void loadPath(branch)
+  if (branch === state.mainBranch && stateChanged(node)) void loadPath(branch)
   if (cardChanged(node)) {
     void refreshCards()
     // The model may be writing cards while the user browses the library.
@@ -127,7 +127,7 @@ function onNodeAppended(p: NodeAppendedPush): void {
   // A file the model just showed opens beside the chat on a wide screen, or
   // replaces the one already open.
   if (
-    branch === state.activeBranch &&
+    branch === state.mainBranch &&
     node.body.type === 'tool_result' &&
     !node.body.is_error &&
     artifactOf(node.body.content) &&
@@ -201,7 +201,7 @@ function onBranchUpdated(p: BranchUpdatedPush): void {
     // A head moved rather than grown (a variant picked, an edit — maybe in
     // another tab): the shown path's state is another one.
     const moved = old && old.head !== p.branch.head && state.nodes[p.branch.head]?.parent !== old.head
-    if (moved && p.branch.id === state.activeBranch) void loadPath(p.branch.id)
+    if (moved && p.branch.id === state.mainBranch) void loadPath(p.branch.id)
   }
 }
 
@@ -250,7 +250,7 @@ function onTurnError(p: TurnErrorPush): void {
   // be (`owedReply`, from its marker on the path). A branch that is not on
   // screen has no row to land in, and an unrecorded failure no marker, so
   // those still need a toast.
-  if (!p.recorded || (p.branch !== state.activeBranch && p.branch !== state.agentView))
+  if (!p.recorded || (p.branch !== state.mainBranch && p.branch !== state.agentView))
     toast('error', p.message)
 }
 

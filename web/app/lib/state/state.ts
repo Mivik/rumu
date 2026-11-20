@@ -172,7 +172,7 @@ const initial = {
   /** Token totals over every model call of the open session. */
   usage: { calls: 0, input: 0, cached: 0, output: 0 } as SessionUsage,
   /** The branch the chat shows: the session's main line. */
-  activeBranch: null as BranchId | null,
+  mainBranch: null as BranchId | null,
   pathState: null as PathState | null,
 
   /** Streaming buffers keyed by branch; cleared when the Assistant node is appended. */

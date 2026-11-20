@@ -13,7 +13,7 @@
   "takeBack": "撤回失败",
   "editFirst": "无法编辑第一条消息",
   "loadingBranch": "加载分支失败",
-  "activate": "切换分支失败",
+  "switchVariant": "切换版本失败",
   "action": "{label}失败",
   "regenerate": "重新生成失败",
   "retry": "重试回复失败",

@@ -72,9 +72,9 @@ export async function askSide(text: string): Promise<boolean> {
       await rumu.request('prompt', { branch: side.branch, text })
       return true
     }
-    if (!state.activeBranch) return false
+    if (!state.mainBranch) return false
     const res = await rumu.request<{ branch: Branch }>('branch.side', {
-      branch: state.activeBranch,
+      branch: state.mainBranch,
       text,
       quote: side.quote,
     })

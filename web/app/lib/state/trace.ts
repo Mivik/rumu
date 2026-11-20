@@ -96,7 +96,7 @@ export const trace = computed<TraceRow[]>(() => {
   const hooks = new Map<BranchId, HookTraceEntry[]>()
   const main: HookTraceEntry[] = []
   for (const e of hookTraceForSession.value) {
-    if (e.branch === state.activeBranch || !state.branches[e.branch]) main.push(e)
+    if (e.branch === state.mainBranch || !state.branches[e.branch]) main.push(e)
     else {
       const list = hooks.get(e.branch) ?? []
       list.push(e)

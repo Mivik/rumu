@@ -322,7 +322,7 @@ impl Kernel {
     }
 
     /// One user turn: prompt event → (unless regenerating) User node → the
-    /// step loop. A regeneration forks at an existing prompt, so its prompt
+    /// step loop. A regeneration moves onto an existing prompt, so its prompt
     /// event is replayed but the message is not appended again; a retry has
     /// neither — the loop simply runs again on what is already there. The
     /// loop's outcome comes back when it ran (not for a blocked prompt or a

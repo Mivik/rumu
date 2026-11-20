@@ -53,7 +53,7 @@ async fn main() -> anyhow::Result<()> {
         .to_owned();
     let branch = create["result"]["session"]["main_branch"]
         .as_str()
-        .expect("active branch")
+        .expect("main branch")
         .to_owned();
     info!("session {session}, branch {branch}");
 

@@ -6058,7 +6058,7 @@ async fn side_question_forks_at_the_head_and_leaves_the_main_line_alone() {
     assert!(seen.iter().any(|n| matches!(&n.body,
         NodeBody::Note { content, .. } if content.text.contains("> doubles cwnd"))));
 
-    // The main line is untouched and still the active one.
+    // The main line is untouched.
     let (after, _) = kernel.branch_path(&main).unwrap();
     assert_eq!(after.len(), before.len());
     let session = kernel.list_sessions().unwrap().remove(0);

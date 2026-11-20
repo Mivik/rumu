@@ -18,7 +18,7 @@ import Icon from '../ui/Icon.vue'
 const TIP_ID = `context-meter-${useId()}`
 
 const use = computed(() => contextUse.value)
-const busy = computed(() => !!state.activeBranch && !!state.busy[state.activeBranch])
+const busy = computed(() => !!state.mainBranch && !!state.busy[state.mainBranch])
 /** Amber from a tenth short of where it compacts (of the window, with
  *  auto-compaction off). */
 const warn = computed(() => {

@@ -19,7 +19,9 @@ pub mod kind {
     /// An out-of-band post to a branch, before delivery.
     /// payload: `{ "source": .., "effects": [..], "wake": bool }` — interceptable
     pub const POST: &str = "post";
-    pub const BRANCH_FORK: &str = "branch.fork";
+    /// The main line's head moved (`branch.move`, a regenerate, a rewind).
+    /// payload: `{ "node": .. }` — the new head
+    pub const BRANCH_MOVE: &str = "branch.move";
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]

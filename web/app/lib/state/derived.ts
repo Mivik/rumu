@@ -18,7 +18,7 @@ export function isUnseen(s: SessionInfo): boolean {
 }
 
 export const currentBranch = computed<Branch | null>(() =>
-  state.activeBranch ? (state.branches[state.activeBranch] ?? null) : null,
+  state.mainBranch ? (state.branches[state.mainBranch] ?? null) : null,
 )
 
 /** root → head of `b`; with `stop`, only the nodes after that one. */
@@ -35,7 +35,7 @@ export function pathOf(b: Branch | null | undefined, stop?: NodeId | null): Node
   return out.reverse()
 }
 
-/** root → head for the active branch. */
+/** root → head for the main line. */
 export const pathNodes = computed<Node[]>(() => pathOf(currentBranch.value))
 
 /** call_id → ToolCall, from the assistant nodes in `nodes` (for pairing results). */
@@ -52,11 +52,11 @@ export function callsOf(nodes: Node[]): Map<string, { call: ToolCallLike; node: 
 export const callsOnPath = computed(() => callsOf(pathNodes.value))
 type ToolCallLike = { call_id: string; name: string; args: unknown }
 
-export const activeDelta = computed<DeltaBuffer | null>(() =>
-  state.activeBranch ? (state.deltas[state.activeBranch] ?? null) : null,
+export const mainDelta = computed<DeltaBuffer | null>(() =>
+  state.mainBranch ? (state.deltas[state.mainBranch] ?? null) : null,
 )
 
-export const isBusy = computed(() => !!state.activeBranch && !!state.busy[state.activeBranch])
+export const isBusy = computed(() => !!state.mainBranch && !!state.busy[state.mainBranch])
 
 export interface OwedReply {
   /** The recorded failure's message (empty when there is none) — then the

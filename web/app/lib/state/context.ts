@@ -1,4 +1,4 @@
-// The active branch's context use, for the composer's meter: how much of the
+// The main line's context use, for the composer's meter: how much of the
 // next model's window the conversation fills, and where it compacts. Mirrors
 // the kernel's `estimate` / `threshold` (crates/rumu-kernel/src/compact.rs):
 // the last reply's measured usage, plus a rough count of what came after it.
@@ -53,7 +53,7 @@ export interface ContextUse {
 }
 
 export const contextUse = computed<ContextUse | null>(() => {
-  const branch = state.activeBranch
+  const branch = state.mainBranch
   const s = models.settings
   if (!branch || !s) return null
   const model = resolvePick(currentPick())?.model

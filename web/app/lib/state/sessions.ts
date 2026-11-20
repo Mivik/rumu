@@ -150,7 +150,7 @@ export async function openSession(id: SessionId, opts: { history?: OpenHistory }
     state.sessionId = tree.session.id
     viewAssistant(tree.session.assistant)
     replaceTree(tree)
-    state.activeBranch = tree.session.main_branch
+    state.mainBranch = tree.session.main_branch
     // A new session already written keeps the project it was written for.
     if (!landingWritten.value) chooseLandingProject(tree.session.project ?? null)
     const history = opts.history ?? 'push'
@@ -213,7 +213,7 @@ export function closeSession(): void {
   state.nodes = {}
   state.branches = {}
   state.agentNodes = {}
-  state.activeBranch = null
+  state.mainBranch = null
   state.pathState = null
   state.deltas = {}
   state.busy = {}
@@ -370,11 +370,11 @@ function settlePicks(): void {
 }
 
 /**
- * Send a message on the active branch. With no session open (the landing
+ * Send a message on the main line. With no session open (the landing
  * state), start a new session first and send the text as its first prompt.
  * `attachments` name already-uploaded images the text places with
  * `[Image #N]` anchors (empty text is allowed when there is one). `choice`
- * is the composer's pick, taken before any fork. `to` is the branch it goes
+ * is the composer's pick, taken before any head move. `to` is the branch it goes
  * to (the main line by default). Returns whether the prompt was accepted.
  */
 export async function sendPrompt(
@@ -389,7 +389,7 @@ export async function sendPrompt(
     // The new session's root holds who and where already.
     choice = { model: choice.model }
   }
-  const branch = to ?? state.activeBranch
+  const branch = to ?? state.mainBranch
   if (!branch) return false
   state.busy[branch] = true
   try {
@@ -406,10 +406,10 @@ export async function sendPrompt(
 }
 
 /**
- * Regenerate the reply to a prompt: the server forks at the user message,
- * moves the main line onto the user message, records the composer's model
- * where it differs, replays the prompt (hooks and memory injection included)
- * and streams a new answer from there. The old reply stays reachable from
+ * Regenerate the reply to a prompt: the server moves the main line onto the
+ * user message, records the composer's model where it differs, replays the
+ * prompt (hooks and memory injection included) and streams a new answer from
+ * there. The old reply stays reachable from
  * the message's variant switcher.
  */
 export async function regenerateFrom(nodeId: NodeId): Promise<void> {
@@ -428,13 +428,13 @@ export async function regenerateFrom(nodeId: NodeId): Promise<void> {
 }
 
 /**
- * `branch.retry`: run the turn again on the active branch, in place — no
+ * `branch.retry`: run the turn again on the main line, in place — no
  * prompt event, no new user node; the failed marker stays on the path. The
  * composer's pick goes along, so a failure fixed by switching the model
  * retries on the new one. The server refuses branches that already have
  * their reply.
  */
-export async function retryBranch(branch = state.activeBranch): Promise<boolean> {
+export async function retryBranch(branch = state.mainBranch): Promise<boolean> {
   if (!branch) return false
   state.busy[branch] = true
   try {
@@ -449,9 +449,9 @@ export async function retryBranch(branch = state.activeBranch): Promise<boolean>
 }
 
 /** What reverting the file changes since the user message `node` on the
- *  active branch would do (`branch.revert_plan`); null on failure. */
+ *  main line would do (`branch.revert_plan`); null on failure. */
 export async function revertPlan(node: NodeId): Promise<RevertPlan | null> {
-  const branch = state.activeBranch
+  const branch = state.mainBranch
   if (!branch) return null
   try {
     return await rumu.request<RevertPlan>('branch.revert_plan', { branch, node })
@@ -462,7 +462,7 @@ export async function revertPlan(node: NodeId): Promise<RevertPlan | null> {
 }
 
 /**
- * Rewind to the user message `node` on the active branch
+ * Rewind to the user message `node` on the main line
  * (`branch.rewind`): revert `files` of its plan, and with `conversation`
  * move the main line to just before the message, the message put
  * back into an empty composer. Returns the files reverted, the failed ones
@@ -473,7 +473,7 @@ export async function rewindTo(
   files: FileRef[],
   conversation: boolean,
 ): Promise<RevertFile[] | null> {
-  const branch = state.activeBranch
+  const branch = state.mainBranch
   if (!branch) return null
   try {
     const res = await rumu.request<{ files: RevertFile[]; branch: Branch | null }>('branch.rewind', {
@@ -505,10 +505,10 @@ function putBack(node: Node): void {
   requestComposerFocus()
 }
 
-/** `branch.compact`: summarize the active branch's older context now, the
+/** `branch.compact`: summarize the main line's older context now, the
  *  summary focusing on `focus` when given. */
 export async function compactBranch(focus: string): Promise<boolean> {
-  const branch = state.activeBranch
+  const branch = state.mainBranch
   if (!branch) return false
   state.busy[branch] = true
   try {
@@ -523,7 +523,7 @@ export async function compactBranch(focus: string): Promise<boolean> {
 
 /** `branch.stop`: stop this branch's reply; background tasks it started keep
  *  running (kill them from the composer's task tab). */
-export async function stopTurn(branch = state.activeBranch): Promise<void> {
+export async function stopTurn(branch = state.mainBranch): Promise<void> {
   if (!branch) return
   try {
     await rumu.request('branch.stop', { branch })
@@ -534,7 +534,7 @@ export async function stopTurn(branch = state.activeBranch): Promise<void> {
 
 /** `task.kill_all`: cancel every background task the branch (or a sub-agent
  *  below it) started, leaving its reply running — the task tab's "stop all". */
-export async function stopAllTasks(branch = state.activeBranch): Promise<void> {
+export async function stopAllTasks(branch = state.mainBranch): Promise<void> {
   if (!branch) return
   try {
     await rumu.request('task.kill_all', { branch })
@@ -543,9 +543,9 @@ export async function stopAllTasks(branch = state.activeBranch): Promise<void> {
   }
 }
 
-/** `prompt.cancel`: take back a steering prompt still queued on the active
- * branch, returning its content; null once it has been written (or failed). */
-export async function takeBackPrompt(node: NodeId, branch = state.activeBranch): Promise<Content | null> {
+/** `prompt.cancel`: take back a steering prompt still queued on
+ * `branch`, returning its content; null once it has been written (or failed). */
+export async function takeBackPrompt(node: NodeId, branch = state.mainBranch): Promise<Content | null> {
   if (!branch) return null
   try {
     const res = await rumu.request<{ content: Content }>('prompt.cancel', { branch, node })
@@ -561,10 +561,10 @@ export async function takeBackPrompt(node: NodeId, branch = state.activeBranch):
 }
 
 /**
- * Edit a sent prompt: fork from just before it and send the new text there,
- * replacing the branch that held the original message and reply — its
- * alternative stays reachable from the user message's variant switcher. It
- * runs on the composer's pick, not the one the original was sent with.
+ * Edit a sent prompt: move the main line to just before it and send the new
+ * text there; the original message and reply stay reachable from its variant
+ * switcher. It runs on the composer's pick, not the one the original was sent
+ * with.
  */
 export async function editPrompt(
   node: Node,
