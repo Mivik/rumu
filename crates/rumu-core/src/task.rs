@@ -75,9 +75,21 @@ impl TaskKind {
                     format!("{name}: {args_summary}")
                 }
             }
-            Self::Agent { .. } => format!("agent: {summary}"),
+            Self::Agent { .. } => format!("agent: {}", agent_label(summary)),
         }
     }
+}
+
+/// A sub-agent's task as a label: its first line, cut to 80 characters
+/// (marked with `…` when anything was left out).
+pub fn agent_label(task: &str) -> String {
+    let task = task.trim();
+    let first = task.lines().next().unwrap_or_default().trim_end();
+    let mut label: String = first.chars().take(80).collect();
+    if label.len() < task.len() {
+        label.push('…');
+    }
+    label
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize, ts_rs::TS)]

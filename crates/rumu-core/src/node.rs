@@ -784,7 +784,7 @@ impl Structured for SessionRoot {
 pub struct AgentReply {
     /// The sub-agent's branch.
     pub branch: BranchId,
-    /// The first line of its task, cut to 80 characters.
+    /// Its task as a label ([`crate::agent_label`]).
     pub label: String,
 }
 

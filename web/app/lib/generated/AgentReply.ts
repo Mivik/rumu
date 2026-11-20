@@ -11,6 +11,6 @@ export type AgentReply = {
  */
 branch: BranchId, 
 /**
- * The first line of its task, cut to 80 characters.
+ * Its task as a label ([`crate::agent_label`]).
  */
 label: string, };

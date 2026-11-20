@@ -389,7 +389,7 @@ impl Kernel {
         ask: crate::turn::ModelAsk,
     ) -> Result<ToolOutput> {
         let kind = TaskKind::Agent { child_branch: None };
-        let label = format!("agent: {task}");
+        let label = kind.label(&task);
         let (id, token) = match self.create_task(
             session,
             branch,

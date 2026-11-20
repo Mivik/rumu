@@ -1454,13 +1454,7 @@ impl Kernel {
             Some(BranchKind::Agent { task, .. }) => task,
             _ => String::new(),
         };
-        let label: String = task
-            .lines()
-            .next()
-            .unwrap_or_default()
-            .chars()
-            .take(80)
-            .collect();
+        let label = rumu_core::agent_label(&task);
         let note = NodeBody::Note {
             source: SYSTEM_SOURCE.into(),
             content: Content::note_with(
