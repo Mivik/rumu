@@ -185,9 +185,7 @@ function start(): void {
   color: color-mix(in srgb, var(--tone) 60%, var(--ink));
 }
 
-@media (prefers-color-scheme: dark) {
-  .band {
-    --k: 0.9;
-  }
+:global(html[data-theme='dark']) .band {
+  --k: 0.9;
 }
 </style>

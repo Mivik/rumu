@@ -9,12 +9,15 @@ import { t } from '../../i18n'
 import type { ToolRowView } from '../../lib/toolrows'
 import { argsOf, toolRowTitle } from '../../lib/toolrows'
 import { toolIcon } from '../../lib/toolIcon'
+import { appearance } from '../../lib/state/appearance'
 import Icon from '../ui/Icon.vue'
 import FileDiff from './FileDiff.vue'
 
 const props = defineProps<{ view: ToolRowView }>()
 
-const open = ref(true)
+// The diff opens folded when the panel says so; the header folds it away and
+// back either way.
+const open = ref(!appearance.foldEdits)
 
 /** `ws:dir/name` → the muted head (`ws:dir/`) and the name. */
 const parts = computed(() => {

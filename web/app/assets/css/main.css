@@ -4,9 +4,10 @@
  * "paper" surfaces, one coral brand color, pine green as the quiet
  * secondary, and a small semantic set: memory / tool / danger / agent.
  *
- * Every color is a CSS var that flips with prefers-color-scheme, and
- * `@theme inline` maps them to Tailwind names — so templates never use
- * `dark:`. Tailwind's default colors, font sizes, radii and shadows are
+ * Every color is a CSS var, and the dark ones live in one rule the app
+ * switches on (`data-theme` on <html>: the user's choice, the system's
+ * resolved); `@theme inline` maps them to Tailwind names — so templates
+ * never use `dark:`. Tailwind's default colors, font sizes, radii and shadows are
  * cleared: only the names below exist (bg-surface, text-ink-2, text-meta,
  * rounded-card, shadow-soft …), which keeps one-off values out of components.
  *
@@ -79,48 +80,49 @@
   --col-max: clamp(760px, 56vw, 960px);
 }
 
-@media (prefers-color-scheme: dark) {
-  :root {
-    color-scheme: dark;
+/* The dark theme: the app resolves the user's choice (the system's, or a
+ * fixed one) into `data-theme` on <html>, so the tokens live in one place
+ * and the panel's switch is a single attribute. */
+:root[data-theme='dark'] {
+  color-scheme: dark;
 
-    /* warm dark: brown-black, not blue-gray */
-    --canvas: #1a1714;
-    --surface: #23201c;
-    --surface-2: #2c2824;
+  /* warm dark: brown-black, not blue-gray */
+  --canvas: #1a1714;
+  --surface: #23201c;
+  --surface-2: #2c2824;
 
-    --line: #3b352f;
-    --line-soft: #302b26;
+  --line: #3b352f;
+  --line-soft: #302b26;
 
-    --ink: #ede6dd;
-    --ink-2: #b5aa9e;
-    --ink-3: #887d72;
+  --ink: #ede6dd;
+  --ink-2: #b5aa9e;
+  --ink-3: #887d72;
 
-    --brand: #f47c61;
-    --brand-strong: #f79b85;
-    --brand-soft: #3d261f;
-    --on-brand: #2a140e;
+  --brand: #f47c61;
+  --brand-strong: #f79b85;
+  --brand-soft: #3d261f;
+  --on-brand: #2a140e;
 
-    --pine: #8dbfa8;
-    --pine-soft: #1e2e27;
+  --pine: #8dbfa8;
+  --pine-soft: #1e2e27;
 
-    --memory: #a88bf0;
-    --memory-soft: #2b2340;
-    --tool: #8eaacb;
-    --tool-soft: #1f2732;
-    --danger: #ef6f7a;
-    --danger-soft: #3d1f25;
-    --agent: #5cc8ce;
-    --agent-soft: #173031;
-    --warn: #e2a64b;
+  --memory: #a88bf0;
+  --memory-soft: #2b2340;
+  --tool: #8eaacb;
+  --tool-soft: #1f2732;
+  --danger: #ef6f7a;
+  --danger-soft: #3d1f25;
+  --agent: #5cc8ce;
+  --agent-soft: #173031;
+  --warn: #e2a64b;
 
-    --grain: url("data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' width='180' height='180'%3E%3Cfilter id='n'%3E%3CfeTurbulence type='fractalNoise' baseFrequency='.85' numOctaves='3' stitchTiles='stitch'/%3E%3CfeColorMatrix values='0 0 0 0 1 0 0 0 0 .92 0 0 0 0 .82 0 0 0 .045 0'/%3E%3C/filter%3E%3Crect width='100%25' height='100%25' filter='url(%23n)'/%3E%3C/svg%3E");
-    --lamp: color-mix(in srgb, var(--brand) 6%, transparent);
+  --grain: url("data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' width='180' height='180'%3E%3Cfilter id='n'%3E%3CfeTurbulence type='fractalNoise' baseFrequency='.85' numOctaves='3' stitchTiles='stitch'/%3E%3CfeColorMatrix values='0 0 0 0 1 0 0 0 0 .92 0 0 0 0 .82 0 0 0 .045 0'/%3E%3C/filter%3E%3Crect width='100%25' height='100%25' filter='url(%23n)'/%3E%3C/svg%3E");
+  --lamp: color-mix(in srgb, var(--brand) 6%, transparent);
 
-    --scrim: rgb(0 0 0 / 55%);
-    --shadow-soft-v: 0 1px 2px rgb(0 0 0 / 30%);
-    --shadow-card-v: 0 1px 3px rgb(0 0 0 / 30%), 0 8px 24px -10px rgb(0 0 0 / 50%);
-    --shadow-pop-v: 0 2px 6px rgb(0 0 0 / 35%), 0 18px 40px -12px rgb(0 0 0 / 60%);
-  }
+  --scrim: rgb(0 0 0 / 55%);
+  --shadow-soft-v: 0 1px 2px rgb(0 0 0 / 30%);
+  --shadow-card-v: 0 1px 3px rgb(0 0 0 / 30%), 0 8px 24px -10px rgb(0 0 0 / 50%);
+  --shadow-pop-v: 0 2px 6px rgb(0 0 0 / 35%), 0 18px 40px -12px rgb(0 0 0 / 60%);
 }
 
 @theme {

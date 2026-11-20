@@ -59,6 +59,13 @@ export default defineNuxtConfig({
           innerHTML:
             "try{var p=new URLSearchParams(location.hash.slice(1));if(p.has('token')){window.__rumuToken=p.get('token');p.delete('token');var r=p.toString();history.replaceState(history.state,'',location.pathname+location.search+(r?'#'+r:''))}}catch(e){}",
         },
+        {
+          // The theme, before the first paint: the tokens in main.css read
+          // it off <html>. The plugin (app/plugins/appearance.client.ts)
+          // takes over from here.
+          innerHTML:
+            "try{var a=JSON.parse(localStorage.getItem('rumu.appearance')||'{}');var d=a.theme==='dark'||(a.theme!=='light'&&matchMedia('(prefers-color-scheme: dark)').matches);document.documentElement.dataset.theme=d?'dark':'light'}catch(e){}",
+        },
       ],
     },
   },
