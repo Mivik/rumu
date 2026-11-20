@@ -1,5 +1,5 @@
 <script setup lang="ts">
-// The cards recalled for a step (`memory.import`), listed under their count
+// The cards recalled for a step (`card.import`), listed under their count
 // by their mounted id inside an opened activity run. Each opens in the
 // CardDrawer. A card's underline draws once, the first time it is seen.
 import { computed } from 'vue'

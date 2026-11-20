@@ -3,7 +3,7 @@
 //! Every way a card's body reaches the model leaves a trace on the path.
 //! Cards are keyed by their deck id and deck-local path:
 //!
-//! - auto-import: `Note` with `content.data = memory.import {deck, path, rev}`
+//! - auto-import: `Note` with `content.data = card.import {deck, path, rev}`
 //!   (and the card text) — the payload carries the revision, so imports are
 //!   per-version;
 //! - tool read/write: a `Note` with empty text and `content.data = card.use
@@ -97,7 +97,7 @@ pub fn card_use(
     })
 }
 
-/// Payload of an auto-import note (`memory.import` v1).
+/// Payload of an auto-import note (`card.import` v1).
 #[derive(Debug, Clone, PartialEq, Eq, serde::Serialize, serde::Deserialize, ts_rs::TS)]
 #[ts(export)]
 pub struct CardImport {
@@ -107,11 +107,11 @@ pub struct CardImport {
 }
 
 impl Structured for CardImport {
-    const TAG: &'static str = "memory.import";
+    const TAG: &'static str = "card.import";
     const V: u32 = 1;
 }
 
-/// Payload of a card update notice (`memory.card_update` v1). `rev` is the
+/// Payload of a card update notice (`card.update` v1). `rev` is the
 /// current revision, or `"deleted"`.
 #[derive(Debug, Clone, PartialEq, Eq, serde::Serialize, serde::Deserialize, ts_rs::TS)]
 #[ts(export)]
@@ -122,7 +122,7 @@ pub struct CardUpdate {
 }
 
 impl Structured for CardUpdate {
-    const TAG: &'static str = "memory.card_update";
+    const TAG: &'static str = "card.update";
     const V: u32 = 1;
 }
 

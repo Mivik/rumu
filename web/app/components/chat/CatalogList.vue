@@ -1,5 +1,5 @@
 <script setup lang="ts">
-// A card catalog note (`memory.catalog`), one per mounted deck: the cards it
+// A card catalog note (`deck.catalog`), one per mounted deck: the cards it
 // offered the model, each opening in the CardDrawer, and the folded
 // directories as one line each. Shown inside an opened activity run
 // (ActivityRun), folded under a heading that names the deck's mount point. It

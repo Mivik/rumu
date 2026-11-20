@@ -34,7 +34,7 @@ interface CardItem {
   hover: string
 }
 
-/** Decode a `kernel.task` completion payload, if that is what this note is. */
+/** Decode a `task.done` completion payload, if that is what this note is. */
 function taskDoneOf(content: Content): TaskDone | null {
   const d = content.data
   if (!d || d.tag !== TASK_TAG || d.v !== TASK_VERSION) return null

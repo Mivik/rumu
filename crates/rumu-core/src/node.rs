@@ -38,7 +38,16 @@ pub struct Tagged {
 /// Tags renamed since they were first written, `(old, current)`. Records
 /// keep the old name on disk; reading one gives the current name, so no
 /// reader (here or in the web) knows the old one.
-const RENAMED_TAGS: &[(&str, &str)] = &[("card_use", "card.use")];
+const RENAMED_TAGS: &[(&str, &str)] = &[
+    ("card_use", "card.use"),
+    ("memory.import", "card.import"),
+    ("memory.card_update", "card.update"),
+    ("memory.catalog", "deck.catalog"),
+    ("kernel.task", "task.done"),
+    ("root", "session.root"),
+    ("compaction", "branch.compaction"),
+    ("artifact", "workspace.artifact"),
+];
 
 fn current_tag<'de, D: serde::Deserializer<'de>>(d: D) -> Result<String, D::Error> {
     let tag = String::deserialize(d)?;
@@ -524,7 +533,7 @@ pub struct Artifact {
 }
 
 impl Structured for Artifact {
-    const TAG: &'static str = "artifact";
+    const TAG: &'static str = "workspace.artifact";
     const V: u32 = 1;
 }
 
@@ -611,7 +620,7 @@ impl Structured for CardUnmount {
     const V: u32 = 1;
 }
 
-/// Payload of the session `root` marker (v1). The assistant lives on the root so
+/// Payload of the `session.root` marker (v1). The assistant lives on the root so
 /// that every path of the session carries it, including sub-agents forked at
 /// the root.
 #[derive(Debug, Clone, Default, PartialEq, Eq, Serialize, Deserialize)]
@@ -626,7 +635,7 @@ pub struct SessionRoot {
 }
 
 impl Structured for SessionRoot {
-    const TAG: &'static str = "root";
+    const TAG: &'static str = "session.root";
     const V: u32 = 1;
 }
 
@@ -883,8 +892,8 @@ mod tests {
             serde_json::from_value(json!({"tag": "card_use", "v": 1, "data": {}})).unwrap();
         assert_eq!(old.tag, "card.use");
         let other: Tagged =
-            serde_json::from_value(json!({"tag": "root", "v": 1, "data": {}})).unwrap();
-        assert_eq!(other.tag, "root");
+            serde_json::from_value(json!({"tag": "workspace.use", "v": 1, "data": {}})).unwrap();
+        assert_eq!(other.tag, "workspace.use");
     }
 
     #[test]

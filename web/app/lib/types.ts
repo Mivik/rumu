@@ -100,12 +100,12 @@ export const TURN_ERROR_TAG = 'turn.error'
 export type Effect = Content
 
 /** The tag/version the catalog payload uses. */
-export const CATALOG_TAG = 'memory.catalog'
+export const CATALOG_TAG = 'deck.catalog'
 /** The once-per-path assistant introduction: model context only, never shown. */
 export const ASSISTANT_INTRO_TAG = 'assistant.intro'
 export const CATALOG_VERSION = 3
 
-export const TASK_TAG = 'kernel.task'
+export const TASK_TAG = 'task.done'
 export const TASK_VERSION = 1
 
 /**

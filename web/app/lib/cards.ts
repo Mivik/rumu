@@ -1,8 +1,8 @@
 // Card registry: identifying knowledge cards everywhere they appear.
 //
 // A card surfaces in four shapes:
-//   1. Note { content.data = memory.import {id, rev} }              → context pill chip
-//   2. Note { content.data = memory.card_update {id, rev} }         → "updated" pill
+//   1. Note { content.data = card.import {id, rev} }                → context pill chip
+//   2. Note { content.data = card.update {id, rev} }                → "updated" pill
 //   3. ToolResult of a card read/write (read/write/edit on
 //      `@rumu:/cards/<id>`) + a card.use note → tool row chip
 //   4. the card window, which reads the live card (card.get) beside the uses
@@ -25,6 +25,12 @@ import type {
 import { rumu } from './api'
 import { callsOnPath, pathNodes, state } from './store'
 
+/** A payload about cards or decks (`card.*`, `deck.*`): set in the memory
+ *  tone wherever records show. */
+export function isCardTag(tag: string | undefined): boolean {
+  return !!tag && (tag.startsWith('card.') || tag.startsWith('deck.'))
+}
+
 /** The payload tag/version decode for one Content, or null. */
 function payload<T>(content: Content | null | undefined, tag: string, v: number): T | null {
   const d = content?.data
@@ -34,12 +40,12 @@ function payload<T>(content: Content | null | undefined, tag: string, v: number)
 
 /** An auto-import note's payload, if it is one. */
 export function importOf(content: Content | null | undefined): CardImport | null {
-  return payload<CardImport>(content, 'memory.import', 1)
+  return payload<CardImport>(content, 'card.import', 1)
 }
 
 /** A card update notice's payload, if it is one. */
 export function updateOf(content: Content | null | undefined): CardUpdate | null {
-  return payload<CardUpdate>(content, 'memory.card_update', 1)
+  return payload<CardUpdate>(content, 'card.update', 1)
 }
 
 /** The `card.use` record carried by an empty-text note. */
@@ -316,7 +322,7 @@ export const cardUsesOnPath = computed(() => {
   return uses
 })
 
-/** Card identity → update notes on this path (`memory.card_update`), in order. */
+/** Card identity → update notes on this path (`card.update`), in order. */
 export const updateNotesByCard = computed(() => {
   const m = new Map<string, Node[]>()
   for (const n of pathNodes.value) {

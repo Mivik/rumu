@@ -2,7 +2,7 @@
 import type { CardOp } from "./CardOp";
 
 /**
- * Payload of the `card_use` marker (v1), recorded by card reads/writes
+ * Payload of the `card.use` marker (v1), recorded by card reads/writes
  * (`read`/`write`/`edit` on `@rumu:/cards/<mount>/<path>`).
  */
 export type CardUse = { 

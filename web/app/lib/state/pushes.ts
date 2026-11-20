@@ -64,7 +64,7 @@ function cardChanged(node: Node): boolean {
   if (node.body.type !== 'note') return false
   const data = node.body.content.data
   if (!data) return false
-  if (data.tag === 'memory.card_update') return true
+  if (data.tag === 'card.update') return true
   // The mount table changed: the shelf follows the branch.
   if (data.tag === 'card.mount' || data.tag === 'card.unmount') return true
   if (data.tag !== 'card.use') return false

@@ -151,7 +151,7 @@ impl TaskInfo {
     }
 }
 
-/// Structured payload of a task-completion note (`kernel.task` v1), carried in
+/// Structured payload of a task-completion note (`task.done` v1), carried in
 /// the note's `content.data`.
 #[derive(Debug, Clone, Serialize, Deserialize, ts_rs::TS)]
 #[ts(export)]
@@ -164,7 +164,7 @@ pub struct TaskDone {
 }
 
 impl Structured for TaskDone {
-    const TAG: &'static str = "kernel.task";
+    const TAG: &'static str = "task.done";
     const V: u32 = 1;
 }
 

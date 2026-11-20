@@ -8,6 +8,7 @@ import { t } from '../../i18n'
 import type { TraceKind, TraceRow } from '../../lib/store'
 import { toast } from '../../lib/state/ui'
 import type { Node } from '../../lib/types'
+import { isCardTag } from '../../lib/cards'
 import { copyText, fmtDuration, fmtTokens, preview, shortId } from '../../lib/util'
 import Icon from '../ui/Icon.vue'
 import JsonTree from './JsonTree.vue'
@@ -64,8 +65,7 @@ function tone(row: TraceRow): string {
   if (b.type === 'user') return 'tone-brand'
   if (b.type === 'tool_result') return b.is_error ? 'tone-danger' : 'tone-tool'
   if (b.type === 'note') {
-    const tag = b.content.data?.tag
-    return tag?.startsWith('memory') || tag === 'card.use' ? 'tone-memory' : 'tone-neutral'
+    return isCardTag(b.content.data?.tag) ? 'tone-memory' : 'tone-neutral'
   }
   return 'tone-neutral'
 }

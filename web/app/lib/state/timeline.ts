@@ -21,10 +21,10 @@ function isCatalogNote(n: Node): boolean {
   return n.body.type === 'note' && n.body.content.data?.tag === CATALOG_TAG
 }
 
-/** Cards recalled for the prompt (`memory.import`): rumu's doing, so they fold
+/** Cards recalled for the prompt (`card.import`): rumu's doing, so they fold
  *  into the work of the step they were recalled for. */
 function isRecallNote(n: Node): boolean {
-  return n.body.type === 'note' && n.body.source === 'memory' && n.body.content.data?.tag === 'memory.import'
+  return n.body.type === 'note' && n.body.source === 'memory' && n.body.content.data?.tag === 'card.import'
 }
 
 /** A bookkeeping marker with nothing to show: the root marker, the
@@ -33,7 +33,7 @@ function isRecallNote(n: Node): boolean {
  * and a `turn.error` failure record (the error row at the end shows an
  * unanswered one; in the transcript it leaves no trace), a `workspace.set`
  * (the composer's workspace chip shows the result), the empty
- * `memory.import` recording a pinned card the introduction carried, and the
+ * `card.import` recording a pinned card the introduction carried, and the
  * `model.use` / `model.reset` / `card.mount` / `card.unmount` state
  * markers (the composer and the tool row show those).
  * Kept out of the timeline entirely — as an empty context item it would
@@ -44,9 +44,9 @@ function isSilentMarker(n: Node): boolean {
   if (tag === 'workspace.set') return true
   if (n.body.content.text !== '') return false
   return (
-    tag === 'root' ||
+    tag === 'session.root' ||
     tag === 'card.use' ||
-    tag === 'memory.import' ||
+    tag === 'card.import' ||
     tag === TURN_ERROR_TAG ||
     tag === 'model.use' ||
     tag === 'model.reset' ||
@@ -178,7 +178,7 @@ export type TimelineEntry = TimelineUserEntry | TimelineContextEntry | TimelineG
 
 /** The compaction payload of a note, if it is one. */
 export function compactionOf(n: Node): Compaction | null {
-  if (n.body.type !== 'note' || n.body.content.data?.tag !== 'compaction') return null
+  if (n.body.type !== 'note' || n.body.content.data?.tag !== 'branch.compaction') return null
   return n.body.content.data.data as Compaction
 }
 

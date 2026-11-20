@@ -14,6 +14,7 @@ import { argSummary, shortId } from '../../lib/util'
 import { highlightLine } from '../../lib/markdown'
 import { displayCall } from '../../lib/toolrows'
 import { patchOfData } from '../../lib/diff'
+import { isCardTag } from '../../lib/cards'
 import { toolIcon } from '../../lib/toolIcon'
 import Icon from '../ui/Icon.vue'
 import Chip from '../ui/Chip.vue'
@@ -120,8 +121,7 @@ function decisionLabel(d: Decision): string | null {
   return null
 }
 function effectTone(e: Content): string {
-  const tag = e.data?.tag
-  if (tag?.startsWith('memory') || tag === 'card.use') return 'border-memory/35 bg-memory-soft text-memory'
+  if (isCardTag(e.data?.tag)) return 'border-memory/35 bg-memory-soft text-memory'
   return 'border-line-soft bg-canvas text-ink-2'
 }
 function decisionTone(d: Decision): string {

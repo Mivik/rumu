@@ -928,7 +928,7 @@ async fn tool_calling_turn_and_title() {
     assert_eq!(
         body_kinds(&nodes),
         vec![
-            "marker[root]",
+            "marker[session.root]",
             "user",
             "assistant+calls",
             "tool_result",
@@ -997,7 +997,7 @@ async fn hook_blocks_prompt() {
     let (done, nodes, _) = run_turn(&kernel, &branch, "hello?").await;
     assert_eq!(done["method"], "turn.error");
     assert_eq!(done["params"]["message"], "not in the mood");
-    assert_eq!(body_kinds(&nodes), vec!["marker[root]"]); // nothing appended
+    assert_eq!(body_kinds(&nodes), vec!["marker[session.root]"]); // nothing appended
 }
 
 #[tokio::test]
@@ -1274,7 +1274,7 @@ async fn transient_failure_is_retried_to_success() {
     let (nodes, _) = kernel.branch_path(&branch).unwrap();
     assert_eq!(
         body_kinds(&nodes),
-        vec!["marker[root]", "user", "assistant"]
+        vec!["marker[session.root]", "user", "assistant"]
     );
     let NodeBody::Assistant { stats, .. } = &nodes[2].body else {
         unreachable!()
@@ -1305,7 +1305,7 @@ async fn persistent_transient_failure_records_a_marker() {
     let (nodes, _) = kernel.branch_path(&branch).unwrap();
     assert_eq!(
         body_kinds(&nodes),
-        vec!["marker[root]", "user", "marker[turn.error]"]
+        vec!["marker[session.root]", "user", "marker[turn.error]"]
     );
     let marker = nodes.last().unwrap();
     let NodeBody::Note { content, .. } = &marker.body else {
@@ -1390,7 +1390,7 @@ async fn abort_during_backoff_ends_the_turn() {
     assert!(!seen.iter().any(|v| v["method"] == "turn.error"));
 
     let (nodes, _) = kernel.branch_path(&branch).unwrap();
-    assert_eq!(body_kinds(&nodes), vec!["marker[root]", "user"]);
+    assert_eq!(body_kinds(&nodes), vec!["marker[session.root]", "user"]);
 }
 
 /// `branch.retry` runs the step loop again on the same branch: the marker
@@ -1427,7 +1427,12 @@ async fn retry_after_failure_appends_after_the_marker() {
     let (nodes, _) = kernel.branch_path(&branch).unwrap();
     assert_eq!(
         body_kinds(&nodes),
-        vec!["marker[root]", "user", "marker[turn.error]", "assistant"]
+        vec![
+            "marker[session.root]",
+            "user",
+            "marker[turn.error]",
+            "assistant"
+        ]
     );
     // The marker is on the path the kernel hands the adapter, but the
     // adapter's projection skips it (empty-text note) — asserted in
@@ -1475,7 +1480,7 @@ async fn retry_applies_the_current_choice() {
     assert_eq!(
         body_kinds(&nodes),
         vec![
-            "marker[root]",
+            "marker[session.root]",
             "user",
             "marker[turn.error]",
             "marker[model.use]",
@@ -1553,7 +1558,7 @@ async fn retry_works_behind_a_hook_note() {
     let (nodes, _) = kernel.branch_path(&branch).unwrap();
     assert_eq!(
         body_kinds(&nodes),
-        vec!["marker[root]", "user", "note", "marker[turn.error]"]
+        vec!["marker[session.root]", "user", "note", "marker[turn.error]"]
     );
 
     *llm.fail.lock().unwrap() = 0; // the provider recovered
@@ -1565,7 +1570,7 @@ async fn retry_works_behind_a_hook_note() {
     assert_eq!(
         body_kinds(&nodes),
         vec![
-            "marker[root]",
+            "marker[session.root]",
             "user",
             "note",
             "marker[turn.error]",
@@ -1621,7 +1626,7 @@ async fn retry_does_not_bypass_a_refused_prompt() {
     // user node at the head owes a reply — yet there is no recorded failure
     // to replay.
     let (nodes, _) = kernel.branch_path(&regenerated.id).unwrap();
-    assert_eq!(body_kinds(&nodes), vec!["marker[root]", "user"]);
+    assert_eq!(body_kinds(&nodes), vec!["marker[session.root]", "user"]);
     let err = kernel
         .retry(&regenerated.id, Default::default())
         .await
@@ -1887,7 +1892,7 @@ async fn safe_point_queueing() {
     assert_eq!(
         body_kinds(&nodes),
         vec![
-            "marker[root]",
+            "marker[session.root]",
             "user",
             "assistant+calls",
             "tool_result",
@@ -1972,7 +1977,7 @@ async fn agent_forks_a_child_and_survives_batch_order() {
 
         let (cnodes, _) = kernel.branch_path(&child.id).unwrap();
         let kinds = body_kinds(&cnodes);
-        assert_eq!(kinds[0], "marker[root]");
+        assert_eq!(kinds[0], "marker[session.root]");
         assert_eq!(kinds[1], "user");
         assert_eq!(kinds[2], "assistant+calls");
         assert_eq!(kinds[3], "tool_result");
@@ -2106,7 +2111,7 @@ async fn agent_context_none_starts_at_the_root() {
 
     let (cnodes, _) = kernel.branch_path(&child.id).unwrap();
     let kinds = body_kinds(&cnodes);
-    assert_eq!(kinds[..2], ["marker[root]", "user"]);
+    assert_eq!(kinds[..2], ["marker[session.root]", "user"]);
     let NodeBody::User { content } = &cnodes[1].body else {
         panic!("the child's first own node is its task");
     };
@@ -2123,7 +2128,10 @@ async fn agent_context_none_starts_at_the_root() {
 
     // The child's LLM projection held only the root and the task.
     let projections = llm.projections();
-    assert_eq!(body_kinds(&projections[1]), vec!["marker[root]", "user"]);
+    assert_eq!(
+        body_kinds(&projections[1]),
+        vec!["marker[session.root]", "user"]
+    );
     assert!(
         !projections[1].iter().any(|n| matches!(
             &n.body,
@@ -2318,7 +2326,7 @@ async fn agent_context_none_inherits_the_project() {
     let (cnodes, cstate) = kernel.branch_path(&child.id).unwrap();
     assert_eq!(
         body_kinds(&cnodes)[..3],
-        ["marker[root]", "marker[card.mount]", "user"]
+        ["marker[session.root]", "marker[card.mount]", "user"]
     );
     assert_eq!(cstate.project.as_deref(), Some("proj-deck"));
     assert_eq!(cstate.mounted, ["proj", "app"]);
@@ -3535,7 +3543,10 @@ async fn regenerate_replies_from_the_prompt_without_duplicating_it() {
     wait_turn(&mut rx, Some(regenerated.id.0.as_str())).await;
 
     let (path, _) = kernel.branch_path(&regenerated.id).unwrap();
-    assert_eq!(body_kinds(&path), vec!["marker[root]", "user", "assistant"]);
+    assert_eq!(
+        body_kinds(&path),
+        vec!["marker[session.root]", "user", "assistant"]
+    );
     assert_eq!(
         path.iter()
             .filter(|n| matches!(n.body, NodeBody::User { .. }))
@@ -3559,7 +3570,10 @@ async fn regenerate_replies_from_the_prompt_without_duplicating_it() {
 
     // The original branch still holds the first exchange.
     let (old, _) = kernel.branch_path(&branch).unwrap();
-    assert_eq!(body_kinds(&old), vec!["marker[root]", "user", "assistant"]);
+    assert_eq!(
+        body_kinds(&old),
+        vec!["marker[session.root]", "user", "assistant"]
+    );
 }
 
 /// Regenerating moves the main line onto the prompt: the same branch goes on
@@ -4734,7 +4748,7 @@ async fn background_tool_returns_task_id_and_completion_wakes_idle_branch() {
     // The completion note arrives and wakes the idle branch.
     let note = wait_push(
         &mut rx,
-        |v| pushed_note_tag(v) == Some("kernel.task"),
+        |v| pushed_note_tag(v) == Some("task.done"),
         "task completion note",
     )
     .await;
@@ -4830,7 +4844,7 @@ async fn foreground_call_moves_to_the_background_at_its_timeout() {
     // the move, and its completion note the result.
     let note = wait_push(
         &mut rx,
-        |v| pushed_note_tag(v) == Some("kernel.task"),
+        |v| pushed_note_tag(v) == Some("task.done"),
         "task completion note",
     )
     .await;
@@ -4968,7 +4982,7 @@ async fn abort_cancels_owned_tasks_and_does_not_wake() {
     kernel.abort(&branch).unwrap();
     let note = wait_push(
         &mut rx,
-        |v| pushed_note_tag(v) == Some("kernel.task"),
+        |v| pushed_note_tag(v) == Some("task.done"),
         "cancelled task note",
     )
     .await;
@@ -5383,7 +5397,7 @@ async fn agent_runs_in_background_by_default() {
     // The agent completed as a task later; its note wakes the parent.
     let note = wait_push(
         &mut rx,
-        |v| pushed_note_tag(v) == Some("kernel.task"),
+        |v| pushed_note_tag(v) == Some("task.done"),
         "agent task note",
     )
     .await;
@@ -5477,7 +5491,7 @@ async fn user_abort_of_agent_branch_reports_cancelled() {
 
     let note = wait_push(
         &mut rx,
-        |v| pushed_note_tag(v) == Some("kernel.task"),
+        |v| pushed_note_tag(v) == Some("task.done"),
         "agent task note",
     )
     .await;
@@ -5649,7 +5663,7 @@ async fn background_task_effects_keep_their_plugin_source() {
     assert_eq!(done["method"], "turn.done");
     wait_push(
         &mut rx,
-        |v| pushed_note_tag(v) == Some("kernel.task"),
+        |v| pushed_note_tag(v) == Some("task.done"),
         "task completion note",
     )
     .await;
@@ -5988,7 +6002,7 @@ async fn side_question_forks_at_the_head_and_leaves_the_main_line_alone() {
     assert_eq!(
         body_kinds(&nodes),
         vec![
-            "marker[root]",
+            "marker[session.root]",
             "user",
             "assistant",
             "note",

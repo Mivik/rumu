@@ -4,7 +4,7 @@ import type { TaskKind } from "./TaskKind";
 import type { TaskStatus } from "./TaskStatus";
 
 /**
- * Structured payload of a task-completion note (`kernel.task` v1), carried in
+ * Structured payload of a task-completion note (`task.done` v1), carried in
  * the note's `content.data`.
  */
 export type TaskDone = { id: TaskId, status: TaskStatus, kind: TaskKind, is_error: boolean, };

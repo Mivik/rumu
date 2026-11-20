@@ -1,5 +1,5 @@
 // Artifacts: snapshots of workspace files the model `show`s the user. Each
-// lives on the path as the `artifact` payload of a `show` result, its bytes a
+// lives on the path as the `workspace.artifact` payload of a `show` result, its bytes a
 // blob, so a branch sees exactly the versions it showed; the snapshots of one
 // file on the path are its versions, in order. The open one is
 // `state.artifact`: a result node id, shown only while that node is on the
@@ -12,10 +12,10 @@ import { pathNodes } from './state/derived'
 import { state, type LightboxImage } from './state/state'
 import { blobUrl, scratchPath } from './attachments'
 
-/** The `artifact` payload of a `show` result, if it is one. */
+/** The `workspace.artifact` payload of a `show` result, if it is one. */
 export function artifactOf(content: Content | null | undefined): Artifact | null {
   const d = content?.data
-  return d && d.tag === 'artifact' && d.v === 1 ? (d.data as Artifact) : null
+  return d && d.tag === 'workspace.artifact' && d.v === 1 ? (d.data as Artifact) : null
 }
 
 export interface ArtifactVersion {

@@ -196,7 +196,7 @@ async fn recall_inlines_the_matching_card() {
         .unwrap();
     assert_eq!(out.effects.len(), 1, "{:?}", out.effects);
     assert_eq!(out.effects[0].text, "# self/deploy\nthe card body\n");
-    let import: usage::CardImport = out.effects[0].decode().expect("memory.import payload");
+    let import: usage::CardImport = out.effects[0].decode().expect("card.import payload");
     assert_eq!(import.deck, crate::testutil::MAIN_DECK);
     assert_eq!(import.path, "deploy");
 
@@ -275,7 +275,7 @@ async fn update_notices() {
         .unwrap();
     {
         let content = &out.effects[0];
-        let update: usage::CardUpdate = content.decode().expect("memory.card_update payload");
+        let update: usage::CardUpdate = content.decode().expect("card.update payload");
         assert_eq!(update.deck, crate::testutil::MAIN_DECK);
         assert_eq!(update.path, "x");
         assert_eq!(update.rev, v2);
@@ -304,7 +304,7 @@ async fn update_notices() {
         .unwrap();
     {
         let content = &out.effects[0];
-        let update: usage::CardUpdate = content.decode().expect("memory.card_update payload");
+        let update: usage::CardUpdate = content.decode().expect("card.update payload");
         assert_eq!(update.path, "gone");
         assert_eq!(update.rev, "deleted");
         assert!(content.text.contains("deleted"), "{}", content.text);

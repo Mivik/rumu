@@ -7,7 +7,7 @@
 //! ```text
 //! {"t":"session","id":"7c9e…","title":"","main_branch":"7c9e…","created_at":1,"updated_at":1}
 //! {"t":"branch","id":"7c9e…","session":"7c9e…","head":"7c9e…","forked_from":null,"kind":{"type":"main"},"status":"active","created_at":1}
-//! {"t":"node","id":"7c9e…","parent":null,"session":"7c9e…","at":1,"body":{"type":"note","source":"system","content":{"text":"","data":{"tag":"root","v":1,"data":{}}}}}
+//! {"t":"node","id":"7c9e…","parent":null,"session":"7c9e…","at":1,"body":{"type":"note","source":"system","content":{"text":"","data":{"tag":"session.root","v":1,"data":{}}}}}
 //! {"t":"node","branch":"7c9e…","id":"5d1a…","parent":"7c9e…","session":"7c9e…","at":2,"body":{"type":"user","content":{"text":"hi"}}}
 //! {"t":"branch_update","id":"7c9e…","status":"done"}
 //! {"t":"branch_update","id":"7c9e…","head":"5d1a…"}

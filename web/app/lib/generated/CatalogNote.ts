@@ -5,6 +5,6 @@ import type { FoldedCatalogDir } from "./FoldedCatalogDir";
 
 /**
  * Structured card index carried in a [`rumu_core::NodeBody::Note`]'s
- * `content.data` under the `memory.catalog` tag.
+ * `content.data` under the `deck.catalog` tag.
  */
 export type CatalogNote = { scope: CatalogScope, entries: Array<CatalogEntry>, folded: Array<FoldedCatalogDir>, };

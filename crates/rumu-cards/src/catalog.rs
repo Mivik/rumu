@@ -60,7 +60,7 @@ pub struct CatalogScope {
 }
 
 /// Structured card index carried in a [`rumu_core::NodeBody::Note`]'s
-/// `content.data` under the `memory.catalog` tag.
+/// `content.data` under the `deck.catalog` tag.
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, ts_rs::TS)]
 #[ts(export)]
 pub struct CatalogNote {
@@ -70,7 +70,7 @@ pub struct CatalogNote {
 }
 
 impl Structured for CatalogNote {
-    const TAG: &'static str = "memory.catalog";
+    const TAG: &'static str = "deck.catalog";
     const V: u32 = 3;
 }
 

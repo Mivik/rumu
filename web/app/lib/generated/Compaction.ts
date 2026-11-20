@@ -3,7 +3,7 @@ import type { CompactReason } from "./CompactReason";
 import type { NodeId } from "./NodeId";
 
 /**
- * Payload of the `compaction` note (v1).
+ * Payload of the `branch.compaction` note (v1).
  */
 export type Compaction = { 
 /**

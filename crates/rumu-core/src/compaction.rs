@@ -22,7 +22,7 @@ pub enum CompactReason {
     Overflow,
 }
 
-/// Payload of the `compaction` note (v1).
+/// Payload of the `branch.compaction` note (v1).
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, ts_rs::TS)]
 #[ts(export)]
 pub struct Compaction {
@@ -42,7 +42,7 @@ pub struct Compaction {
 }
 
 impl Structured for Compaction {
-    const TAG: &'static str = "compaction";
+    const TAG: &'static str = "branch.compaction";
     const V: u32 = 1;
 }
 
