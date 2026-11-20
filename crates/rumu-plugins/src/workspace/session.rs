@@ -368,7 +368,7 @@ impl WorkspacePlugin {
     /// The session half of `search`: BM25-ranked nodes over user text,
     /// assistant text + tool-call args, tool-result text and note text. Any
     /// query term matches (OR); equal scores are newest first by `at`, and
-    /// tool results are downweighted. Read-only — no `card_use` markers.
+    /// tool results are downweighted. Read-only — no `card.use` markers.
     pub(super) async fn session_search(
         &self,
         query: &str,

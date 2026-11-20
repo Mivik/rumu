@@ -29,12 +29,28 @@ pub const FILE_PATCH_TAG: &str = "workspace.file_patch";
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize, ts_rs::TS)]
 #[ts(export)]
 pub struct Tagged {
+    #[serde(deserialize_with = "current_tag")]
     pub tag: String,
     pub v: u32,
     pub data: Value,
 }
 
+/// Tags renamed since they were first written, `(old, current)`. Records
+/// keep the old name on disk; reading one gives the current name, so no
+/// reader (here or in the web) knows the old one.
+const RENAMED_TAGS: &[(&str, &str)] = &[("card_use", "card.use")];
+
+fn current_tag<'de, D: serde::Deserializer<'de>>(d: D) -> Result<String, D::Error> {
+    let tag = String::deserialize(d)?;
+    Ok(RENAMED_TAGS
+        .iter()
+        .find(|(old, _)| *old == tag)
+        .map_or(tag, |(_, new)| (*new).to_owned()))
+}
+
 /// A payload type with a stable tag and version, stored in [`Tagged`].
+/// Tags are `<subject>.<name>`, lowercase, words joined by `_`; renaming one
+/// goes through `RENAMED_TAGS`.
 pub trait Structured: Serialize + DeserializeOwned {
     const TAG: &'static str;
     const V: u32;
@@ -614,6 +630,22 @@ impl Structured for SessionRoot {
     const V: u32 = 1;
 }
 
+/// Payload of the `agent.reply` note (v1): a finished sub-agent ran again on
+/// a message and its reply comes back to the parent branch.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, ts_rs::TS)]
+#[ts(export)]
+pub struct AgentReply {
+    /// The sub-agent's branch.
+    pub branch: BranchId,
+    /// The first line of its task, cut to 80 characters.
+    pub label: String,
+}
+
+impl Structured for AgentReply {
+    const TAG: &'static str = "agent.reply";
+    const V: u32 = 1;
+}
+
 /// Payload of the `turn.error` marker (v1): a turn that failed terminally
 /// after its retries ran out. Recorded at the branch head as a durable record
 /// of the failure; the marker's empty text keeps it out of the model's
@@ -844,6 +876,16 @@ pub struct PathState {
 mod tests {
     use super::*;
     use serde_json::json;
+
+    #[test]
+    fn renamed_tags_read_as_current() {
+        let old: Tagged =
+            serde_json::from_value(json!({"tag": "card_use", "v": 1, "data": {}})).unwrap();
+        assert_eq!(old.tag, "card.use");
+        let other: Tagged =
+            serde_json::from_value(json!({"tag": "root", "v": 1, "data": {}})).unwrap();
+        assert_eq!(other.tag, "root");
+    }
 
     #[test]
     fn call_stats_sit_flat_on_the_assistant_body() {

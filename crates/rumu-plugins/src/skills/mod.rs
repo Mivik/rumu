@@ -10,7 +10,7 @@ mod repo;
 #[cfg(test)]
 mod tests;
 
-use std::collections::HashSet;
+use std::collections::{BTreeMap, HashSet};
 use std::fmt::Write as _;
 use std::path::{Path, PathBuf};
 use std::sync::Arc;
@@ -34,9 +34,14 @@ const FILES_LIMIT: usize = 200;
 
 /// Payload of the `skills.intro` note (v1): the skill list, again whenever it
 /// changes.
-#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
-struct SkillsIntro {
-    skills: Vec<String>,
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, ts_rs::TS)]
+#[ts(export)]
+pub struct SkillsIntro {
+    pub skills: Vec<String>,
+    /// Each skill's one-line description, by name, for the UI; absent in
+    /// notes written before it existed.
+    #[serde(default, skip_serializing_if = "BTreeMap::is_empty")]
+    pub about: BTreeMap<String, String>,
 }
 
 impl Structured for SkillsIntro {
@@ -356,11 +361,20 @@ one of its scripts, write the script into your workspace first.",
                 }
             )
         };
+        let mut about = BTreeMap::new();
         for s in &skills {
-            let _ = write!(text, "\n- `{}`: {}", s.name, one_line(&s.description));
+            let line = one_line(&s.description);
+            let _ = write!(text, "\n- `{}`: {line}", s.name);
+            about.insert(s.name.clone(), line);
         }
         Ok(HookOutput {
-            effects: vec![Content::note_with(text, &SkillsIntro { skills: names })],
+            effects: vec![Content::note_with(
+                text,
+                &SkillsIntro {
+                    skills: names,
+                    about,
+                },
+            )],
             decision: Decision::Pass,
         })
     }

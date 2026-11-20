@@ -4,7 +4,7 @@
 //   1. Note { content.data = memory.import {id, rev} }              → context pill chip
 //   2. Note { content.data = memory.card_update {id, rev} }         → "updated" pill
 //   3. ToolResult of a card read/write (read/write/edit on
-//      `@rumu:/cards/<id>`) + a card_use note → tool row chip
+//      `@rumu:/cards/<id>`) + a card.use note → tool row chip
 //   4. the card window, which reads the live card (card.get) beside the uses
 //      derived from the path
 // A card is identified by its deck id and path; records carry both. This
@@ -42,9 +42,9 @@ export function updateOf(content: Content | null | undefined): CardUpdate | null
   return payload<CardUpdate>(content, 'memory.card_update', 1)
 }
 
-/** The `card_use` record carried by an empty-text note. */
+/** The `card.use` record carried by an empty-text note. */
 export function cardUseOf(content: Content | null | undefined): CardUseRecord | null {
-  return payload<CardUseRecord>(content, 'card_use', 1)
+  return payload<CardUseRecord>(content, 'card.use', 1)
 }
 
 /** The `workspace.use` marker carried by an empty-text note. */

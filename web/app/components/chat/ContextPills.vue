@@ -11,10 +11,16 @@ import { computed, ref } from 'vue'
 import { t } from '../../i18n'
 import type { Content, Node, TaskDone } from '../../lib/types'
 import type { FilesReverted } from '../../lib/generated/FilesReverted'
+import type { McpIntro } from '../../lib/generated/McpIntro'
+import type { SkillsIntro } from '../../lib/generated/SkillsIntro'
+import type { WatchEvent } from '../../lib/generated/WatchEvent'
+import type { WatchSilence } from '../../lib/generated/WatchSilence'
+import type { AgentReply } from '../../lib/generated/AgentReply'
 import { CATALOG_TAG, ASSISTANT_INTRO_TAG, TASK_TAG, TASK_VERSION } from '../../lib/types'
 import Icon from '../ui/Icon.vue'
 import { agentsOf, importOf, mountedId, updateOf, workspaceUseOf } from '../../lib/cards'
-import { openDrawer } from '../../lib/store'
+import { openDrawer, state } from '../../lib/store'
+import { taskLabel } from '../../lib/tasks'
 import { vEnter } from '../../lib/motion'
 import NoticeRow from './NoticeRow.vue'
 import type { Notice } from './NoticeRow.vue'
@@ -42,6 +48,21 @@ function revertOf(content: Content): FilesReverted | null {
   return d && d.tag === 'workspace.revert' && d.v === 1 ? (d.data as FilesReverted) : null
 }
 
+/** The payload of a note of `tag` (v1), if that is what this note is. */
+function dataOf<T>(content: Content, tag: string): T | null {
+  const d = content.data
+  return d && d.tag === tag && d.v === 1 ? (d.data as T) : null
+}
+
+/** `bash: cargo test` for a task: from the open session's task list, else
+ *  what the completion payload says, else its id. */
+function labelOf(id: string, kind?: TaskDone['kind']): string {
+  const tk = state.tasks[id]
+  if (tk) return taskLabel(tk)
+  if (kind?.type === 'tool') return kind.args_summary ? `${kind.name}: ${kind.args_summary}` : kind.name
+  return id
+}
+
 /** Up to 3 names shown; past that, 2 names + "+N" (rest in the hover title). */
 const SHOWN = 3
 
@@ -63,8 +84,55 @@ const parsed = computed(() => {
     const agents = agentsOf(b.content)
     const wsUse = workspaceUseOf(b.content)
     const revert = revertOf(b.content)
+    const mcp = dataOf<McpIntro>(b.content, 'mcp.intro')
+    const skills = dataOf<SkillsIntro>(b.content, 'skills.intro')
+    const watch = dataOf<WatchEvent>(b.content, 'workspace.watch')
+    const silence = dataOf<WatchSilence>(b.content, 'workspace.watch_silence')
+    const reply = dataOf<AgentReply>(b.content, 'agent.reply')
     if (task) {
-      add({ kind: 'task', key: `task:${task.id}`, id: task.id, status: task.status, text: b.content.text })
+      const label = labelOf(task.id, task.kind)
+      add({
+        kind: 'task',
+        key: `task:${task.id}`,
+        id: task.id,
+        label,
+        status: task.status,
+        text: b.content.text,
+      })
+    } else if (mcp) {
+      const servers = mcp.servers.map((name) => ({ name, ...mcp.status?.[name] }))
+      add({
+        kind: 'mcp',
+        key: `mcp:${n.id}`,
+        servers,
+        text: servers.map((s) => (s.error ? `${s.name}: ${s.error}` : s.name)).join('\n'),
+      })
+    } else if (skills) {
+      const text = skills.skills.map((s) => (skills.about?.[s] ? `${s}: ${skills.about[s]}` : s)).join('\n')
+      add({ kind: 'skills', key: `skills:${n.id}`, names: skills.skills, text })
+    } else if (watch) {
+      add({
+        kind: 'watch',
+        key: `watch:${n.id}`,
+        id: watch.task,
+        label: labelOf(watch.task),
+        count: watch.count ?? 0,
+        matching: watch.matching ?? false,
+        text: b.content.text,
+      })
+    } else if (silence) {
+      add({
+        kind: 'silence',
+        key: `silence:${n.id}`,
+        id: silence.task,
+        label: labelOf(silence.task),
+        secs: silence.secs,
+        matching: silence.matching,
+      })
+    } else if (reply) {
+      // The text after the `sub-agent (…) replied:` line is the reply.
+      const text = b.content.text.slice(b.content.text.indexOf('\n') + 1)
+      add({ kind: 'reply', key: `reply:${n.id}`, branch: reply.branch, label: reply.label, text })
     } else if (b.source === 'memory' && update) {
       const id = mountedId(update.deck, update.path) ?? update.path
       add({ kind: 'update', key: `update:${id}`, id, label: id, text: b.content.text })
@@ -92,10 +160,12 @@ const parsed = computed(() => {
       const files = revert.files.map((f) => `${f.ws}:${f.path}`)
       add({ kind: 'revert', key: `revert:${n.id}`, files, text: files.join('\n') })
     } else if (b.content.text || !b.content.data) {
-      add({ kind: 'note', key: `note:${n.id}`, text: b.content.text })
+      // Name the plugin a note comes from; rumu's own (`system`) go unnamed.
+      const source = b.source === 'system' ? undefined : b.source
+      add({ kind: 'note', key: `note:${n.id}`, source, text: b.content.text })
     }
     // An empty-text note with data that no producer claimed (e.g. the root
-    // marker or a card_use record) has nothing to show here.
+    // marker or a card.use record) has nothing to show here.
   }
   return { cards, notices: [...notices.values()] }
 })

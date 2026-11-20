@@ -6,7 +6,7 @@
 //! - auto-import: `Note` with `content.data = memory.import {deck, path, rev}`
 //!   (and the card text) — the payload carries the revision, so imports are
 //!   per-version;
-//! - tool read/write: a `Note` with empty text and `content.data = card_use
+//! - tool read/write: a `Note` with empty text and `content.data = card.use
 //!   {deck, path, rev, view_rev, call_id, op}` appended right after the tool
 //!   batch —
 //!   counted only when a successful ToolResult with the same `call_id` exists
@@ -34,7 +34,7 @@ pub struct Use {
     pub commit: Option<String>,
 }
 
-/// What a `card_use` record describes: a tool read, write or edit.
+/// What a `card.use` record describes: a tool read, write or edit.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, serde::Serialize, serde::Deserialize, ts_rs::TS)]
 #[serde(rename_all = "lowercase")]
 #[ts(export)]
@@ -44,7 +44,7 @@ pub enum CardOp {
     Edit,
 }
 
-/// Payload of the `card_use` marker (v1), recorded by card reads/writes
+/// Payload of the `card.use` marker (v1), recorded by card reads/writes
 /// (`read`/`write`/`edit` on `@rumu:/cards/<mount>/<path>`).
 #[derive(Debug, Clone, PartialEq, Eq, serde::Serialize, serde::Deserialize, ts_rs::TS)]
 #[ts(export)]
@@ -69,14 +69,14 @@ fn default_op() -> CardOp {
 }
 
 impl Structured for CardUse {
-    const TAG: &'static str = "card_use";
+    const TAG: &'static str = "card.use";
     const V: u32 = 1;
 }
 
 /// Marker tag recorded by card reads/writes.
 pub const CARD_USE: &str = CardUse::TAG;
 
-/// Build the `card_use` marker content for a read/write.
+/// Build the `card.use` marker content for a read/write.
 pub fn card_use(
     deck: &str,
     path: &str,
@@ -141,7 +141,7 @@ pub(crate) fn ok_calls(nodes: &[Node]) -> HashSet<&str> {
         .collect()
 }
 
-/// The latest `card_use` marker record of `(deck, path)` on the path
+/// The latest `card.use` marker record of `(deck, path)` on the path
 /// (validated by a successful ToolResult). Import notes are ignored — the
 /// read-before-write check of the edit tools needs the tool read's `view_rev`,
 /// which only tool uses carry.
@@ -156,7 +156,7 @@ pub fn uses_on_path(nodes: &[Node]) -> BTreeMap<(String, String), Use> {
     fold_uses(nodes, &ok_calls(nodes))
 }
 
-/// One pass over the path: imports and `card_use` records, latest wins.
+/// One pass over the path: imports and `card.use` records, latest wins.
 /// `ok_calls` validates the tool uses.
 fn fold_uses(nodes: &[Node], ok_calls: &HashSet<&str>) -> BTreeMap<(String, String), Use> {
     let mut uses: BTreeMap<(String, String), Use> = BTreeMap::new();

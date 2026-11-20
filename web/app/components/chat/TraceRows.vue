@@ -65,7 +65,7 @@ function tone(row: TraceRow): string {
   if (b.type === 'tool_result') return b.is_error ? 'tone-danger' : 'tone-tool'
   if (b.type === 'note') {
     const tag = b.content.data?.tag
-    return tag?.startsWith('memory') || tag === 'card_use' ? 'tone-memory' : 'tone-neutral'
+    return tag?.startsWith('memory') || tag === 'card.use' ? 'tone-memory' : 'tone-neutral'
   }
   return 'tone-neutral'
 }

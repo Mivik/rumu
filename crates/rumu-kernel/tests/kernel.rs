@@ -334,7 +334,7 @@ impl Plugin for TestPlugin {
                 let tag = args
                     .get("kind")
                     .and_then(Value::as_str)
-                    .unwrap_or("card_use")
+                    .unwrap_or("card.use")
                     .to_owned();
                 let data = args.get("data").cloned().unwrap_or(json!({}));
                 return Ok(ToolOutput::ok("recorded").with_effect(Content {

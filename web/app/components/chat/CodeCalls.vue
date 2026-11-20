@@ -121,7 +121,7 @@ function decisionLabel(d: Decision): string | null {
 }
 function effectTone(e: Content): string {
   const tag = e.data?.tag
-  if (tag?.startsWith('memory') || tag === 'card_use') return 'border-memory/35 bg-memory-soft text-memory'
+  if (tag?.startsWith('memory') || tag === 'card.use') return 'border-memory/35 bg-memory-soft text-memory'
   return 'border-line-soft bg-canvas text-ink-2'
 }
 function decisionTone(d: Decision): string {

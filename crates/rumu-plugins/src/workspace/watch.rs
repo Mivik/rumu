@@ -101,17 +101,40 @@ impl Default for WatchTiming {
 
 /// Payload of a watch event note (`workspace.watch` v1): the batch's lines in
 /// `@rumu:/tasks/<id>/output`.
-#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, ts_rs::TS)]
+#[ts(export)]
 pub struct WatchEvent {
     pub task: TaskId,
     pub from: usize,
     pub to: usize,
     /// Whether the note cut the middle of the batch.
     pub truncated: bool,
+    /// Event lines in the batch (0 in notes written before it existed).
+    #[serde(default)]
+    pub count: usize,
+    /// Whether the watch has a `match` filter (the lines are matching ones).
+    #[serde(default)]
+    pub matching: bool,
 }
 
 impl Structured for WatchEvent {
     const TAG: &'static str = "workspace.watch";
+    const V: u32 = 1;
+}
+
+/// Payload of a watch's `silence` note (`workspace.watch_silence` v1): no
+/// event came for `secs` seconds.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, ts_rs::TS)]
+#[ts(export)]
+pub struct WatchSilence {
+    pub task: TaskId,
+    pub secs: u64,
+    /// Whether the watch has a `match` filter (no matching line came).
+    pub matching: bool,
+}
+
+impl Structured for WatchSilence {
+    const TAG: &'static str = "workspace.watch_silence";
     const V: u32 = 1;
 }
 
@@ -675,6 +698,8 @@ impl Watch {
                 from: r.from,
                 to: r.to,
                 truncated: r.truncated,
+                count: r.count,
+                matching: self.filter.is_some(),
             },
         );
         let post = Post {
@@ -695,10 +720,14 @@ impl Watch {
             None => "no new output",
         };
         let secs = self.silence.map_or(0, |(s, _)| s);
-        let note = Content::text(format!(
-            "watch {}{}: {what} for {secs}s",
-            self.task, self.label
-        ));
+        let note = Content::note_with(
+            format!("watch {}{}: {what} for {secs}s", self.task, self.label),
+            &WatchSilence {
+                task: self.task.clone(),
+                secs,
+                matching: self.filter.is_some(),
+            },
+        );
         let post = Post {
             effects: vec![note],
             wake: true,

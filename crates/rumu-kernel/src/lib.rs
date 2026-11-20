@@ -645,7 +645,7 @@ impl Kernel {
     /// [`path_nodes`](Self::path_nodes) plus the appends queued for the next
     /// safe point, as provisional tail nodes. Plugins and hooks read this
     /// view so a marker recorded earlier in a tool batch (`workspace.use`,
-    /// `card_use`) is already in effect for the batch's later calls; the
+    /// `card.use`) is already in effect for the batch's later calls; the
     /// stored path (UI, projection) stays the committed one.
     pub(crate) fn pending_path_nodes(&self, branch: &BranchId) -> Result<Vec<Node>> {
         let mut path = self.path_nodes(branch)?;
@@ -1453,7 +1453,13 @@ impl Kernel {
             .collect();
         let note = NodeBody::Note {
             source: SYSTEM_SOURCE.into(),
-            content: Content::text(format!("sub-agent ({label}) replied:\n{text}")),
+            content: Content::note_with(
+                format!("sub-agent ({label}) replied:\n{text}"),
+                &rumu_core::AgentReply {
+                    branch: branch.clone(),
+                    label,
+                },
+            ),
         };
         self.deliver(parent, NodeId::new(), note, Some((SYSTEM_SOURCE, false)))
             .await?;

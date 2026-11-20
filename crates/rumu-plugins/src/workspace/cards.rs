@@ -295,7 +295,7 @@ impl WorkspacePlugin {
     }
 
     /// Write (or move, with `from`) a card's editable view. Overwriting an
-    /// existing card requires the latest `card_use` on this branch to carry
+    /// existing card requires the latest `card.use` on this branch to carry
     /// the card's current `view_rev` — read it first.
     pub(super) async fn card_write(
         &self,
@@ -560,7 +560,7 @@ impl WorkspacePlugin {
         .with_effect(seen))
     }
 
-    /// Read-before-write concurrency: the latest `card_use` for the card's
+    /// Read-before-write concurrency: the latest `card.use` for the card's
     /// `(deck, path)` on the branch path must carry the card's current
     /// on-disk `view_rev`. A refusal lists the git commits since the read that
     /// touch the path, and the diff from the read version to the current one.
@@ -632,7 +632,7 @@ impl WorkspacePlugin {
     }
 }
 
-/// The `card_use` marker recording a tool read/write (the result itself is
+/// The `card.use` marker recording a tool read/write (the result itself is
 /// the snapshot). Keyed by the card's deck and path; the commit is the CAS
 /// base.
 fn record_card_use(

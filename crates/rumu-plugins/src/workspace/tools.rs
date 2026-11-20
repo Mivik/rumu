@@ -1179,7 +1179,7 @@ fn display(ws: &Workspace, abs: &Utf8TypedPathBuf) -> String {
 
 impl WorkspacePlugin {
     /// The `search` tool: cards by default, past conversations with
-    /// `scope: "@rumu:/sessions[/<session>]"`. Read-only — no `card_use`
+    /// `scope: "@rumu:/sessions[/<session>]"`. Read-only — no `card.use`
     /// markers.
     async fn tool_search(
         &self,

@@ -1380,7 +1380,7 @@ async fn card_paths_are_equivalent_in_every_form() {
     }
     // Every read records one use marker.
     assert_eq!(effects.len(), 5);
-    let payload: usage::CardUse = effects[0].decode().expect("card_use payload");
+    let payload: usage::CardUse = effects[0].decode().expect("card.use payload");
     assert_eq!(payload.deck, crate::testutil::MAIN_DECK);
     assert_eq!(payload.path, "m");
     assert_eq!(payload.op, usage::CardOp::Read);
@@ -1627,7 +1627,7 @@ async fn card_tools_read_write_validate_and_list() {
     );
 
     // The use marker carries both revs; `rev` ignores metadata.
-    let payload: usage::CardUse = out.effects[0].decode().expect("card_use payload");
+    let payload: usage::CardUse = out.effects[0].decode().expect("card.use payload");
     assert_eq!(payload.deck, crate::testutil::MAIN_DECK);
     assert_eq!(payload.path, "m");
     assert_eq!(payload.op, usage::CardOp::Read);
@@ -3436,7 +3436,7 @@ async fn search_sessions_and_cards_by_scope() {
     );
     assert!(
         out.effects.is_empty(),
-        "searching records no card_use markers"
+        "searching records no card.use markers"
     );
 
     // Scopes outside the @rumu workspace are rejected.

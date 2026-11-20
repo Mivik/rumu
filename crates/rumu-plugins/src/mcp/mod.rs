@@ -10,6 +10,7 @@ mod hub;
 #[cfg(test)]
 mod tests;
 
+use std::collections::BTreeMap;
 use std::fmt::Write as _;
 use std::path::PathBuf;
 use std::sync::Arc;
@@ -40,9 +41,27 @@ const INTRO_HOOK: &str = "mcp-intro";
 
 /// Payload of the `mcp.intro` note (v1): the server list, again whenever it
 /// changes.
-#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
-struct McpIntro {
-    servers: Vec<String>,
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, ts_rs::TS)]
+#[ts(export)]
+pub struct McpIntro {
+    pub servers: Vec<String>,
+    /// Each configured server's state when the note was written, for the
+    /// UI; absent in notes written before it existed.
+    #[serde(default, skip_serializing_if = "BTreeMap::is_empty")]
+    pub status: BTreeMap<String, McpIntroServer>,
+}
+
+/// A server's line in the `mcp.intro` note.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, ts_rs::TS)]
+#[ts(export)]
+pub struct McpIntroServer {
+    pub status: McpStatus,
+    /// Enabled tools (when ready).
+    pub tools: usize,
+    /// The first line of the error (when failed).
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    #[ts(optional)]
+    pub error: Option<String>,
 }
 
 impl Structured for McpIntro {
@@ -94,16 +113,22 @@ impl Plugin for McpPlugin {
         if last.as_ref().unwrap_or(&Vec::new()) == &servers {
             return Ok(HookOutput::default());
         }
-        let text = match (last, servers.is_empty()) {
-            (_, true) => "This session has no MCP servers any more.".to_owned(),
-            (None, false) => intro(&self.hub, &mcp).await,
-            (Some(_), false) => format!(
-                "The MCP servers changed; this replaces the earlier list.\n{}",
-                intro(&self.hub, &mcp).await
+        let (text, status) = match (last, servers.is_empty()) {
+            (_, true) => (
+                "This session has no MCP servers any more.".to_owned(),
+                BTreeMap::new(),
             ),
+            (None, false) => intro(&self.hub, &mcp).await,
+            (Some(_), false) => {
+                let (text, status) = intro(&self.hub, &mcp).await;
+                (
+                    format!("The MCP servers changed; this replaces the earlier list.\n{text}"),
+                    status,
+                )
+            }
         };
         Ok(HookOutput {
-            effects: vec![Content::note_with(text, &McpIntro { servers })],
+            effects: vec![Content::note_with(text, &McpIntro { servers, status })],
             decision: Decision::Pass,
         })
     }
@@ -232,8 +257,9 @@ pub fn servers(decks: &Decks, state: &PathState) -> McpUse {
 }
 
 /// The server-list note: the session's servers, their status and
-/// instructions.
-async fn intro(hub: &McpHub, mcp: &McpUse) -> String {
+/// instructions; and each configured server's state for the UI.
+async fn intro(hub: &McpHub, mcp: &McpUse) -> (String, BTreeMap<String, McpIntroServer>) {
+    let mut status = BTreeMap::new();
     let mut text = format!(
         "MCP servers of this session. Their tools are not in your tool list: they are the actions \
 of `{RUMU_WORKSPACE}:/mcp/<server>` — find them with `search` (scope `{RUMU_WORKSPACE}:/mcp`) or \
@@ -247,6 +273,14 @@ no `path`)."
             Some(server) => {
                 let snap = enabled(server.ready().await, rules);
                 text.push_str(&status_line(&snap));
+                status.insert(
+                    name.clone(),
+                    McpIntroServer {
+                        status: snap.status,
+                        tools: snap.tools.len(),
+                        error: first_error_line(&snap).map(str::to_owned),
+                    },
+                );
                 if let Some(i) = snap
                     .instructions
                     .as_deref()
@@ -259,7 +293,15 @@ no `path`)."
             }
         }
     }
-    text
+    (text, status)
+}
+
+/// The first line of a failed server's error.
+fn first_error_line(snap: &Snapshot) -> Option<&str> {
+    match snap.status {
+        McpStatus::Failed => snap.error.as_deref().and_then(|e| e.lines().next()),
+        _ => None,
+    }
 }
 
 fn status_line(snap: &Snapshot) -> String {
@@ -268,10 +310,7 @@ fn status_line(snap: &Snapshot) -> String {
         McpStatus::Connecting => "connecting".into(),
         McpStatus::Failed => format!(
             "unavailable ({})",
-            snap.error
-                .as_deref()
-                .and_then(|e| e.lines().next())
-                .unwrap_or("failed")
+            first_error_line(snap).unwrap_or("failed")
         ),
     }
 }

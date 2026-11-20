@@ -58,7 +58,7 @@ let traceSeq = 1
 const MAX_LIVE_OUTPUT = 1_000_000
 
 /** Did this node change the card library on disk? A write/edit records a
- * `card_use`; the memory hook records `card_update` notices for cards that
+ * `card.use`; the memory hook records `card_update` notices for cards that
  * changed elsewhere. Both make open card windows and deck counts stale. */
 function cardChanged(node: Node): boolean {
   if (node.body.type !== 'note') return false
@@ -67,7 +67,7 @@ function cardChanged(node: Node): boolean {
   if (data.tag === 'memory.card_update') return true
   // The mount table changed: the shelf follows the branch.
   if (data.tag === 'card.mount' || data.tag === 'card.unmount') return true
-  if (data.tag !== 'card_use') return false
+  if (data.tag !== 'card.use') return false
   const op = (data.data as { op?: unknown }).op
   return op === 'write' || op === 'edit'
 }

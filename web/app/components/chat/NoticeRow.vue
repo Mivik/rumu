@@ -2,14 +2,30 @@
 // One side note (a context notice other than recalled cards; see
 // ContextPills), as a sentence that reads on its own: the default workspace
 // set, a CLAUDE.md loaded, a card that changed, a finished background task,
-// a plain note in full, files the user reverted.
-import type { TaskStatus } from '../../lib/types'
+// the session's MCP servers or skills, a watch event, a sub-agent's reply,
+// files the user reverted, a plain note in full. The model-facing text
+// stays in the hover title.
+import { t } from '../../i18n'
+import type { BranchId, TaskStatus } from '../../lib/types'
+import type { McpStatus } from '../../lib/generated/McpStatus'
+
+export interface McpServerLine {
+  name: string
+  status?: McpStatus
+  tools?: number
+  error?: string
+}
 
 export type Notice =
   | { kind: 'workspace' | 'agents'; key: string; name: string }
   | { kind: 'update'; key: string; id: string; label: string; text: string }
-  | { kind: 'task'; key: string; id: string; status: TaskStatus; text: string }
-  | { kind: 'note'; key: string; text: string }
+  | { kind: 'task'; key: string; id: string; label: string; status: TaskStatus; text: string }
+  | { kind: 'mcp'; key: string; servers: McpServerLine[]; text: string }
+  | { kind: 'skills'; key: string; names: string[]; text: string }
+  | { kind: 'watch'; key: string; id: string; label: string; count: number; matching: boolean; text: string }
+  | { kind: 'silence'; key: string; id: string; label: string; secs: number; matching: boolean }
+  | { kind: 'reply'; key: string; branch: BranchId; label: string; text: string }
+  | { kind: 'note'; key: string; source?: string; text: string }
   | { kind: 'revert'; key: string; files: string[]; text: string }
 
 const ICON: Record<Notice['kind'], string> = {
@@ -17,14 +33,31 @@ const ICON: Record<Notice['kind'], string> = {
   agents: 'file',
   update: 'note',
   task: 'tool',
+  mcp: 'mcp',
+  skills: 'document',
+  watch: 'bash',
+  silence: 'bash',
+  reply: 'agent',
   note: 'note',
   revert: 'undo',
+}
+
+/** `telegram (61 tools)`; a server not ready says so. */
+function serverWord(s: McpServerLine): string {
+  if (s.status === 'connecting') return t('cards.notes.mcpConnecting', { name: s.name })
+  if (s.status === 'failed') return t('cards.notes.mcpFailed', { name: s.name })
+  if (s.status === 'ready') return t('cards.notes.mcpTools', { name: s.name, count: s.tools ?? 0 })
+  return s.name
+}
+
+/** Names in a sentence: `a、b、c` / `a, b, c`. */
+function joinList(xs: string[]): string {
+  return xs.join(t('cards.notes.sep'))
 }
 </script>
 
 <script setup lang="ts">
-import { t } from '../../i18n'
-import { openDrawer, openTaskDetail } from '../../lib/store'
+import { openAgentView, openDrawer, openTaskDetail } from '../../lib/store'
 import { taskStatusWord } from '../../lib/tasks'
 import { workspaceLabel } from '../../lib/util'
 import Icon from '../ui/Icon.vue'
@@ -53,7 +86,59 @@ defineProps<{ notice: Notice }>()
       :title="notice.text"
       @click="openTaskDetail(notice.id)"
     >
-      {{ t('cards.notes.task', { id: notice.id, status: taskStatusWord(notice.status) }) }}
+      {{ t('cards.notes.task', { label: notice.label, status: taskStatusWord(notice.status) }) }}
+    </button>
+    <span v-else-if="notice.kind === 'mcp'" class="min-w-0 truncate" :title="notice.text">
+      {{
+        notice.servers.length
+          ? t('cards.notes.mcp', { list: joinList(notice.servers.map(serverWord)) })
+          : t('cards.notes.mcpNone')
+      }}
+    </span>
+    <span v-else-if="notice.kind === 'skills'" class="min-w-0 truncate" :title="notice.text">
+      {{
+        notice.names.length
+          ? t('cards.notes.skills', { list: joinList(notice.names) })
+          : t('cards.notes.skillsNone')
+      }}
+    </span>
+    <button
+      v-else-if="notice.kind === 'watch'"
+      type="button"
+      class="min-w-0 truncate text-left hover:text-ink"
+      :title="notice.text"
+      @click="openTaskDetail(notice.id)"
+    >
+      {{
+        notice.count
+          ? t(notice.matching ? 'cards.notes.watchMatch' : 'cards.notes.watch', {
+              label: notice.label,
+              count: notice.count,
+            })
+          : t('cards.notes.watchSome', { label: notice.label })
+      }}
+    </button>
+    <button
+      v-else-if="notice.kind === 'silence'"
+      type="button"
+      class="min-w-0 truncate text-left hover:text-ink"
+      @click="openTaskDetail(notice.id)"
+    >
+      {{
+        t(notice.matching ? 'cards.notes.silenceMatch' : 'cards.notes.silence', {
+          label: notice.label,
+          secs: notice.secs,
+        })
+      }}
+    </button>
+    <button
+      v-else-if="notice.kind === 'reply'"
+      type="button"
+      class="min-w-0 truncate text-left hover:text-ink"
+      :title="notice.text"
+      @click="openAgentView(notice.branch)"
+    >
+      {{ t('cards.notes.reply', { label: notice.label }) }}
     </button>
     <span v-else-if="notice.kind === 'revert'" class="min-w-0 truncate" :title="notice.text">
       {{
@@ -62,6 +147,9 @@ defineProps<{ notice: Notice }>()
           : t('cards.notes.revertNone')
       }}
     </span>
-    <span v-else-if="notice.kind === 'note'" class="min-w-0 whitespace-pre-wrap">{{ notice.text }}</span>
+    <span v-else-if="notice.kind === 'note'" class="min-w-0 whitespace-pre-wrap"
+      ><span v-if="notice.source" class="font-semibold text-ink-2">{{ notice.source }} </span
+      >{{ notice.text }}</span
+    >
   </div>
 </template>

@@ -28,12 +28,14 @@ function isRecallNote(n: Node): boolean {
 }
 
 /** A bookkeeping marker with nothing to show: the root marker, the
- * `card_use` record a card read/write leaves after its tool result (the
+ * `card.use` record a card read/write leaves after its tool result (the
  * Context data reads it from the path; the tool row already shows the card),
  * and a `turn.error` failure record (the error row at the end shows an
  * unanswered one; in the transcript it leaves no trace), a `workspace.set`
- * (the composer's workspace chip shows the result), and the empty
- * `memory.import` recording a pinned card the introduction carried.
+ * (the composer's workspace chip shows the result), the empty
+ * `memory.import` recording a pinned card the introduction carried, and the
+ * `model.use` / `model.reset` / `card.mount` / `card.unmount` state
+ * markers (the composer and the tool row show those).
  * Kept out of the timeline entirely — as an empty context item it would
  * split the activity run around it in two. */
 function isSilentMarker(n: Node): boolean {
@@ -41,7 +43,16 @@ function isSilentMarker(n: Node): boolean {
   const tag = n.body.content.data?.tag
   if (tag === 'workspace.set') return true
   if (n.body.content.text !== '') return false
-  return tag === 'root' || tag === 'card_use' || tag === 'memory.import' || tag === TURN_ERROR_TAG
+  return (
+    tag === 'root' ||
+    tag === 'card.use' ||
+    tag === 'memory.import' ||
+    tag === TURN_ERROR_TAG ||
+    tag === 'model.use' ||
+    tag === 'model.reset' ||
+    tag === 'card.mount' ||
+    tag === 'card.unmount'
+  )
 }
 
 export interface ToolRowInfo {
