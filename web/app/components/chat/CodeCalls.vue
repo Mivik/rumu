@@ -1,19 +1,17 @@
 <script setup lang="ts">
 // Internal tool calls made by one `code` script: a compact list under the
-// script body. Rows expand to their args/output; the hook trace of the
-// enclosing call (tool.pre/post on internal calls) is shown underneath.
+// script body. Rows expand to their args/output.
 // Each invoke is an ordinary ToolResult node whose `invoke.parent` names the
 // `code` call; they nest here instead of showing as chat rows. While the
 // row is shut, the files the script changed stand after it as EditCards.
 import { computed, ref } from 'vue'
 import { t } from '../../i18n'
-import type { Branch, Content, Decision, FilePatch, Tagged } from '../../lib/types'
+import type { Branch, FilePatch, Tagged } from '../../lib/types'
 import type { ToolRowInfo } from '../../lib/store'
 import { openAgentView, state } from '../../lib/store'
 import { argSummary, shortId } from '../../lib/util'
 import { bashExtraArgs, displayCall } from '../../lib/toolrows'
 import { patchOfData } from '../../lib/diff'
-import { isCardTag } from '../../lib/cards'
 import { toolIcon } from '../../lib/toolIcon'
 import Icon from '../ui/Icon.vue'
 import Chip from '../ui/Chip.vue'
@@ -23,7 +21,6 @@ import FileView from './FileView.vue'
 import JsonTree from './JsonTree.vue'
 
 const props = defineProps<{ row: ToolRowInfo }>()
-const parentCall = computed(() => props.row.call?.call_id ?? '')
 
 /** One invoke node under this `code` call, flattened for display. */
 interface CodeCallRow {
@@ -54,7 +51,6 @@ const calls = computed<CodeCallRow[]>(() => {
   }
   return out
 })
-const traces = computed(() => state.hookTrace.filter((e) => e.parent_call === parentCall.value))
 
 /** Sub-agent branches forked by an internal call: keyed by its call id. */
 const agentChildren = computed(() => {
@@ -68,7 +64,6 @@ function openAgent(b: Branch): void {
   openAgentView(b.id)
 }
 const expanded = ref<Set<string>>(new Set())
-const showTrace = ref(false)
 
 type Status = 'ok' | 'error' | 'blocked'
 
@@ -111,23 +106,6 @@ function commandOf(c: CodeCallRow): string {
   return typeof cmd === 'string' ? cmd.trim() : ''
 }
 
-function effectLabel(e: Content): string {
-  return e.data?.tag ? `note:${e.data.tag}` : 'note'
-}
-function decisionLabel(d: Decision): string | null {
-  if (d.type === 'block') return `block: ${d.reason.slice(0, 40)}`
-  if (d.type === 'rewrite') return 'rewrite'
-  return null
-}
-function effectTone(e: Content): string {
-  if (isCardTag(e.data?.tag)) return 'border-memory/35 bg-memory-soft text-memory'
-  return 'border-line-soft bg-canvas text-ink-2'
-}
-function decisionTone(d: Decision): string {
-  return d.type === 'block'
-    ? 'border-danger/35 bg-danger-soft text-danger'
-    : 'border-line-soft bg-canvas text-ink-2'
-}
 const iconTone: Record<Status, string> = {
   ok: 'text-tool',
   error: 'text-danger',
@@ -136,7 +114,7 @@ const iconTone: Record<Status, string> = {
 </script>
 
 <template>
-  <div v-if="calls.length || traces.length" class="mt-2 flex flex-col gap-1.5">
+  <div v-if="calls.length" class="mt-2 flex flex-col gap-1.5">
     <div
       v-if="calls.length"
       class="flex flex-col divide-y divide-line-soft overflow-hidden rounded-control border border-line-soft"
@@ -235,37 +213,6 @@ const iconTone: Record<Status, string> = {
             }}</pre>
           </div>
         </div>
-      </div>
-    </div>
-
-    <button
-      v-if="traces.length"
-      class="flex items-center gap-1.5 self-start rounded-xs px-1.5 py-0.5 text-micro text-ink-3 transition-colors hover:bg-surface-2 hover:text-ink-2"
-      @click="showTrace = !showTrace"
-    >
-      <Icon name="chevron" :size="12" :class="{ 'rotate-90': showTrace }" />
-      {{ t('tools.detail.hookTrace', { count: traces.length }) }}
-    </button>
-    <div v-if="showTrace" class="flex flex-col gap-1 pl-1">
-      <div v-for="e in traces" :key="e.seq" class="flex flex-wrap items-center gap-1.5">
-        <span class="font-mono text-micro text-tool">{{ e.event }}</span>
-        <span class="text-micro text-ink-2">{{ e.plugin }}</span>
-        <span class="font-mono text-micro text-ink-3">{{ e.hook_id }}</span>
-        <span
-          v-for="(a, i) in e.effects"
-          :key="i"
-          class="max-w-full truncate rounded-xs border px-1.5 font-mono text-micro"
-          :class="effectTone(a)"
-        >
-          {{ effectLabel(a) }}
-        </span>
-        <span
-          v-if="decisionLabel(e.decision)"
-          class="max-w-full truncate rounded-xs border px-1.5 font-mono text-micro"
-          :class="decisionTone(e.decision)"
-        >
-          {{ decisionLabel(e.decision) }}
-        </span>
       </div>
     </div>
   </div>

@@ -65,8 +65,7 @@
     "images": "Images",
     "outputError": "Output · error",
     "liveOutput": "Task output",
-    "runningTag": "· running",
-    "hookTrace": "hook trace · {count}"
+    "runningTag": "· running"
   },
   "diff": {
     "moreLines": "{count} more line | {count} more lines",

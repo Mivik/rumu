@@ -65,8 +65,7 @@
     "images": "图片",
     "outputError": "输出 · 错误",
     "liveOutput": "任务输出",
-    "runningTag": "· 运行中",
-    "hookTrace": "工具调用记录 · {count}"
+    "runningTag": "· 运行中"
   },
   "diff": {
     "moreLines": "其余 {count} 行",
