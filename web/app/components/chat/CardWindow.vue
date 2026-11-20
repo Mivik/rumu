@@ -293,7 +293,8 @@ function onMoved(nextDeck: string, nextPath: string): void {
   inset: 0;
   width: min(680px, calc(100vw - 32px));
   max-width: none;
-  max-height: min(85dvh, calc(100dvh - 32px - env(safe-area-inset-top) - env(safe-area-inset-bottom)));
+  /* a reading window, not a page: past 720px a tall card scrolls inside */
+  max-height: min(85dvh, 720px, calc(100dvh - 32px - env(safe-area-inset-top) - env(safe-area-inset-bottom)));
   margin: auto;
   padding: 0;
   overflow: hidden;

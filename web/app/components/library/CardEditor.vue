@@ -487,7 +487,7 @@ const draftDiff = computed(() =>
     <div
       v-if="!showHistory"
       class="mt-2 flex h-8 flex-none items-center gap-1"
-      :class="mode === 'read' ? 'mx-auto w-full max-w-[680px] px-6 sm:px-8' : 'px-4 sm:px-8'"
+      :class="mode === 'read' ? 'mx-auto w-full max-w-[var(--col-max)] px-6 sm:px-8' : 'px-4 sm:px-8'"
     >
       <h2 v-if="mode === 'edit'" class="min-w-0 flex-1 truncate text-title font-bold">
         {{ detail ? title : t('library.newCard') }}
@@ -604,7 +604,7 @@ const draftDiff = computed(() =>
             class="scroll-gutter col-start-1 row-start-1 min-h-0 overflow-y-auto"
           >
             <CardFace
-              class="mx-auto w-full max-w-[680px] px-6 pt-2 pb-6 sm:px-8 sm:pb-7"
+              class="mx-auto w-full max-w-[var(--col-max)] px-6 pt-2 pb-6 sm:px-8 sm:pb-7"
               :dir="dir"
               :title="title"
               :description="readView.description"
