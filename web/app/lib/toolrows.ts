@@ -183,8 +183,12 @@ function callShort(name: string, call: Call): string {
       return preview(str('code'), 40)
     case 'workspace.use':
       return workspaceLabel(baseName(str('path')))
-    case 'search':
-      return preview(str('query'), 40)
+    case 'search': {
+      // A scope is always under `@rumu:`; the row keeps only the path.
+      const query = preview(str('query'), 40)
+      const scope = str('scope').replace(/^@rumu:/, '')
+      return scope ? `${query} (in ${scope})` : query
+    }
     case 'agent':
       return preview(str('task'), 40)
     default:
@@ -455,14 +459,13 @@ export function toolPhrase(v: ToolRowView): PhrasePart[] {
   return [{ text: `${t('tools.verb.other')} ` }, { text: v.name, mono: true }]
 }
 
-/** A successful edit of a workspace file: its diff stands outside the
- * run's fold, as an EditCard. Card edits stay rows (the card chip opens
- * them; a deleted card's patch names no file); a failed edit is a row with
- * its error. */
+/** A successful edit of a workspace file or a card: its diff stands outside
+ * the run's fold, as an EditCard. A deleted card stays a row (its patch
+ * names no file); a failed edit is a row with its error. */
 export function isFileEdit(v: ToolRowView): boolean {
   if (v.status !== 'ok' || v.row.call === null) return false
   if (v.name === 'delete') return !!v.patch?.file
-  return (v.name === 'write' || v.name === 'edit') && !v.toolCardId
+  return v.name === 'write' || v.name === 'edit'
 }
 
 /** Rows the user expanded, and blocked rows they collapsed (blocked rows
