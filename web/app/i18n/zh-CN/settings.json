@@ -1,6 +1,6 @@
 {
   "title": "设置",
-  "defaults": "标题与压缩",
+  "defaults": "会话行为",
   "providers": "服务商",
   "aliases": "别名",
   "aliasName": "名称",
