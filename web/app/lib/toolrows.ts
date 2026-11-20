@@ -229,6 +229,19 @@ export function bashExit(text: string): { code: number | null; body: string } {
   return m ? { code: Number(m[1]), body: text.slice(m[0].length) } : { code: null, body: text }
 }
 
+/** A foreground bash call's timeout in seconds (past it the kernel moves the
+ * call to the background; 60 when not given), or null for a background call. */
+export function bashTimeout(args: Args): number | null {
+  if (args?.background === true) return null
+  const t = args?.timeout
+  return typeof t === 'number' && t > 0 ? Math.min(t, 600) : 60
+}
+
+/** A bash call's args other than its command and intent, for its opened row. */
+export function bashExtraArgs(args: Args): [string, unknown][] {
+  return Object.entries(args ?? {}).filter(([k]) => k !== 'command' && k !== 'description')
+}
+
 /** `+N −M`, leaving out a zero side (a create says `+N`, a delete `−M`). */
 function diffText(diff: DiffCounts): string {
   const parts = [diff.added ? `+${diff.added}` : '', diff.removed ? `−${diff.removed}` : '']

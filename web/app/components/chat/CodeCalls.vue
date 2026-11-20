@@ -11,8 +11,7 @@ import type { Branch, Content, Decision, FilePatch, Tagged } from '../../lib/typ
 import type { ToolRowInfo } from '../../lib/store'
 import { openAgentView, state } from '../../lib/store'
 import { argSummary, shortId } from '../../lib/util'
-import { highlightLine } from '../../lib/markdown'
-import { displayCall } from '../../lib/toolrows'
+import { bashExtraArgs, displayCall } from '../../lib/toolrows'
 import { patchOfData } from '../../lib/diff'
 import { isCardTag } from '../../lib/cards'
 import { toolIcon } from '../../lib/toolIcon'
@@ -106,7 +105,7 @@ function pathOf(c: CodeCallRow): string {
   const p = argsOf(c)?.path
   return typeof p === 'string' ? p : ''
 }
-/** A bash row is its own `$ command` line, whole once open. */
+/** A bash call's command, whole in its opened body. */
 function commandOf(c: CodeCallRow): string {
   const cmd = argsOf(c)?.command
   return typeof cmd === 'string' ? cmd.trim() : ''
@@ -149,11 +148,8 @@ const iconTone: Record<Status, string> = {
         :class="{ 'bg-danger-soft/30': status(c) !== 'ok' }"
       >
         <button
-          class="flex w-full min-w-0 gap-2 px-2 py-1 text-left transition-colors"
-          :class="[
-            c.name === 'bash' && isOpen(c.call_id) ? 'items-start' : 'items-center',
-            isOpen(c.call_id) ? 'bg-surface-2' : 'hover:bg-surface-2/70',
-          ]"
+          class="flex w-full min-w-0 items-center gap-2 px-2 py-1 text-left transition-colors"
+          :class="isOpen(c.call_id) ? 'bg-surface-2' : 'hover:bg-surface-2/70'"
           :title="`${c.name} ${summary(c)} → ${statusLabel(c)}`"
           @click="toggle(c.call_id)"
         >
@@ -166,16 +162,13 @@ const iconTone: Record<Status, string> = {
             class="font-mono text-micro font-medium"
             :class="status(c) === 'ok' ? 'text-tool' : 'text-danger'"
           >
-            {{ c.name === 'bash' ? '$' : c.name }}
+            {{ c.name === 'bash' && !isOpen(c.call_id) ? '$' : c.name }}
           </span>
           <span
-            v-if="c.name === 'bash' && isOpen(c.call_id)"
-            class="shell max-h-40 min-w-0 flex-1 overflow-y-auto font-mono text-micro break-words whitespace-pre-wrap text-ink"
-            v-html="highlightLine(commandOf(c), 'bash')"
-          ></span>
-          <span v-else-if="summary(c)" class="min-w-0 truncate font-mono text-micro text-ink-2">{{
-            summary(c)
-          }}</span>
+            v-if="summary(c) && !(c.name === 'bash' && isOpen(c.call_id))"
+            class="min-w-0 truncate font-mono text-micro text-ink-2"
+            >{{ summary(c) }}</span
+          >
           <span class="ml-auto flex flex-none items-center gap-2">
             <span class="text-micro text-ink-3">{{ c.dur_ms }} ms</span>
             <span
@@ -225,6 +218,8 @@ const iconTone: Record<Status, string> = {
           class="reveal"
           :output="output(c)"
           :failed="status(c) !== 'ok'"
+          :command="commandOf(c)"
+          :args="bashExtraArgs(argsOf(c))"
         />
         <div v-else-if="isOpen(c.call_id)" class="reveal flex flex-col gap-1.5 pt-1 pr-2 pb-2 pl-[28px]">
           <div>

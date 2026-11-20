@@ -14,11 +14,18 @@ import { t } from '../../i18n'
 import type { ToolRowInfo } from '../../lib/store'
 import { openAgentView, openTaskDetail, state } from '../../lib/store'
 import type { ToolRowView } from '../../lib/toolrows'
-import { argsOf, isRowOpen, outputJson, toggleRow, toolRowTitle, toolRowView } from '../../lib/toolrows'
+import {
+  argsOf,
+  bashExtraArgs,
+  isRowOpen,
+  outputJson,
+  toggleRow,
+  toolRowTitle,
+  toolRowView,
+} from '../../lib/toolrows'
 import { taskStatusWord } from '../../lib/tasks'
 import { shortId } from '../../lib/util'
 import { toolIcon } from '../../lib/toolIcon'
-import { highlightLine } from '../../lib/markdown'
 import { vEnter } from '../../lib/motion'
 import Icon from '../ui/Icon.vue'
 import Chip from '../ui/Chip.vue'
@@ -43,17 +50,16 @@ function callArg(v: ToolRowView, key: string): string {
   return typeof raw === 'string' ? raw.trim() : ''
 }
 
-/** A bash row is its own prompt line: its intent (or the command, clipped
- * to one line) while closed, the whole command (highlighted) once open —
- * its body then says the exit code, so the row's result hides. */
+/** An open bash row: the whole command and the exit code are in its body,
+ * so the line keeps only its intent. */
 function isShellOpen(v: ToolRowView): boolean {
   return v.name === 'bash' && isRowOpen(v)
 }
 
-/** A bash row's label: `$` when a command follows it, the tool name when
- * the row shows the call's intent instead. */
+/** A bash row's label: `$` when the clipped command follows it, the tool
+ * name otherwise. */
 function nameLabel(v: ToolRowView): string {
-  return v.name === 'bash' && (isShellOpen(v) || !v.description) ? '$' : v.name
+  return v.name === 'bash' && !isShellOpen(v) && !v.description ? '$' : v.name
 }
 
 /** The dedicated body an expanded row gets: a successful write/edit its
@@ -71,12 +77,19 @@ function bodyOf(v: ToolRowView): 'diff' | 'file' | 'bash' | null {
 /** A background bash shows its task: live output while it runs, the final
  * result (with its exit code) once done. The row's own result is only the
  * "started task" line — all that is left after a reload drops the task. */
-function bashOf(v: ToolRowView): { output: string; failed: boolean; running: boolean } {
+function bashOf(v: ToolRowView): {
+  output: string
+  failed: boolean
+  running: boolean
+  command: string
+  args: [string, unknown][]
+} {
+  const own = { command: callArg(v, 'command'), args: bashExtraArgs(argsOf(v.row.call)) }
   const task = v.taskId ? state.tasks[v.taskId] : undefined
-  if (!task) return { output: v.output, failed: v.status !== 'ok', running: false }
+  if (!task) return { ...own, output: v.output, failed: v.status !== 'ok', running: false }
   const live = liveTaskOutput(task.id)
   const running = task.status === 'running'
-  return { output: running ? live : (task.result?.text ?? live), failed: task.is_error, running }
+  return { ...own, output: running ? live : (task.result?.text ?? live), failed: task.is_error, running }
 }
 
 /** Status color of a row's icon and name: failures danger, else tool. */
@@ -100,11 +113,8 @@ function liveTaskOutput(id: string | null): string {
       :class="{ 'bg-danger-soft/40': v.status !== 'ok' }"
     >
       <button
-        class="flex w-full min-w-0 gap-2 px-2.5 py-1 text-left transition-colors"
-        :class="[
-          isShellOpen(v) ? 'items-start' : 'items-center',
-          isRowOpen(v) ? 'bg-surface-2' : 'hover:bg-surface-2/70',
-        ]"
+        class="flex w-full min-w-0 items-center gap-2 px-2.5 py-1 text-left transition-colors"
+        :class="isRowOpen(v) ? 'bg-surface-2' : 'hover:bg-surface-2/70'"
         :title="toolRowTitle(v)"
         :aria-expanded="isRowOpen(v)"
         @click="toggleRow(v)"
@@ -119,17 +129,12 @@ function liveTaskOutput(id: string | null): string {
           :class="statusClass(v)"
           >{{ nameLabel(v) }}</span
         >
+        <span v-if="v.description" class="min-w-0 truncate text-meta text-ink-2">{{ v.description }}</span>
         <span
-          v-if="isShellOpen(v)"
-          class="shell max-h-40 min-w-0 flex-1 overflow-y-auto font-mono text-meta break-words whitespace-pre-wrap text-ink"
-          v-html="highlightLine(callArg(v, 'command'), 'bash')"
-        ></span>
-        <span v-else-if="v.description" class="min-w-0 truncate text-meta text-ink-2">{{
-          v.description
-        }}</span>
-        <span v-else-if="v.callText" class="min-w-0 truncate font-mono text-meta text-ink-2">{{
-          v.callText
-        }}</span>
+          v-else-if="v.callText && !isShellOpen(v)"
+          class="min-w-0 truncate font-mono text-meta text-ink-2"
+          >{{ v.callText }}</span
+        >
         <span v-if="v.diff" class="max-w-[40%] flex-none truncate text-micro text-ink-3">
           ·
           <span v-if="v.diff.added || !v.diff.removed" class="font-medium text-pine"

@@ -20,8 +20,7 @@ import { computed, onBeforeUnmount, ref } from 'vue'
 import { t } from '../../i18n'
 import type { ActivityRunning } from '../../lib/store'
 import { findAgentChild, openAgentView, state, useBranchView } from '../../lib/store'
-import { argsOf, displayCall } from '../../lib/toolrows'
-import { highlightLine } from '../../lib/markdown'
+import { argsOf, bashExtraArgs, bashTimeout, displayCall } from '../../lib/toolrows'
 import { vFollow } from '../../lib/motion'
 import { argSummary, fmtThought, shortId } from '../../lib/util'
 import { toolIcon } from '../../lib/toolIcon'
@@ -49,6 +48,7 @@ const rows = computed(() => {
     const start = Math.min(assistant.at, now.value)
     const quietFor = now.value - Math.max(start, progress?.at ?? 0)
     const child = call.name === 'agent' ? findAgentChild(call.call_id) : null
+    const timeout = call.name === 'bash' ? bashTimeout(args) : null
     return {
       call,
       args,
@@ -58,6 +58,8 @@ const rows = computed(() => {
       target: argSummary(call),
       progress: progress?.text ?? '',
       elapsed: fmtThought(now.value - start),
+      extra: bashExtraArgs(args),
+      timeout: timeout === null ? null : fmtThought(timeout * 1000),
       stalled: quietFor >= STALL_MS ? fmtThought(quietFor) : null,
     }
   })
@@ -76,7 +78,7 @@ function strArg(r: Row, key: string): string {
   return typeof raw === 'string' ? raw.trim() : ''
 }
 
-/** An open bash row is its own prompt line, like a finished one. */
+/** An open bash row: the command is in its body, like a finished one. */
 function isShellOpen(r: Row): boolean {
   return r.call.name === 'bash' && r.open
 }
@@ -97,11 +99,8 @@ function tail(text: string): string {
     >
       <button
         type="button"
-        class="flex w-full min-w-0 gap-2 px-2.5 py-1 text-left transition-colors"
-        :class="[
-          isShellOpen(r) ? 'items-start' : 'items-center',
-          r.open ? 'bg-surface-2' : 'hover:bg-surface-2/70',
-        ]"
+        class="flex w-full min-w-0 items-center gap-2 px-2.5 py-1 text-left transition-colors"
+        :class="r.open ? 'bg-surface-2' : 'hover:bg-surface-2/70'"
         :aria-expanded="r.open"
         @click="toggle(r)"
       >
@@ -112,24 +111,15 @@ function tail(text: string): string {
           <Icon :name="toolIcon(r.call.name)" :size="12" class="text-tool" />
         </span>
         <span class="max-w-[40%] flex-none truncate font-mono text-meta font-medium text-tool">{{
-          isShellOpen(r) ? '$' : r.call.name
+          r.call.name === 'bash' && !r.open && !r.description ? '$' : r.call.name
         }}</span>
+        <span v-if="r.description" class="flex-none truncate text-meta text-ink-2">{{ r.description }}</span>
         <span
-          v-if="isShellOpen(r)"
-          class="shell max-h-40 min-w-0 flex-1 overflow-y-auto font-mono text-meta break-words whitespace-pre-wrap text-ink"
-          v-html="highlightLine(strArg(r, 'command'), 'bash')"
-        ></span>
-        <template v-else>
-          <span v-if="r.description" class="flex-none truncate text-meta text-ink-2">{{
-            r.description
-          }}</span>
-          <span
-            v-if="r.target"
-            class="min-w-0 truncate font-mono text-meta"
-            :class="r.description ? 'text-ink-3' : 'text-ink-2'"
-            >{{ r.target }}</span
-          >
-        </template>
+          v-if="r.target && !isShellOpen(r)"
+          class="min-w-0 truncate font-mono text-meta"
+          :class="r.description ? 'text-ink-3' : 'text-ink-2'"
+          >{{ r.target }}</span
+        >
         <span class="ml-auto flex flex-none items-center gap-2">
           <Chip
             v-if="r.child"
@@ -146,10 +136,8 @@ function tail(text: string): string {
             :class="r.stalled ? 'text-warn' : 'text-ink-3'"
             :title="t('common.running')"
           >
-            {{ r.elapsed
-            }}<template v-if="r.stalled">
-              · {{ t('tools.running.silent', { duration: r.stalled }) }}</template
-            >
+            {{ r.elapsed }}<template v-if="r.timeout"> / {{ r.timeout }}</template
+            ><template v-if="r.stalled"> · {{ t('tools.running.silent', { duration: r.stalled }) }}</template>
           </span>
           <Icon
             name="chevron"
@@ -161,7 +149,15 @@ function tail(text: string): string {
       </button>
 
       <template v-if="r.open">
-        <BashView v-if="r.call.name === 'bash'" class="reveal" :output="r.progress" :failed="false" running />
+        <BashView
+          v-if="r.call.name === 'bash'"
+          class="reveal"
+          :output="r.progress"
+          :failed="false"
+          running
+          :command="strArg(r, 'command')"
+          :args="r.extra"
+        />
         <div v-else class="reveal flex flex-col gap-2 pt-1 pr-2.5 pb-2.5 pl-[30px]">
           <div v-if="r.call.name === 'code'">
             <div class="mb-1 text-micro font-semibold text-ink-3">{{ t('tools.detail.script') }}</div>
