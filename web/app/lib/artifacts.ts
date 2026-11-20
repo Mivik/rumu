@@ -58,6 +58,8 @@ export const openArtifact = computed<Pick<ArtifactVersion, 'artifact' | 'version
 
 export function showArtifact(open: string | Artifact | null): void {
   state.artifact = open
+  // Over a sub-agent, keep the way back to it.
+  state.panelBack = open ? (state.agentView ?? state.panelBack) : null
   if (open) {
     state.agentView = null
     state.taskDetail = null

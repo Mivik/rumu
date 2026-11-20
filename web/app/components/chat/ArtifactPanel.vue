@@ -22,6 +22,7 @@ import { toast } from '../../lib/state/ui'
 import { copyText, fmtBytes, workspaceLabel } from '../../lib/util'
 import Icon from '../ui/Icon.vue'
 import FileView from './FileView.vue'
+import PanelBack from './PanelBack.vue'
 
 const shown = computed(() => openArtifact.value)
 const artifact = computed(() => shown.value?.artifact ?? null)
@@ -106,6 +107,7 @@ function onDownload(): void {
     class="sheet flex min-h-0 min-w-0 flex-col overflow-hidden rounded-sheet bg-surface"
   >
     <header class="flex min-h-14 flex-none items-center gap-2 border-b border-line-soft px-4">
+      <PanelBack />
       <span class="flex min-w-0 flex-col">
         <span class="truncate text-[15px] font-bold" :title="artifact.title">{{ artifact.title }}</span>
         <span class="truncate font-mono text-micro text-ink-3" :title="artifact.path">{{ where }}</span>

@@ -74,5 +74,6 @@ export function closePanels(): void {
     state.artifact = null
     state.agentView = null
     state.taskDetail = null
+    state.panelBack = null
   }
 }

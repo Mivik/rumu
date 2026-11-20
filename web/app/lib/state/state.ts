@@ -200,6 +200,9 @@ const initial = {
   taskOutput: {} as Record<TaskId, string>,
   /** The task whose buffered output is open in the tasks panel. */
   taskDetail: null as TaskId | null,
+  /** The sub-agent an open task output or artifact replaced beside the
+   *  chat: their back button returns to it. */
+  panelBack: null as BranchId | null,
 
   hookTrace: [] as HookTraceEntry[],
   toasts: [] as Toast[],

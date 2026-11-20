@@ -4,11 +4,12 @@
 import { computed, onBeforeUnmount, onMounted, ref } from 'vue'
 import { t } from '../../i18n'
 import { vFollow } from '../../lib/motion'
-import { killTask, state } from '../../lib/store'
+import { killTask, openTaskDetail, state } from '../../lib/store'
 import { taskElapsed, taskStatusWord } from '../../lib/tasks'
 import { bashExit } from '../../lib/toolrows'
 import { toolIcon } from '../../lib/toolIcon'
 import Icon from '../ui/Icon.vue'
+import PanelBack from './PanelBack.vue'
 
 const task = computed(() => (state.taskDetail ? (state.tasks[state.taskDetail] ?? null) : null))
 const running = computed(() => task.value?.status === 'running')
@@ -31,6 +32,7 @@ const output = computed(() => {
 <template>
   <section v-if="task" class="sheet flex min-h-0 min-w-0 flex-col overflow-hidden rounded-sheet bg-surface">
     <header class="flex min-h-14 flex-none items-center gap-2.5 border-b border-line-soft px-4">
+      <PanelBack />
       <Icon
         :name="task.kind.type === 'agent' ? 'agent' : toolIcon(task.kind.name)"
         :size="16"
@@ -74,7 +76,7 @@ const output = computed(() => {
           class="icon-btn size-7"
           :title="t('tools.tasks.close')"
           :aria-label="t('tools.tasks.close')"
-          @click="state.taskDetail = null"
+          @click="openTaskDetail(task.id)"
         >
           <Icon name="close" :size="15" />
         </button>

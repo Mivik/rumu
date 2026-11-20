@@ -146,6 +146,7 @@ export async function openSession(id: SessionId, opts: { history?: OpenHistory }
       state.artifact = null
       state.agentView = null
       state.taskDetail = null
+      state.panelBack = null
     }
     state.sessionId = tree.session.id
     viewAssistant(tree.session.assistant)
@@ -225,6 +226,7 @@ export function closeSession(): void {
   state.taskDetail = null
   state.agentView = null
   state.artifact = null
+  state.panelBack = null
 }
 
 /** Resync the session's runtime task table (`task.list`). */
@@ -267,6 +269,8 @@ export function openTaskDetail(id: TaskId): void {
     return
   }
   state.taskDetail = state.taskDetail === id ? null : id
+  // Over a sub-agent, keep the way back to it.
+  state.panelBack = state.taskDetail ? state.agentView : null
   if (!state.taskDetail) return
   state.artifact = null
   state.agentView = null

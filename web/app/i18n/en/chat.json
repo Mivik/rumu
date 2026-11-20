@@ -205,6 +205,7 @@
   "agentView": {
     "title": "Sub-agent",
     "back": "Parent sub-agent",
+    "backTo": "Back to sub-agent",
     "close": "Close"
   },
   "side": {

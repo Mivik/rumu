@@ -73,6 +73,7 @@ export function useBranchView(): BranchView {
  *  artifact or task output); `null` closes it. */
 export function openAgentView(id: BranchId | null): void {
   state.agentView = id
+  state.panelBack = null
   if (!id) return
   state.artifact = null
   state.taskDetail = null
