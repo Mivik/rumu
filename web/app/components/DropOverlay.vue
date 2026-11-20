@@ -11,7 +11,7 @@
 // drags (sessions, cards) move text, not files, and are left alone.
 import { onBeforeUnmount, onMounted } from 'vue'
 import { t } from '../i18n'
-import { carriesFiles, dragging, dropFiles } from '../lib/state/drops'
+import { carriesFiles, dragging, dropFiles, setDragFromPage } from '../lib/state/drops'
 
 // `dragenter` and `dragleave` fire for every element the pointer crosses, so
 // the depth is counted: the outline clears when the drag really leaves.
@@ -47,26 +47,43 @@ function onDrop(e: DragEvent): void {
   dropFiles([...(e.dataTransfer?.files ?? [])])
 }
 
-/** The drag ended where it started, or was cancelled: the outline goes. */
+/** A drag that starts here (an image, a session, a card) is the page's own:
+ *  not a drop to take, even when it carries a file. */
+function onDragstart(): void {
+  setDragFromPage(true)
+}
+
+/** The drag ended where it started, or was cancelled: the outline goes.
+ *  `dragend` is lost when its source left the page mid-drag, so a pointer
+ *  moving again (no pointer events fire during a drag) also says it is over. */
 function onDragend(): void {
+  setDragFromPage(false)
   depth = 0
   dragging.value = false
 }
 
+function onPointermove(): void {
+  setDragFromPage(false)
+}
+
 onMounted(() => {
+  window.addEventListener('dragstart', onDragstart)
   window.addEventListener('dragenter', onDragenter)
   window.addEventListener('dragover', onDragover)
   window.addEventListener('dragleave', onDragleave)
   window.addEventListener('drop', onDrop)
   window.addEventListener('dragend', onDragend)
+  window.addEventListener('pointermove', onPointermove, { passive: true })
 })
 
 onBeforeUnmount(() => {
+  window.removeEventListener('dragstart', onDragstart)
   window.removeEventListener('dragenter', onDragenter)
   window.removeEventListener('dragover', onDragover)
   window.removeEventListener('dragleave', onDragleave)
   window.removeEventListener('drop', onDrop)
   window.removeEventListener('dragend', onDragend)
+  window.removeEventListener('pointermove', onPointermove)
 })
 </script>
 

@@ -6,8 +6,8 @@
 use std::sync::Arc;
 
 use rumu_core::{
-    Attachment, AttachmentKind, BranchId, CompactReason, Compaction, Content, ModelPick, Node,
-    NodeBody, Role, SYSTEM_SOURCE, compaction_of, truncate_middle, view_order,
+    Attachment, AttachmentKind, BranchId, CompactReason, Compaction, Content, DOCUMENT_TEXT_LIMIT,
+    ModelPick, Node, NodeBody, Role, SYSTEM_SOURCE, compaction_of, truncate_middle, view_order,
 };
 use serde_json::json;
 use tokio_util::sync::CancellationToken;
@@ -48,10 +48,11 @@ fn text_tokens(text: &str) -> u64 {
 }
 
 /// What an attachment adds to a projection, roughly: an image costs a fixed
-/// amount, a document is read as text.
+/// amount, a document is read as text — as much of it as the model is sent
+/// ([`DOCUMENT_TEXT_LIMIT`]), not the whole file.
 fn attachment_tokens(a: &Attachment) -> u64 {
     match a.kind {
-        AttachmentKind::Document => a.size.div_ceil(4),
+        AttachmentKind::Document => a.size.min(DOCUMENT_TEXT_LIMIT as u64).div_ceil(4),
         AttachmentKind::Image | AttachmentKind::Audio => IMAGE_TOKENS,
     }
 }
@@ -660,7 +661,19 @@ mod tests {
         };
         // An image is a fixed cost; a document is read as text.
         assert_eq!(node_tokens(&with(image)), text_tokens("hi") + IMAGE_TOKENS);
-        assert_eq!(node_tokens(&with(document)), text_tokens("hi") + 1_000);
+        assert_eq!(
+            node_tokens(&with(document.clone())),
+            text_tokens("hi") + 1_000
+        );
+        // A long document counts only the part the model is sent.
+        let long = Attachment {
+            size: 10 << 20,
+            ..document
+        };
+        assert_eq!(
+            node_tokens(&with(long)),
+            text_tokens("hi") + (DOCUMENT_TEXT_LIMIT / 4) as u64
+        );
     }
 
     #[test]

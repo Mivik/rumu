@@ -61,15 +61,7 @@ import {
 } from '../../lib/store'
 import type { PromptAttachment } from '../../lib/store'
 import type { Attachment, Content, Quote, Node as TreeNode } from '../../lib/types'
-import {
-  ACCEPT_FILES,
-  isDocument,
-  isImage,
-  kindOf,
-  typedText,
-  uploadBlob,
-  withLeadingAnchors,
-} from '../../lib/attachments'
+import { kindOf, sniffFile, typedText, uploadBlob, withLeadingAnchors } from '../../lib/attachments'
 import { composerFocus, editTarget as mainEdit, openLightbox, toast } from '../../lib/state/ui'
 import { askSide, openSide, quoteBlock, quotes as mainQuotes } from '../../lib/state/side'
 import { dragging, setDropSink } from '../../lib/state/drops'
@@ -142,37 +134,39 @@ async function run(item: PendingAttachment): Promise<void> {
   }
 }
 
-/** Take the files in: an image and a text document are what the server
- *  keeps, so anything else is refused with a word. */
-function attachFiles(list: FileList | File[]): void {
+/** Take the files in, each as what its bytes say it is (`sniffFile`): an
+ *  image or a text document; anything else is refused with a word. */
+async function attachFiles(list: FileList | File[]): Promise<void> {
   const files = [...list]
-  const refused = files.filter((f) => !isImage(f) && !isDocument(f))
-  if (refused.length) toast('error', t('chat.composer.notAttachable'))
-  const take = files.filter((f) => isImage(f) || isDocument(f))
-  const room = MAX_ATTACHMENTS - attachments.value.length
+  // The buffer they land in is the one open now, not after the reads.
+  const into = current.value
+  const kinds = await Promise.all(files.map(sniffFile))
+  const take = files.flatMap((file, i) => (kinds[i] ? [{ file, kind: kinds[i] }] : []))
+  if (take.length < files.length) toast('error', t('chat.composer.notAttachable'))
+  const room = MAX_ATTACHMENTS - into.attachments.length
   if (take.length > room) {
     toast('error', t('chat.composer.tooManyAttachments', { max: MAX_ATTACHMENTS }))
   }
-  for (const file of take.slice(0, Math.max(0, room))) {
+  for (const { file, kind } of take.slice(0, Math.max(0, room))) {
     const item = reactive<PendingAttachment>({
       id: nextAttachmentId(),
       file,
       name: file.name,
       // a document has no picture; only an image gets a local preview
-      url: isImage(file) ? URL.createObjectURL(file) : '',
+      url: kind === 'image' ? URL.createObjectURL(file) : '',
       status: 'uploading',
       ctrl: new AbortController(),
     })
-    attachments.value.push(item)
+    into.attachments.push(item)
     void run(item)
   }
 }
 
 /** Whether a tile shows as a picture: an image does, a document shows as a
- *  chip. Before the upload answers, the file's own type decides. */
+ *  chip. Before the upload answers, only an image has a local preview. */
 function picture(item: PendingAttachment): boolean {
   if (item.attachment) return kindOf(item.attachment) === 'image'
-  return !!item.file && isImage(item.file)
+  return !!item.url
 }
 
 /** The size a chip shows: the stored bytes once uploaded, the file's own
@@ -198,12 +192,12 @@ function onPaste(e: ClipboardEvent): void {
   const files = e.clipboardData?.files
   if (!files?.length) return
   e.preventDefault()
-  attachFiles(files)
+  void attachFiles(files)
 }
 
 function onPick(e: Event): void {
   const input = e.target as HTMLInputElement
-  attachFiles(input.files ?? [])
+  void attachFiles(input.files ?? [])
   input.value = ''
 }
 
@@ -247,15 +241,18 @@ function onClickCapture(e: MouseEvent): void {
   textareaEl.value?.focus()
 }
 
+/** Unregisters this composer as the drop sink — and only this one. */
+let dropSinkOff: (() => void) | undefined
+
 onMounted(() => {
   // The window answers the drag (lib/state/drops), so a file dropped
   // anywhere in the app lands here.
-  setDropSink((files) => attachFiles(files))
+  dropSinkOff = setDropSink((files) => void attachFiles(files))
   document.addEventListener('click', onTapAnywhere, true)
 })
 
 onBeforeUnmount(() => {
-  setDropSink(null)
+  dropSinkOff?.()
   document.removeEventListener('click', onTapAnywhere, true)
   endEdit()
   for (const item of subDraft?.attachments ?? []) releaseAttachment(item)
@@ -630,7 +627,6 @@ const sendLabel = computed(() =>
           <input
             ref="fileEl"
             type="file"
-            :accept="ACCEPT_FILES"
             multiple
             class="hidden"
             :aria-label="t('chat.composer.attach')"

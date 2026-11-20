@@ -77,6 +77,21 @@ impl Blobs {
         })
     }
 
+    /// Store an upload, deciding from its bytes what it is: an image
+    /// [`ingest_image`](Self::ingest_image) takes is normalized, text is kept
+    /// as a document. An image in a format ingest does not take (HEIC, BMP,
+    /// TIFF, …) is [`Error::Unsupported`] rather than "not text"; text whose
+    /// first bytes happen to look like an image header is still text.
+    pub fn ingest(&self, bytes: &[u8], name: Option<String>) -> Result<Attachment> {
+        if is_image(bytes) {
+            return self.ingest_image(bytes, name);
+        }
+        if !is_text(bytes) && image::guess_format(bytes).is_ok() {
+            return Err(Error::Unsupported);
+        }
+        self.ingest_document(bytes, name)
+    }
+
     /// Store a text document as it is — no normalization, no re-encoding —
     /// and describe it. The model reads a document as text, so its bytes
     /// must stay the ones the user sent. Bytes that are not text (not valid

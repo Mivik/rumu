@@ -21,11 +21,14 @@ const RESERVE_BUFFER = 13_000
 const IMAGE_TOKENS = 1_200
 /** A document counts its bytes, four to a token, as the kernel counts them. */
 const BYTES_PER_TOKEN = 4
+/** The most of a document the model is sent (`DOCUMENT_TEXT_LIMIT` in
+ *  rumu-core). */
+const DOCUMENT_TEXT_LIMIT = 64 << 10
 
 /** What an attachment adds to the projection, roughly: an image is a fixed
- *  price, a document is read. */
+ *  price, a document is read — as much of it as the model is sent. */
 function attachmentTokens(a: Attachment): number {
-  if (kindOf(a) === 'document') return Math.ceil(a.size / BYTES_PER_TOKEN)
+  if (kindOf(a) === 'document') return Math.ceil(Math.min(a.size, DOCUMENT_TEXT_LIMIT) / BYTES_PER_TOKEN)
   return IMAGE_TOKENS
 }
 

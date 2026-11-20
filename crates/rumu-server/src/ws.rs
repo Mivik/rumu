@@ -189,14 +189,7 @@ async fn blob_upload(
     let name = params.get("name").cloned().filter(|n| !n.trim().is_empty());
     let blobs = state.blobs.clone();
     // Normalization is CPU-bound: keep it off the async executor.
-    let ingested = tokio::task::spawn_blocking(move || {
-        if rumu_blob::is_image(&bytes) {
-            blobs.ingest_image(&bytes, name)
-        } else {
-            blobs.ingest_document(&bytes, name)
-        }
-    })
-    .await;
+    let ingested = tokio::task::spawn_blocking(move || blobs.ingest(&bytes, name)).await;
     match ingested {
         Ok(Ok(attachment)) => Json(attachment).into_response(),
         Ok(Err(e)) => blob_error(&e),

@@ -117,6 +117,9 @@ pub struct Content {
 pub enum AttachmentKind {
     #[default]
     Image,
+    /// Nothing attaches audio yet, so it has no anchor of its own: when
+    /// something does, give it one in [`Content::segments`] (and its mirror
+    /// in the web) — until then an audio attachment follows the text.
     Audio,
     /// A text document kept whole: its bytes are stored as they are and
     /// projected to the model as its text.
@@ -260,6 +263,13 @@ pub fn image_label(n: usize, file: Option<&str>) -> String {
     }
 }
 
+/// Largest document text projected to the model, in bytes (about 16k
+/// tokens). A document is read, not seen: a longer one would flood the
+/// context, so it is cut and the `@scratch` file its label names holds the
+/// whole of it. Changing it changes the projection of every session that
+/// holds a longer document, and so its prompt cache.
+pub const DOCUMENT_TEXT_LIMIT: usize = 64 << 10;
+
 /// The label projected ahead of the `n`-th document, so the model can refer
 /// to it by name: `Document n:`, or `Document n (@scratch:<path>):` when the
 /// document is also a file there.
@@ -337,16 +347,16 @@ impl Content {
         let mut placed = vec![false; self.attachments.len()];
         let mut out = Vec::new();
         let (mut last, mut scan) = (0, 0);
-        loop {
-            // The next anchor of either kind; the earlier one comes first.
-            let image_at = text[scan..].find(IMAGE).map(|off| scan + off);
-            let document_at = text[scan..].find(DOCUMENT).map(|off| scan + off);
-            let (at, kind, open) = match (image_at, document_at) {
-                (Some(i), Some(d)) if i < d => (i, AttachmentKind::Image, IMAGE),
-                (Some(_), Some(d)) => (d, AttachmentKind::Document, DOCUMENT),
-                (Some(i), None) => (i, AttachmentKind::Image, IMAGE),
-                (None, Some(d)) => (d, AttachmentKind::Document, DOCUMENT),
-                (None, None) => break,
+        // One pass over the text: every anchor of either kind opens with `[`.
+        while let Some(off) = text[scan..].find('[') {
+            let at = scan + off;
+            let (kind, open) = if text[at..].starts_with(IMAGE) {
+                (AttachmentKind::Image, IMAGE)
+            } else if text[at..].starts_with(DOCUMENT) {
+                (AttachmentKind::Document, DOCUMENT)
+            } else {
+                scan = at + 1;
+                continue;
             };
             let digits = at + open.len();
             let len = text[digits..]

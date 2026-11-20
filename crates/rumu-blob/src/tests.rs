@@ -150,6 +150,34 @@ fn rejects_non_images() {
 }
 
 #[test]
+fn an_upload_is_judged_by_its_bytes() {
+    let dir = temp_dir("ingest");
+    let blobs = Blobs::open(&dir).unwrap();
+    let png = encoded(rgb(4, 3), ImageFormat::Png);
+    // An image goes in as an image, whatever it is called.
+    let a = blobs.ingest(&png, Some("shot.txt".into())).unwrap();
+    assert_eq!(a.kind, rumu_core::AttachmentKind::Image);
+    // Text goes in as a document, whatever it is called.
+    let d = blobs
+        .ingest(b"fn main() {}\n", Some("main.ts".into()))
+        .unwrap();
+    assert_eq!(d.kind, rumu_core::AttachmentKind::Document);
+    // Text that opens like an image header (a PNM's `P1`) is still text.
+    let d = blobs.ingest(b"P1 ships first\n", None).unwrap();
+    assert_eq!(d.kind, rumu_core::AttachmentKind::Document);
+    // An image ingest does not take says so, not "not text".
+    let mut bmp = b"BM".to_vec();
+    bmp.resize(64, 0);
+    assert!(matches!(blobs.ingest(&bmp, None), Err(Error::Unsupported)));
+    // Any other binary is not a document.
+    assert!(matches!(
+        blobs.ingest(b"\x7fELF\x02\x01\x01\x00", None),
+        Err(Error::NotText)
+    ));
+    fs::remove_dir_all(&dir).ok();
+}
+
+#[test]
 fn model_copy_is_the_blob_when_small_else_a_scaled_jpeg() {
     let dir = temp_dir("model");
     let blobs = Blobs::open(&dir).unwrap();

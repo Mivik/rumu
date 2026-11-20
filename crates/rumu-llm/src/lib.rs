@@ -50,10 +50,10 @@ use genai::resolver::{AuthData, Endpoint};
 use genai::{Client, ModelIden, ServiceTarget};
 use rumu_blob::Blobs;
 use rumu_core::{
-    ALIAS_PROVIDER, Attachment, AttachmentKind, CallStats, CompactSettings, Content, Effort,
-    ModelAlias, ModelConfig, ModelInfo, ModelPick, Node, NodeBody, Protocol, ProviderSettings,
-    ReasoningBlock, Role, Roles, SCRATCH_WORKSPACE, Segment, Titles, ToolCall, ToolSpec, Usage,
-    document_label, image_label, split_model_ref,
+    ALIAS_PROVIDER, Attachment, AttachmentKind, CallStats, CompactSettings, Content,
+    DOCUMENT_TEXT_LIMIT, Effort, ModelAlias, ModelConfig, ModelInfo, ModelPick, Node, NodeBody,
+    Protocol, ProviderSettings, ReasoningBlock, Role, Roles, SCRATCH_WORKSPACE, Segment, Titles,
+    ToolCall, ToolSpec, Usage, document_label, image_label, split_model_ref,
 };
 use rumu_kernel::{Budget, Delta, Llm, LlmError, LlmResponse, OnDelta};
 use serde_json::{Value, json};
@@ -67,11 +67,6 @@ pub use probe::{Probe, probe};
 /// the provider dropped, and blocks whose prefix did not verify but that it
 /// passed through anyway (`thinking_mismatch_allowed`, which is not a reset).
 const THINKING_BINDING_BETA: &str = "thinking-binding-controls-2026-08-01";
-
-/// Largest document text projected to the model, in bytes. A document is
-/// read, not seen: a long one would flood the context, so it is cut and the
-/// `@scratch` file its label names holds the whole of it.
-const DOCUMENT_TEXT_LIMIT: usize = 16 << 10;
 
 /// The genai adapter. Its providers, aliases and roles come from the
 /// settings and can be replaced while running: a request uses the
@@ -1828,7 +1823,7 @@ mod tests {
 
     #[test]
     fn a_long_document_is_cut_and_says_where_the_whole_one_is() {
-        let long = "x".repeat(20_000);
+        let long = "x".repeat(DOCUMENT_TEXT_LIMIT + 1_000);
         let (_dir, blobs, atts) = documents_with(&[&long]);
         let path = format!(".inbox/attachments/{}.md", &atts[0].hash[..12]);
         let nodes = vec![node(NodeBody::User {
@@ -1847,7 +1842,8 @@ mod tests {
         );
         assert!(
             text.contains(&format!(
-                "… [truncated: {DOCUMENT_TEXT_LIMIT} of 20000 bytes shown; the whole document is at @scratch:{path}]"
+                "… [truncated: {DOCUMENT_TEXT_LIMIT} of {} bytes shown; the whole document is at @scratch:{path}]",
+                long.len()
             )),
             "{text}"
         );

@@ -142,20 +142,15 @@ export function contentSegments(content: Content): ContentSegment[] {
   let last = 0
   let scan = 0
   for (;;) {
-    // The next anchor of either kind.
-    let at = -1
-    let open = ''
-    let kind: AnchorKind | null = null
-    for (const a of ANCHORS) {
-      const i = text.indexOf(a.open, scan)
-      if (i < 0) continue
-      if (at < 0 || i < at) {
-        at = i
-        open = a.open
-        kind = a.kind
-      }
+    // One pass over the text: every anchor of either kind opens with `[`.
+    const at = text.indexOf('[', scan)
+    if (at < 0) break
+    const anchor = ANCHORS.find((a) => text.startsWith(a.open, at))
+    if (!anchor) {
+      scan = at + 1
+      continue
     }
-    if (at < 0 || kind === null) break
+    const { open, kind } = anchor
     const digits = at + open.length
     let end = digits
     while (end < text.length && isDigit(text.charCodeAt(end))) end++
@@ -213,110 +208,40 @@ export function renderedContent(content: Content | undefined): string {
   return out
 }
 
-/** The MIME types a browser may hand over for a text document. The server
- *  decides from the bytes (UTF-8, no NUL); this is the client's guess, so a
- *  file may still be refused. */
-const DOCUMENT_MIME = new Set([
-  'application/json',
-  'application/ld+json',
-  'application/xml',
-  'application/xhtml+xml',
-  'application/yaml',
-  'application/x-yaml',
-  'application/toml',
-  'application/sql',
-  'application/javascript',
-  'application/x-javascript',
-  'application/ecmascript',
-  'application/typescript',
-  'application/x-sh',
-  'application/x-shellscript',
-  'application/x-python',
-  'application/x-rust',
-  'application/x-diff',
-  'application/x-patch',
-  'application/graphql',
-])
+/** What a file can be attached as. */
+export type FileKind = 'image' | 'document'
 
-/** The names a document's type is read from (`document_mime` in the
- *  kernel). */
-const DOCUMENT_NAME = new Set([
-  'md',
-  'markdown',
-  'txt',
-  'text',
-  'log',
-  'json',
-  'jsonl',
-  'yaml',
-  'yml',
-  'toml',
-  'xml',
-  'csv',
-  'tsv',
-  'html',
-  'htm',
-  'css',
-  'js',
-  'mjs',
-  'cjs',
-  'ts',
-  'tsx',
-  'jsx',
-  'py',
-  'rs',
-  'sh',
-  'bash',
-  'zsh',
-  'sql',
-  'diff',
-  'patch',
-  'ini',
-  'conf',
-  'cfg',
-])
+/** How much of a file is read to tell what it is. */
+const SNIFF_BYTES = 8192
 
-/** Whether a file is a text document: what the server would store as it is.
- *  A file with no type of its own is judged by its name. */
-export function isDocument(file: File): boolean {
-  const type = file.type.toLowerCase()
-  if (type.startsWith('text/')) return true
-  if (DOCUMENT_MIME.has(type)) return true
-  if (!type || type === 'application/octet-stream')
-    return DOCUMENT_NAME.has(file.name.split('.').pop()?.toLowerCase() ?? '')
-  return false
+/** Whether `b` opens like an image the server takes (PNG, JPEG, GIF, WebP). */
+function imageHeader(b: Uint8Array): boolean {
+  const at = (i: number, s: string) => [...s].every((c, k) => b[i + k] === c.charCodeAt(0))
+  return (
+    (b[0] === 0x89 && at(1, 'PNG')) ||
+    (b[0] === 0xff && b[1] === 0xd8 && b[2] === 0xff) ||
+    at(0, 'GIF8') ||
+    (at(0, 'RIFF') && at(8, 'WEBP'))
+  )
 }
 
-/** The names an image's type is read from, for a file the browser hands
- *  over without a type of its own. */
-const IMAGE_NAME = new Set([
-  'png',
-  'jpg',
-  'jpeg',
-  'gif',
-  'webp',
-  'svg',
-  'bmp',
-  'avif',
-  'heic',
-  'heif',
-  'tiff',
-  'ico',
-])
-
-/** Whether a file is an image: a browser's type, or a name that says so. */
-export function isImage(file: File): boolean {
-  const type = file.type.toLowerCase()
-  if (type.startsWith('image/')) return true
-  if (!type || type === 'application/octet-stream')
-    return IMAGE_NAME.has(file.name.split('.').pop()?.toLowerCase() ?? '')
-  return false
+/** What a file is, from its first bytes rather than the type the browser
+ *  guessed from its name (which calls a `.ts` file a video and gives a
+ *  `Makefile` none): an image by its header, else a document when the
+ *  bytes read as UTF-8 text, else `null` — not attachable. The server
+ *  checks the whole file the same way, so this only saves a doomed upload. */
+export async function sniffFile(file: File): Promise<FileKind | null> {
+  const head = new Uint8Array(await file.slice(0, SNIFF_BYTES).arrayBuffer())
+  if (imageHeader(head)) return 'image'
+  if (head.includes(0)) return null
+  try {
+    // `stream`: a character cut at the slice's end is not an error.
+    new TextDecoder('utf-8', { fatal: true }).decode(head, { stream: true })
+    return 'document'
+  } catch {
+    return null
+  }
 }
-
-/** What the file picker offers: images, and the text kinds a document can
- *  be. */
-export const ACCEPT_FILES =
-  'image/*,text/*,.md,.markdown,.txt,.log,.json,.yaml,.yml,.toml,.xml,.csv,.tsv,.html,.htm,.css,.js,.mjs,.cjs,.ts,.tsx,.py,.rs,.sh,.bash,.sql,.diff,.patch'
 
 /**
  * Upload a file to the blob store (`POST /blobs`, same origin). The server
