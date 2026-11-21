@@ -90,7 +90,7 @@ async function copy(): Promise<void> {
         @click="toggle"
       >
         <span class="glyph chev">
-          <Icon :name="expanded ? 'chev-up' : 'chevron'" :size="12" />
+          <Icon :name="expanded ? 'down' : 'chevron'" :size="12" />
         </span>
         <span class="glyph dollar">$</span>
       </button>
@@ -182,18 +182,26 @@ pre.open {
   opacity: 0;
 }
 
-.mark:hover > .dollar,
+/* A pointer anywhere over the command turns the prompt into the way to fold
+   it; the prompt alone is a small target, and reading a command means
+   hovering it. */
+.group:hover .mark > .dollar,
 .mark:focus-visible > .dollar {
   opacity: 0;
 }
 
-.mark:hover > .chev,
-.mark:focus-visible > .chev,
+.group:hover .mark > .chev,
+.mark:focus-visible > .chev {
+  opacity: 1;
+}
+
+/* The bottom chevron has no prompt to swap with: it is the control whenever
+   the block is open. */
 .mark.is-on > .chev {
   opacity: 1;
 }
 
-.mark:hover > .chev {
+.group:hover .mark > .chev {
   color: var(--ink-2);
 }
 
