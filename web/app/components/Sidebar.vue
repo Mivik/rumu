@@ -22,6 +22,7 @@ import {
   deleteSession,
   goHome,
   isBusy,
+  isRunning,
   isUnseen,
   landingAssistant,
   landingProject,
@@ -383,7 +384,7 @@ function endDrag(): void {
 const presence = computed(() => {
   if (!connected.value)
     return { live: false, offline: true, title: t('common.offlineReconnecting'), dot: 'bg-danger' }
-  if (isBusy.value) return { live: true, offline: false, title: t('common.working'), dot: 'bg-brand' }
+  if (isBusy.value) return { live: true, offline: false, title: t('common.working'), dot: 'bg-pine' }
   return { live: false, offline: false, title: t('common.connected'), dot: 'bg-pine' }
 })
 
@@ -609,14 +610,17 @@ const otherLocale = computed<Locale>(
                 class="max-w-[6.5rem] flex-none truncate text-micro font-normal text-ink-3"
                 >{{ assistantName(row.s.assistant) }}</span
               >
+              <!-- the row's dot, one state at a time: a call waiting on you
+                   (ringed), a turn running (pine, breathing — any session's,
+                   not just the open one), else activity you have not seen -->
               <span
                 v-if="waiting.has(row.s.id)"
                 class="size-2 flex-none rounded-full bg-brand ring-3 ring-brand-soft"
                 :title="t('chat.ask.waiting')"
               />
               <span
-                v-else-if="row.s.id === state.sessionId && isBusy"
-                class="dot-live size-1.5 flex-none rounded-full bg-brand"
+                v-else-if="isRunning(row.s)"
+                class="dot-live dot-run size-1.5 flex-none rounded-full bg-pine"
                 :title="t('common.working')"
               />
               <span
@@ -728,7 +732,10 @@ const otherLocale = computed<Locale>(
 
     <!-- the connection, at the foot -->
     <div class="flex flex-none items-center gap-2 border-t border-line-soft px-3 py-3 text-meta text-ink-3">
-      <span class="size-2 flex-none rounded-full" :class="[presence.dot, { 'dot-live': presence.live }]" />
+      <span
+        class="size-2 flex-none rounded-full"
+        :class="[presence.dot, presence.live && 'dot-live dot-run']"
+      />
       <span
         class="flex-1 first-letter:uppercase"
         :class="{ 'font-semibold text-danger': presence.offline }"

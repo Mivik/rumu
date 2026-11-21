@@ -64,7 +64,7 @@ const statusText = computed(() => {
       class="flex flex-none items-center gap-1.5 text-micro"
       :class="failed && !running ? 'text-danger' : 'text-ink-3'"
     >
-      <span v-if="running" class="dot-live dot-task size-1.5 rounded-full bg-pine" />
+      <span v-if="running" class="dot-live dot-run size-1.5 rounded-full bg-pine" />
       {{ statusText }}
     </span>
   </button>

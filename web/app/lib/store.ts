@@ -21,6 +21,7 @@ export {
   currentBranch,
   hookTraceForSession,
   isBusy,
+  isRunning,
   isUnseen,
   pathNodes,
   pathOf,

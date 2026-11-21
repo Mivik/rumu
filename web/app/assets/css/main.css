@@ -1384,7 +1384,7 @@
  *   enter-stamp  "blocked" verdict           reveal       disclosed detail
  *   view-in      session switch              cascade      panel contents
  *   stagger      a grid of items             SWAP / SIDE_SHEET  (lib/motion.ts)
- *   dot-live     the coral dot, working     line-in    a card's underline
+ *   dot-live     a dot breathing its halo    line-in    a card's underline
  */
 
 @layer components {
@@ -1489,9 +1489,9 @@
     animation: halo 1.6s ease-out infinite;
   }
 
-  /* a running background task: pine, so it reads as a process of its own
-   * rather than rumu working the turn */
-  .dot-live.dot-task {
+  /* something running on its own — a background task, a sub-agent, another
+   * session's turn — is pine, apart from the coral that marks what wants you */
+  .dot-live.dot-run {
     --dot-live: var(--pine);
   }
 
