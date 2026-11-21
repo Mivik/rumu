@@ -20,7 +20,7 @@ import {
   openTaskDetail,
   state,
 } from './store'
-import { toast } from './state/ui'
+import { focusTarget, toast } from './state/ui'
 import type { Page } from './router'
 import type { Artifact, LibraryRef } from './types'
 import { copyText } from './util'
@@ -89,6 +89,9 @@ function openAddress(abs: string): boolean {
       }
       if (!sid) return false
       closeDrawer()
+      // `/sessions/<s>/<node>` or `<a>..<b>`: open at the (first) node.
+      const node = segs[1]?.split('..')[0]
+      if (node && node !== 'branches') focusTarget.value = { session: sid, node }
       // A failed open reports itself; a page gives way once it loads.
       void openSession(sid)
       return true
@@ -158,7 +161,20 @@ function openWorkspaceAddress(address: string): boolean {
   return true
 }
 
-async function copyAddress(address: string): Promise<void> {
+/** How many leading characters of a node id an address shows, as the kernel's
+ *  own session reads abbreviate them (`MIN_ABBR`). */
+const NODE_ABBR = 8
+
+const short = (id: string): string => id.slice(0, NODE_ABBR)
+
+/** The `@rumu` address of the open session's nodes `from` down to `to`: one
+ *  node, or the `<from>..<to>` stretch of its path. */
+export function nodeAddress(from: string, to = from): string {
+  const what = from === to ? short(from) : `${short(from)}..${short(to)}`
+  return `@rumu:/sessions/${state.sessionId}/${what}`
+}
+
+export async function copyAddress(address: string): Promise<void> {
   if (await copyText(address)) toast('info', t('common.copiedAddress'), address)
   else toast('error', t('common.copyFailed'))
 }

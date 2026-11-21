@@ -11,7 +11,7 @@
 // One muted meta line at the bottom:
 // usage and the files the turn changed stay visible (hover usage for the
 // full request/turn breakdown);
-// copy/regenerate/fork reveal on hover once the turn has finished.
+// copy/regenerate/fork and the more menu reveal on hover once the turn has finished.
 // Only the `live` group (the last one, while a turn runs) shows the stream.
 import { computed, onBeforeUnmount, ref, watch } from 'vue'
 import { t } from '../../i18n'
@@ -32,6 +32,7 @@ import ActivityRun from './ActivityRun.vue'
 import ArtifactCard from './ArtifactCard.vue'
 import BranchSwitcher from './BranchSwitcher.vue'
 import ContextPills from './ContextPills.vue'
+import MessageMenu from './MessageMenu.vue'
 import StreamText from './StreamText.vue'
 import UsageHud from './UsageHud.vue'
 
@@ -258,7 +259,7 @@ const bare = computed(() => !items.value.length && !props.group.assistants.lengt
       <span class="flex-1" />
       <span
         v-if="!live && !view.sub"
-        class="flex items-center gap-0.5 opacity-100 transition duration-200 ease-soft sm:opacity-0 sm:group-hover/agroup:opacity-100 sm:group-focus-within/agroup:opacity-100"
+        class="flex items-center gap-0.5 opacity-100 transition duration-200 ease-soft sm:opacity-0 sm:group-hover/agroup:opacity-100 sm:group-focus-within/agroup:opacity-100 sm:has-aria-expanded:opacity-100"
       >
         <BranchSwitcher :parent-id="prompt?.id ?? null" />
         <button
@@ -288,6 +289,11 @@ const bare = computed(() => !items.value.length && !props.group.assistants.lengt
         >
           <Icon name="fork" :size="12" />
         </button>
+        <MessageMenu
+          v-if="group.assistants.length"
+          :from="group.assistants[0]!.id"
+          :to="group.assistants.at(-1)!.id"
+        />
       </span>
     </div>
   </div>

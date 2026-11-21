@@ -60,6 +60,10 @@
     "project": "Project",
     "moveProject": "Move to another project"
   },
+  "message": {
+    "more": "More",
+    "copyAddress": "Copy message address"
+  },
   "user": {
     "edit": "Edit message",
     "editTitle": "Edit and resend",

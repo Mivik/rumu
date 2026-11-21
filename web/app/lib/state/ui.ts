@@ -20,6 +20,18 @@ watch(
   () => (editTarget.value = null),
 )
 
+/** A message to bring into view once its session shows it (a clicked
+ *  `@rumu:/sessions/<s>/<node>` address): its id or a prefix.
+ *  Opening another session drops it. */
+export const focusTarget = shallowRef<{ session: string; node: string } | null>(null)
+
+watch(
+  () => state.sessionId,
+  (id) => {
+    if (focusTarget.value && !id?.startsWith(focusTarget.value.session)) focusTarget.value = null
+  },
+)
+
 /** Put the caret in the composer: returning home from the sidebar should land
  *  the user in the writing box, not on the button they just clicked. */
 export function requestComposerFocus(): void {

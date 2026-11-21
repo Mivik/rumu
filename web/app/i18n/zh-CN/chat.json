@@ -60,6 +60,10 @@
     "project": "项目",
     "moveProject": "移到其他项目"
   },
+  "message": {
+    "more": "更多",
+    "copyAddress": "复制消息地址"
+  },
   "user": {
     "edit": "编辑消息",
     "editTitle": "编辑并重新发送",

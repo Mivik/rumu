@@ -1,7 +1,7 @@
 <script setup lang="ts">
 // A user message: right-aligned coral-tinted bubble (max ~70% of the column,
 // width fits content, no avatar); its coral ring on the thread is ConversationView's.
-// Edit/copy/regenerate/fork sit under the message's bottom-right: always shown
+// Edit/copy/regenerate/fork/rewind and the more menu sit under the message's bottom-right: always shown
 // on touch, revealed on hover with a fine pointer. Editing loads the message
 // into the composer (`editTarget`), outlined here while it is there;
 // regenerate asks the same question again
@@ -31,6 +31,7 @@ import BranchSwitcher from './BranchSwitcher.vue'
 import ContextPills from './ContextPills.vue'
 import DocumentChip from './DocumentChip.vue'
 import ImageThumb from './ImageThumb.vue'
+import MessageMenu from './MessageMenu.vue'
 import RewindDialog from './RewindDialog.vue'
 
 const props = withDefaults(defineProps<{ node: Node; context?: Node[] }>(), { context: () => [] })
@@ -165,7 +166,7 @@ const rewinding = ref(false)
     <!-- actions sit at the message's bottom-right: always on touch, revealed on hover with a fine pointer -->
     <div
       v-if="!view.sub"
-      class="mt-0.5 flex h-5 items-center justify-end gap-0.5 opacity-100 transition duration-200 ease-soft pointer-fine:opacity-0 pointer-fine:group-hover/urow:opacity-100 pointer-fine:group-focus-within/urow:opacity-100"
+      class="mt-0.5 flex h-5 items-center justify-end gap-0.5 opacity-100 transition duration-200 ease-soft pointer-fine:opacity-0 pointer-fine:group-hover/urow:opacity-100 pointer-fine:group-focus-within/urow:opacity-100 pointer-fine:has-aria-expanded:opacity-100"
     >
       <BranchSwitcher :parent-id="node.parent" />
       <button
@@ -213,6 +214,7 @@ const rewinding = ref(false)
       >
         <Icon name="undo" :size="12" />
       </button>
+      <MessageMenu :from="node.id" />
     </div>
     <RewindDialog v-if="rewinding" :node="node" @close="rewinding = false" />
 

@@ -22,7 +22,8 @@
 // grows (a decision unfolding) eats into the blank, not the page, and gets it
 // back when it shrinks. A prompt you just sent eases the view to the end — a
 // session switch still lands there at once, and a branch switch keeps your
-// place.
+// place. A clicked `@rumu` node address lands on that message instead of
+// the end.
 //
 // The thread is the rail down the sheet's right edge (TimelineRail), which
 // owns its measurement and drawing. This file owns the scroll state and
@@ -31,6 +32,7 @@
 import { computed, nextTick, onBeforeUnmount, ref, watch, watchEffect } from 'vue'
 import { ensureAgentNodes, state, useBranchView } from '../../lib/store'
 import { prefersReduced, timelineLive, vEnter } from '../../lib/motion'
+import { focusTarget } from '../../lib/state/ui'
 import type { TimelineEntry } from '../../lib/store'
 import type { Node } from '../../lib/types'
 import UserRow from './UserRow.vue'
@@ -118,6 +120,9 @@ onBeforeUnmount(() => clearTimeout(scrollTimer))
 
 /** Bumped by every "open at the end" request; only the newest one lands. */
 let endSeq = 0
+/** The request a mounted scroller has taken up: each lands once, however
+ *  many times it is asked for (the scroller mounting asks again). */
+let settled = 0
 
 /**
  * Jump to the tail of a freshly opened view. The scroller may not exist yet
@@ -135,6 +140,8 @@ function settleEnd(seq: number): void {
   if (seq !== endSeq) return
   const el = scrollEl.value
   if (!el) return // the scrollEl watcher below asks again once it mounts
+  if (settled === seq) return
+  settled = seq
   // Two frames: the first layout pass (and the sheet's entrance) finish before
   // the end is trustworthy.
   requestAnimationFrame(() => {
@@ -146,6 +153,14 @@ function settleEnd(seq: number): void {
     nearBottom.value = true
     requestAnimationFrame(() => {
       if (seq !== endSeq || scrollEl.value !== node) return
+      // A linked message lands in place of the end (and the end stops
+      // pulling at once, not on the scroll event a frame later).
+      if (focusIndex >= 0) {
+        jumpTo(focusIndex, false)
+        focusIndex = -1
+        nearBottom.value = false
+        return
+      }
       quietUntil = performance.now() + 150
       node.scrollTop = endTop(node)
       nearBottom.value = true
@@ -158,6 +173,35 @@ function settleEnd(seq: number): void {
 watch(scrollEl, (el) => {
   if (el && endSeq) settleEnd(endSeq)
 })
+
+/** The entry a linked message opens at, waiting for the end scroll's turn. */
+let focusIndex = -1
+
+/** The entry holding the node `prefix` names; -1 when none does. */
+function entryOf(prefix: string): number {
+  return timeline.value.findIndex((e) => {
+    const nodes = e.kind === 'group' ? e.assistants : e.kind === 'context' ? e.nodes : [e.node]
+    return nodes.some((n) => n.id.startsWith(prefix))
+  })
+}
+
+// A linked message (`focusTarget`) opens once its session shows it, in
+// place of the end a fresh open lands on.
+watch(
+  () => [focusTarget.value, timeline.value] as const,
+  ([focus]) => {
+    if (view.sub || !focus || !state.sessionId?.startsWith(focus.session)) return
+    const i = entryOf(focus.node)
+    if (i < 0) return
+    focusTarget.value = null
+    focusIndex = i
+    nearBottom.value = false
+    const seq = ++endSeq
+    void nextTick(() => settleEnd(seq))
+  },
+  // The view mounts after a cold boot's session has loaded.
+  { immediate: true },
+)
 
 // ---- the page below the timeline ----
 
@@ -366,10 +410,10 @@ function promptOf(i: number): Node | null {
 }
 
 /** Jump to where an entry starts; a quiet flash marks where it landed. */
-function jumpTo(i: number): void {
+function jumpTo(i: number, smooth = true): void {
   const el = innerEl.value?.querySelector<HTMLElement>(`[data-entry="${i}"]`)
   if (!el) return
-  el.scrollIntoView({ behavior: prefersReduced() ? 'auto' : 'smooth', block: 'start' })
+  el.scrollIntoView({ behavior: smooth && !prefersReduced() ? 'smooth' : 'auto', block: 'start' })
   el.classList.remove('flash-nav')
   void el.offsetWidth
   el.classList.add('flash-nav')
