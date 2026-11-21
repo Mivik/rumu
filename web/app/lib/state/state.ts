@@ -5,8 +5,6 @@ import { reactive } from 'vue'
 import type { PageRoute, SessionView, StatsRange } from '../router'
 import type {
   Artifact,
-  Decision,
-  Effect,
   Branch,
   BranchId,
   Assistant,
@@ -20,7 +18,6 @@ import type {
   Tagged,
   TaskId,
   TaskInfo,
-  Timestamp,
   ToastKind,
   LibraryDeck,
   LibraryCard,
@@ -28,21 +25,6 @@ import type {
   Project,
   Workspace,
 } from '../types'
-
-export interface HookTraceEntry {
-  seq: number
-  at: Timestamp
-  /** Session this entry was attributed to (the open session, or null if unknown). */
-  session: SessionId | null
-  branch: BranchId
-  event: string
-  plugin: string
-  hook_id: string
-  effects: Effect[]
-  decision: Decision
-  /** Enclosing `code` call id, for internal calls. */
-  parent_call?: string
-}
 
 /** One open card window. Windows stack: a body link opens a new one over the
  *  card it was clicked in, instead of replacing it. */
@@ -111,7 +93,6 @@ export interface RetryState {
   message: string
 }
 
-export const MAX_TRACE = 500
 export const MAX_DELTA_CHARS = 400_000
 
 const initial = {
@@ -204,7 +185,6 @@ const initial = {
    *  chat: their back button returns to it. */
   panelBack: null as BranchId | null,
 
-  hookTrace: [] as HookTraceEntry[],
   toasts: [] as Toast[],
 
   /** Open card windows, bottom first. Each is a native modal <dialog>, so

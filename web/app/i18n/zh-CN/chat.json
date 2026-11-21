@@ -188,7 +188,6 @@
   "trace": {
     "empty": "暂无节点",
     "nodes": "{count} 个节点",
-    "hooks": "{count} 次钩子",
     "show": "显示",
     "copy": "复制 JSON",
     "copied": "已复制 JSON",

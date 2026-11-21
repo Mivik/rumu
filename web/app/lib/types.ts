@@ -8,8 +8,6 @@
 
 import type { Branch } from './generated/Branch'
 import type { BranchId } from './generated/BranchId'
-import type { Content } from './generated/Content'
-import type { Decision } from './generated/Decision'
 import type { Node } from './generated/Node'
 import type { NodeId } from './generated/NodeId'
 import type { SessionId } from './generated/SessionId'
@@ -69,7 +67,6 @@ export type { DeckCat } from './generated/DeckCat'
 export type { Project } from './generated/Project'
 export type { WorkspaceUse as WorkspaceUseMarkerData } from './generated/WorkspaceUse'
 export type { PathState } from './generated/PathState'
-export type { Decision } from './generated/Decision'
 export type { CatalogEntry } from './generated/CatalogEntry'
 export type { FoldedCatalogDir } from './generated/FoldedCatalogDir'
 export type { CatalogScope } from './generated/CatalogScope'
@@ -95,10 +92,6 @@ export type Timestamp = number
  * the timeline skips it and the error row (`owedReply`) reads it while the
  * reply is still owed. */
 export const TURN_ERROR_TAG = 'turn.error'
-
-/** A plugin-authored tail append: a note's content (an empty-text note is a
- * marker). The kernel fills the node's `source` with the plugin's name. */
-export type Effect = Content
 
 /** The tag/version the catalog payload uses. */
 export const CATALOG_TAG = 'deck.catalog'
@@ -361,17 +354,6 @@ export interface SessionUpdatedPush {
 /** `session.deleted` push: the session and its whole tree are gone. */
 export interface SessionDeletedPush {
   session: SessionInfo
-}
-
-export interface HookFiredPush {
-  branch: BranchId
-  event: string
-  plugin: string
-  hook_id: string
-  effects: Effect[]
-  decision: Decision
-  /** Set when the event came from an internal `code` call. */
-  parent_call?: string
 }
 
 /** `tool.progress` push: a running tool's incremental update. */

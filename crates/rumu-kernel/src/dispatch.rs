@@ -3,7 +3,7 @@
 use std::sync::Arc;
 
 use rumu_core::{BranchId, Cx, Decision, Event, HookOutput, kind};
-use serde_json::{Value, json};
+use serde_json::Value;
 
 use crate::{Kernel, RegisteredHook, Result, fields, host::KernelRuntime};
 
@@ -84,7 +84,6 @@ impl Kernel {
             // Fail-closed: a malfunctioning hook on an interceptable event
             // becomes a synthetic block.
             let output = self.call_hook(h, ev, interceptable, hook_timeout).await;
-            self.push_hook_fired(ev, &h.plugin_name, &h.spec.id, &output);
             called_at[idx] = Some(calls);
 
             if !output.effects.is_empty()
@@ -141,7 +140,6 @@ impl Kernel {
                     continue;
                 }
                 let fresh = self.call_hook(h, ev, true, hook_timeout).await;
-                self.push_hook_fired(ev, &h.plugin_name, &h.spec.id, &fresh);
                 verdict[idx] = Some(HookOutput {
                     effects: vec![],
                     decision: match fresh.decision {
@@ -161,23 +159,6 @@ impl Kernel {
             }
         }
         Ok(None)
-    }
-
-    fn push_hook_fired(&self, ev: &Event, plugin: &str, hook_id: &str, output: &HookOutput) {
-        let mut params = json!({
-            "branch": ev.branch,
-            "event": ev.kind,
-            "plugin": plugin,
-            "hook_id": hook_id,
-            "effects": output.effects,
-            "decision": output.decision,
-        });
-        // Internal `code` calls carry their enclosing call id so the UI can
-        // hang the hook trace off the internal call row.
-        if let Some(parent) = ev.payload.get("parent_call").and_then(Value::as_str) {
-            params["parent_call"] = json!(parent);
-        }
-        self.push("hook.fired", params);
     }
 
     /// Flush queued notes/markers at a safe point.

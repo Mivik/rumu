@@ -1,5 +1,5 @@
 <script setup lang="ts">
-// Rows of the trace view: one per node or hook firing, a sub-agent as a
+// Rows of the trace view: one per node, a sub-agent as a
 // foldable group of its own rows. A row opens into its full JSON. Which rows
 // are open and which kinds are hidden belong to TraceView, so they survive
 // the rows being rebuilt as the session grows.
@@ -22,7 +22,6 @@ const props = defineProps<{
 }>()
 
 function kindOf(row: TraceRow): TraceKind | null {
-  if (row.kind === 'hook') return 'hook'
   if (row.kind === 'agent') return null
   const b = row.node.body
   if (b.type === 'tool_result') return 'tool'
@@ -50,7 +49,6 @@ function clock(ms: number): string {
 }
 
 function label(row: TraceRow): string {
-  if (row.kind === 'hook') return 'hook'
   if (row.kind === 'agent') return 'agent'
   const b = row.node.body
   if (b.type === 'note') return b.content.text ? 'note' : 'marker'
@@ -60,7 +58,6 @@ function label(row: TraceRow): string {
 /** Literal utility strings (Tailwind only emits complete class names). */
 function tone(row: TraceRow): string {
   if (row.kind === 'agent') return 'tone-agent'
-  if (row.kind === 'hook') return row.hook.decision.type === 'block' ? 'tone-danger' : 'tone-neutral'
   const b = row.node.body
   if (b.type === 'user') return 'tone-brand'
   if (b.type === 'tool_result') return b.is_error ? 'tone-danger' : 'tone-tool'
@@ -78,15 +75,6 @@ function summary(row: TraceRow): string {
   if (row.kind === 'agent') {
     const k = row.branch.kind
     return k.type === 'agent' ? `${preview(k.task, 100)} · ${k.inherit.context} · ${row.branch.status}` : ''
-  }
-  if (row.kind === 'hook') {
-    const h = row.hook
-    const parts = [h.event, h.plugin]
-    if (h.effects.length)
-      parts.push(h.effects.map((e) => (e.data?.tag ? `note:${e.data.tag}` : 'note')).join(' '))
-    if (h.decision.type === 'block') parts.push(`block: ${preview(h.decision.reason, 60)}`)
-    else if (h.decision.type === 'rewrite') parts.push('rewrite')
-    return parts.join(' · ')
   }
   const b = row.node.body
   switch (b.type) {
@@ -116,7 +104,6 @@ function summary(row: TraceRow): string {
 
 function at(row: TraceRow): number {
   if (row.kind === 'node') return row.node.at
-  if (row.kind === 'hook') return row.hook.at
   return row.branch.created_at
 }
 
@@ -133,7 +120,6 @@ function id(row: TraceRow): string {
 
 function json(row: TraceRow): Node | object {
   if (row.kind === 'node') return row.node
-  if (row.kind === 'hook') return row.hook
   return row.branch
 }
 

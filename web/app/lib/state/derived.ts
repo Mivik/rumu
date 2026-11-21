@@ -206,8 +206,3 @@ export function siblingAlternatives(parentId: NodeId | null): SiblingAlternative
   if (!parentId) return []
   return siblingIndex.value.get(parentId) ?? []
 }
-
-/** Hook trace rows for the open session (unknown-branch rows are dropped here). */
-export const hookTraceForSession = computed(() =>
-  state.hookTrace.filter((e) => e.session !== null && e.session === state.sessionId),
-)

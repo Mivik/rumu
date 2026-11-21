@@ -14,14 +14,12 @@ import type {
   BranchUpdatedPush,
   PendingDecision,
   DecisionResolvedPush,
-  HookFiredPush,
   LlmDeltaPush,
   Node,
   NodeAppendedPush,
   PromptBlockedPush,
   PromptQueuedPush,
   SessionDeletedPush,
-  SessionId,
   SessionUpdatedPush,
   TaskInfoPush,
   TaskProgressPush,
@@ -32,7 +30,7 @@ import type {
   WarningPush,
   Workspace,
 } from '../types'
-import { MAX_TRACE, state } from './state'
+import { state } from './state'
 import { applyDelta } from './stream'
 import { artifactOf } from '../artifacts'
 import {
@@ -51,8 +49,6 @@ import { refreshProjects } from './projects'
 import { loadPath } from './tree'
 import { toast } from './ui'
 import { t } from '../../i18n'
-
-let traceSeq = 1
 
 /** Live tool/task output kept in memory (chars). */
 const MAX_LIVE_OUTPUT = 1_000_000
@@ -277,30 +273,6 @@ function onWarning(p: WarningPush): void {
   toast('error', p.message)
 }
 
-function onHookFired(p: HookFiredPush): void {
-  // Attribute to the open session when the branch belongs to it (or is unknown
-  // while one of its branches is busy — mid-turn sub-agents etc.).
-  let session: SessionId | null = null
-  const known = state.branches[p.branch]
-  if (known && known.session === state.sessionId) session = state.sessionId
-  else if (!known && state.sessionId && Object.values(state.busy).some(Boolean)) {
-    session = state.sessionId
-  }
-  state.hookTrace.push({
-    seq: traceSeq++,
-    at: Date.now(),
-    session,
-    branch: p.branch,
-    event: p.event,
-    plugin: p.plugin,
-    hook_id: p.hook_id,
-    effects: p.effects ?? [],
-    decision: p.decision ?? { type: 'pass' },
-    parent_call: p.parent_call,
-  })
-  if (state.hookTrace.length > MAX_TRACE) state.hookTrace.splice(0, state.hookTrace.length - MAX_TRACE)
-}
-
 let started = false
 
 export function startApp(): void {
@@ -334,7 +306,6 @@ export function startApp(): void {
     state.decisions = state.decisions.filter((d) => d.id !== id)
   })
   rumu.onPush('session.deleted', (p) => onSessionDeleted(p as unknown as SessionDeletedPush))
-  rumu.onPush('hook.fired', (p) => onHookFired(p as unknown as HookFiredPush))
   rumu.onPush('tool.progress', (p) => onToolProgress(p as unknown as ToolProgressPush))
   rumu.onPush('task.started', (p) => onTaskInfo(p as unknown as TaskInfoPush))
   rumu.onPush('task.done', (p) => onTaskInfo(p as unknown as TaskInfoPush))

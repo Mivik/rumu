@@ -188,7 +188,6 @@
   "trace": {
     "empty": "No nodes yet",
     "nodes": "{count} node | {count} nodes",
-    "hooks": "{count} hook | {count} hooks",
     "show": "Show",
     "copy": "Copy JSON",
     "copied": "Copied JSON",

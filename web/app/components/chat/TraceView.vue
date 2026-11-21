@@ -1,7 +1,7 @@
 <script setup lang="ts">
 // The trace view: the open session's raw trajectory. Every node on the
-// active path in order, the hook firings seen since this page loaded between
-// them, and each sub-agent's own rows folded under the call that started it.
+// active path in order, and each sub-agent's own rows folded under the call
+// that started it.
 // A row opens into its full JSON. Like the conversation, it opens at the end
 // and follows new rows while you are there.
 import { computed, nextTick, reactive, ref, watch, watchEffect } from 'vue'
@@ -10,7 +10,7 @@ import { ensureAgentNodes, pathNodes, state, trace } from '../../lib/store'
 import type { TraceKind } from '../../lib/store'
 import TraceRows from './TraceRows.vue'
 
-const KINDS: TraceKind[] = ['user', 'assistant', 'tool', 'note', 'marker', 'hook']
+const KINDS: TraceKind[] = ['user', 'assistant', 'tool', 'note', 'marker']
 
 const open = reactive(new Set<string>())
 const hidden = reactive(new Set<TraceKind>())
@@ -33,8 +33,6 @@ const calls = computed(() => {
   }
   return map
 })
-
-const hookCount = computed(() => trace.value.filter((r) => r.kind === 'hook').length)
 
 const scrollEl = ref<HTMLElement | null>(null)
 const nearBottom = ref(true)
@@ -79,7 +77,6 @@ watch(trace, () => {
         <div class="mb-2 flex flex-wrap items-center gap-x-3 gap-y-1.5 px-2">
           <span class="text-micro text-ink-3 tabular-nums">
             {{ t('chat.trace.nodes', { count: pathNodes.length }) }}
-            <template v-if="hookCount"> · {{ t('chat.trace.hooks', { count: hookCount }) }}</template>
           </span>
           <span
             class="ml-auto flex flex-wrap items-center gap-1"

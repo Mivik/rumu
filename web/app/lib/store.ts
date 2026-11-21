@@ -10,7 +10,7 @@
 //   pushes.ts   WebSocket pushes + boot
 
 export { state } from './state/state'
-export type { DeltaBuffer, HookTraceEntry, RetryState, Toast } from './state/state'
+export type { DeltaBuffer, RetryState, Toast } from './state/state'
 export type { CardWindow } from './state/state'
 
 export {
@@ -19,7 +19,6 @@ export {
   callsOnPath,
   connected,
   currentBranch,
-  hookTraceForSession,
   isBusy,
   isUnseen,
   pathNodes,

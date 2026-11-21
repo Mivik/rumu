@@ -735,7 +735,7 @@ async fn wait_turn(rx: &mut PushRx, branch: Option<&str>) -> Value {
 }
 
 /// Drive pushes until `turn.done`/`turn.error`, collecting every push seen
-/// along the way (for assertions on `node.appended` / `hook.fired`).
+/// along the way (for assertions on `node.appended`).
 async fn wait_turn_collect(rx: &mut PushRx, branch: Option<&str>) -> (Value, Vec<Value>) {
     let mut seen = Vec::new();
     while let Some(v) = rx.recv().await {
