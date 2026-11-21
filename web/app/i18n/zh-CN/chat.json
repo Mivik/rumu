@@ -78,8 +78,8 @@
     "revertTitle": "回退到此处"
   },
   "stopConfirm": {
-    "body": "{count} 个后台任务仍在运行，继续将停止它们",
-    "submit": "停止并继续"
+    "body": "停止 {count} 个后台任务？",
+    "submit": "停止"
   },
   "revert": {
     "title": "回退到此消息之前",

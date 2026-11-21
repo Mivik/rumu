@@ -48,6 +48,7 @@ import AssistantAvatar from './brand/AssistantAvatar.vue'
 import ProjectSeal from './brand/ProjectSeal.vue'
 import RumuCat from './brand/RumuCat.vue'
 import RumuMark from './brand/RumuMark.vue'
+import ConfirmPrompt from './ui/ConfirmPrompt.vue'
 import Icon from './ui/Icon.vue'
 import Popover from './ui/Popover.vue'
 
@@ -686,26 +687,14 @@ const otherLocale = computed<Locale>(
                     </button>
                   </template>
                   <!-- stage two: confirmation, in place -->
-                  <div v-else class="px-2.5 py-2">
-                    <p class="text-secondary text-ink-2">{{ t('chat.sidebar.deletePrompt') }}</p>
-                    <p class="mt-1 text-micro text-ink-3">{{ t('chat.sidebar.deleteWarning') }}</p>
-                    <div class="mt-2 flex items-center justify-end gap-3">
-                      <button
-                        type="button"
-                        class="text-micro font-semibold text-ink-2 transition-colors hover:text-ink"
-                        @click="cancelDelete"
-                      >
-                        {{ t('common.cancel') }}
-                      </button>
-                      <button
-                        type="button"
-                        class="text-micro font-semibold text-danger transition-colors hover:underline"
-                        @click="confirmRemove(row.s.id, close)"
-                      >
-                        {{ t('chat.sidebar.deleteConfirm') }}
-                      </button>
-                    </div>
-                  </div>
+                  <ConfirmPrompt
+                    v-else
+                    :prompt="t('chat.sidebar.deletePrompt')"
+                    :warning="t('chat.sidebar.deleteWarning')"
+                    :confirm="t('chat.sidebar.deleteConfirm')"
+                    @cancel="cancelDelete"
+                    @confirm="confirmRemove(row.s.id, close)"
+                  />
                 </template>
               </Popover>
             </span>

@@ -1,13 +1,15 @@
 <script setup lang="ts">
 // Asked when moving the main line (regenerate, edit, variant switch, rewind)
 // would leave background tasks or sub-agents of the part it leaves behind:
-// a small popup beside the control the user pressed — stop them and go on,
-// or keep everything as it is. A pointer down outside it, or Escape, says no.
+// a small popup beside the control the user pressed, the session menu's
+// confirm step — stop them and go on, or keep everything as it is. A pointer
+// down outside it, or Escape, says no; the page does not scroll meanwhile.
 import { computed, ref, watch } from 'vue'
 import type { Ref } from 'vue'
 import { autoUpdate, flip, offset, shift, useFloating } from '@floating-ui/vue'
 import { t } from '../../i18n'
 import { stopConfirm } from '../../lib/state/ui'
+import ConfirmPrompt from '../ui/ConfirmPrompt.vue'
 
 const panel = ref<HTMLElement | null>(null)
 const open = computed(() => !!stopConfirm.value)
@@ -44,7 +46,14 @@ const answer = (ok: boolean): void => stopConfirm.value?.answer(ok)
 function onPointer(e: PointerEvent): void {
   if (!panel.value?.contains(e.target as Node)) answer(false)
 }
+/** Wheel, touch drag or a scrolling key outside the popup moves nothing. */
+function onScroll(e: Event): void {
+  if (!panel.value?.contains(e.target as Node)) e.preventDefault()
+}
+const SCROLL_KEYS = new Set(['ArrowUp', 'ArrowDown', 'PageUp', 'PageDown', 'Home', 'End', ' '])
+
 function onKey(e: KeyboardEvent): void {
+  if (SCROLL_KEYS.has(e.key) && !panel.value?.contains(e.target as Node)) e.preventDefault()
   if (e.key !== 'Escape') return
   // Close only the popup: a dialog behind it stays open.
   e.preventDefault()
@@ -56,9 +65,13 @@ watch(open, (v) => {
   if (v) {
     document.addEventListener('pointerdown', onPointer, true)
     window.addEventListener('keydown', onKey, true)
+    window.addEventListener('wheel', onScroll, { capture: true, passive: false })
+    window.addEventListener('touchmove', onScroll, { capture: true, passive: false })
   } else {
     document.removeEventListener('pointerdown', onPointer, true)
     window.removeEventListener('keydown', onKey, true)
+    window.removeEventListener('wheel', onScroll, true)
+    window.removeEventListener('touchmove', onScroll, true)
   }
 })
 </script>
@@ -77,17 +90,14 @@ watch(open, (v) => {
         role="alertdialog"
         :aria-label="t('chat.stopConfirm.body', { count: stopConfirm.count })"
         :style="{ ...floatingStyles, visibility: isPositioned ? 'visible' : 'hidden' }"
-        class="z-70 flex w-max max-w-[min(320px,calc(100vw-1rem))] flex-col gap-2 rounded-card border border-line-soft bg-surface p-3 shadow-pop"
+        class="z-70 w-[min(220px,calc(100vw-1rem))] rounded-card border border-line-soft bg-surface p-1 shadow-pop"
       >
-        <p class="text-secondary text-ink-2">
-          {{ t('chat.stopConfirm.body', { count: stopConfirm.count }) }}
-        </p>
-        <div class="flex items-center justify-end gap-2">
-          <button type="button" class="btn" @click="answer(false)">{{ t('common.cancel') }}</button>
-          <button type="button" class="btn btn-primary" autofocus @click="answer(true)">
-            {{ t('chat.stopConfirm.submit') }}
-          </button>
-        </div>
+        <ConfirmPrompt
+          :prompt="t('chat.stopConfirm.body', { count: stopConfirm.count })"
+          :confirm="t('chat.stopConfirm.submit')"
+          @cancel="answer(false)"
+          @confirm="answer(true)"
+        />
       </div>
     </Transition>
   </Teleport>
