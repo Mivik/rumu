@@ -1,8 +1,9 @@
 <script setup lang="ts">
 // One "context" row: the Notes between messages. Recalled cards stay in view
 // as card stubs ("recalled [A] [B]", clickable, opening the CardDrawer); every
-// other notice (the default workspace, a loaded CLAUDE.md, a card that
-// changed, a finished task, a plain note) is a side note, set on a divider
+// other notice (the default workspace, the user moving the session into or
+// out of a project, a loaded CLAUDE.md, a card that changed, a finished task,
+// a plain note) is a side note, set on a divider
 // across the column since it happens between the turns rather than in one.
 // A few short ones sit on the divider as they are, "── ▣ loaded … ──"; more
 // fold into "── 3 side notes › ──", opening to a list of sentences
@@ -16,6 +17,7 @@ import type { SkillsIntro } from '../../lib/generated/SkillsIntro'
 import type { WatchEvent } from '../../lib/generated/WatchEvent'
 import type { WatchSilence } from '../../lib/generated/WatchSilence'
 import type { AgentReply } from '../../lib/generated/AgentReply'
+import type { CardMount } from '../../lib/generated/CardMount'
 import { CATALOG_TAG, ASSISTANT_INTRO_TAG, TASK_TAG, TASK_VERSION } from '../../lib/types'
 import Icon from '../ui/Icon.vue'
 import { agentsOf, importOf, mountedId, updateOf, workspaceUseOf } from '../../lib/cards'
@@ -89,7 +91,16 @@ const parsed = computed(() => {
     const watch = dataOf<WatchEvent>(b.content, 'workspace.watch')
     const silence = dataOf<WatchSilence>(b.content, 'workspace.watch_silence')
     const reply = dataOf<AgentReply>(b.content, 'agent.reply')
-    if (task) {
+    // The user moving the session (the model's own mounts are pure markers,
+    // shown by their tool rows).
+    const entered = b.content.text ? dataOf<CardMount>(b.content, 'card.mount') : null
+    const left = b.content.text ? dataOf<{ at: string }>(b.content, 'card.unmount') : null
+    if (entered?.project || left) {
+      const name = entered
+        ? (state.projects.find((p) => p.id === entered.deck)?.name ?? entered.deck.slice(0, 8))
+        : null
+      add({ kind: 'project', key: `project:${n.id}`, name, text: b.content.text })
+    } else if (task) {
       const label = labelOf(task.id, task.kind)
       add({
         kind: 'task',

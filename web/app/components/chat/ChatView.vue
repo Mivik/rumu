@@ -1,7 +1,7 @@
 <script setup lang="ts">
 // Center column, the one paper sheet on the canvas: the shell around the
 // open session's view. The shell owns the header (who the session runs as,
-// its title, view tabs, and beside them the project it works in) and the
+// its title, view tabs, and beside them the project it is in) and the
 // composer card at the foot (BranchChat); the view between them is the
 // conversation (ConversationView), the raw trajectory (TraceView) or its usage
 // statistics (StatsView). The
@@ -28,24 +28,20 @@ import ViewTabs from './ViewTabs.vue'
 import SidePop from './SidePop.vue'
 import Welcome from './Welcome.vue'
 import SessionPickers from './SessionPickers.vue'
+import SessionProject from './SessionProject.vue'
 import AssistantAvatar from '../brand/AssistantAvatar.vue'
 import RumuMark from '../brand/RumuMark.vue'
-import ProjectSeal from '../brand/ProjectSeal.vue'
 import Icon from '../ui/Icon.vue'
 
-/** The open session's assistant and project, by name. */
+/** The open session's assistant, by name. */
 const scope = computed(() => {
   const s = state.session
   if (!s) return null
   const assistant = state.assistants.find((a) => a.id === s.assistant)
-  const project = s.project ? state.projects.find((p) => p.id === s.project) : null
   return {
     assistant: s.assistant,
     assistantName: assistant?.name ?? s.assistant.slice(0, 8),
     cat: assistantCat(assistant ?? { id: s.assistant }),
-    project: s.project ?? null,
-    projectName: project?.name ?? s.project ?? null,
-    projectInfo: project ?? null,
   }
 })
 </script>
@@ -119,18 +115,7 @@ const scope = computed(() => {
       </div>
       <div v-if="state.sessionId" class="flex gap-4">
         <ViewTabs class="flex-none" />
-        <span v-if="scope?.project" class="ml-auto flex min-w-0 items-center gap-1 pb-1.5">
-          <button
-            type="button"
-            class="scope-tag"
-            :title="t('chat.sidebar.projectSettings')"
-            @click="openPage('projects', scope.project)"
-          >
-            <ProjectSeal v-if="scope.projectInfo" :project="scope.projectInfo" :size="14" />
-            <Icon v-else name="mount" :size="13" class="flex-none text-tool" />
-            <span class="truncate">{{ scope.projectName }}</span>
-          </button>
-        </span>
+        <SessionProject />
       </div>
     </header>
 

@@ -95,11 +95,11 @@ const view = computed<RequestView | null>(() => {
         hint: t('chat.ask.hint', { from: r.from, to: r.to }),
       }
     case 'deck_mount':
-      if (r.at === '/cards/project')
+      if (r.project)
         return {
           title: t('chat.ask.moveProjectTitle', { from: r.from, project: r.deck }),
           detail: null,
-          hint: t('chat.ask.moveProjectHint'),
+          hint: t('chat.ask.moveProjectHint', { at: r.at }),
         }
       return {
         title: t('chat.ask.mountTitle', { from: r.from, deck: r.deck }),

@@ -1,7 +1,7 @@
 <script lang="ts">
 // One side note (a context notice other than recalled cards; see
 // ContextPills), as a sentence that reads on its own: the default workspace
-// set, a CLAUDE.md loaded, a card that changed, a finished background task,
+// set, the session moved into or out of a project, a CLAUDE.md loaded, a card that changed, a finished background task,
 // the session's MCP servers or skills, a watch event, a sub-agent's reply,
 // files the user reverted, a plain note in full. The model-facing text
 // stays in the hover title.
@@ -18,6 +18,7 @@ export interface McpServerLine {
 
 export type Notice =
   | { kind: 'workspace' | 'agents'; key: string; name: string }
+  | { kind: 'project'; key: string; name: string | null; text: string }
   | { kind: 'update'; key: string; id: string; label: string; text: string }
   | { kind: 'task'; key: string; id: string; label: string; status: TaskStatus; text: string }
   | { kind: 'mcp'; key: string; servers: McpServerLine[]; text: string }
@@ -30,6 +31,7 @@ export type Notice =
 
 const ICON: Record<Notice['kind'], string> = {
   workspace: 'mount',
+  project: 'mount',
   agents: 'file',
   update: 'note',
   task: 'tool',
@@ -70,6 +72,11 @@ defineProps<{ notice: Notice }>()
     <Icon :name="ICON[notice.kind]" :size="12" class="flex-none text-ink-3" />
     <span v-if="notice.kind === 'workspace'" class="min-w-0 truncate">
       {{ t('cards.notes.workspace', { name: workspaceLabel(notice.name) }) }}
+    </span>
+    <span v-else-if="notice.kind === 'project'" class="min-w-0 truncate" :title="notice.text">
+      {{
+        notice.name ? t('cards.notes.projectEntered', { name: notice.name }) : t('cards.notes.projectLeft')
+      }}
     </span>
     <span v-else-if="notice.kind === 'agents'" class="min-w-0 truncate">
       {{ t('cards.notes.loaded', { name: notice.name }) }}

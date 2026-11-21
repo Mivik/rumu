@@ -33,7 +33,13 @@ import { state } from './state'
 import { fetchTree, findAgentChild, loadPath, moveHead, replaceTree } from './tree'
 import { openAgentView } from './branchView'
 import { requestComposerFocus, toast } from './ui'
-import { chooseLandingProject, landingAssistant, landingProject, rememberSessionPicks } from './projects'
+import {
+  chooseLandingAssistant,
+  chooseLandingProject,
+  landingAssistant,
+  landingProject,
+  rememberSessionPicks,
+} from './projects'
 
 /** The id of the default assistant ('' before the roster has loaded). */
 export function defaultAssistant(): string {
@@ -298,9 +304,11 @@ export async function newSession(): Promise<boolean> {
   }
 }
 
-/** From the landing page: start the next session in `project`. */
-export function startSessionIn(project: string | null): void {
+/** From the landing page: start the next session in `project` (and as
+ *  `assistant`, when given). */
+export function startSessionIn(project: string | null, assistant?: string): void {
   chooseLandingProject(project)
+  if (assistant) chooseLandingAssistant(assistant)
   goHome()
 }
 

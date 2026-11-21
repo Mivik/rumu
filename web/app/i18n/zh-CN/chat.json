@@ -12,7 +12,6 @@
     "deleteWarning": "此操作无法撤销。",
     "lastActive": "上次活跃 {at}",
     "actions": "会话操作",
-    "noProject": "无项目",
     "showMore": "再显示 {n} 个",
     "showLess": "收起",
     "newSession": "新会话",
@@ -57,7 +56,9 @@
     "openSessions": "打开会话列表",
     "running": "运行中…",
     "queued": "排队中",
-    "takeBack": "撤回到输入框（↑）"
+    "takeBack": "撤回到输入框（↑）",
+    "project": "项目",
+    "moveProject": "移到其他项目"
   },
   "user": {
     "edit": "编辑消息",
@@ -133,7 +134,7 @@
     "mountTitle": "{from} 想挂载 {deck}",
     "mountHint": "{deck} 会挂载到 {at}，之后可以读取其中的卡片。",
     "moveProjectTitle": "{from} 想把本会话移入 {project}",
-    "moveProjectHint": "{'@'}rumu:/cards/project",
+    "moveProjectHint": "会作为本会话的项目挂载到 {at}，替换当前所在的项目。",
     "deckCreateTitle": {
       "assistant": "{from} 想创建助手 {name}",
       "project": "{from} 想创建项目 {name}",

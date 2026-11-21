@@ -12,7 +12,6 @@
     "deleteWarning": "This can't be undone.",
     "lastActive": "Last active {at}",
     "actions": "Session actions",
-    "noProject": "No project",
     "showMore": "Show {n} more",
     "showLess": "Show less",
     "newSession": "New session",
@@ -57,7 +56,9 @@
     "openSessions": "Open sessions",
     "running": "running…",
     "queued": "queued",
-    "takeBack": "Take back to edit (↑)"
+    "takeBack": "Take back to edit (↑)",
+    "project": "Project",
+    "moveProject": "Move to another project"
   },
   "user": {
     "edit": "Edit message",
@@ -133,7 +134,7 @@
     "mountTitle": "{from} wants to mount {deck}",
     "mountHint": "{deck} would be mounted at {at}, and its cards readable from then on.",
     "moveProjectTitle": "{from} wants to move this session into {project}",
-    "moveProjectHint": "{'@'}rumu:/cards/project",
+    "moveProjectHint": "It would be mounted at {at} as this session's project, in place of the one it is in.",
     "deckCreateTitle": {
       "assistant": "{from} wants to create the assistant {name}",
       "project": "{from} wants to create the project {name}",

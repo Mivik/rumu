@@ -16,6 +16,8 @@
   "notes": {
     "count": "{count} side note | {count} side notes",
     "workspace": "Default workspace set to {name}",
+    "projectEntered": "Moved into the project {name}",
+    "projectLeft": "Moved out of its project",
     "loaded": "Loaded {name}",
     "cardBefore": "Card",
     "cardAfter": "changed",

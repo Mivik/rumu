@@ -257,7 +257,8 @@ export interface QuestionOption {
   description?: string
 }
 
-/** `deck.mount` without a grant: `from` mounts `deck` at `at`. */
+/** `deck.mount` without a grant: `from` mounts `deck` at `at`; with
+ *  `project`, as the session's project (moving the session into it). */
 export interface MountRequest {
   kind: 'deck_mount'
   from: string
@@ -265,6 +266,7 @@ export interface MountRequest {
   deck: string
   deck_id: string
   at: string
+  project?: boolean
 }
 
 /** A card write into a deck that is not `from`'s own: `content` at `path`,

@@ -1,10 +1,11 @@
 <script setup lang="ts">
 // Left column: the wordmark with the language key beside it, the landing,
 // library, assistants and projects entries, and the sessions grouped by
-// project (a two-level tree). Each project group carries its sessions, newest
-// first, the newest few until "show more"; the last group holds the sessions
-// without a project. A drag between groups moves the session. At the foot,
-// the connection status.
+// project (a two-level tree). A session is in its project's group, or in its
+// assistant's when it has none. Each group carries its sessions, newest
+// first, the newest few until "show more". Dropping a session on another
+// project's group moves it there, on its assistant's group out of its
+// project. At the foot, the connection status.
 //
 // Alignment: the column pads 8px; session rows add 12px more, so every line
 // of text starts 20px in from the card's edge on both sides.
@@ -22,6 +23,7 @@ import {
   goHome,
   isBusy,
   isUnseen,
+  landingAssistant,
   landingProject,
   moveSession,
   openLibrary,
@@ -32,6 +34,7 @@ import {
   startSessionIn,
   state,
 } from '../lib/store'
+import { assistantCat } from '../lib/assistantFace'
 import { mountedCardCount } from '../lib/cards'
 import type { Project, SessionInfo } from '../lib/types'
 import { layout } from '../lib/layout'
@@ -41,6 +44,7 @@ import { models } from '../lib/state/models'
 import { prefs } from '../lib/state/prefs'
 import { requestComposerFocus } from '../lib/state/ui'
 import { relTime } from '../lib/util'
+import AssistantAvatar from './brand/AssistantAvatar.vue'
 import ProjectSeal from './brand/ProjectSeal.vue'
 import RumuCat from './brand/RumuCat.vue'
 import RumuMark from './brand/RumuMark.vue'
@@ -86,11 +90,12 @@ function pickSession(id: string): void {
   layout.sidebarOpen = false
 }
 
-/** Start the next session in `project` (`null`: none). The group unfolds so
- *  the unsent session's row is visible where it will be born. */
-function newIn(project: string | null): void {
-  prefs.collapsedProjects[project ?? ''] = false
-  startSessionIn(project)
+/** Start the next session in `group`: in its project, or as its assistant
+ *  in none. The group unfolds so the unsent session's row is visible where
+ *  it will be born. */
+function newIn(group: Group): void {
+  prefs.collapsedProjects[group.key] = false
+  startSessionIn(group.projectId, group.assistant ?? undefined)
   layout.sidebarOpen = false
 }
 
@@ -119,12 +124,14 @@ interface SessionRow {
   last: string
 }
 
-/** One group of the tree: a project, or the sessions without one. */
+/** One group of the tree: a project, or an assistant's sessions in none. */
 interface Group {
   key: string
-  /** The project a dropped session moves into (`null`: no project). */
+  /** The project a dropped session moves into (`null`: out of its own). */
   projectId: string | null
   project: Project | null
+  /** An assistant's group: whose sessions without a project it holds. */
+  assistant: string | null
   name: string
   sessions: SessionRow[]
   activity: number
@@ -148,57 +155,43 @@ function lastActive(s: SessionInfo): string {
       })
 }
 
-/** The projects, those with recent activity first and the empty ones by
- *  name, then the group without a project; sessions newest first. */
+/** The groups with sessions, the latest activity first (projects and
+ *  assistants alike), then the empty projects by name; sessions newest first.
+ *  A session is in its project's group when this client knows the project
+ *  (one a model just made shows once the list is refreshed, a deleted one
+ *  never), else in its assistant's. */
 const groups = computed<Group[]>(() => {
   const map = new Map<string, Group>()
-  for (const p of state.projects)
-    map.set(p.id, {
-      key: p.id,
-      projectId: p.id,
-      project: p,
-      name: p.name,
-      sessions: [],
-      activity: -Infinity,
-      draft: false,
-    })
-  map.set('', {
-    key: '',
-    projectId: null,
-    project: null,
-    name: t('chat.sidebar.noProject'),
-    sessions: [],
-    activity: -Infinity,
-    draft: false,
-  })
-  for (const s of sortedSessions.value) {
-    const key = s.project ?? ''
-    let group = map.get(key)
-    // A project this client has not heard of yet (a model just made it).
-    if (!group) {
-      group = {
-        key,
-        projectId: key,
-        project: null,
-        name: key,
-        sessions: [],
-        activity: -Infinity,
-        draft: false,
-      }
-      map.set(key, group)
+  const group = (key: string, init: () => Omit<Group, 'key' | 'sessions' | 'activity' | 'draft'>): Group => {
+    let g = map.get(key)
+    if (!g) {
+      g = { key, ...init(), sessions: [], activity: -Infinity, draft: false }
+      map.set(key, g)
     }
-    group.sessions.push({ s, ago: relTime(s.touched_at, now.value), last: lastActive(s) })
-    group.activity = Math.max(group.activity, s.touched_at)
+    return g
+  }
+  const projectGroup = (p: Project) =>
+    group(p.id, () => ({ projectId: p.id, project: p, assistant: null, name: p.name }))
+  const assistantGroup = (id: string) =>
+    group(id, () => ({ projectId: null, project: null, assistant: id, name: assistantName(id) }))
+  for (const p of state.projects) projectGroup(p)
+  for (const s of sortedSessions.value) {
+    const g = map.get(s.project ?? '') ?? assistantGroup(s.assistant)
+    g.sessions.push({ s, ago: relTime(s.touched_at, now.value), last: lastActive(s) })
+    g.activity = Math.max(g.activity, s.touched_at)
   }
   // The landing composer is a new session not created yet: its row sits in
   // the group it would be born into, unless a boot is still resolving. Once
   // written it stays while other sessions are open, until sent or emptied.
   if (!state.booting && (onLanding.value || landingWritten.value)) {
-    const draft = map.get(landingProject.value ?? '')
-    if (draft) draft.draft = true
+    const into = landingProject.value
+      ? map.get(landingProject.value)
+      : landingAssistant.value
+        ? assistantGroup(landingAssistant.value)
+        : undefined
+    if (into) into.draft = true
   }
   return [...map.values()].sort((a, b) => {
-    if (!a.projectId !== !b.projectId) return a.projectId ? -1 : 1
     // The unsent session is not a reason to move a group: going home would
     // reshuffle the whole column under the pointer, and opening the session
     // shuffle it back. It lands where its group already stands.
@@ -206,6 +199,7 @@ const groups = computed<Group[]>(() => {
     const busyB = b.sessions.length > 0
     if (busyA !== busyB) return busyA ? -1 : 1
     if (busyA && a.activity !== b.activity) return b.activity - a.activity
+    if (!a.projectId !== !b.projectId) return a.projectId ? -1 : 1
     return a.name.localeCompare(b.name, locale.value)
   })
 })
@@ -351,8 +345,17 @@ function startDrag(e: DragEvent, s: SessionInfo): void {
   if (e.dataTransfer) e.dataTransfer.effectAllowed = 'move'
 }
 
+/** May the dragged session drop on `group`? Another project's group, or its
+ *  own assistant's when it is in a project (moving it out). */
+function accepts(group: Group): boolean {
+  const s = state.sessions.find((x) => x.id === dragging.value)
+  if (!s) return false
+  if (group.projectId) return group.projectId !== s.project
+  return group.assistant === s.assistant && !!s.project
+}
+
 function overGroup(e: DragEvent, group: Group): void {
-  if (!dragging.value) return
+  if (!accepts(group)) return
   e.preventDefault()
   dragOver.value = group.key
 }
@@ -366,12 +369,10 @@ function leaveGroup(e: DragEvent, group: Group): void {
 function dropOn(e: DragEvent, group: Group): void {
   e.preventDefault()
   const id = dragging.value
+  const ok = accepts(group)
   dragging.value = null
   dragOver.value = null
-  if (!id) return
-  const session = state.sessions.find((s) => s.id === id)
-  if (!session || (session.project ?? null) === group.projectId) return
-  void moveSession(id, group.projectId)
+  if (id && ok) void moveSession(id, group.projectId)
 }
 
 function endDrag(): void {
@@ -505,6 +506,17 @@ const otherLocale = computed<Locale>(
               :class="{ 'rotate-90': !collapsed(group) }"
             />
             <ProjectSeal v-if="group.project" :project="group.project" :size="16" class="mr-0.5" />
+            <AssistantAvatar
+              v-else-if="group.assistant"
+              :id="group.assistant"
+              :cat="
+                assistantCat(
+                  state.assistants.find((a) => a.id === group.assistant) ?? { id: group.assistant },
+                )
+              "
+              :size="16"
+              class="mr-0.5"
+            />
             <span class="min-w-0 truncate text-meta text-ink-2">{{ group.name }}</span>
             <span v-if="group.sessions.length" class="text-micro text-ink-3 tabular-nums">{{
               group.sessions.length
@@ -518,7 +530,7 @@ const otherLocale = computed<Locale>(
               class="icon-btn size-6"
               :title="t('chat.sidebar.newSession')"
               :aria-label="t('chat.sidebar.newSession')"
-              @click.stop="newIn(group.projectId)"
+              @click.stop="newIn(group)"
             >
               <Icon name="plus" :size="14" />
             </button>
@@ -593,7 +605,7 @@ const otherLocale = computed<Locale>(
             >
               <span class="min-w-0 flex-1 truncate">{{ row.s.title || t('common.untitled') }}</span>
               <span
-                v-if="row.s.assistant !== defaultAssistant"
+                v-if="!group.assistant && row.s.assistant !== defaultAssistant"
                 class="max-w-[6.5rem] flex-none truncate text-micro font-normal text-ink-3"
                 >{{ assistantName(row.s.assistant) }}</span
               >

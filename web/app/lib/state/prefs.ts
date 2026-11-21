@@ -12,15 +12,21 @@ interface Prefs {
   model: ModelUse | null
   /** The project whose group was last in view (`null`: no project). */
   lastProject: string | null
-  /** The assistant last used in each project (`''` is the no-project group). */
+  /** The assistant last used in each project (`''`: in none). */
   assistantByProject: Record<string, string>
-  /** Collapsed sidebar groups, by project id (`''` is the no-project group). */
+  /** Collapsed sidebar groups, by group key (a project or assistant id). */
   collapsedProjects: Record<string, boolean>
 }
 
 function load(): Partial<Prefs> {
   try {
-    return JSON.parse(localStorage.getItem(KEY) ?? '{}') as Partial<Prefs>
+    const stored = JSON.parse(localStorage.getItem(KEY) ?? '{}') as Partial<Prefs> & {
+      lastProjects?: string[]
+    }
+    // One short-lived version kept a list; its first is the project.
+    const { lastProjects, ...rest } = stored
+    if (rest.lastProject === undefined && lastProjects) rest.lastProject = lastProjects[0] ?? null
+    return rest
   } catch {
     return {}
   }
