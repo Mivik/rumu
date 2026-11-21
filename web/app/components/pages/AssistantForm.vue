@@ -989,7 +989,7 @@ onBeforeUnmount(() => window.removeEventListener('keydown', onKey, true))
   line-height: 1.65;
 }
 
-:global(html[data-theme='dark']) .hero {
+html[data-theme='dark'] .hero {
   --k: 0.9;
 }
 
