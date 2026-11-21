@@ -16,9 +16,10 @@ use axum::response::{IntoResponse, Response};
 use axum::routing::{get, post};
 use futures_util::{SinkExt, StreamExt};
 use rumu_blob::Blobs;
+use rumu_cards::cards::default_mount_point;
 use rumu_cards::{Author, Cards, Decks, library};
 use rumu_core::{
-    BranchId, CardMount, Content, NodeId, PROJECT_MOUNT, SessionId, SessionRoot, TaskId, Workspace,
+    BranchId, CardMount, CardUnmount, Content, NodeId, SessionId, SessionRoot, TaskId, Workspace,
     Workspaces,
 };
 use rumu_kernel::Kernel;
@@ -425,16 +426,14 @@ async fn dispatch(state: &AppState, method: &str, p: &Value) -> Result<Value> {
 
         "session.create" => {
             // The assistant deck id (the default assistant when omitted),
-            // with its default mounts, in the `project` deck (none when
-            // omitted or null).
+            // with its default mounts, in the `project` deck (when omitted
+            // or null, the first project deck among the default mounts).
             let deck = assistant_param(state, p)?;
-            let mut mounts = state.decks.default_mounts(deck.id());
-            if let Some(project) = project_param(state, p)? {
-                mounts.push(CardMount {
-                    deck: project.id().to_owned(),
-                    at: PROJECT_MOUNT.into(),
-                });
-            }
+            let project = project_param(state, p)?;
+            let mounts =
+                state
+                    .decks
+                    .session_mounts(deck.id(), project.as_ref().map(|d| d.id()), None);
             let (session, branch) = kernel
                 .create_rooted_session(SessionRoot {
                     assistant: deck.id().to_owned(),
@@ -444,44 +443,71 @@ async fn dispatch(state: &AppState, method: &str, p: &Value) -> Result<Value> {
             Ok(json!({ "session": session, "branch": branch }))
         }
 
-        // Move a session into the `project` deck, or out of its project
-        // (null): recorded on its main line, the model told in a note.
+        // Move a session into the `project` deck (out of the one it is in),
+        // or out of its project (null): recorded on its main line, the model
+        // told in a note.
         "session.move" => {
             let session: SessionId = str_param(p, "session")?.into();
             let project = project_param(state, p)?;
-            let text = match &project {
-                Some(deck) => {
-                    let workspaces = state.workspaces.project(deck.id());
-                    let listed = if workspaces.is_empty() {
-                        "It mounts no workspace; `@scratch` is the default.".to_owned()
-                    } else {
-                        format!(
-                            "Its workspaces: {}; `{}` is the default.",
-                            workspaces
-                                .iter()
-                                .map(|n| format!("`{n}`"))
-                                .collect::<Vec<_>>()
-                                .join(", "),
-                            workspaces[0]
-                        )
-                    };
+            let info = kernel
+                .list_sessions()?
+                .into_iter()
+                .find(|s| s.id == session)
+                .ok_or_else(|| ServerError::InvalidParams(format!("no session `{session}`")))?;
+            let mounts = kernel.branch_path(&info.main_branch)?.1.mounts;
+            let old = mounts.iter().find(|m| m.project);
+            if old.map(|m| &m.deck) == project.as_ref().map(|d| &d.meta.id) {
+                return Ok(json!({}));
+            }
+            let mut notes = Vec::new();
+            if let Some(old) = old {
+                let name = state.decks.get(&old.deck).map(|d| d.meta.name);
+                let text = format!(
+                    "The user moved this session out of its project `{}`: `@rumu:{}` is \
+                     unmounted, and content loaded from it earlier is no longer readable, \
+                     writable or updated.",
+                    name.as_deref().unwrap_or(&old.deck),
+                    old.at
+                );
+                notes.push(Content::note_with(
+                    text,
+                    &CardUnmount { at: old.at.clone() },
+                ));
+            }
+            if let Some(deck) = project {
+                // A deck mounted already is marked where it is.
+                let staying: Vec<CardMount> =
+                    mounts.iter().filter(|m| !m.project).cloned().collect();
+                let at = staying
+                    .iter()
+                    .find(|m| m.deck == deck.meta.id)
+                    .map(|m| m.at.clone())
+                    .unwrap_or_else(|| default_mount_point(&deck.meta.name, "project", &staying));
+                let workspaces = state.workspaces.project(deck.id());
+                let listed = if workspaces.is_empty() {
+                    "It mounts no workspace.".to_owned()
+                } else {
                     format!(
-                        "The user moved this session into the project `{}` (deck id {}), mounted \
-                         at `@rumu:{PROJECT_MOUNT}`. {listed}",
-                        deck.meta.name,
-                        deck.id()
+                        "Its workspaces: {}.",
+                        workspaces
+                            .iter()
+                            .map(|n| format!("`{n}`"))
+                            .collect::<Vec<_>>()
+                            .join(", ")
                     )
-                }
-                None => format!(
-                    "The user moved this session out of its project; `@rumu:{PROJECT_MOUNT}` is \
-                     unmounted and `@scratch` is the default workspace."
-                ),
-            };
-            let mount = project.map(|deck| CardMount {
-                deck: deck.id().to_owned(),
-                at: PROJECT_MOUNT.into(),
-            });
-            kernel.move_project(&session, mount, text).await?;
+                };
+                let text = format!(
+                    "The user moved this session into the project `{}` (deck id {}), mounted \
+                     at `@rumu:{at}`. {listed}",
+                    deck.meta.name,
+                    deck.id()
+                );
+                notes.push(Content::note_with(
+                    text,
+                    &CardMount::new(deck.id(), at, true),
+                ));
+            }
+            kernel.move_project(&session, notes).await?;
             Ok(json!({}))
         }
 
@@ -1346,10 +1372,11 @@ fn card_mounts(state: &AppState, p: &Value) -> Result<Vec<CardMount>> {
         return Ok(state.kernel.branch_path(&BranchId::from(branch))?.1.mounts);
     }
     let deck = assistant_param(state, p)?;
-    let mut mounts = vec![CardMount {
-        deck: deck.id().to_owned(),
-        at: rumu_cards::cards::SELF_MOUNT.into(),
-    }];
+    let mut mounts = vec![CardMount::new(
+        deck.id(),
+        rumu_cards::cards::SELF_MOUNT,
+        false,
+    )];
     mounts.extend(state.decks.default_mounts(deck.id()));
     Ok(mounts)
 }

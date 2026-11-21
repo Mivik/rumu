@@ -11,9 +11,10 @@
 //!   `edit` replaces text in the current one, `write` to a new name creates
 //!   a deck (`kind:` says which), and `write` with `from` renames one.
 //!   Deleting a deck is the user's, in the web UI;
-//! - its actions `deck.mount { at }` and `deck.unmount` change this
-//!   branch's mount table (`super::mount`); mounting a project deck at
-//!   `project` moves the session into it, unmounting it leaves.
+//! - its actions `deck.mount { at?, project? }` and `deck.unmount` change
+//!   this branch's mount table (`super::mount`); a project deck mounted
+//!   with `project: true` becomes the session's project, unmounting it
+//!   leaves.
 //!
 //! The web edits the same fields through `assistant.upsert` and
 //! `project.update`, and both go through [`crate::decks`].
@@ -392,7 +393,7 @@ impl WorkspacePlugin {
     ) -> ToolResult<bool> {
         let (b, a) = (&before.meta, &after.meta);
         let grants = b.mounts != a.mounts || b.allow_ask != a.allow_ask;
-        let own = deck.id() == state.assistant || state.project.as_deref() == Some(deck.id());
+        let own = deck.id() == state.assistant || state.project() == Some(deck.id());
         let rest = b.name != a.name
             || b.model != a.model
             || b.skills != a.skills
@@ -784,14 +785,14 @@ impl Node for DeckFile {
         &[
             ActionSpec {
                 name: "deck.mount",
-                about: "mount it at `/cards/<at>` for this branch; a project deck at `project` \
-                        moves the session into that project",
+                about: "mount it at `/cards/<at>` (by default its name) for this branch; a \
+                        project deck with `project: true` becomes this session's project",
                 args: rumu_core::tool_schema::<MountArgs>,
                 approval: Approval::Asks(Action::Mount),
             },
             ActionSpec {
                 name: "deck.unmount",
-                about: "unmount it from this branch (a project deck: leave the project)",
+                about: "unmount it from this branch (this session's project: leave it)",
                 args: rumu_core::tool_schema::<NoArgs>,
                 approval: Approval::Never,
             },
@@ -802,8 +803,9 @@ impl Node for DeckFile {
         let deck = at.p.named(at.state, at.param("name"))?;
         match spec.name {
             "deck.mount" => {
-                let MountArgs { at: point } = spec.parse(args)?;
-                at.p.mount_deck(at.state, &deck, &point, at.cx).await
+                let MountArgs { at: point, project } = spec.parse(args)?;
+                at.p.mount_deck(at.state, &deck, point.as_deref(), project, at.cx)
+                    .await
             }
             _ => {
                 let NoArgs {} = spec.parse(args)?;
@@ -817,7 +819,13 @@ impl Node for DeckFile {
 #[derive(Deserialize, JsonSchema)]
 #[serde(deny_unknown_fields)]
 struct MountArgs {
-    /// mount point under `/cards` (`user` for `/cards/user`; `project` moves
-    /// the session into a project deck)
-    at: String,
+    /// mount point under `/cards` (`notes` for `/cards/notes`); by default
+    /// the deck's name
+    #[serde(default)]
+    at: Option<String>,
+    /// a project deck: make it this session's project (leaving the one it
+    /// is in); without it the deck is only mounted, the session's project
+    /// unchanged
+    #[serde(default)]
+    project: bool,
 }

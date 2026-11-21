@@ -242,10 +242,7 @@ impl FakeRuntime {
         {
             let mut state = fake.state.lock().unwrap();
             state.assistant = TEST_ASSISTANT.into();
-            state.mounts = vec![rumu_core::CardMount {
-                deck: MAIN_DECK.into(),
-                at: "/cards/self".into(),
-            }];
+            state.mounts = vec![rumu_core::CardMount::new(MAIN_DECK, "/cards/self", false)];
         }
         Arc::new(fake)
     }

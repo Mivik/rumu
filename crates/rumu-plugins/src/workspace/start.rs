@@ -121,14 +121,14 @@ impl WorkspacePlugin {
                 from_deck.meta.name
             )
         };
-        // Its own default mounts, and the project of this session.
-        let mut mounts: Vec<CardMount> = self.decks.default_mounts(to.id());
-        if let Some(project) = &state.project {
-            mounts.push(CardMount {
-                deck: project.clone(),
-                at: rumu_core::PROJECT_MOUNT.into(),
-            });
-        }
+        // Its own default mounts, and the project of this session at its
+        // point here (so paths in the prompt resolve there too).
+        let project = state.project_mount();
+        let mut mounts: Vec<CardMount> = self.decks.session_mounts(
+            to.id(),
+            project.map(|m| m.deck.as_str()),
+            project.map(|m| m.at.as_str()),
+        );
         mounts.sort_by(|a, b| a.at.cmp(&b.at));
         let (session, _) = at
             .cx

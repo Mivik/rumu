@@ -7,16 +7,20 @@
 //! mounted deck's pinned cards and catalog; the unmount result says the deck
 //! is no longer readable/writable.
 //!
-//! `/cards/project` is the session's project: only project decks mount
-//! there, mounting one moves the session into it (replacing another), and
-//! unmounting it leaves the project. A project deck mounted elsewhere is just
-//! a read mount.
+//! A session is in one project at most: the mount marked
+//! [`CardMount::project`]. Any deck, another project deck too, mounts as a
+//! plain mount that leaves the session's project as it is; `project: true`
+//! makes a project deck the session's project instead (taking the old one
+//! off), and unmounting the project leaves it. Changing the project drops
+//! the last `workspace.use`, so the result says when the default moves.
 
-use rumu_cards::cards::{SELF_MOUNT, mount_points_overlap, normalize_mount_point};
+use rumu_cards::cards::{
+    SELF_MOUNT, default_mount_point, mount_points_overlap, normalize_mount_point,
+};
 use rumu_cards::deck::{Action, Deck};
 use rumu_core::{
-    CardMount, CardUnmount, Content, Cx, PROJECT_MOUNT, PathState, RUMU_WORKSPACE,
-    SCRATCH_WORKSPACE, ToolError, ToolOutput, ToolResult, WorkspaceUse,
+    CardMount, CardUnmount, Content, Cx, PathState, RUMU_WORKSPACE, SCRATCH_WORKSPACE, ToolError,
+    ToolOutput, ToolResult,
 };
 use serde_json::json;
 
@@ -45,7 +49,7 @@ impl WorkspacePlugin {
                 deck.meta.name
             )));
         }
-        let mut effects: Vec<Content> = points
+        let effects: Vec<Content> = points
             .iter()
             .map(|at| Content::marker(&CardUnmount { at: at.clone() }))
             .collect();
@@ -56,59 +60,90 @@ impl WorkspacePlugin {
             deck.meta.name,
             shown.join(", ")
         );
-        if points.iter().any(|at| at == PROJECT_MOUNT) {
-            effects.push(Content::marker(&WorkspaceUse {
-                name: SCRATCH_WORKSPACE.into(),
-            }));
-            text.push_str(&format!(
-                " This session leaves its project; `{SCRATCH_WORKSPACE}` is the default workspace."
-            ));
+        if state.project() == Some(deck.id()) {
+            text.push_str(" This session leaves its project.");
+            text.push_str(&self.default_moved(state, None));
         }
         Ok(ToolOutput::ok(text).with_effects(effects))
     }
 
-    /// Refuse a mount point another deck occupies (unless it is the project,
-    /// which a later project mount replaces), overlaps, or that is invalid.
-    fn check_mount_point(&self, state: &PathState, deck: &Deck, at: &str) -> ToolResult<()> {
-        if at == PROJECT_MOUNT && !deck.project() {
-            return Err(ToolError::model(format!(
-                "`{PROJECT_MOUNT}` holds only project decks; `{}` is not one",
-                deck.meta.name
-            )));
+    /// `" The default workspace is now …"` when the branch, moved to
+    /// `project`, defaults elsewhere than it does: a project change drops the
+    /// last `workspace.use`, so the project's first workspace the branch may
+    /// address applies, else `@scratch`.
+    fn default_moved(&self, state: &PathState, project: Option<&str>) -> String {
+        let after = project
+            .into_iter()
+            .flat_map(|p| self.workspaces.project(p))
+            .find(|n| state.workspaces.iter().any(|w| &w.name == n))
+            .unwrap_or_else(|| SCRATCH_WORKSPACE.to_owned());
+        if state.default_workspace.as_deref() == Some(after.as_str()) {
+            String::new()
+        } else {
+            format!(" The default workspace is now `{after}`.")
         }
-        if let Some(other) = state
-            .mounts
-            .iter()
-            .find(|m| mount_points_overlap(&m.at, at))
-        {
-            if at == PROJECT_MOUNT && other.at == PROJECT_MOUNT {
-                return Ok(()); // replaced by the new project mount
-            }
-            return Err(ToolError::model(if other.at == at {
-                format!("`{at}` is already mounted")
-            } else {
-                format!("mount point `{at}` overlaps `{}`", other.at)
-            }));
-        }
-        Ok(())
     }
 
-    /// `deck.mount`: mount `deck` at `at` (`project` moves the session into
-    /// it), asking the user unless a grant covers it.
+    /// `deck.mount`: mount `deck` at `at` (by default at its name), asking
+    /// the user unless a grant covers it. With `project`, a project deck
+    /// becomes the session's project: the old one is taken off, and a deck
+    /// mounted already is marked where it is.
     pub(super) async fn mount_deck(
         &self,
         state: &PathState,
         deck: &Deck,
-        at: &str,
+        at: Option<&str>,
+        project: bool,
         cx: &Cx,
     ) -> ToolResult<ToolOutput> {
-        let at = normalize_mount_point(at).map_err(ToolError::model)?;
-        if at == SELF_MOUNT {
+        if project && !deck.project() {
             return Err(ToolError::model(format!(
-                "`{SELF_MOUNT}` is this session's own deck and is always mounted"
+                "`{}` is not a project deck: only one can be this session's project",
+                deck.meta.name
             )));
         }
-        self.check_mount_point(state, deck, &at)?;
+        let old = state.project_mount().filter(|_| project);
+        if old.is_some_and(|m| m.deck == deck.meta.id) {
+            return Err(ToolError::model(format!(
+                "`{}` is this session's project already",
+                deck.meta.name
+            )));
+        }
+        // The mounts that stay: the old project goes when another comes.
+        let staying: Vec<CardMount> = state
+            .mounts
+            .iter()
+            .filter(|m| Some(*m) != old)
+            .cloned()
+            .collect();
+        let at = match staying.iter().find(|m| m.deck == deck.meta.id) {
+            Some(same) if project => same.at.clone(),
+            Some(same) => {
+                return Err(ToolError::model(format!(
+                    "`{}` is already mounted at `{}`",
+                    deck.meta.name, same.at
+                )));
+            }
+            None => {
+                let at = match at {
+                    Some(at) => normalize_mount_point(at).map_err(ToolError::model)?,
+                    None => default_mount_point(&deck.meta.name, fallback_point(deck), &staying),
+                };
+                if at == SELF_MOUNT {
+                    return Err(ToolError::model(format!(
+                        "`{SELF_MOUNT}` is this session's own deck and is always mounted"
+                    )));
+                }
+                if let Some(other) = staying.iter().find(|m| mount_points_overlap(&m.at, &at)) {
+                    return Err(ToolError::model(if other.at == at {
+                        format!("`{at}` is already mounted")
+                    } else {
+                        format!("mount point `{at}` overlaps `{}`", other.at)
+                    }));
+                }
+                at
+            }
+        };
         let request = json!({
             "kind": "deck_mount",
             "from": deck_name(self.decks(), &state.assistant),
@@ -116,6 +151,7 @@ impl WorkspacePlugin {
             "deck": deck.meta.name,
             "deck_id": deck.meta.id,
             "at": at,
+            "project": project,
         });
         if !approve(self.decks(), cx, Action::Mount, deck.id(), request)
             .await
@@ -126,32 +162,55 @@ impl WorkspacePlugin {
                 deck.meta.name
             )));
         }
-        Ok(self.mounted_output(deck, &at, &state.assistant))
+        let mut out = self.mounted_output(state, deck, &at, project);
+        if let Some(old) = old {
+            let mut effects = vec![Content::marker(&CardUnmount { at: old.at.clone() })];
+            effects.append(&mut out.effects);
+            out.effects = effects;
+        }
+        Ok(out)
     }
 
-    /// The mount result and its markers: the `CardMount` marker, then (for a
-    /// project) a `WorkspaceUse` marker for its first workspace or `@scratch`.
-    fn mounted_output(&self, deck: &Deck, at: &str, assistant: &str) -> ToolOutput {
+    /// The mount result and its markers: the `CardMount` marker, then the
+    /// pinned cards it shows.
+    fn mounted_output(
+        &self,
+        state: &PathState,
+        deck: &Deck,
+        at: &str,
+        project: bool,
+    ) -> ToolOutput {
         let point = at.trim_start_matches("/cards/");
         let mut text = format!("mounted deck `{}` at `{at}`", deck.meta.name);
-        if at == PROJECT_MOUNT {
+        if deck.project() {
             let names = self.workspaces.project(deck.id());
             if names.is_empty() {
                 text.push_str(&format!(
-                    "\nIt mounts no workspace; `@scratch` is now the default workspace. Add some \
-                     to `workspaces:` in `{RUMU_WORKSPACE}:/decks/{}`.",
+                    "\nIt mounts no workspace; add some to `workspaces:` in \
+                     `{RUMU_WORKSPACE}:/decks/{}`.",
                     deck.meta.name
                 ));
             } else {
                 text.push_str(&format!(
-                    "\nIts workspaces: {}; `{}` is now the default workspace.",
+                    "\nIts workspaces: {}.",
                     names
                         .iter()
                         .map(|n| format!("`{n}`"))
                         .collect::<Vec<_>>()
-                        .join(", "),
-                    names[0]
+                        .join(", ")
                 ));
+            }
+            if project {
+                text.push_str(match state.project_mount() {
+                    Some(_) => " It is this session's project now, in place of the old one.",
+                    None => " It is this session's project now.",
+                });
+                text.push_str(&self.default_moved(state, Some(deck.id())));
+            } else {
+                text.push_str(
+                    " This session's project stays as it is (`project: true` would make it \
+                     this one).",
+                );
             }
         }
         let pinned = deck.pinned().unwrap_or_default();
@@ -167,17 +226,22 @@ impl WorkspacePlugin {
         }
         // The catalog the catalog note could not carry: it was written before
         // this deck was mounted.
-        if let Ok(note) =
-            rumu_cards::catalog::deck_catalog(self.decks(), deck, at, assistant, rumu_core::now())
-            && (!note.entries.is_empty() || !note.folded.is_empty())
+        if let Ok(note) = rumu_cards::catalog::deck_catalog(
+            self.decks(),
+            deck,
+            at,
+            &state.assistant,
+            rumu_core::now(),
+        ) && (!note.entries.is_empty() || !note.folded.is_empty())
         {
             text.push('\n');
             text.push_str(&note.markdown());
         }
-        let mut effects = vec![Content::marker(&CardMount {
-            deck: deck.meta.id.clone(),
-            at: at.to_owned(),
-        })];
+        let mut effects = vec![Content::marker(&CardMount::new(
+            deck.meta.id.clone(),
+            at,
+            project,
+        ))];
         // The pinned cards shown are uses of their revisions, as the
         // introduction's are: a later change brings the new text.
         effects.extend(pinned.into_iter().map(|card| {
@@ -187,15 +251,11 @@ impl WorkspacePlugin {
                 rev: card.revision,
             })
         }));
-        if at == PROJECT_MOUNT {
-            let first = self
-                .workspaces
-                .project(deck.id())
-                .into_iter()
-                .next()
-                .unwrap_or_else(|| SCRATCH_WORKSPACE.to_owned());
-            effects.push(Content::marker(&WorkspaceUse { name: first }));
-        }
         ToolOutput::ok(text).with_effects(effects)
     }
+}
+
+/// The mount point a deck whose name leaves nothing path-safe gets.
+pub(crate) fn fallback_point(deck: &Deck) -> &'static str {
+    if deck.project() { "project" } else { "deck" }
 }

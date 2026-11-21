@@ -516,10 +516,7 @@ async fn catalog_names_the_last_author() {
         .to_owned();
     let cards = rumu_cards::Cards::new(
         &decks,
-        &[rumu_core::CardMount {
-            deck: id,
-            at: "/cards/self".into(),
-        }],
+        &[rumu_core::CardMount::new(id, "/cards/self", false)],
     );
     let card = deck_card(dir.path(), "a");
     let mut view = rumu_cards::card::view_of(&card);
@@ -610,11 +607,9 @@ async fn assistant_intro_names_the_project_and_its_workspaces() {
         ];
         state.mounted = vec!["app".into(), "proj".into()];
         state.default_workspace = Some("app".into());
-        state.project = Some(PROJECT.into());
-        state.mounts.push(rumu_core::CardMount {
-            deck: PROJECT.into(),
-            at: rumu_core::PROJECT_MOUNT.into(),
-        });
+        state
+            .mounts
+            .push(rumu_core::CardMount::new(PROJECT, "/cards/project", true));
     }
     let out = plugin
         .on_hook("assistant-intro", &event("llm.pre"), &host.cx())
@@ -648,9 +643,9 @@ async fn assistant_intro_names_the_project_and_its_workspaces() {
         !project_mount.contains("writes ask the user"),
         "the session's project deck is its own: {project_mount}"
     );
-    // Rules: project facts go to `/cards/project`, work under way is
+    // Rules: project facts go to that project's deck, work under way is
     // qualified by "outside any project".
-    assert!(text.contains("goes to `/cards/project`"), "{text}");
+    assert!(text.contains("goes to that project's deck"), "{text}");
     assert!(
         text.contains("work under way outside any project"),
         "{text}"

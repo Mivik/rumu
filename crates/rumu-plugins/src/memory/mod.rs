@@ -25,8 +25,8 @@ use rumu_cards::catalog::{self, CatalogNote};
 use rumu_cards::deck::Action;
 use rumu_cards::{Card, Cards, Decks, card, usage};
 use rumu_core::{
-    Content, Cx, Decision, Event, HookOutput, HookSpec, Manifest, PROJECT_MOUNT, Plugin,
-    RUMU_WORKSPACE, Structured,
+    Content, Cx, Decision, Event, HookOutput, HookSpec, Manifest, Plugin, RUMU_WORKSPACE,
+    Structured,
 };
 use serde::{Deserialize, Serialize};
 use serde_json::json;
@@ -175,10 +175,10 @@ impl MemoryPlugin {
             "You are the assistant `{}` (deck id {}). Cards live in the decks mounted under `{RUMU_WORKSPACE}:/cards`.",
             deck.meta.name, deck.meta.id
         );
-        match state.project.as_deref() {
+        match state.project_mount() {
             Some(project) => {
-                let name = self.decks.get(project).map_or_else(
-                    || format!("`{project}`"),
+                let name = self.decks.get(&project.deck).map_or_else(
+                    || format!("`{}`", project.deck),
                     |d| {
                         format!(
                             "`{}` (`{RUMU_WORKSPACE}:/decks/{}`)",
@@ -187,7 +187,8 @@ impl MemoryPlugin {
                     },
                 );
                 text.push_str(&format!(
-                    "\nProject: {name}, mounted at `{RUMU_WORKSPACE}:{PROJECT_MOUNT}`."
+                    "\nProject: {name}, mounted at `{RUMU_WORKSPACE}:{}`.",
+                    project.at
                 ));
                 let mounted: Vec<_> = state
                     .mounted
@@ -248,14 +249,16 @@ impl MemoryPlugin {
         }
         text.push_str(&format!(
             "\n`list {RUMU_WORKSPACE}:/decks` lists every deck; `invoke` `deck.mount` (`args: {{at: \
-             \"<point>\"}}`) or `deck.unmount` on `{RUMU_WORKSPACE}:/decks/<name>` mounts or \
-             unmounts one (`at: \"project\"` moves the session into a project deck)."
+             \"<point>\"}}`, by default its name) or `deck.unmount` on \
+             `{RUMU_WORKSPACE}:/decks/<name>` mounts or unmounts one. Another project's deck mounts \
+             like any deck, leaving this session's project as it is; `project: true` moves the \
+             session into it."
         ));
         text.push_str(
             "\n\nPlacement rules:\n\
 1. Put a card in the mounted deck whose charter (its pinned `about` card) fits what the card is \
 about, whichever assistant learned it: a fact about the user goes to the user's deck, a fact \
-about the session's project goes to `/cards/project`.\n\
+about a project goes to that project's deck.\n\
 2. Your own deck (`/cards/self`) is your own memory: your persona and instructions, what you \
 learned from your own work (approaches that worked, mistakes to avoid), and work under way outside \
 any project. A card no mounted deck fits also stays there until one does; then move it (`write` \

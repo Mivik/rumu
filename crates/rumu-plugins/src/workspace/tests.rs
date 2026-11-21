@@ -28,10 +28,11 @@ fn state_with(workspaces: Vec<Workspace>, default: Option<&str>) -> PathState {
         workspaces,
         default_workspace: default.map(str::to_owned),
         assistant: crate::testutil::TEST_ASSISTANT.into(),
-        mounts: vec![rumu_core::CardMount {
-            deck: crate::testutil::MAIN_DECK.into(),
-            at: "/cards/self".into(),
-        }],
+        mounts: vec![rumu_core::CardMount::new(
+            crate::testutil::MAIN_DECK,
+            "/cards/self",
+            false,
+        )],
         ..Default::default()
     }
 }
@@ -2244,10 +2245,7 @@ async fn mounted_assistant_sessions_are_visible() {
         .lock()
         .unwrap()
         .mounts
-        .push(rumu_core::CardMount {
-            deck: LEDGER.into(),
-            at: "/cards/ledger".into(),
-        });
+        .push(rumu_core::CardMount::new(LEDGER, "/cards/ledger", false));
     let out = call("list", json!({ "path": "@rumu:/sessions" })).await;
     let ledger_line = out
         .content
@@ -4140,10 +4138,7 @@ async fn cas_refusal_lists_changes_and_diff() {
         .unwrap();
     let cards = rumu_cards::Cards::new(
         decks,
-        &[rumu_core::CardMount {
-            deck: deck.id().to_owned(),
-            at: "/cards/self".into(),
-        }],
+        &[rumu_core::CardMount::new(deck.id(), "/cards/self", false)],
     );
     cards
         .write(
@@ -4212,10 +4207,11 @@ async fn mounts_need_a_grant_and_must_not_overlap() {
         workspaces: vec![],
         default_workspace: Some(RUMU_WORKSPACE.into()),
         assistant: main.clone(),
-        mounts: vec![rumu_core::CardMount {
-            deck: main.clone(),
-            at: "/cards/self".into(),
-        }],
+        mounts: vec![rumu_core::CardMount::new(
+            main.clone(),
+            "/cards/self",
+            false,
+        )],
         ..Default::default()
     };
     let cx = host.cx();
@@ -4261,18 +4257,19 @@ async fn mounts_need_a_grant_and_must_not_overlap() {
         .lock()
         .unwrap()
         .mounts
-        .push(rumu_core::CardMount {
-            deck: extra.clone(),
-            at: "/cards/extra".into(),
-        });
+        .push(rumu_core::CardMount::new(
+            extra.clone(),
+            "/cards/extra",
+            false,
+        ));
 
-    // A mount point may not overlap an existing one.
+    // A deck mounts once.
     let out = plugin
         .call_tool("invoke", mount("extra", "/cards/extra/deep"), &cx)
         .await
         .unwrap();
     assert!(
-        out.is_error && out.content.text.contains("overlaps"),
+        out.is_error && out.content.text.contains("already mounted at"),
         "{}",
         out.content.text
     );
@@ -4335,14 +4332,8 @@ async fn links_read_their_target_and_refuse_writes() {
         default_workspace: Some(RUMU_WORKSPACE.into()),
         assistant: main.clone(),
         mounts: vec![
-            rumu_core::CardMount {
-                deck: main.clone(),
-                at: "/cards/self".into(),
-            },
-            rumu_core::CardMount {
-                deck: other.clone(),
-                at: "/cards/other".into(),
-            },
+            rumu_core::CardMount::new(main.clone(), "/cards/self", false),
+            rumu_core::CardMount::new(other.clone(), "/cards/other", false),
         ],
         ..Default::default()
     };
@@ -4534,10 +4525,11 @@ async fn writes_to_other_decks_need_approval() {
         .lock()
         .unwrap()
         .mounts
-        .push(rumu_core::CardMount {
-            deck: user.clone(),
-            at: "/cards/user".into(),
-        });
+        .push(rumu_core::CardMount::new(
+            user.clone(),
+            "/cards/user",
+            false,
+        ));
     let cx = host.cx();
     let write = |path: &str, from: Option<&str>| {
         let mut args = json!({ "path": path, "content": "UTC+8\n" });
@@ -4634,10 +4626,7 @@ async fn cards_are_deleted_after_a_read() {
         .lock()
         .unwrap()
         .mounts
-        .push(rumu_core::CardMount {
-            deck: user,
-            at: "/cards/user".into(),
-        });
+        .push(rumu_core::CardMount::new(user, "/cards/user", false));
     let cx = host.cx();
     let delete = |path: &str| json!({ "path": path });
 
@@ -4764,10 +4753,7 @@ async fn card_paths_cannot_escape_a_mount() {
         .lock()
         .unwrap()
         .mounts
-        .push(rumu_core::CardMount {
-            deck: other,
-            at: "/cards/other".into(),
-        });
+        .push(rumu_core::CardMount::new(other, "/cards/other", false));
     let cx = host.cx();
     let out = plugin
         .call_tool(
@@ -4875,14 +4861,8 @@ async fn links_store_the_target_and_go_dangling_on_a_move() {
         default_workspace: Some(RUMU_WORKSPACE.into()),
         assistant: main.clone(),
         mounts: vec![
-            rumu_core::CardMount {
-                deck: main.clone(),
-                at: "/cards/self".into(),
-            },
-            rumu_core::CardMount {
-                deck: other.clone(),
-                at: "/cards/other".into(),
-            },
+            rumu_core::CardMount::new(main.clone(), "/cards/self", false),
+            rumu_core::CardMount::new(other.clone(), "/cards/other", false),
         ],
         ..Default::default()
     };
@@ -5073,18 +5053,11 @@ fn project_setup() -> (
     *host.state.lock().unwrap() = PathState {
         workspaces: registry.list(),
         mounted: registry.project(PROJECT_ID),
-        project: Some(PROJECT_ID.into()),
         default_workspace: Some("app".into()),
         assistant: crate::testutil::TEST_ASSISTANT.into(),
         mounts: vec![
-            rumu_core::CardMount {
-                deck: crate::testutil::TEST_ASSISTANT.into(),
-                at: "/cards/self".into(),
-            },
-            rumu_core::CardMount {
-                deck: PROJECT_ID.into(),
-                at: rumu_core::PROJECT_MOUNT.into(),
-            },
+            rumu_core::CardMount::new(crate::testutil::TEST_ASSISTANT, "/cards/self", false),
+            rumu_core::CardMount::new(PROJECT_ID, "/cards/project", true),
         ],
         ..Default::default()
     };
@@ -5420,10 +5393,11 @@ async fn sessions_belong_to_their_project_or_assistant_deck() {
         .lock()
         .unwrap()
         .mounts
-        .push(rumu_core::CardMount {
-            deck: PROJECT_ID.into(),
-            at: rumu_core::PROJECT_MOUNT.into(),
-        });
+        .push(rumu_core::CardMount::new(
+            PROJECT_ID,
+            "/cards/project",
+            true,
+        ));
     let cx = host.cx();
     let out = plugin
         .call_tool("list", json!({ "path": "@rumu:/sessions" }), &cx)
@@ -5459,11 +5433,10 @@ async fn sessions_belong_to_their_project_or_assistant_deck() {
     // shows its own.
     {
         let mut state = host.state.lock().unwrap();
-        state.mounts.retain(|m| m.at != rumu_core::PROJECT_MOUNT);
-        state.mounts.push(rumu_core::CardMount {
-            deck: OTHER.into(),
-            at: "/cards/other".into(),
-        });
+        state.mounts.retain(|m| !m.project);
+        state
+            .mounts
+            .push(rumu_core::CardMount::new(OTHER, "/cards/other", false));
     }
     let out = plugin
         .call_tool("list", json!({ "path": "@rumu:/sessions" }), &cx)
@@ -5534,22 +5507,39 @@ fn mount_setup() -> (
         workspaces: registry.list(),
         default_workspace: Some(RUMU_WORKSPACE.into()),
         assistant: crate::testutil::TEST_ASSISTANT.into(),
-        mounts: vec![rumu_core::CardMount {
-            deck: crate::testutil::TEST_ASSISTANT.into(),
-            at: "/cards/self".into(),
-        }],
+        mounts: vec![rumu_core::CardMount::new(
+            crate::testutil::TEST_ASSISTANT,
+            "/cards/self",
+            false,
+        )],
         ..Default::default()
     };
     let cx = host.cx();
     (home, plugin, host, cx, registry)
 }
 
+/// `invoke` arguments mounting `deck` as this session's project.
+fn mount_project(deck: &str) -> Value {
+    json!({ "action": "deck.mount", "path": format!("@rumu:/decks/{deck}"), "args": { "project": true } })
+}
+
 #[tokio::test]
-async fn deck_mount_moves_between_projects() {
+async fn deck_mount_borrows_a_project_or_moves_the_session_into_it() {
     use rumu_cards::deck::{Action, Scope};
 
     let (_home, plugin, host, cx, _registry) = mount_setup();
     let main = crate::testutil::TEST_ASSISTANT;
+    let apply = |out: &ToolOutput| {
+        let mut state = host.state.lock().unwrap();
+        for e in &out.effects {
+            if let Some(gone) = e.decode::<rumu_core::CardUnmount>() {
+                state.mounts.retain(|m| m.at != gone.at);
+            } else if let Some(m) = e.decode::<rumu_core::CardMount>() {
+                state.mounts.retain(|o| o.at != m.at);
+                state.mounts.push(m);
+            }
+        }
+    };
 
     // The deck listing names each deck's kind.
     let out = plugin
@@ -5570,21 +5560,23 @@ async fn deck_mount_moves_between_projects() {
         .await
         .unwrap();
     assert!(
-        out.content.text.contains("deck.mount(at: string)")
+        out.content
+            .text
+            .contains("deck.mount(at?: string, project?: boolean)")
             && out.content.text.contains("asks the user: `mount`")
             && out.content.text.contains("deck.unmount()"),
         "{}",
         out.content.text
     );
 
-    // Only project decks mount at `/cards/project`, and the session's own
-    // deck neither moves nor unmounts.
+    // Only a project deck becomes the session's project, and the session's
+    // own deck neither moves nor unmounts.
     let out = plugin
-        .call_tool("invoke", mount("main", "/cards/project"), &cx)
+        .call_tool("invoke", mount_project("main"), &cx)
         .await
         .unwrap();
     assert!(
-        out.is_error && out.content.text.contains("only project decks"),
+        out.is_error && out.content.text.contains("not a project deck"),
         "{}",
         out.content.text
     );
@@ -5605,7 +5597,7 @@ async fn deck_mount_moves_between_projects() {
         .unwrap()
         .push_back(json!({ "allow": false }));
     let out = plugin
-        .call_tool("invoke", mount("proj", "project"), &cx)
+        .call_tool("invoke", mount_project("proj"), &cx)
         .await
         .unwrap();
     assert!(
@@ -5618,66 +5610,108 @@ async fn deck_mount_moves_between_projects() {
         assert_eq!(decisions.len(), 1, "{decisions:?}");
         assert_eq!(decisions[0]["kind"], "deck_mount");
         assert_eq!(decisions[0]["deck"], "proj");
+        assert_eq!(decisions[0]["at"], "/cards/proj");
+        assert_eq!(decisions[0]["project"], true);
     }
-
-    // A project mount carries the workspaces, default first, and a
-    // `WorkspaceUse` marker for its first one.
     plugin
         .decks()
         .remember(Action::Mount, Scope::Always, "", main, PROJECT_ID);
+    plugin
+        .decks()
+        .remember(Action::Mount, Scope::Always, "", main, PROJECT2_ID);
+
+    // Mounted plainly, a project deck lists its workspaces and leaves the
+    // session's project (none here) and default as they are.
     let out = plugin
-        .call_tool("invoke", mount("proj", "project"), &cx)
+        .call_tool(
+            "invoke",
+            json!({ "action": "deck.mount", "path": "@rumu:/decks/proj" }),
+            &cx,
+        )
+        .await
+        .unwrap();
+    assert!(!out.is_error, "{}", out.content.text);
+    let text = &out.content.text;
+    assert!(
+        text.contains("at `/cards/proj`") && text.contains("Its workspaces: `app`."),
+        "{text}"
+    );
+    assert!(
+        text.contains("project stays as it is") && !text.contains("default"),
+        "{text}"
+    );
+    let marker: rumu_core::CardMount = out.effects[0].decode().unwrap();
+    assert_eq!(
+        marker,
+        rumu_core::CardMount::new(PROJECT_ID, "/cards/proj", false)
+    );
+    apply(&out);
+    let out = plugin
+        .call_tool("invoke", mount("proj", "again"), &cx)
+        .await
+        .unwrap();
+    assert!(
+        out.is_error && out.content.text.contains("already mounted at"),
+        "{}",
+        out.content.text
+    );
+
+    // `project: true` on it marks it where it is: the session is in it, and
+    // its first workspace is the default.
+    let out = plugin
+        .call_tool("invoke", mount_project("proj"), &cx)
         .await
         .unwrap();
     assert!(!out.is_error, "{}", out.content.text);
     assert!(
         out.content
             .text
-            .contains("Its workspaces: `app`; `app` is now the default workspace."),
+            .contains("It is this session's project now. The default workspace is now `app`."),
         "{}",
         out.content.text
     );
     let marker: rumu_core::CardMount = out.effects[0].decode().unwrap();
-    assert_eq!(marker.deck, PROJECT_ID);
-    assert_eq!(marker.at, rumu_core::PROJECT_MOUNT);
-    let use_: WorkspaceUse = out.effects[1].decode().unwrap();
-    assert_eq!(use_.name, "app");
-    host.state
-        .lock()
-        .unwrap()
-        .mounts
-        .push(rumu_core::CardMount {
-            deck: PROJECT_ID.into(),
-            at: rumu_core::PROJECT_MOUNT.into(),
-        });
-
-    // Mounting another project there replaces it instead of refusing; one
-    // with no workspace says where to add them.
-    plugin
-        .decks()
-        .remember(Action::Mount, Scope::Always, "", main, PROJECT2_ID);
+    assert_eq!(
+        marker,
+        rumu_core::CardMount::new(PROJECT_ID, "/cards/proj", true)
+    );
+    apply(&out);
+    host.state.lock().unwrap().default_workspace = Some("app".into());
     let out = plugin
-        .call_tool("invoke", mount("proj2", "project"), &cx)
+        .call_tool("invoke", mount_project("proj"), &cx)
+        .await
+        .unwrap();
+    assert!(
+        out.is_error && out.content.text.contains("project already"),
+        "{}",
+        out.content.text
+    );
+
+    // Another project in its place: the old one is taken off first; one
+    // with no workspace says where to add them.
+    let out = plugin
+        .call_tool("invoke", mount_project("proj2"), &cx)
         .await
         .unwrap();
     assert!(!out.is_error, "{}", out.content.text);
+    let text = &out.content.text;
     assert!(
-        out.content.text.contains("`@rumu:/decks/proj2`"),
-        "{}",
-        out.content.text
+        text.contains("`@rumu:/decks/proj2`") && text.contains("in place of the old one"),
+        "{text}"
     );
-    let marker: rumu_core::CardMount = out.effects[0].decode().unwrap();
-    assert_eq!(marker.deck, PROJECT2_ID);
-    let use_: WorkspaceUse = out.effects[1].decode().unwrap();
-    assert_eq!(use_.name, SCRATCH_WORKSPACE, "it mounts no workspace");
-    {
-        let mut state = host.state.lock().unwrap();
-        state.mounts.retain(|m| m.at != rumu_core::PROJECT_MOUNT);
-        state.mounts.push(rumu_core::CardMount {
-            deck: PROJECT2_ID.into(),
-            at: rumu_core::PROJECT_MOUNT.into(),
-        });
-    }
+    assert!(
+        text.contains("The default workspace is now `@scratch`."),
+        "{text}"
+    );
+    let gone: rumu_core::CardUnmount = out.effects[0].decode().unwrap();
+    assert_eq!(gone.at, "/cards/proj");
+    let marker: rumu_core::CardMount = out.effects[1].decode().unwrap();
+    assert_eq!(
+        marker,
+        rumu_core::CardMount::new(PROJECT2_ID, "/cards/proj2", true)
+    );
+    apply(&out);
+    host.state.lock().unwrap().default_workspace = Some(SCRATCH_WORKSPACE.into());
 
     // A deck that is not mounted cannot be unmounted.
     let out = plugin
@@ -5690,21 +5724,20 @@ async fn deck_mount_moves_between_projects() {
         out.content.text
     );
 
-    // Unmounting the project leaves it and resets the default to `@scratch`.
+    // Unmounting the project leaves it.
     let out = plugin
         .call_tool("invoke", unmount("proj2"), &cx)
         .await
         .unwrap();
     assert!(!out.is_error, "{}", out.content.text);
     assert!(
-        out.content.text.contains("leaves its project"),
+        out.content.text.contains("leaves its project") && !out.content.text.contains("default"),
         "{}",
         out.content.text
     );
     let marker: rumu_core::CardUnmount = out.effects[0].decode().unwrap();
-    assert_eq!(marker.at, rumu_core::PROJECT_MOUNT);
-    let use_: WorkspaceUse = out.effects[1].decode().unwrap();
-    assert_eq!(use_.name, SCRATCH_WORKSPACE);
+    assert_eq!(marker.at, "/cards/proj2");
+    assert_eq!(out.effects.len(), 1);
 }
 
 #[tokio::test]
@@ -5808,10 +5841,11 @@ async fn private_decks_are_unlisted_and_unmountable() {
         .lock()
         .unwrap()
         .mounts
-        .push(rumu_core::CardMount {
-            deck: hidden.meta.id.clone(),
-            at: "/cards/hidden".into(),
-        });
+        .push(rumu_core::CardMount::new(
+            hidden.meta.id.clone(),
+            "/cards/hidden",
+            false,
+        ));
     let out = plugin
         .call_tool("list", json!({ "path": "@rumu:/decks" }), &cx)
         .await
@@ -5843,10 +5877,7 @@ async fn private_decks_are_visible_through_the_assistant_mounts() {
         workspaces: vec![],
         default_workspace: Some(RUMU_WORKSPACE.into()),
         assistant: BOSS_DECK.into(),
-        mounts: vec![rumu_core::CardMount {
-            deck: BOSS_DECK.into(),
-            at: "/cards/self".into(),
-        }],
+        mounts: vec![rumu_core::CardMount::new(BOSS_DECK, "/cards/self", false)],
         ..Default::default()
     };
     let cx = host.cx();
@@ -5876,14 +5907,8 @@ async fn private_decks_refuse_cross_deck_links() {
         default_workspace: Some(RUMU_WORKSPACE.into()),
         assistant: main.into(),
         mounts: vec![
-            rumu_core::CardMount {
-                deck: main.into(),
-                at: "/cards/self".into(),
-            },
-            rumu_core::CardMount {
-                deck: hidden.meta.id.clone(),
-                at: "/cards/hidden".into(),
-            },
+            rumu_core::CardMount::new(main, "/cards/self", false),
+            rumu_core::CardMount::new(hidden.meta.id.clone(), "/cards/hidden", false),
         ],
         ..Default::default()
     };
@@ -5994,18 +6019,11 @@ fn decks_setup() -> (
     *host.state.lock().unwrap() = PathState {
         workspaces: registry.list(),
         mounted: registry.project(PROJECT_ID),
-        project: Some(PROJECT_ID.into()),
         default_workspace: Some("app".into()),
         assistant: crate::testutil::TEST_ASSISTANT.into(),
         mounts: vec![
-            rumu_core::CardMount {
-                deck: crate::testutil::TEST_ASSISTANT.into(),
-                at: "/cards/self".into(),
-            },
-            rumu_core::CardMount {
-                deck: PROJECT_ID.into(),
-                at: rumu_core::PROJECT_MOUNT.into(),
-            },
+            rumu_core::CardMount::new(crate::testutil::TEST_ASSISTANT, "/cards/self", false),
+            rumu_core::CardMount::new(PROJECT_ID, "/cards/project", true),
         ],
         ..Default::default()
     };

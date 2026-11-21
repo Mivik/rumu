@@ -360,6 +360,59 @@ async fn aborting_the_turn_cancels_the_question() {
 /// scout starts a session of its own: `session.create` without `assistant`.
 struct SelfLlm;
 
+/// A session started from one in a project is in it too, at the point the
+/// starter has it (so the paths its prompt names resolve there); a project
+/// deck the starter only borrows stays the starter's.
+#[tokio::test]
+async fn a_started_session_has_the_starters_project_where_it_has_it() {
+    let home = home();
+    let (eval, web) = (
+        "0193a2f1-0000-7000-8000-000000000004",
+        "0193a2f1-0000-7000-8000-000000000005",
+    );
+    create_deck(
+        home.path(),
+        &format!("id: {eval}\nname: eval\nproject: true\n"),
+        &[],
+    );
+    create_deck(
+        home.path(),
+        &format!("id: {web}\nname: Web App\nproject: true\n"),
+        &[],
+    );
+    let kernel = kernel_on(home.path(), Arc::new(SelfLlm)).await;
+    let scout = deck_id(home.path(), "scout");
+    let (session, _) = kernel
+        .create_rooted_session(rumu_core::SessionRoot {
+            assistant: scout.clone(),
+            mounts: vec![
+                rumu_core::CardMount::new(eval, "/cards/project", true),
+                rumu_core::CardMount::new(web, "/cards/web-app", false),
+            ],
+        })
+        .await
+        .unwrap();
+    assert_eq!(session.project.as_deref(), Some(eval));
+    let branch = session.main_branch.clone();
+    let mut rx = kernel.tap_pushes();
+    kernel.prompt(&branch, "ask myself").await.unwrap();
+    let (done, _) = run(&kernel, &mut rx, &branch, json!({ "allow": false })).await;
+    assert_eq!(done["method"], "turn.done", "{done}");
+    let started = kernel
+        .list_sessions()
+        .unwrap()
+        .into_iter()
+        .find(|s| s.id != session.id)
+        .expect("the started session");
+    assert_eq!(started.project.as_deref(), Some(eval));
+    let (_, st) = kernel.branch_path(&started.main_branch).unwrap();
+    assert_eq!(
+        st.project_mount().map(|m| m.at.as_str()),
+        Some("/cards/project")
+    );
+    assert!(st.mounts.iter().all(|m| m.deck != web));
+}
+
 #[async_trait]
 impl Llm for SelfLlm {
     async fn complete(

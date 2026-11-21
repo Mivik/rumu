@@ -28,7 +28,7 @@ pub(crate) fn allowed(
     action: Action,
     to: &str,
 ) -> bool {
-    (action == Action::Write && state.project.as_deref() == Some(to))
+    (action == Action::Write && state.project() == Some(to))
         || decks.allowed(action, session, &state.assistant, to)
 }
 
