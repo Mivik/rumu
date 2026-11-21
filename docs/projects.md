@@ -51,40 +51,57 @@ An assistant works in any project.
   own directories. Names that leave the registry drop out, and deleting the
   deck drops its list.
 - The default workspace of a path is the last `workspace.use` marker, else
-  the project's first workspace, else `@scratch`. Entering a project makes its
-  first workspace the default; leaving it returns to `@scratch`.
+  the first of its project's workspaces it may address, else `@scratch`.
+  Entering, switching or leaving the project drops the `workspace.use` before
+  it, so the new project's first workspace (or `@scratch`) is the default;
+  the result or note of the move says so when the default changes.
 
 ## Sessions in a project
 
-- A session's project is the project deck mounted at `/cards/project`. Only
-  project decks mount there, and a project deck mounted elsewhere is only
-  read. `deck.yaml` mounts cannot use `/cards/project`.
-- A session starts in the project it was created in, or in none.
-- Mounting a project deck at `/cards/project` moves the session into that
-  project from that point on; unmounting it leaves the project. Like every
-  mount, it is a marker on the branch, so forks inherit it. Besides the deck,
-  its pinned cards and its catalog, the mount returns the project's
-  workspaces.
-- An `ask` session has no project and keeps its mounts, so it never gets
-  one.
-- The first-call note names the project and lists its workspaces (name,
-  location, read-only), the default first.
+- A session is in **at most one** project, its own. Its project deck is
+  mounted at `/cards/<name>` (the name made path-safe, `-2`, `-3`, … when
+  taken), and the mount marker says it is the project (`project: true`). A
+  path has at most one such mount.
+- Any other deck mounts beside it, another project's deck too: a plain mount
+  (`project: false`) that leaves the session's project, its sidebar group and
+  its default workspace as they are. Its cards are writable as any mounted
+  deck's, with the `write` approval, and the mount lists its workspaces
+  (every registered workspace is addressable anyway). This is how a session
+  works across two projects: it belongs to one and borrows the other.
+- A session starts in the project it was created in. Created without one, a
+  session of an assistant whose `deck.yaml` mounts a project deck is in that
+  project (the first such mount); created in another project, that default
+  mount stays a plain one.
+- `deck.mount` with `project: true` moves the session into a project deck
+  from that point on: the old project is unmounted first, and a deck mounted
+  already becomes the project where it is. Unmounting the project leaves it.
+  Like every mount, it is a marker on the branch, so forks inherit it.
+  Besides the deck, its pinned cards and its catalog, the mount returns the
+  project's workspaces.
+- A fresh `agent` and `session.create` start in the caller's project, at the
+  point the caller has it; the decks the caller only borrows stay its own.
+- The first-call note names the project, where it is mounted, and lists its
+  workspaces (name, location, read-only), the default first.
 - A session is listed under the project of its main line.
+- Journals from before this mount their project at `/cards/project` with
+  markers that do not say `project`; a mount there reads as the project and
+  stays there. A `project: true` mount while a path already has a project
+  reads as a plain mount.
 
 ## Memory boundary
 
-- Facts about the project and work under way on it go to `/cards/project`.
-  What spans projects stays with the assistant's mounts: the user
-  (`/cards/user`), general knowledge (`/cards/world`) and the assistant's own
-  lessons (`/cards/self`).
+- Facts about a project and work under way on it go to its deck. What spans
+  projects stays with the assistant's mounts: the user (`/cards/user`),
+  general knowledge (`/cards/world`) and the assistant's own lessons
+  (`/cards/self`).
 - A session's conversation belongs to one deck: its project's, or its
-  assistant's when it has no project. Mounting a deck opens its sessions, so
-  `@rumu:/sessions` in a project session lists that project's sessions,
-  whichever assistant ran them, and the assistant's sessions outside any
-  project. Another project's sessions are listed only while its deck is
-  mounted.
+  assistant's when it has no project. Mounting a deck opens its sessions,
+  as the project or borrowed, so `@rumu:/sessions` in a project session lists
+  that project's sessions, whichever assistant ran them, and the assistant's
+  sessions outside any project. Another project's sessions are listed only
+  while its deck is mounted (a private one's too).
 - The sidebar groups sessions by the same rule: a project's group is exactly
-  the sessions its deck opens.
+  the sessions it is the project of.
 
 ## Agent control
 
@@ -147,11 +164,13 @@ Which set a workspace is in shows in its path, not in a field:
   and `@rumu` have entries there for this alone (they cannot be written or
   deleted). It is the web's `branch.use_workspace`: the same `workspace.use`
   marker.
-- `invoke { action: "deck.mount", path: "@rumu:/decks/<name>", args: { at:
-  "project" } }` moves the session into a project, and `deck.unmount` on
-  its deck leaves it. `list @rumu:/decks` names each deck's kind. No web
-  method is called `deck.mount` or `deck.unmount`: the web moves a session
-  with `session.move`, which writes the same marker.
+- `invoke { action: "deck.mount", path: "@rumu:/decks/<name>" }` mounts a
+  deck (`args: { at }` picks the point); a project deck stays borrowed.
+  `args: { project: true }` moves the session into it instead, and
+  `deck.unmount` on the project's deck leaves it. `list @rumu:/decks` names
+  each deck's kind. No web method is called `deck.mount` or `deck.unmount`:
+  the web moves a session with `session.move { session, project }` (`null`:
+  out of its project), which writes the same markers with a note each.
 - Writing `kind: project` (and, optionally, `workspaces:`) to a new
   `@rumu:/decks/<name>` creates a project deck with a blank charter; the
   assistant then writes the charter and mounts it with `deck.mount`, which
@@ -170,7 +189,8 @@ Which set a workspace is in shows in its path, not in a field:
 | the same in another project                   | `configure`         |
 | write the session's project deck              | none                |
 | leave the project                             | none                |
-| move into an existing project                 | `mount` of its deck |
+| move into an existing project, or borrow it   | `mount` of its deck |
+| write a borrowed project deck                 | `write` of its deck |
 | create a project                              | `create`            |
 
 - `create`, `configure` and `workspace` are approval actions like those in
@@ -180,13 +200,18 @@ Which set a workspace is in shows in its path, not in a field:
 
 ## Web UI
 
-- The sidebar is a two-level tree: the projects and one group for sessions
-  without a project, each with its sessions, newest first. Projects are
-  ordered by latest activity. A session row names its assistant unless it is
-  the default one.
-- Each project row has actions to start a session in it and to open its
-  settings. Dragging a session to another group moves it: the same marker as
-  `deck.mount`, with no approval.
+- The sidebar is a two-level tree: a group for each project, and one for
+  each assistant holding its sessions without a project (headed by its
+  avatar), each with its sessions, newest first. Groups with sessions are
+  ordered by latest activity, projects and assistants alike; the empty
+  projects follow by name. A session row in a project group names its
+  assistant unless it is the default one.
+- Each group row has an action to start a session in it (a project group's
+  also opens its settings). Dragging a session to another project's group
+  moves it there, and to its own assistant's group out of its project: the
+  same markers as `deck.mount`, with no approval.
+- The chat header shows the session's project, if any, beside the view tabs,
+  with a menu to move it to another project or out of its own.
 - The projects page is a grid of project cards: a contour band drawn from
   the id under the seal, the name, the workspaces (left out when the only one
   shares the project's name), the latest activity and a new-session action.
@@ -223,5 +248,6 @@ Which set a workspace is in shows in its path, not in a field:
 ## Not in scope
 
 - A project's own default mounts (`mounts` in a project deck's `deck.yaml`).
-- Several projects in one session.
+- Several projects of one session: a session borrows other project decks
+  instead (see [Sessions in a project](#sessions-in-a-project)).
 - An `ask` session in the asking session's project.

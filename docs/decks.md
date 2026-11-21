@@ -15,8 +15,8 @@ else mounts the deck.
 
 - Put a card in the mounted deck whose charter fits what the card is about,
   whichever assistant learned it: a fact about the user goes to the deck
-  mounted at `/cards/user`, a fact about the session's project to
-  `/cards/project` (see [Projects](projects.md)).
+  mounted at `/cards/user`, a fact about a project to that project's deck
+  (see [Projects](projects.md)).
 - Your own deck (`/cards/self`) is the assistant's own memory: its persona and
   instructions, what it learned from its own work (approaches that worked,
   mistakes to avoid), and work under way outside any project. A card no
@@ -157,17 +157,21 @@ The first-call note states these rules.
 - The model manages mounts through `@rumu:/decks`:
   - `list @rumu:/decks` lists decks: name, kind, mount point if mounted,
     whether mounting or writing it would ask the user, and its summary.
-  - `invoke { action: "deck.mount", path: "@rumu:/decks/<name>", args: { at
-    } }` mounts a deck at `/cards/<at>` (`mount` approval).
+  - `invoke { action: "deck.mount", path: "@rumu:/decks/<name>", args: { at?,
+    project? } }` mounts a deck at `/cards/<at>`, by default at its name
+    made path-safe (`-2`, `-3`, … when taken), with the `mount` approval. A
+    deck mounts once. `project: true` makes a project deck the session's
+    project (see [Projects](projects.md#sessions-in-a-project)); without it a
+    project deck is borrowed, as any deck.
   - `deck.unmount` on a deck unmounts it from wherever it is mounted.
   - No web method shares these names; the web's `session.move` writes the
-    same marker for `/cards/project`.
-- The mount table is branch state on the node path, so forks and sub-agents
-  inherit it, the session's project included. Mount points must not overlap:
+    same markers for the session's project.
+- The mount table is branch state on the node path, so forks inherit it, the
+  session's project included. A fresh sub-agent starts from the session's
+  root mounts and the parent's project. Mount points must not overlap:
   neither may be a prefix of the other. `/cards/self` can be neither mounted
-  nor unmounted, and `/cards/project` holds only project decks.
-  `deck.yaml` mounts follow the same rules; invalid entries are refused when
-  saved.
+  nor unmounted. `deck.yaml` mounts follow the same rules; invalid entries
+  are refused when saved.
 - Mounting returns, at that point in the conversation, the deck, its pinned
   cards and its [catalog](#catalog). The prompt cache before that point is
   unaffected.
@@ -218,7 +222,8 @@ actions:
 | `configure` | change a deck's configuration (see below)   | nothing                                |
 
 - An assistant may do anything with its own deck and with the session's
-  project deck.
+  project deck. A borrowed project deck is like any other deck: writing it
+  asks (`write`).
 - The user answers with one of: don't allow, allow once, allow for this
   session, always allow.
   - "Allow for this session" covers the rest of the session, its branches
@@ -365,7 +370,8 @@ actions on `@rumu:/sessions`:
 
 1. `invoke session.create` on `@rumu:/sessions` with `{ prompt, assistant?,
    model?, effort? }` starts a session of `assistant` (an assistant deck's id;
-   yourself when absent) with its default mounts and the caller's project, and
+   yourself when absent) with its default mounts and the caller's project (at
+   the caller's point; not the decks the caller only borrows), and
    sends `prompt` as its first message. It returns the new session's address at
    once; the session runs on by itself, like one the user started.
 2. Another assistant's session asks the user first (action `ask`), unless
