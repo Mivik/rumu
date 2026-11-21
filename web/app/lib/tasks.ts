@@ -3,6 +3,7 @@
 
 import type { TaskInfo, TaskStatus } from './types'
 import { t } from '../i18n'
+import { callById } from './state/derived'
 
 /** `bash: rm -rf dist`, `agent: find the config`. */
 export function taskLabel(t: TaskInfo): string {
@@ -10,6 +11,14 @@ export function taskLabel(t: TaskInfo): string {
     return t.kind.args_summary ? `${t.kind.name}: ${t.kind.args_summary}` : t.kind.name
   }
   return `agent: ${t.summary}`
+}
+
+/** A bash task's command, read from its call (the task keeps only a summary);
+ * empty until the call's node is loaded. */
+export function taskCommand(t: TaskInfo): string {
+  if (t.kind.type !== 'tool' || t.kind.name !== 'bash') return ''
+  const command = (callById(t.call_id)?.args as { command?: unknown } | null)?.command
+  return typeof command === 'string' ? command.trimEnd() : ''
 }
 
 /** The word shown in notes and chips (`ok` / `error` / `cancelled`). */

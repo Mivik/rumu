@@ -1,18 +1,38 @@
 <script setup lang="ts">
 // A background task's output beside the chat: what it runs, how it is doing,
 // and its buffered output, following the end while it streams.
-import { computed, onBeforeUnmount, onMounted, ref } from 'vue'
+import { computed, onBeforeUnmount, onMounted, ref, watch } from 'vue'
 import { t } from '../../i18n'
 import { vFollow } from '../../lib/motion'
-import { killTask, openTaskDetail, state } from '../../lib/store'
-import { taskElapsed, taskStatusWord } from '../../lib/tasks'
+import { ensureAgentNodes, killTask, openTaskDetail, state } from '../../lib/store'
+import { taskCommand, taskElapsed, taskStatusWord } from '../../lib/tasks'
 import { bashExit } from '../../lib/toolrows'
 import { toolIcon } from '../../lib/toolIcon'
 import Icon from '../ui/Icon.vue'
 import PanelBack from './PanelBack.vue'
+import TermCommand from './TermCommand.vue'
 
 const task = computed(() => (state.taskDetail ? (state.tasks[state.taskDetail] ?? null) : null))
 const running = computed(() => task.value?.status === 'running')
+
+const command = computed(() => (task.value ? taskCommand(task.value) : ''))
+
+const box = ref<HTMLElement | null>(null)
+
+/** Scrolled before the re-render, so `v-follow` stops following and the
+ * command just unfolded stays in view. */
+function onCommandToggle(open: boolean): void {
+  if (open && box.value) box.value.scrollTop = 0
+}
+
+// A sub-agent's nodes (and so the call) load only on demand.
+watch(
+  task,
+  (tk) => {
+    if (tk && !taskCommand(tk)) void ensureAgentNodes(tk.branch)
+  },
+  { immediate: true },
+)
 
 const now = ref(Date.now())
 let timer: ReturnType<typeof setInterval> | undefined
@@ -83,13 +103,19 @@ const output = computed(() => {
       </span>
     </header>
 
-    <pre
-      v-if="output.body"
-      :key="task.id"
-      v-follow="running"
-      class="view-in min-h-0 flex-1 overflow-auto px-5 py-4 font-mono text-micro leading-[1.6] break-words whitespace-pre-wrap"
-      >{{ output.body }}</pre>
-    <p v-else class="flex-1 px-5 py-4 text-meta text-ink-3">{{ t('common.noOutput') }}</p>
+    <div :key="task.id" ref="box" v-follow="running" class="min-h-0 flex-1 overflow-auto">
+      <div
+        v-if="command"
+        class="border-b border-line-soft bg-surface-2 px-5 py-2 font-mono text-meta leading-[1.55]"
+      >
+        <TermCommand :command="command" :lines="3" @toggle="onCommandToggle" />
+      </div>
+      <pre
+        v-if="output.body"
+        class="view-in px-5 py-4 font-mono text-micro leading-[1.6] break-words whitespace-pre-wrap"
+        >{{ output.body }}</pre>
+      <p v-else class="px-5 py-4 text-meta text-ink-3">{{ t('common.noOutput') }}</p>
+    </div>
 
     <footer
       v-if="output.code || task.truncated"

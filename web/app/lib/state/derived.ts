@@ -52,6 +52,20 @@ export function callsOf(nodes: Node[]): Map<string, { call: ToolCallLike; node: 
 export const callsOnPath = computed(() => callsOf(pathNodes.value))
 type ToolCallLike = { call_id: string; name: string; args: unknown }
 
+/** Every call in the loaded tree, by call_id. */
+const callsInTree = computed(() => {
+  const map = new Map<string, ToolCallLike>()
+  for (const n of Object.values(state.nodes)) {
+    if (n.body.type !== 'assistant') continue
+    for (const c of n.body.tool_calls) map.set(c.call_id, c)
+  }
+  return map
+})
+
+export function callById(call_id: string): ToolCallLike | null {
+  return callsInTree.value.get(call_id) ?? null
+}
+
 export const mainDelta = computed<DeltaBuffer | null>(() =>
   state.mainBranch ? (state.deltas[state.mainBranch] ?? null) : null,
 )

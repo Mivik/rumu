@@ -6,7 +6,7 @@
 import { computed, onBeforeUnmount, onMounted, ref, watch } from 'vue'
 import { t } from '../../i18n'
 import { killTask, openTaskDetail, state, stopAllTasks, taskChild, useBranchView } from '../../lib/store'
-import { taskElapsed, taskLabel } from '../../lib/tasks'
+import { taskCommand, taskElapsed, taskLabel } from '../../lib/tasks'
 import { toolIcon } from '../../lib/toolIcon'
 import type { TaskInfo } from '../../lib/types'
 import Icon from '../ui/Icon.vue'
@@ -123,7 +123,7 @@ function isOpen(tk: TaskInfo): boolean {
                       <button
                         type="button"
                         class="flex min-w-0 flex-1 items-center gap-2"
-                        :title="`${tk.id} · ${taskLabel(tk)}`"
+                        :title="`${tk.id} · ${taskCommand(tk) || taskLabel(tk)}`"
                         @click="openTaskDetail(tk.id)"
                       >
                         <Icon
