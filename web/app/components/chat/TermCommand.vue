@@ -19,6 +19,10 @@ const props = defineProps<{
   lines?: number
 }>()
 
+/** The toggle was pressed: the box around the command may want to react (the
+ * task panel scrolls back to the command it just unfolded). */
+const emit = defineEmits<{ toggle: [expanded: boolean] }>()
+
 const pre = ref<HTMLPreElement | null>(null)
 const expanded = ref(false)
 /** The command does not fit folded: measured on the folded block, so the
@@ -58,6 +62,11 @@ watch(
   },
 )
 
+function toggle(): void {
+  expanded.value = !expanded.value
+  emit('toggle', expanded.value)
+}
+
 async function copy(): Promise<void> {
   const ok = await copyText(props.command)
   toast('info', ok ? t('common.copiedCode') : t('common.copyFailed'))
@@ -82,7 +91,7 @@ async function copy(): Promise<void> {
         :title="expanded ? t('common.foldCommand') : t('common.unfoldCommand')"
         :aria-label="expanded ? t('common.foldCommand') : t('common.unfoldCommand')"
         :aria-expanded="expanded"
-        @click="expanded = !expanded"
+        @click="toggle"
       >
         <Icon :name="expanded ? 'fold-v' : 'unfold-v'" :size="12" />
       </button>
@@ -117,10 +126,12 @@ pre.folded {
   overflow: hidden;
 }
 
-/* Unfolded: as tall as it needs, up to most of the panel, then it scrolls. */
+/* Unfolded: as tall as it needs. The box it sits in owns the scrolling — a
+   panel puts the command and the output in one box, so a ceiling here would
+   only create a second scrollbar. */
 pre.open {
-  max-height: 60vh;
-  overflow: auto;
+  max-height: none;
+  overflow: visible;
 }
 
 .term-btn {

@@ -19,6 +19,16 @@ const running = computed(() => task.value?.status === 'running')
  * (`description` first, cut to 80 chars), and the kernel keeps no args. */
 const command = computed(() => (task.value?.kind.type === 'tool' ? taskCommand(task.value) : ''))
 
+/** The box the command and the output share. */
+const box = ref<HTMLElement | null>(null)
+
+/** Unfolding happens at the top of the box: without this, a box following the
+ * end would carry the command out of view the moment it opens. Done before
+ * the re-render, so `v-follow` reads it as scrolled up and leaves it there. */
+function onCommandToggle(open: boolean): void {
+  if (open && box.value) box.value.scrollTop = 0
+}
+
 // A task started inside a sub-agent branch: its call sits in nodes the tree
 // leaves out until that branch's nodes are asked for.
 watch(
@@ -98,22 +108,24 @@ const output = computed(() => {
       </span>
     </header>
 
-    <!-- The command above its output: the header has room for the summary
-         only, and a summary is not something to run again. -->
-    <div
-      v-if="command"
-      class="flex-none border-b border-line-soft bg-surface-2 px-5 py-2 font-mono text-meta leading-[1.55]"
-    >
-      <TermCommand :command="command" :lines="3" />
+    <!-- One scroll box for what it runs and what it printed: the command is
+         the top of the same terminal, not a pane of its own (two boxes meant
+         two scrollbars, and a folded command could not be read while reading
+         the output below it). -->
+    <div ref="box" v-follow="running" class="min-h-0 flex-1 overflow-auto">
+      <div
+        v-if="command"
+        class="border-b border-line-soft bg-surface-2 px-5 py-2 font-mono text-meta leading-[1.55]"
+      >
+        <TermCommand :command="command" :lines="3" @toggle="onCommandToggle" />
+      </div>
+      <pre
+        v-if="output.body"
+        :key="task.id"
+        class="view-in px-5 py-4 font-mono text-micro leading-[1.6] break-words whitespace-pre-wrap"
+        >{{ output.body }}</pre>
+      <p v-else class="px-5 py-4 text-meta text-ink-3">{{ t('common.noOutput') }}</p>
     </div>
-
-    <pre
-      v-if="output.body"
-      :key="task.id"
-      v-follow="running"
-      class="view-in min-h-0 flex-1 overflow-auto px-5 py-4 font-mono text-micro leading-[1.6] break-words whitespace-pre-wrap"
-      >{{ output.body }}</pre>
-    <p v-else class="flex-1 px-5 py-4 text-meta text-ink-3">{{ t('common.noOutput') }}</p>
 
     <footer
       v-if="output.code || task.truncated"
