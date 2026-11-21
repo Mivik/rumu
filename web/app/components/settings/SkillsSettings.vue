@@ -19,16 +19,18 @@ const pendingDelete = ref<string | null>(null)
 watchEffect(() => (layout.settingsBusy = busy.value !== null))
 onBeforeUnmount(() => (layout.settingsBusy = false))
 
-/** The name the server gives a URL: its last segment without `.git`. */
-const derived = computed(
-  () =>
-    url.value
-      .trim()
-      .replace(/\/+$/, '')
-      .split(/[/:]/)
-      .pop()
-      ?.replace(/\.git$/, '') ?? '',
-)
+/** A valid repository name, as the server checks it. */
+const validName = (n: string) => /^[A-Za-z0-9_-][A-Za-z0-9_.-]{0,63}$/.test(n)
+
+/** The name the server gives a URL: `owner-repo` without `.git`, or the
+ *  repository alone when there is no valid owner. */
+const derived = computed(() => {
+  const segments = url.value.trim().split(/[/:]/).filter(Boolean)
+  const repo = (segments.pop() ?? '').replace(/\.git$/, '')
+  const owner = segments.pop()
+  const named = owner ? `${owner}-${repo}` : ''
+  return validName(named) ? named : repo
+})
 
 async function install(): Promise<void> {
   if (!url.value.trim() || busy.value) return

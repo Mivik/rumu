@@ -41,7 +41,7 @@ Read from the Agent Skills specification and its guide for clients.
 ## Installed repositories
 
 - Settings › Skills installs a repository from a git URL, under a name (by
-  default the URL's last segment without `.git`). rumu runs
+  default `owner-repo` from the URL, without `.git`). rumu runs
   `git clone --depth 1`, never prompting, so a private repository needs
   credentials git already has.
 - The clone is the record: Settings shows its `origin`, pulls it

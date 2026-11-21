@@ -11,7 +11,7 @@ use super::Skills;
 const GIT_TIMEOUT: Duration = Duration::from_secs(300);
 
 impl Skills {
-    /// Clone `url` as `name` (by default the URL's last segment). Returns the
+    /// Clone `url` as `name` (by default the URL's `owner-repo`). Returns the
     /// name.
     pub async fn install(&self, url: &str, name: Option<&str>) -> Result<String, String> {
         let url = url.trim();
@@ -73,15 +73,16 @@ fn valid_repo_name(name: &str) -> bool {
             .all(|b| b.is_ascii_alphanumeric() || matches!(b, b'-' | b'_' | b'.'))
 }
 
-/// A URL's last path segment without `.git`: `https://host/o/skills.git` →
-/// `skills`.
+/// A URL's owner and repository, without `.git`: `https://host/o/skills.git`
+/// → `o-skills`; the repository alone when there is no valid owner.
 fn name_of(url: &str) -> Option<String> {
-    let last = url
-        .trim_end_matches('/')
-        .rsplit(['/', ':'])
-        .next()?
-        .trim_end_matches(".git");
-    valid_repo_name(last).then(|| last.to_owned())
+    let mut segments = url.split(['/', ':']).filter(|s| !s.is_empty()).rev();
+    let repo = segments.next()?.trim_end_matches(".git");
+    let named = segments
+        .next()
+        .map(|owner| format!("{owner}-{repo}"))
+        .filter(|n| valid_repo_name(n));
+    named.or_else(|| valid_repo_name(repo).then(|| repo.to_owned()))
 }
 
 /// Run git in `cwd`, never prompting; the error is its stderr's tail.
@@ -127,4 +128,19 @@ pub(super) fn origin(dir: &Path) -> Option<String> {
         }
     }
     None
+}
+
+#[cfg(test)]
+#[test]
+fn names_a_url_by_owner_and_repo() {
+    for (url, name) in [
+        ("https://github.com/o/skills", Some("o-skills")),
+        ("https://github.com/o/skills.git/", Some("o-skills")),
+        ("git@github.com:o/skills.git", Some("o-skills")),
+        ("skills", Some("skills")),
+        ("../skills", Some("skills")),
+        ("", None),
+    ] {
+        assert_eq!(name_of(url).as_deref(), name, "{url}");
+    }
 }
