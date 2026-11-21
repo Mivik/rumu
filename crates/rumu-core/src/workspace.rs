@@ -115,10 +115,6 @@ impl Workspace {
     }
 }
 
-/// The mount point of a session's project deck: the deck mounted there is
-/// the session's project.
-pub const PROJECT_MOUNT: &str = "/cards/project";
-
 /// Each project's mounted workspaces: project deck id → workspace names, in
 /// order (the first is the project's default).
 pub type ProjectWorkspaces = BTreeMap<String, Vec<String>>;

@@ -13,9 +13,9 @@ use async_trait::async_trait;
 use rumu_core::kind;
 use rumu_core::{
     Attachment, BranchId, BranchStatus, CardMount, Content, Cx, Decision, Event, HookOutput,
-    HookSpec, Inbox, Invoke, Manifest, Node, NodeBody, NodeId, PROJECT_MOUNT, PathState, Plugin,
-    Post, Progress, SCRATCH_WORKSPACE, SessionId, SessionRoot, Tagged, TaskDone, TaskKind,
-    TaskStatus, ToolCall, ToolOutput, ToolSpec, Workspace, WorkspaceUse, Workspaces,
+    HookSpec, Inbox, Invoke, Manifest, Node, NodeBody, NodeId, PathState, Plugin, Post, Progress,
+    SCRATCH_WORKSPACE, SessionId, SessionRoot, Tagged, TaskDone, TaskKind, TaskStatus, ToolCall,
+    ToolOutput, ToolSpec, Workspace, WorkspaceUse, Workspaces,
 };
 use rumu_kernel::{Delta, Kernel, Llm, LlmError, LlmResponse, OnDelta, ScriptedLlm};
 use rumu_store::Store;
@@ -684,10 +684,22 @@ fn registry_with(workspaces: &[(&str, &str)], deck: &str, mounts: &[&str]) -> Wo
 }
 
 fn project_mount(deck: &str) -> CardMount {
-    CardMount {
-        deck: deck.into(),
-        at: PROJECT_MOUNT.into(),
-    }
+    CardMount::new(deck, format!("/cards/{deck}"), true)
+}
+
+/// The notes `session.move` writes to move a session into project `deck`
+/// (out of its project with `None`), from `from`.
+fn move_notes(from: Option<&str>, deck: Option<&str>, text: &str) -> Vec<Content> {
+    let gone = from.map(|from| {
+        Content::note_with(
+            "left",
+            &rumu_core::CardUnmount {
+                at: format!("/cards/{from}"),
+            },
+        )
+    });
+    let added = deck.map(|deck| Content::note_with(text, &project_mount(deck)));
+    gone.into_iter().chain(added).collect()
 }
 
 /// A kernel over `registry` and a session that starts in project `deck`.
@@ -2346,7 +2358,7 @@ async fn agent_context_none_inherits_the_project() {
     // Move into the project after the root, so the project is inherited as a
     // marker rather than already being a root default.
     kernel
-        .move_project(&session, Some(project_mount("proj-deck")), "entered".into())
+        .move_project(&session, move_notes(None, Some("proj-deck"), "entered"))
         .await
         .unwrap();
     run_turn_on(&kernel, &branch, "go").await;
@@ -2363,7 +2375,7 @@ async fn agent_context_none_inherits_the_project() {
         body_kinds(&cnodes)[..3],
         ["marker[session.root]", "marker[card.mount]", "user"]
     );
-    assert_eq!(cstate.project.as_deref(), Some("proj-deck"));
+    assert_eq!(cstate.project(), Some("proj-deck"));
     assert_eq!(cstate.mounted, ["proj", "app"]);
     assert_eq!(cstate.default_workspace.as_deref(), Some("proj"));
 }
@@ -2643,7 +2655,7 @@ async fn every_workspace_is_addressable_and_the_project_mounts_its_own() {
     let (s, _) = kernel.create_session("assistant".into()).await.unwrap();
     let (_, st) = kernel.branch_path(&s.main_branch).unwrap();
     assert_eq!(workspace_names(&st), ["app", "lib", "proj", "@scratch"]);
-    assert!(st.mounted.is_empty() && st.project.is_none());
+    assert!(st.mounted.is_empty() && st.project().is_none());
     assert_eq!(st.default_workspace.as_deref(), Some(SCRATCH_WORKSPACE));
     assert_eq!(s.project, None);
 
@@ -2663,7 +2675,7 @@ async fn every_workspace_is_addressable_and_the_project_mounts_its_own() {
     let (_, st) = kernel.branch_path(&branch).unwrap();
     assert_eq!(workspace_names(&st), ["app", "lib", "proj", "@scratch"]);
     assert_eq!(st.mounted, ["proj", "lib"]);
-    assert_eq!(st.project.as_deref(), Some("proj-deck"));
+    assert_eq!(st.project(), Some("proj-deck"));
     assert_eq!(st.default_workspace.as_deref(), Some("proj"));
 }
 
@@ -2712,77 +2724,86 @@ async fn registry_changes_are_pushed_with_projects() {
     assert_eq!(st.default_workspace.as_deref(), Some("lib"));
 }
 
-/// `move_project` writes the project mount (or unmount) marker followed by a
-/// note carrying the project's first workspace as the default. Repeating the
-/// move is a no-op.
+/// `move_project` writes its notes in order, and the last one says where
+/// the default workspace moved when it did.
 #[tokio::test]
-async fn move_project_records_markers_default_and_note() {
+async fn move_project_records_notes_and_the_default_moved() {
     let registry = registry_with(
         &[("app", "/s/app"), ("proj", "/p/proj")],
         "proj-deck",
         &["proj", "app"],
     );
+    registry
+        .update_both(|_, projects| {
+            projects.insert("other".into(), vec!["app".into()]);
+            projects.insert("empty".into(), Vec::new());
+            Ok::<_, ()>(())
+        })
+        .unwrap();
     let (kernel, _llm) = kernel_with(vec![], vec![], registry);
     let (s, _) = kernel.create_session("assistant".into()).await.unwrap();
     let branch = s.main_branch.clone();
-    let text = "The user moved this session into project `proj-deck`.";
     let mut rx = kernel.tap_pushes();
+    let last_text = |kernel: &Arc<Kernel>| {
+        let nodes = kernel.branch_path(&branch).unwrap().0;
+        match &nodes.last().unwrap().body {
+            NodeBody::Note { content, .. } => content.text.clone(),
+            _ => panic!("a note"),
+        }
+    };
 
     kernel
-        .move_project(&s.id, Some(project_mount("proj-deck")), text.into())
+        .move_project(&s.id, move_notes(None, Some("proj-deck"), "in."))
         .await
         .unwrap();
-    let (nodes, st) = kernel.branch_path(&branch).unwrap();
-    assert_eq!(st.project.as_deref(), Some("proj-deck"));
+    let (_, st) = kernel.branch_path(&branch).unwrap();
+    assert_eq!(st.project(), Some("proj-deck"));
     assert_eq!(st.mounted, ["proj", "app"]);
     assert_eq!(st.default_workspace.as_deref(), Some("proj"));
-    let [marker, note] = &nodes[nodes.len() - 2..] else {
-        panic!("the move writes two nodes");
-    };
-    assert!(matches!(&marker.body,
-        NodeBody::Note { content, .. } if content.decode::<CardMount>().is_some_and(|m| m.deck == "proj-deck" && m.at == PROJECT_MOUNT)));
-    let NodeBody::Note { content, .. } = &note.body else {
-        panic!("the second node is a note");
-    };
-    assert_eq!(content.text, text);
     assert_eq!(
-        content.decode::<WorkspaceUse>().map(|w| w.name),
-        Some("proj".into())
+        last_text(&kernel),
+        "in. The default workspace is now `proj`."
     );
     let info = kernel.session_tree(&s.id).unwrap().0;
     assert_eq!(info.project.as_deref(), Some("proj-deck"));
-    // The main line's new project is announced.
     assert!(std::iter::from_fn(|| rx.try_recv().ok()).any(|v| {
         v["method"] == "session.updated" && v["params"]["session"]["project"] == "proj-deck"
     }));
 
-    // Already in that project: nothing is written.
-    let len = kernel.branch_path(&branch).unwrap().0.len();
+    // Switching: the old project goes, the new one comes.
     kernel
-        .move_project(&s.id, Some(project_mount("proj-deck")), "again".into())
+        .move_project(
+            &s.id,
+            move_notes(Some("proj-deck"), Some("other"), "moved."),
+        )
         .await
         .unwrap();
-    assert_eq!(kernel.branch_path(&branch).unwrap().0.len(), len);
-
-    // Leaving writes an unmount marker and falls back to `@scratch`.
+    let (_, st) = kernel.branch_path(&branch).unwrap();
+    assert_eq!(st.project(), Some("other"));
+    assert_eq!(st.mounts.iter().filter(|m| m.project).count(), 1);
+    assert_eq!(
+        last_text(&kernel),
+        "moved. The default workspace is now `app`."
+    );
+    // To one without workspaces: `@scratch`.
     kernel
-        .move_project(&s.id, None, "The user left the project.".into())
+        .move_project(&s.id, move_notes(Some("other"), Some("empty"), "moved."))
         .await
         .unwrap();
-    let (nodes, st) = kernel.branch_path(&branch).unwrap();
-    assert!(st.project.is_none() && st.mounted.is_empty());
+    assert_eq!(
+        last_text(&kernel),
+        "moved. The default workspace is now `@scratch`."
+    );
+    // Out of a project with the same default: nothing more said.
+    kernel
+        .move_project(&s.id, move_notes(Some("empty"), None, ""))
+        .await
+        .unwrap();
+    let (_, st) = kernel.branch_path(&branch).unwrap();
+    assert!(st.project().is_none() && st.mounted.is_empty());
     assert_eq!(st.default_workspace.as_deref(), Some(SCRATCH_WORKSPACE));
-    assert!(matches!(&nodes[nodes.len() - 2].body,
-        NodeBody::Note { content, .. } if content.decode::<rumu_core::CardUnmount>().is_some()));
+    assert_eq!(last_text(&kernel), "left");
     assert_eq!(kernel.session_tree(&s.id).unwrap().0.project, None);
-
-    // Already outside: a no-op too.
-    let len = kernel.branch_path(&branch).unwrap().0.len();
-    kernel
-        .move_project(&s.id, None, "still outside".into())
-        .await
-        .unwrap();
-    assert_eq!(kernel.branch_path(&branch).unwrap().0.len(), len);
 }
 
 /// `SessionInfo.project` tracks the main line: created, moved into a
@@ -2802,7 +2823,7 @@ async fn session_project_follows_the_main_line() {
 
     // Moving the main line into a project is recorded on the session.
     kernel
-        .move_project(&s.id, Some(project_mount("proj-deck")), "in".into())
+        .move_project(&s.id, move_notes(None, Some("proj-deck"), "in"))
         .await
         .unwrap();
     assert_eq!(

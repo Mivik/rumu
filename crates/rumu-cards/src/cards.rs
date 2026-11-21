@@ -21,8 +21,6 @@ use crate::{Error, Result};
 pub const CARDS_ROOT: &str = "/cards";
 /// Where a session's own deck is mounted.
 pub const SELF_MOUNT: &str = "/cards/self";
-/// The mount point of the session's project deck.
-pub use rumu_core::PROJECT_MOUNT;
 /// The prefix a link target is written with.
 pub const LINK_PREFIX: &str = "@rumu:/cards/";
 
@@ -53,6 +51,33 @@ pub fn normalize_mount_point(at: &str) -> std::result::Result<String, String> {
         ));
     }
     Ok(format!("{CARDS_ROOT}/{name}"))
+}
+
+/// Where a deck named `name` mounts by default: `/cards/<name>` made
+/// path-safe (lowercased, other characters folded to `-`, starting with a
+/// letter), or `/cards/<fallback>` when nothing of the name is left; `-2`,
+/// `-3`, … appended while it is `/cards/self` or collides with one of
+/// `taken`.
+pub fn default_mount_point(name: &str, fallback: &str, taken: &[CardMount]) -> String {
+    let mut base = String::new();
+    for c in name.chars().map(|c| c.to_ascii_lowercase()) {
+        if c.is_ascii_lowercase() || (c.is_ascii_digit() && !base.is_empty()) {
+            base.push(c);
+        } else if !base.is_empty() && !base.ends_with('-') {
+            base.push('-');
+        }
+    }
+    let base = match base.trim_end_matches('-') {
+        "" => fallback,
+        b => b,
+    };
+    (1..)
+        .map(|i| match i {
+            1 => format!("{CARDS_ROOT}/{base}"),
+            i => format!("{CARDS_ROOT}/{base}-{i}"),
+        })
+        .find(|at| at != SELF_MOUNT && taken.iter().all(|m| !mount_points_overlap(&m.at, at)))
+        .expect("some suffix is free")
 }
 
 /// Do two normalized mount points collide (equal, or one inside the other)?
@@ -137,10 +162,7 @@ impl Cards {
         let mounts: Vec<CardMount> = decks
             .list()
             .iter()
-            .map(|deck| CardMount {
-                deck: deck.id().to_owned(),
-                at: format!("{CARDS_ROOT}/{}", deck.id()),
-            })
+            .map(|deck| CardMount::new(deck.id(), format!("{CARDS_ROOT}/{}", deck.id()), false))
             .collect();
         Self::new(decks, &mounts)
     }

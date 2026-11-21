@@ -27,10 +27,6 @@ mounted: Array<string>,
  */
 restrict?: Array<string>, 
 /**
- * The project deck: the one mounted at [`crate::PROJECT_MOUNT`].
- */
-project?: string, 
-/**
  * Default workspace name: the last `workspace.use` marker here; after
  * the kernel's merge, resolved (marker → the project's first → `@scratch`).
  */

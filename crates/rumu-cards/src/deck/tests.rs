@@ -145,13 +145,7 @@ fn deck_yaml_mounts_grant_mounting_and_marked_writes() {
 #[test]
 fn each_write_is_one_commit_with_author_and_trailers() {
     let (_dir, decks, deck) = deck_home();
-    let cards = Cards::new(
-        &decks,
-        &[CardMount {
-            deck: deck.id().to_owned(),
-            at: "/cards/self".into(),
-        }],
-    );
+    let cards = Cards::new(&decks, &[CardMount::new(deck.id(), "/cards/self", false)]);
     let author = Author {
         id: "deck-id".into(),
         name: "ledger".into(),
@@ -192,13 +186,7 @@ fn each_write_is_one_commit_with_author_and_trailers() {
 #[test]
 fn a_moved_card_is_a_new_card_in_history() {
     let (_dir, decks, deck) = deck_home();
-    let cards = Cards::new(
-        &decks,
-        &[CardMount {
-            deck: deck.id().to_owned(),
-            at: "/cards/self".into(),
-        }],
-    );
+    let cards = Cards::new(&decks, &[CardMount::new(deck.id(), "/cards/self", false)]);
     cards
         .write("self/x", "body\n", None, None, &Author::user())
         .unwrap();
@@ -299,13 +287,7 @@ fn deck_names_are_display_labels_and_unique() {
 #[test]
 fn a_write_commits_only_its_own_path() {
     let (_dir, decks, deck) = deck_home();
-    let cards = Cards::new(
-        &decks,
-        &[CardMount {
-            deck: deck.id().to_owned(),
-            at: "/cards/self".into(),
-        }],
-    );
+    let cards = Cards::new(&decks, &[CardMount::new(deck.id(), "/cards/self", false)]);
     cards
         .write("self/b", "body b\n", None, None, &Author::for_deck(&deck))
         .unwrap();
@@ -331,14 +313,8 @@ fn two_decks() -> (tempfile::TempDir, Decks, Cards) {
     let cards = Cards::new(
         &decks,
         &[
-            CardMount {
-                deck: id("main"),
-                at: "/cards/self".into(),
-            },
-            CardMount {
-                deck: id("other"),
-                at: "/cards/other".into(),
-            },
+            CardMount::new(id("main"), "/cards/self", false),
+            CardMount::new(id("other"), "/cards/other", false),
         ],
     );
     (dir, decks, cards)
@@ -624,7 +600,7 @@ fn a_home_with_decks_but_no_assistant_gets_only_the_assistant() {
 }
 
 #[test]
-fn a_project_is_never_an_assistant_and_never_a_default_mount() {
+fn a_project_is_never_an_assistant_and_a_session_belongs_to_one() {
     let (_dir, decks, main) = deck_home();
     let both = decks.upsert(DeckMeta {
         assistant: true,
@@ -640,21 +616,50 @@ fn a_project_is_never_an_assistant_and_never_a_default_mount() {
     let project = decks
         .upsert(DeckMeta {
             project: true,
-            ..empty_meta(String::new(), "app".into())
+            ..empty_meta(String::new(), "My App".into())
         })
         .unwrap();
     assert!(project.project());
     assert_eq!(decks.projects().len(), 1);
+    let other = decks
+        .upsert(DeckMeta {
+            project: true,
+            ..empty_meta(String::new(), "other".into())
+        })
+        .unwrap();
+    let id = |d: &Deck| d.meta.id.clone();
 
-    // `/cards/project` is the session's project, never a `deck.yaml` mount.
+    // A project chosen goes at its name, or where asked when that is free.
+    let mounts = decks.session_mounts(main.id(), Some(project.id()), None);
+    assert_eq!(
+        mounts,
+        [CardMount::new(id(&project), "/cards/my-app", true)]
+    );
+    let mounts = decks.session_mounts(main.id(), Some(project.id()), Some("/cards/x"));
+    assert_eq!(mounts, [CardMount::new(id(&project), "/cards/x", true)]);
+    assert!(decks.session_mounts(main.id(), None, None).is_empty());
+
+    // A project deck the assistant mounts by default is its sessions'
+    // project, unless another one is chosen; the chosen one moves aside.
     let mut meta = main.meta.clone();
     meta.mounts = vec![DeckMount {
-        deck: project.meta.id.clone(),
-        at: "/cards/project".into(),
+        deck: id(&other),
+        at: "/cards/my-app".into(),
         write: false,
     }];
-    let err = decks.upsert(meta).unwrap_err().to_string();
-    assert!(err.contains("the session's project"), "{err}");
+    decks.upsert(meta).unwrap();
+    let mounts = decks.session_mounts(main.id(), None, None);
+    assert_eq!(mounts, [CardMount::new(id(&other), "/cards/my-app", true)]);
+    let mounts = decks.session_mounts(main.id(), Some(project.id()), Some("/cards/my-app"));
+    assert_eq!(
+        mounts,
+        [
+            CardMount::new(id(&other), "/cards/my-app", false),
+            CardMount::new(id(&project), "/cards/my-app-2", true),
+        ]
+    );
+    let mounts = decks.session_mounts(main.id(), Some(other.id()), None);
+    assert_eq!(mounts, [CardMount::new(id(&other), "/cards/my-app", true)]);
 }
 
 #[test]

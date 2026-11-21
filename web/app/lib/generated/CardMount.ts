@@ -13,4 +13,10 @@ deck: string,
 /**
  * The mount point, always under `/cards` (`/cards/self`, `/cards/user`).
  */
-at: string, };
+at: string, 
+/**
+ * This mount is the session's project (a project deck it belongs to,
+ * not one it only borrows). A path has at most one: moving to another
+ * project unmounts the old one first.
+ */
+project: boolean, };

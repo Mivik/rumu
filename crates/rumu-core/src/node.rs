@@ -734,12 +734,47 @@ impl Structured for WorkspaceSet {
 /// Mounting makes a deck readable; writing to it is approved separately
 /// (the session's own deck is always writable).
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, ts_rs::TS)]
+#[serde(from = "StoredMount")]
 #[ts(export)]
 pub struct CardMount {
     /// The mounted deck's id.
     pub deck: String,
     /// The mount point, always under `/cards` (`/cards/self`, `/cards/user`).
     pub at: String,
+    /// This mount is the session's project (a project deck it belongs to,
+    /// not one it only borrows). A path has at most one: moving to another
+    /// project unmounts the old one first.
+    pub project: bool,
+}
+
+impl CardMount {
+    pub fn new(deck: impl Into<String>, at: impl Into<String>, project: bool) -> Self {
+        Self {
+            deck: deck.into(),
+            at: at.into(),
+            project,
+        }
+    }
+}
+
+/// Where a session's project was mounted before mounts said which one it is:
+/// a mount there stored without `project` is the project.
+const LEGACY_PROJECT_MOUNT: &str = "/cards/project";
+
+/// [`CardMount`] as stored: older mounts lack `project`.
+#[derive(Deserialize)]
+struct StoredMount {
+    deck: String,
+    at: String,
+    #[serde(default)]
+    project: Option<bool>,
+}
+
+impl From<StoredMount> for CardMount {
+    fn from(m: StoredMount) -> Self {
+        let project = m.project.unwrap_or(m.at == LEGACY_PROJECT_MOUNT);
+        Self::new(m.deck, m.at, project)
+    }
 }
 
 impl Structured for CardMount {
@@ -767,7 +802,7 @@ pub struct SessionRoot {
     pub assistant: String,
     /// The deck's `deck.yaml` mounts, seeded at session start (the session's
     /// own deck is implicit at `/cards/self`), and the project the session
-    /// starts in at [`crate::PROJECT_MOUNT`].
+    /// starts in (the mount marked [`CardMount::project`]).
     #[serde(default, skip_serializing_if = "Vec::is_empty")]
     pub mounts: Vec<CardMount>,
 }
@@ -973,8 +1008,8 @@ pub struct SessionInfo {
     pub seen_at: Option<Timestamp>,
     /// The assistant the session runs as.
     pub assistant: String,
-    /// The project deck of the main line (the deck mounted at
-    /// [`crate::PROJECT_MOUNT`]); `None` outside any project.
+    /// The project deck of the main line (its mount marked
+    /// [`CardMount::project`]); `None` outside any project.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     #[ts(optional)]
     pub project: Option<String>,
@@ -1000,10 +1035,6 @@ pub struct PathState {
     #[serde(default, skip_serializing_if = "Option::is_none")]
     #[ts(optional)]
     pub restrict: Option<Vec<String>>,
-    /// The project deck: the one mounted at [`crate::PROJECT_MOUNT`].
-    #[serde(default, skip_serializing_if = "Option::is_none")]
-    #[ts(optional)]
-    pub project: Option<String>,
     /// Default workspace name: the last `workspace.use` marker here; after
     /// the kernel's merge, resolved (marker → the project's first → `@scratch`).
     #[serde(default, skip_serializing_if = "Option::is_none")]
@@ -1019,10 +1050,33 @@ pub struct PathState {
     pub model: Option<crate::ModelUse>,
 }
 
+impl PathState {
+    /// The mount of the branch's project, when it is in one.
+    pub fn project_mount(&self) -> Option<&CardMount> {
+        self.mounts.iter().find(|m| m.project)
+    }
+
+    /// The branch's project deck.
+    pub fn project(&self) -> Option<&str> {
+        self.project_mount().map(|m| m.deck.as_str())
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
     use serde_json::json;
+
+    #[test]
+    fn a_mount_stored_without_project_is_the_project_at_the_old_point() {
+        let read = |v: Value| serde_json::from_value::<CardMount>(v).unwrap();
+        assert!(read(json!({"deck": "p", "at": "/cards/project"})).project);
+        assert!(!read(json!({"deck": "u", "at": "/cards/user"})).project);
+        assert!(!read(json!({"deck": "d", "at": "/cards/project", "project": false})).project);
+        assert!(read(json!({"deck": "p", "at": "/cards/p", "project": true})).project);
+        let v = serde_json::to_value(CardMount::new("d", "/cards/d", false)).unwrap();
+        assert_eq!(v, json!({"deck": "d", "at": "/cards/d", "project": false}));
+    }
 
     #[test]
     fn renamed_tags_read_as_current() {

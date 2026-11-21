@@ -1171,22 +1171,19 @@ impl Kernel {
                 } else if parent_state.restrict.is_some() {
                     initial.push(set_marker(available.clone()));
                 }
-                if parent_state.project
-                    != crate::state::derive_state(std::slice::from_ref(root)).project
-                {
-                    let marker = match &parent_state.project {
-                        Some(deck) => Content::marker(&rumu_core::CardMount {
-                            deck: deck.clone(),
-                            at: rumu_core::PROJECT_MOUNT.into(),
-                        }),
-                        None => Content::marker(&rumu_core::CardUnmount {
-                            at: rumu_core::PROJECT_MOUNT.into(),
-                        }),
-                    };
-                    initial.push(NodeBody::Note {
+                // The parent's project where the root's differs: the root's
+                // goes, then the parent's comes at its point (only the
+                // project: other decks the parent mounted stay its own).
+                let at_root = crate::state::derive_state(std::slice::from_ref(root));
+                if parent_state.project_mount() != at_root.project_mount() {
+                    let gone = at_root
+                        .project_mount()
+                        .map(|m| Content::marker(&rumu_core::CardUnmount { at: m.at.clone() }));
+                    let added = parent_state.project_mount().map(Content::marker);
+                    initial.extend(gone.into_iter().chain(added).map(|content| NodeBody::Note {
                         source: SYSTEM_SOURCE.into(),
-                        content: marker,
-                    });
+                        content,
+                    }));
                 }
                 // Keep the parent's default workspace when the child can
                 // still address it; otherwise the child's merge picks one.

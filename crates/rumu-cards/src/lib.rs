@@ -212,13 +212,7 @@ mod tests {
         ] {
             deck.write_file(path, text, &Author::user()).unwrap();
         }
-        let cards = Cards::new(
-            &decks,
-            &[CardMount {
-                deck: deck.id().to_owned(),
-                at: "/cards/self".into(),
-            }],
-        );
+        let cards = Cards::new(&decks, &[CardMount::new(deck.id(), "/cards/self", false)]);
         (dir, cards)
     }
 

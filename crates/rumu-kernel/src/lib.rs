@@ -22,7 +22,7 @@ pub use fields::extract_fields;
 pub use llm::{Budget, Delta, Llm, LlmError, LlmResponse, OnDelta};
 pub use predicate::{Pred, PredicateError};
 pub use scripted::{Script, ScriptTurn, ScriptedLlm};
-pub use state::{derive_state, merge_workspaces, project_change};
+pub use state::{derive_state, merge_workspaces, mounts_changed};
 
 use std::collections::{HashMap, HashSet};
 use std::sync::{Arc, Mutex};
@@ -734,11 +734,9 @@ impl Kernel {
             touched_at: at,
             seen_at: Some(at),
             assistant,
-            project: root_data
-                .mounts
-                .iter()
-                .find(|m| m.at == rumu_core::PROJECT_MOUNT)
-                .map(|m| m.deck.clone()),
+            project: derive_state(std::slice::from_ref(&root))
+                .project()
+                .map(str::to_owned),
         };
         self.store.insert_session(&info)?;
         self.store.insert_branch(&branch)?;
@@ -805,43 +803,48 @@ impl Kernel {
         Ok(())
     }
 
-    /// The user moves the session into a project (`mount`, a project deck
-    /// at `/cards/project`) or out of it (`None`): the marker a model's
-    /// `deck.mount` writes, then the project's first workspace (or `@scratch`)
-    /// as the default, with `text` telling the model. Recorded on the active
-    /// branch; queued while a turn runs.
+    /// The user moves the session to another project or out of its own:
+    /// `notes` (the unmount and mount markers, each with the text telling
+    /// the model) land on its main line in order, queued while a turn runs.
+    /// When they move the default workspace, the last one says where to.
     pub async fn move_project(
         self: &Arc<Self>,
         session: &SessionId,
-        mount: Option<rumu_core::CardMount>,
-        text: String,
+        mut notes: Vec<Content>,
     ) -> Result<()> {
         let info = self
             .store
             .get_session(session)?
             .ok_or_else(|| Error::SessionNotFound(session.clone()))?;
         let branch = info.main_branch;
-        let state = derive_state(&self.pending_path_nodes(&branch)?);
-        if state.project == mount.as_ref().map(|m| m.deck.clone()) {
-            return Ok(());
+        let mut path = self.pending_path_nodes(&branch)?;
+        let before = self.state_of_nodes(&path).default_workspace;
+        let tail = path
+            .last()
+            .cloned()
+            .ok_or_else(|| Error::Internal(format!("branch {branch} has no root node")))?;
+        path.extend(notes.iter().map(|content| Node {
+            body: NodeBody::Note {
+                source: SYSTEM_SOURCE.into(),
+                content: content.clone(),
+            },
+            ..tail.clone()
+        }));
+        let after = self.state_of_nodes(&path).default_workspace;
+        if before != after
+            && let (Some(last), Some(name)) = (notes.last_mut(), after)
+        {
+            last.text
+                .push_str(&format!(" The default workspace is now `{name}`."));
         }
-        let default = mount
-            .as_ref()
-            .and_then(|m| self.workspaces.project(&m.deck).into_iter().next())
-            .unwrap_or_else(|| rumu_core::SCRATCH_WORKSPACE.to_owned());
-        let marker = match mount {
-            Some(mount) => Content::marker(&mount),
-            None => Content::marker(&rumu_core::CardUnmount {
-                at: rumu_core::PROJECT_MOUNT.into(),
-            }),
-        };
-        let body = NodeBody::Note {
-            source: SYSTEM_SOURCE.into(),
-            content: marker,
-        };
-        self.deliver(&branch, NodeId::new(), body, None).await?;
-        self.deliver_note(&branch, text, &WorkspaceUse { name: default })
-            .await
+        for content in notes {
+            let body = NodeBody::Note {
+                source: SYSTEM_SOURCE.into(),
+                content,
+            };
+            self.deliver(&branch, NodeId::new(), body, None).await?;
+        }
+        Ok(())
     }
 
     /// The user sends a prompt after picking another model: a `model.use`
@@ -1014,15 +1017,20 @@ impl Kernel {
         self.push("node.appended", json!({ "branch": branch, "node": node }));
 
         // The session is listed under its main line's project.
-        if let Some(project) = project_change(&body) {
+        if mounts_changed(&body) {
             let mut session = self
                 .store
                 .get_session(&b.session)?
                 .ok_or_else(|| Error::SessionNotFound(b.session.clone()))?;
-            if session.main_branch == b.id && session.project != project {
-                session.project = project;
-                self.store.update_session(&session)?;
-                self.push("session.updated", json!({ "session": session }));
+            if session.main_branch == b.id {
+                let project = derive_state(&self.path_nodes(branch)?)
+                    .project()
+                    .map(str::to_owned);
+                if session.project != project {
+                    session.project = project;
+                    self.store.update_session(&session)?;
+                    self.push("session.updated", json!({ "session": session }));
+                }
             }
         }
 
@@ -1642,7 +1650,9 @@ impl Kernel {
             .store
             .get_session(&b.session)?
             .ok_or_else(|| Error::SessionNotFound(b.session.clone()))?;
-        session.project = derive_state(&self.path_nodes(branch)?).project;
+        session.project = derive_state(&self.path_nodes(branch)?)
+            .project()
+            .map(str::to_owned);
         session.updated_at = now();
         self.store.update_session(&session)?;
         self.push("session.updated", json!({ "session": session }));
@@ -1721,7 +1731,7 @@ impl Kernel {
             touched_at: at,
             seen_at: Some(at),
             assistant: src.assistant.clone(),
-            project: derive_state(&path).project,
+            project: derive_state(&path).project().map(str::to_owned),
         };
         // The session row first: the store drops writes for unknown sessions.
         self.store.insert_session(&info)?;

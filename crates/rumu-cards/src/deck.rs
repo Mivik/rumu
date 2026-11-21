@@ -22,7 +22,7 @@ use tracing::warn;
 use crate::card::{
     Card, card_content, frontmatter_is_broken, new_uuid, parse_card, valid_card_path,
 };
-use crate::cards::{PROJECT_MOUNT, SELF_MOUNT, mount_points_overlap, normalize_mount_point};
+use crate::cards::{SELF_MOUNT, default_mount_point, mount_points_overlap, normalize_mount_point};
 use crate::git::{self, GitAuthor, Repo};
 use crate::{Error, Result};
 
@@ -210,8 +210,8 @@ pub struct DeckMeta {
     /// Listed in the roster; sessions can run as it.
     #[serde(default)]
     pub assistant: bool,
-    /// A project: sessions can work in it, with it mounted at
-    /// `/cards/project`. Never also an assistant.
+    /// A project: a session belongs to at most one, mounted at its name;
+    /// other sessions may mount it too, as any deck. Never also an assistant.
     #[serde(default, skip_serializing_if = "std::ops::Not::not")]
     pub project: bool,
     /// Hidden from agents unless this session has it mounted: never listed,
@@ -676,13 +676,50 @@ impl Decks {
         let mut out: Vec<CardMount> = Vec::new();
         for m in deck.meta.mounts {
             match self.check_mount(&m, &out) {
-                Ok(at) => out.push(CardMount { deck: m.deck, at }),
+                Ok(at) => out.push(CardMount::new(m.deck, at, false)),
                 Err(message) => {
                     warn!(deck = %deck.meta.name, mount = %m.at, "skipping a default mount: {message}")
                 }
             }
         }
         out
+    }
+
+    /// The mounts a session of `assistant` starts with: its default mounts,
+    /// one marked as the session's project. That is `project` (a project
+    /// deck id) when given, mounted at `at` when that is free, else at its
+    /// name (a default mount of it stays where it is); without it, the first
+    /// project deck among the defaults.
+    pub fn session_mounts(
+        &self,
+        assistant: &str,
+        project: Option<&str>,
+        at: Option<&str>,
+    ) -> Vec<CardMount> {
+        let mut mounts = self.default_mounts(assistant);
+        let project = project.and_then(|id| self.get(id)).or_else(|| {
+            mounts
+                .iter()
+                .filter_map(|m| self.get(&m.deck))
+                .find(Deck::project)
+        });
+        let Some(project) = project.filter(Deck::project) else {
+            return mounts;
+        };
+        if let Some(m) = mounts.iter_mut().find(|m| m.deck == project.id()) {
+            m.project = true;
+            return mounts;
+        }
+        let at = at
+            .filter(|at| {
+                *at != SELF_MOUNT && !mounts.iter().any(|m| mount_points_overlap(&m.at, at))
+            })
+            .map_or_else(
+                || default_mount_point(&project.meta.name, "project", &mounts),
+                str::to_owned,
+            );
+        mounts.push(CardMount::new(project.id(), at, true));
+        mounts
     }
 
     /// Validate one `deck.yaml` mount against the ones before it; the
@@ -695,9 +732,6 @@ impl Decks {
         let at = normalize_mount_point(&m.at)?;
         if at == SELF_MOUNT {
             return Err(format!("`{SELF_MOUNT}` is the session's own deck"));
-        }
-        if at == PROJECT_MOUNT {
-            return Err(format!("`{PROJECT_MOUNT}` is the session's project"));
         }
         if self.get(&m.deck).is_none() {
             return Err(format!("no deck with id `{}`", m.deck));
@@ -845,10 +879,7 @@ impl Decks {
         let mut checked: Vec<CardMount> = Vec::new();
         for m in &meta.mounts {
             let at = self.check_mount(m, &checked).map_err(config_err)?;
-            checked.push(CardMount {
-                deck: m.deck.clone(),
-                at,
-            });
+            checked.push(CardMount::new(m.deck.clone(), at, false));
         }
         for (m, c) in meta.mounts.iter_mut().zip(checked) {
             m.at = c.at;

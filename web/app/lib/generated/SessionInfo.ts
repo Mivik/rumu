@@ -25,7 +25,7 @@ seen_at?: number | null,
  */
 assistant: string, 
 /**
- * The project deck of the main line (the deck mounted at
- * [`crate::PROJECT_MOUNT`]); `None` outside any project.
+ * The project deck of the main line (its mount marked
+ * [`CardMount::project`]); `None` outside any project.
  */
 project?: string, };
