@@ -34,11 +34,12 @@ const folded = computed(() => props.lines !== undefined && !expanded.value)
 const foldStyle = computed(() =>
   props.lines !== undefined && !expanded.value ? { maxHeight: `calc(1.55em * ${props.lines})` } : undefined,
 )
+const toggleLabel = computed(() => (expanded.value ? t('common.foldCommand') : t('common.unfoldCommand')))
 
 function measure(): void {
   const el = pre.value
   // Only meaningful while folded: an unfolded block is already showing
-  // everything up to its ceiling, which is what the toggle is for.
+  // everything, so whatever was measured when it was folded still stands.
   if (!el || !folded.value) return
   overflowing.value = el.scrollHeight - el.clientHeight > 2
 }
@@ -75,7 +76,42 @@ async function copy(): Promise<void> {
 
 <template>
   <div class="group flex items-start gap-1.5">
-    <span class="flex-none text-ink-3 select-none">$</span>
+    <!-- The prompt is the control: hovered (or focused), `$` becomes the
+         chevron that opens or folds the block. What a terminal would call
+         "there is more" is the faded last line of a folded command. -->
+    <div class="flex w-3.5 flex-none flex-col items-center self-stretch">
+      <button
+        v-if="overflowing"
+        type="button"
+        class="mark"
+        :title="toggleLabel"
+        :aria-label="toggleLabel"
+        :aria-expanded="expanded"
+        @click="toggle"
+      >
+        <span class="glyph chev">
+          <Icon :name="expanded ? 'chev-up' : 'chevron'" :size="12" />
+        </span>
+        <span class="glyph dollar">$</span>
+      </button>
+      <span v-else class="select-none text-ink-3">$</span>
+
+      <!-- Open: the command runs on down a rule, and the rule ends with the
+           way back — the top and the bottom of a long block both fold it. -->
+      <template v-if="expanded">
+        <span class="my-1 w-px flex-1 bg-line" aria-hidden="true"></span>
+        <button
+          type="button"
+          class="mark is-on"
+          :title="t('common.foldCommand')"
+          :aria-label="t('common.foldCommand')"
+          @click="toggle"
+        >
+          <span class="glyph chev"><Icon name="chev-up" :size="12" /></span>
+        </button>
+      </template>
+    </div>
+
     <pre
       ref="pre"
       class="shell min-w-0 flex-1"
@@ -83,28 +119,16 @@ async function copy(): Promise<void> {
       :style="foldStyle"
       v-html="highlightLine(command, 'bash')"
     ></pre>
-    <span class="flex flex-none items-start">
-      <button
-        v-if="overflowing"
-        type="button"
-        class="term-btn"
-        :title="expanded ? t('common.foldCommand') : t('common.unfoldCommand')"
-        :aria-label="expanded ? t('common.foldCommand') : t('common.unfoldCommand')"
-        :aria-expanded="expanded"
-        @click="toggle"
-      >
-        <Icon :name="expanded ? 'fold-v' : 'unfold-v'" :size="12" />
-      </button>
-      <button
-        type="button"
-        class="term-btn term-copy"
-        :title="t('common.copyCode')"
-        :aria-label="t('common.copyCode')"
-        @click="copy"
-      >
-        <Icon name="copy" :size="12" />
-      </button>
-    </span>
+
+    <button
+      type="button"
+      class="copy"
+      :title="t('common.copyCode')"
+      :aria-label="t('common.copyCode')"
+      @click="copy"
+    >
+      <Icon name="copy" :size="12" />
+    </button>
   </div>
 </template>
 
@@ -120,10 +144,12 @@ pre {
   word-break: break-word;
 }
 
-/* Folded: the ceiling is inline (it follows `lines`), and nothing scrolls —
-   the toggle is the way to see the rest. */
+/* Folded: the ceiling is inline (it follows `lines`), nothing scrolls, and
+   the last line fades out — the only cue, at three lines, that the command
+   goes on. */
 pre.folded {
   overflow: hidden;
+  mask-image: linear-gradient(to bottom, #000 62%, transparent);
 }
 
 /* Unfolded: as tall as it needs. The box it sits in owns the scrolling — a
@@ -134,30 +160,72 @@ pre.open {
   overflow: visible;
 }
 
-.term-btn {
+.mark {
+  display: grid;
+  place-items: center;
+  width: 100%;
+  padding: 0;
+  line-height: inherit;
+  color: var(--ink-3);
+  border-radius: 4px;
+  cursor: pointer;
+}
+
+.mark > .glyph {
+  grid-area: 1 / 1;
+  display: grid;
+  place-items: center;
+  transition: opacity 0.1s;
+}
+
+.mark > .chev {
+  opacity: 0;
+}
+
+.mark:hover > .dollar,
+.mark:focus-visible > .dollar {
+  opacity: 0;
+}
+
+.mark:hover > .chev,
+.mark:focus-visible > .chev,
+.mark.is-on > .chev {
+  opacity: 1;
+}
+
+.mark:hover > .chev {
+  color: var(--ink-2);
+}
+
+/* No hover to reveal the chevron with. */
+@media (hover: none) {
+  .mark > .chev {
+    opacity: 1;
+  }
+
+  .mark > .dollar {
+    opacity: 0;
+  }
+}
+
+.copy {
   flex: none;
   padding: 3px;
   border-radius: 4px;
   color: var(--ink-3);
+  opacity: 0;
   transition:
     opacity 0.1s,
-    background-color 0.1s,
-    color 0.1s;
+    background-color 0.1s;
 }
 
-.term-btn:hover {
+.group:hover .copy,
+.copy:focus-visible {
+  opacity: 1;
+}
+
+.copy:hover {
   background: var(--surface);
   color: var(--ink-2);
-}
-
-/* The unfolding toggle stays visible: on a touch screen there is no hover to
-   reveal it with. The copy button is quiet until asked for. */
-.term-copy {
-  opacity: 0;
-}
-
-.group:hover .term-copy,
-.term-copy:focus-visible {
-  opacity: 1;
 }
 </style>
