@@ -189,12 +189,12 @@ const prim = (s: CatPrim) => ({
   opacity: 0.32;
 }
 
-:global(html[data-theme='dark']) .cat-blush {
+html[data-theme='dark'] .cat-blush {
   fill: color-mix(in oklab, var(--brand) 55%, white);
   opacity: 0.4;
 }
 
-:global(html[data-theme='dark']) .cat-face {
+html[data-theme='dark'] .cat-face {
   display: inline;
   filter: drop-shadow(0 2px 3px rgb(0 0 0 / 40%));
 }

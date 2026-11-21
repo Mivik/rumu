@@ -151,7 +151,7 @@ const lastActive = computed(() => {
   box-shadow: 0 0 0 3px var(--surface);
 }
 
-:global(html[data-theme='dark']) .band {
+html[data-theme='dark'] .band {
   --k: 0.65;
 }
 </style>

@@ -7,9 +7,10 @@
  * Every color is a CSS var, and the dark ones live in one rule the app
  * switches on (`data-theme` on <html>: the user's choice, the system's
  * resolved); `@theme inline` maps them to Tailwind names — so templates
- * never use `dark:`. Tailwind's default colors, font sizes, radii and shadows are
- * cleared: only the names below exist (bg-surface, text-ink-2, text-meta,
- * rounded-card, shadow-soft …), which keeps one-off values out of components.
+ * never use `dark:`. Tailwind's default colors, font sizes, radii and
+ * shadows are cleared: only the names below exist (bg-surface, text-ink-2,
+ * text-meta, rounded-card, shadow-soft …), which keeps one-off values out
+ * of components.
  *
  * Type: Red Hat Text for UI and body text; Literata for knowledge headings,
  * paths and inline references; JetBrains Mono for code and tool I/O.
