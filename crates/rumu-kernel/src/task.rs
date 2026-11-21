@@ -229,11 +229,14 @@ impl Kernel {
 
     // ---- starting ----
 
-    /// Start a plugin tool as a background task.
+    /// Start a plugin tool as a background task. `anchor` is the main-line
+    /// call it hangs from: `call_id` itself, or a script's `code` call.
+    #[allow(clippy::too_many_arguments)]
     pub(crate) fn start_tool_task(
         self: &Arc<Self>,
         branch: &BranchId,
         session: &SessionId,
+        anchor: &str,
         call_id: &str,
         name: &str,
         args: Value,
@@ -250,7 +253,7 @@ impl Kernel {
         };
         let label = kind.label("");
         let (id, token) =
-            match self.create_task(session, branch, call_id, kind, args_summary, source.clone()) {
+            match self.create_task(session, branch, anchor, kind, args_summary, source.clone()) {
                 Ok(v) => v,
                 Err(e) => return Ok(ToolOutput::err(e.to_string())),
             };
@@ -378,12 +381,15 @@ impl Kernel {
     }
 
     /// Start a sub-agent as a background task. The agent permit is acquired
-    /// inside the task, so the model gets its id immediately.
+    /// inside the task, so the model gets its id immediately. `call_id` is
+    /// the main-line call; a script's agent also names its `inner_call`.
+    #[allow(clippy::too_many_arguments)]
     pub(crate) fn start_agent_task(
         self: &Arc<Self>,
         branch: &BranchId,
         session: &SessionId,
         call_id: &str,
+        inner_call: Option<&str>,
         task: String,
         inherit: rumu_core::Inherit,
         ask: crate::turn::ModelAsk,
@@ -406,12 +412,13 @@ impl Kernel {
         let task_id = id.clone();
         let owner = branch.clone();
         let fork_call = call_id.to_owned();
+        let inner_call = inner_call.map(str::to_owned);
         tokio::spawn(async move {
             let outcome = match kernel
                 .run_agent(
                     &owner,
                     &fork_call,
-                    None,
+                    inner_call.as_deref(),
                     &task,
                     inherit,
                     ask,

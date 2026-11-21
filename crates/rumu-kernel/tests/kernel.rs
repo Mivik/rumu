@@ -5307,34 +5307,62 @@ async fn restart_reports_a_lost_task_once() {
     assert_eq!(notes(&third).len(), 1, "reported once");
 }
 
-/// A plugin invoke (`code` script) may not ask for `background`.
+/// A plugin invoke (`code` script) with `background` starts a task: the
+/// script gets its id, and the result comes later as a note that wakes the
+/// branch.
 #[tokio::test]
-async fn background_from_plugin_invoke_is_refused() {
-    let plugin = Arc::new(script_host(&["plus"], vec![], noop_hooks(), plus_tool()));
-    let (kernel, _llm, _s, branch) = setup(
-        vec![plugin],
+async fn background_from_plugin_invoke_starts_a_task() {
+    let host = Arc::new(script_host(&[], vec![], noop_hooks(), noop_tools()));
+    let bg = Arc::new(background_plugin(
+        "bg",
+        &["bgwork"],
+        vec![],
+        noop_hooks(),
+        noop_tools(),
+    ));
+    let (kernel, _llm, session, branch) = setup(
+        vec![host, bg],
         vec![
             LlmResponse::calls(vec![ToolCall::new(
                 "c1",
                 "script",
-                json!({ "calls": [{ "name": "plus", "args": { "a": 1, "b": 2, "background": true } }] }),
+                json!({ "calls": [{ "name": "bgwork", "args": { "ms": 50, "out": "all done", "background": true } }] }),
             )]),
             LlmResponse::text("done"),
+            LlmResponse::text("woken up"),
         ],
     )
     .await;
+    kernel.set_wake_debounce(Duration::from_millis(10));
+    let mut rx = kernel.tap_pushes();
 
-    let (_, nodes, _) = run_turn(&kernel, &branch, "go").await;
+    let (_, nodes, _) = turn(&kernel, &branch, &mut rx, "go").await;
+    let tasks = kernel.tasks(&session).unwrap();
+    assert_eq!(tasks.len(), 1);
+    let id = tasks[0].id.clone();
+    assert_eq!(tasks[0].call_id, "c1", "hangs from the script's call");
     let (text, _) = result_text(&nodes, "c1");
     let rows: Value = serde_json::from_str(&text).unwrap();
-    assert_eq!(rows[0]["ok"], false);
+    assert_eq!(rows[0]["ok"], true, "{text}");
     assert!(
         rows[0]["text"]
             .as_str()
             .unwrap()
-            .contains("background is not available from a plugin invoke"),
+            .contains(&format!("started task {id}")),
         "{text}"
     );
+
+    let note = wait_push(
+        &mut rx,
+        |v| pushed_note_tag(v) == Some("task.done"),
+        "task completion note",
+    )
+    .await;
+    let note_text = pushed_note_text(&note).unwrap();
+    assert!(note_text.contains("all done"), "{note_text}");
+    let (done, seen) = collect_turn(&mut rx, &branch.0).await;
+    assert_eq!(done["method"], "turn.done");
+    assert_eq!(turn_starts(&seen, "wake"), 1, "{seen:?}");
 }
 
 /// A background task cannot make internal calls: `Cx::invoke` refuses.

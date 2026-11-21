@@ -715,6 +715,14 @@ impl Kernel {
                     .and_then(Value::as_bool)
                     .unwrap_or(name == "agent" && matches!(caller, Caller::Model));
                 let background_tool = self.tools.iter().any(|t| t.name == name && t.background);
+                // A script's call hangs from its enclosing `code` call: that
+                // is the main-line call a task or forked agent anchors to.
+                let (outer_call, inner_call) = match caller {
+                    Caller::Model => (call.call_id.as_str(), None),
+                    Caller::Plugin { parent_call, .. } => {
+                        (parent_call, Some(call.call_id.as_str()))
+                    }
+                };
                 let strip_background = |args: &mut Value| {
                     if let Some(obj) = args.as_object_mut() {
                         obj.remove("background");
@@ -729,10 +737,6 @@ impl Kernel {
                     ToolOutput::err(format!(
                         "tool `{name}` is not available from a plugin invoke"
                     ))
-                } else if wants_background && matches!(caller, Caller::Plugin { .. }) {
-                    // Scripts already have `Promise.all`; background tasks are
-                    // a model-facing tool affordance.
-                    ToolOutput::err("background is not available from a plugin invoke")
                 } else if name == "agent" {
                     // Kernel built-in (not routed to a plugin). The sub-agent
                     // owns its cancellation: the child branch's token is a
@@ -744,25 +748,15 @@ impl Kernel {
                     {
                         Err(e) => ToolOutput::err(e),
                         Ok((task, inherit, ask)) => {
-                            if wants_background && matches!(caller, Caller::Model) {
+                            if wants_background {
                                 match self.start_agent_task(
-                                    branch,
-                                    session,
-                                    &call.call_id,
-                                    task,
-                                    inherit,
-                                    ask,
+                                    branch, session, outer_call, inner_call, task, inherit, ask,
                                 ) {
                                     Ok(out) => out,
                                     Err(e) => ToolOutput::err(format!("agent failed: {e}")),
                                 }
                             } else {
-                                let (fork_call, inner_call) = match caller {
-                                    Caller::Model => (call.call_id.as_str(), None),
-                                    Caller::Plugin { parent_call, .. } => {
-                                        (parent_call, Some(call.call_id.as_str()))
-                                    }
-                                };
+                                let (fork_call, inner_call) = (outer_call, inner_call);
                                 match Box::pin(self.run_agent(
                                     branch, fork_call, inner_call, &task, inherit, ask, token, None,
                                 ))
@@ -788,10 +782,11 @@ impl Kernel {
                     if background_tool {
                         strip_background(&mut args);
                     }
-                    if wants_background && background_tool && matches!(caller, Caller::Model) {
+                    if wants_background && background_tool {
                         match self.start_tool_task(
                             branch,
                             session,
+                            outer_call,
                             &call.call_id,
                             &name,
                             args,

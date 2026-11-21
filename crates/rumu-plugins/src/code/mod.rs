@@ -67,7 +67,10 @@ truncated }`, also for a non-zero exit), or to `{ text, attachments }` when the 
 Attachments reach you only through `attach(img)` (`attach(result)` shows all of a result's \
 attachments); they appear as `[Image #N]` anchors in the output.
 Tools marked (parallel) run concurrently under `Promise.all`; other calls run one at a time, in \
-order. Calls still running when the script ends are cancelled. A tool failure throws `ToolError` \
+order. Calls still running when the script ends are cancelled. `background: true` (on tools that \
+take it) starts a task instead: the call resolves at once to the task's id, the task outlives the \
+script, and its result never reaches the script — it comes later as a note to this conversation. \
+Without it, a script's `agent` call waits for the sub-agent's summary. A tool failure throws `ToolError` \
 (blocked calls throw `BlockedError`, a subclass) with `message` = the output text / block reason \
 and `tool` = the name; uncaught, the script fails and keeps its output so far. Output beyond \
 `max_output` characters keeps its start and end.";
