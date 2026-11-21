@@ -137,7 +137,13 @@ to download, write it to a file (usually in \
 `@scratch`) and `show` it; `show` it again after a change for a new version. HTML runs sandboxed \
 with no network: inline its scripts, styles and images. To put an image in your reply itself, \
 write `![alt](<address>)` with the address of one already in the conversation: a `show`n file, \
-or an attachment's `@scratch:.inbox/…` copy; any other address shows as a link.\n\n\
+or an attachment's `@scratch:.inbox/…` copy; any other address shows as a link. For something \
+interactive in the reply itself (a chart, a slider, a small calculator), write a ```widget \
+fence holding an HTML fragment: the web client runs it in place, sandboxed, as wide as the reply \
+and as tall as its content, the page's colors as CSS variables (`--ink`, `--ink-2`, `--line`, \
+`--surface-2`, `--brand`…). Scripts and styles may load from cdn.jsdelivr.net, \
+cdnjs.cloudflare.com and unpkg.com, nothing else from the network; `rumu.prompt(text)` puts \
+text in the user's message box for them to send. The user sees the widget, not its source.\n\n\
 `@rumu` holds rumu's own data as paths (no bash): `list @rumu:/` shows what is there, and \
 `list` on any of its paths says what it holds, what may be written and what asks the user, and \
 the actions `invoke` runs on it. Its cards (`@rumu:/cards/<mount>/<path>`) are your memory: \

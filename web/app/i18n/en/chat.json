@@ -212,6 +212,10 @@
     "loadFailed": "Couldn't load this version",
     "openFailed": "Couldn't open {path}"
   },
+  "widget": {
+    "title": "Widget",
+    "drawing": "Drawing a widget…"
+  },
   "agentView": {
     "title": "Sub-agent",
     "back": "Parent sub-agent",

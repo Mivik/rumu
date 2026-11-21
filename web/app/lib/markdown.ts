@@ -1,4 +1,5 @@
-// Markdown rendering: marked + DOMPurify, fences highlighted by highlight.js.
+// Markdown rendering: marked + DOMPurify, fences highlighted by highlight.js;
+// a ```widget fence is drawn as a sandboxed page instead (lib/widgets.ts).
 //
 // Link rewriting happens on the HTML string *before* DOMPurify (it strips
 // unknown-scheme hrefs): workspace addresses (`@rumu:`, `@scratch:`) in
@@ -23,6 +24,7 @@ import { shallowRef } from 'vue'
 import { t } from '../i18n'
 import { state, type LightboxImage } from './state/state'
 import { INTERNAL_WORKSPACE, SCRATCH_WORKSPACE } from './types'
+import { isWidgetFence, registerWidget } from './widgets'
 
 /** One chunk per grammar, fetched on first use. Core stays in the entry
  * chunk: it's small, and every highlight needs it anyway. */
@@ -162,6 +164,21 @@ export function langForPath(path: string): string {
   return ALIASES[ext] ?? ext
 }
 
+/** Whether a fence's last line closes it: one still streaming does not. */
+export function fenceClosed(raw: string): boolean {
+  const lines = raw.trimEnd().split('\n')
+  const fence = /^ {0,3}(`{3,}|~{3,})/.exec(lines[0]!)?.[1]
+  if (!fence) return true
+  const close = new RegExp(`^ {0,3}${fence[0]}{${fence.length},}[ \\t]*$`)
+  return lines.length > 1 && close.test(lines.at(-1)!)
+}
+
+/** A widget fence (lib/widgets.ts): drawn once it closes. */
+function renderWidget(text: string, raw: string): string {
+  if (!fenceClosed(raw)) return `<div class="md-widget-pending">${escapeHtml(t('chat.widget.drawing'))}</div>`
+  return text.trim() ? `<rumu-widget class="md-widget" data-key="${registerWidget(text)}"></rumu-widget>` : ''
+}
+
 function renderCode(text: string, info: string | undefined): string {
   // `rust title="…"`, `ts{1,5}` → the leading word.
   const raw = info?.trim().split(/\s+/)[0]?.replace(/\{.*$/, '').toLowerCase() ?? ''
@@ -173,7 +190,11 @@ marked.setOptions({ gfm: true })
 // `**加粗。**正文`: CommonMark won't close emphasis after CJK punctuation
 // when a CJK letter follows.
 marked.use(markedCjkFriendly())
-marked.use({ renderer: { code: ({ text, lang }) => renderCode(text, lang) } })
+marked.use({
+  renderer: {
+    code: ({ text, lang, raw }) => (isWidgetFence(lang) ? renderWidget(text, raw) : renderCode(text, lang)),
+  },
+})
 
 // ---- math: KaTeX, code-split like the grammars. Until it lands a formula
 // renders as its escaped source, then re-renders (`katexVersion`).
@@ -457,5 +478,5 @@ export function renderMarkdown(
     const title = rest.includes(' title=') ? '' : ` title="${rawHref}"`
     return `<a href="#" ${attrs}${title}${rest}>`
   })
-  return DOMPurify.sanitize(linked)
+  return DOMPurify.sanitize(linked, { ADD_TAGS: ['rumu-widget'] })
 }

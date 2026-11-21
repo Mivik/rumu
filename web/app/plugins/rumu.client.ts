@@ -9,6 +9,7 @@ import { startApp } from '../lib/store'
 import { openLightbox, toast } from '../lib/state/ui'
 import { checkUpdate, watchUpdates } from '../lib/update'
 import { copyText } from '../lib/util'
+import { installWidgets } from '../lib/widgets'
 
 /** Copy a fence's source; the button acknowledges inline for a moment. */
 async function copyCode(btn: HTMLButtonElement): Promise<void> {
@@ -41,6 +42,7 @@ export default defineNuxtPlugin(() => {
     }
   })
   startApp()
+  installWidgets()
 
   // A reconnection is often a server restart, i.e. maybe a new build.
   watchUpdates(useRuntimeConfig().app.buildId)

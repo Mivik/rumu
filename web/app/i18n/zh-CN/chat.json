@@ -212,6 +212,10 @@
     "loadFailed": "无法加载此版本",
     "openFailed": "无法打开 {path}"
   },
+  "widget": {
+    "title": "小组件",
+    "drawing": "正在绘制小组件…"
+  },
   "agentView": {
     "title": "子代理",
     "back": "返回上级子代理",

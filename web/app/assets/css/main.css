@@ -1150,6 +1150,30 @@
     margin: 0;
   }
 
+  /* ---- a widget (lib/widgets.ts): its frame spans the column, as tall as
+   * its page reports. ---- */
+
+  .md .md-widget {
+    display: block;
+    margin: 0.85em 0;
+  }
+
+  .md .md-widget > iframe {
+    display: block;
+    width: 100%;
+    border: 0;
+    background: transparent;
+  }
+
+  .md .md-widget-pending {
+    margin: 0.85em 0;
+    padding: 10px 12px;
+    border: 1px dashed var(--line);
+    border-radius: var(--radius-control);
+    color: var(--ink-3);
+    font-size: var(--text-meta);
+  }
+
   .md-copy {
     position: absolute;
     top: 6px;

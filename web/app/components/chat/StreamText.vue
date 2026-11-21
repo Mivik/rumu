@@ -6,8 +6,9 @@
 import { marked, type Tokens } from 'marked'
 import { onBeforeUnmount, onMounted, ref, watch } from 'vue'
 import { useBranchView } from '../../lib/store'
-import { assetsVersion, renderMarkdown } from '../../lib/markdown'
+import { assetsVersion, fenceClosed, renderMarkdown } from '../../lib/markdown'
 import { imagesOnPath, pathImage } from '../../lib/artifacts'
+import { isWidgetFence } from '../../lib/widgets'
 
 const view = useBranchView()
 const el = ref<HTMLElement | null>(null)
@@ -67,8 +68,13 @@ function draw(text: string): void {
 
   for (const n of tail) n.remove()
   open = null
+  // A widget is kept as soon as its fence closes: drawing it again would
+  // reload its page on every update.
+  const widget = tokens.findLastIndex(
+    (tk) => tk.type === 'code' && isWidgetFence((tk as Tokens.Code).lang) && fenceClosed(tk.raw),
+  )
   const done = tokens
-    .slice(0, blocks.at(-2) ?? 0)
+    .slice(0, Math.max(blocks.at(-2) ?? 0, widget + 1))
     .map((tk) => tk.raw)
     .join('')
   if (done && rest.startsWith(done)) {
