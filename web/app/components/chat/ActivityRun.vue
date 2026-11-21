@@ -8,14 +8,16 @@
 // took:
 //   Worked for 3m 12s · 27 calls · 1 error [blocked] ›
 // (a lone call names itself instead: "read store.ts"). Folded or not, what
-// the run changed stands outside the fold — each edited file as an EditCard,
-// unless the settings fold them too — and so do the sub-agents it started,
-// as AgentCards. How much starts open is the settings' work view
+// the run changed stands outside the fold — an EditList, an EditCard each,
+// past a few the rest behind "N more edits"
+// if the settings limit them, unless they fold them too — and so do the sub-agents
+// it started, as AgentCards. How much starts open is the settings' work view
 // (lib/state/appearance). Recall and catalog go with
 // every turn, so neither shows on the line; a run without calls names its
 // thinking ("Thought for 2s"), or its recall / catalog when that is all.
 // Opened, the steps show in order under a hairline: the catalog's cards,
-// each thought, each run of calls as a ToolList box, each edit as its card.
+// each thought, each run of calls as a ToolList box, each stretch of edits
+// as an EditList (never limited).
 // A bare thought — no catalog, no calls — keeps its own disclosure
 // (ThoughtStep).
 import { computed, nextTick, onBeforeUnmount, ref, watch } from 'vue'
@@ -37,7 +39,7 @@ import { vEnter } from '../../lib/motion'
 import Icon from '../ui/Icon.vue'
 import AgentCard from './AgentCard.vue'
 import CatalogList from './CatalogList.vue'
-import EditCard from './EditCard.vue'
+import EditList from './EditList.vue'
 import RecallList from './RecallList.vue'
 import RunningTools from './RunningTools.vue'
 import ThoughtStep from './ThoughtStep.vue'
@@ -160,11 +162,12 @@ const runningAgents = computed(() => running.value?.calls.filter((c) => c.call.n
 const summaryTitle = computed(() => views.value.map(toolRowTitle).join('\n'))
 
 /** The opened body, in order: a tools step splits around its edits, which
- *  show as cards between the rows of the calls before and after them. */
+ *  show as cards between the rows of the calls before and after them, a
+ *  stretch of them with no call between in one box. */
 type Block =
   | { kind: 'step'; key: string; step: ActivityStep }
   | { kind: 'rows'; key: string; rows: ToolRowInfo[] }
-  | { kind: 'edit'; key: string; view: ToolRowView }
+  | { kind: 'edits'; key: string; views: ToolRowView[] }
 const blocks = computed<Block[]>(() => {
   const out: Block[] = []
   for (const s of props.steps) {
@@ -183,9 +186,11 @@ const blocks = computed<Block[]>(() => {
       // are in its call list.
       const edits = isFileEdit(v) ? [v] : isRowOpen(v, work.value) ? [] : fileEditsOf(row)
       if (edits[0] !== v) rows.push(row)
+      if (edits.length) flush()
       for (const e of edits) {
-        flush()
-        out.push({ kind: 'edit', key: `edit:${e.row.result.id}`, view: e })
+        const last = out[out.length - 1]
+        if (last?.kind === 'edits') last.views.push(e)
+        else out.push({ kind: 'edits', key: `edits:${e.row.result.id}`, views: [e] })
       }
     }
     flush()
@@ -267,10 +272,10 @@ function foldFromFoot(): void {
 
     <div v-if="open" class="activity-body reveal">
       <template v-for="b in blocks" :key="b.key">
-        <EditCard
-          v-if="b.kind === 'edit'"
+        <EditList
+          v-if="b.kind === 'edits'"
           v-enter="revealed.has(b.key) ? false : 'enter-fade'"
-          :view="b.view"
+          :views="b.views"
         />
         <ToolList
           v-else-if="b.kind === 'rows'"
@@ -312,7 +317,7 @@ function foldFromFoot(): void {
     <!-- folded, what it changed (unless the settings fold it too) and what
          still runs stay in view -->
     <div v-else-if="outsideEdits.length || running" class="mt-2 flex w-full flex-col gap-2">
-      <EditCard v-for="v in outsideEdits" :key="v.row.result.id" :view="v" />
+      <EditList v-if="outsideEdits.length" :views="outsideEdits" :limit="work.limit_edits" />
       <RunningTools v-if="running" :step="running" />
     </div>
     <!-- the sub-agents it started stand outside the fold -->

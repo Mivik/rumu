@@ -128,6 +128,7 @@
   "work_edits": "文件修改",
   "work_edits_folded": "收起",
   "work_edits_open": "展开",
+  "work_limit_edits": "限制修改数量",
   "preview": "预览",
   "preview_running": "进行中",
   "preview_done": "已完成",
