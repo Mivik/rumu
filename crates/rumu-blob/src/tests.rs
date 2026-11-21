@@ -264,13 +264,13 @@ fn gc_keeps_live_and_recent_blobs() {
 
     // Within the grace period nothing goes.
     assert_eq!(blobs.gc(&refs, Duration::from_secs(3600)).unwrap(), 0);
-    assert!(blobs.contains(&orphan));
+    assert!(blobs.get(&orphan).is_ok());
 
     // Past it, the orphan and the temp file go; the live blob and files
     // that are not blobs stay.
     assert_eq!(blobs.gc(&refs, Duration::ZERO).unwrap(), 2);
-    assert!(blobs.contains(&live));
-    assert!(!blobs.contains(&orphan));
+    assert!(blobs.get(&live).is_ok());
+    assert!(matches!(blobs.get(&orphan), Err(Error::NotFound(_))));
     assert!(dir.join("unrelated").exists());
     fs::remove_dir_all(&dir).ok();
 }

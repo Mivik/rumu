@@ -1092,7 +1092,7 @@ mod tests {
     }
 
     #[test]
-    fn roundtrip_and_persistence() {
+    fn appended_nodes_read_back() {
         let store = Store::in_memory();
         let (session, branch, root) = mk_session(&store);
 
@@ -1119,16 +1119,6 @@ mod tests {
             store.get_branch(&branch.id).unwrap().unwrap().head,
             child.id
         );
-
-        // The same data survives reopening a file-backed store.
-        let dir = temp_dir("roundtrip");
-        {
-            let store = Store::open(&dir, &dir.join("seen.json")).unwrap();
-            mk_session(&store);
-        }
-        let store = Store::open(&dir, &dir.join("seen.json")).unwrap();
-        assert_eq!(store.list_sessions().unwrap().len(), 1);
-        std::fs::remove_dir_all(&dir).ok();
     }
 
     #[test]

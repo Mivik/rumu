@@ -565,7 +565,6 @@ mod tests {
             (json!("prompt"), "bare string"),
             (json!(true), "map"),
             (json!({"toolz": "bash"}), "unknown field"),
-            (json!({"tags": "infra"}), "unknown field"),
             (json!({"cmd": {"rex": "x"}}), "unknown operator"),
             (json!({"cmd": {"eq": 3}}), "expects a string"),
             (json!({"cmd": {"re": "("}}), "invalid regex"),

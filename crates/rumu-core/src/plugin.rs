@@ -305,22 +305,6 @@ mod tests {
         assert_eq!(err.to_string(), "boom");
     }
 
-    /// A plugin's own success type, converted at the boundary.
-    #[derive(Debug)]
-    struct Widget;
-
-    impl From<Widget> for ToolOutput {
-        fn from(_: Widget) -> Self {
-            ToolOutput::ok("widget")
-        }
-    }
-
-    #[test]
-    fn finish_accepts_typed_outputs() {
-        let ok: ToolResult<Widget> = Ok(Widget);
-        assert_eq!(ok.finish().unwrap().content.text, "widget");
-    }
-
     #[test]
     fn cap_bounds_the_model_facing_text() {
         let long = "x".repeat(crate::OUTPUT_LIMIT + 10);

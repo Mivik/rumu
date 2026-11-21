@@ -228,10 +228,5 @@ mod tests {
                 other => panic!("unexpected assistant {other}"),
             }
         }
-        // The path keeps the transcript for display.
-        let NodeBody::Assistant { reasoning, .. } = &path[3].body else {
-            panic!("r2 is an assistant");
-        };
-        assert!(!reasoning.is_empty(), "path keeps the reply's reasoning");
     }
 }

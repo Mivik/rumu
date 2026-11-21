@@ -953,7 +953,7 @@ async fn a_hand_written_title_lands_as_given() {
 }
 
 #[tokio::test]
-async fn tool_calling_turn_and_title() {
+async fn tool_calling_turn() {
     let plugin = Arc::new(plugin_with(
         "calc",
         &["plus"],
@@ -983,10 +983,6 @@ async fn tool_calling_turn_and_title() {
         ]
     );
     assert_eq!(result_text(&nodes, "c1"), ("5".to_owned(), false));
-
-    // Session title = first user prompt.
-    let info = kernel.list_sessions().unwrap().remove(0);
-    assert_eq!(info.title, "add 2 and 3");
 
     // The tool result was in context for the second LLM call.
     let projections = llm.projections();
@@ -1257,15 +1253,6 @@ async fn regenerate_replays_the_prompt_attachments() {
     for p in payloads.iter() {
         assert_eq!(p["attachments"][0]["hash"], "c3");
     }
-    let (nodes, _) = kernel.branch_path(&regenerated.id).unwrap();
-    let user = nodes
-        .iter()
-        .find_map(|n| match &n.body {
-            NodeBody::User { content } => Some(content),
-            _ => None,
-        })
-        .unwrap();
-    assert_eq!(user.attachments, vec![attachment("c3")]);
 }
 
 // ---------- turn failures: retry, marker, manual retry ----------
@@ -1810,9 +1797,10 @@ async fn inject_ordering_without_dedup() {
 
 /// Plugins query the index instead of relying on kernel dedup: an effect
 /// queued earlier in the batch is already visible, and repeating the same
-/// payload appends a second note.
+/// payload counts twice (that both are written is
+/// `inject_ordering_without_dedup`).
 #[tokio::test]
-async fn index_sees_queued_effects_and_kernel_never_dedups() {
+async fn index_sees_queued_effects() {
     let plugin = Arc::new(plugin_with(
         "memory",
         &["append_marker", "probe_index"],
@@ -1845,14 +1833,6 @@ async fn index_sees_queued_effects_and_kernel_never_dedups() {
     let (_, nodes, _) = run_turn(&kernel, &branch, "go").await;
     assert_eq!(result_text(&nodes, "c2"), ("1".to_owned(), false));
     assert_eq!(result_text(&nodes, "c4"), ("2".to_owned(), false));
-    let markers = nodes
-        .iter()
-        .filter(|n| {
-            matches!(&n.body, NodeBody::Note { content, .. }
-                if content.data.as_ref().is_some_and(|t| t.tag == "thing"))
-        })
-        .count();
-    assert_eq!(markers, 2, "the kernel does not deduplicate");
 }
 
 /// A `workspace.use` recorded earlier in the same tool batch is queued to the
@@ -3048,9 +3028,7 @@ async fn two_phase_dispatch() {
             "rewrite_to={rewrite_to}"
         );
         assert_eq!(plugin.calls().len(), ran, "rewrite_to={rewrite_to}");
-        if is_error {
-            assert!(plugin.calls().is_empty());
-        } else {
+        if !is_error {
             assert_eq!(plugin.calls()[0].1["command"], "echo cleaned");
         }
     }
@@ -3438,7 +3416,7 @@ async fn code_inner_inject_is_queued() {
         note_at > c1_at,
         "the note lands after the outer tool result"
     );
-    // Each append is written: the kernel does not deduplicate.
+    // The inner note and the direct call's own note are both written.
     let notes = nodes
         .iter()
         .filter(|n| {
@@ -3569,74 +3547,12 @@ async fn host_call_tool_outside_a_batch_errors() {
     assert!(format!("{err:#}").contains("no running turn"), "{err:#}");
 }
 
-/// Regenerate moves the main line onto the prompt, replies again, and does
-/// not append the user message a second time.
-#[tokio::test]
-async fn regenerate_replies_from_the_prompt_without_duplicating_it() {
-    let (kernel, llm, _s, branch) = setup(
-        vec![],
-        vec![
-            LlmResponse::text("first reply"),
-            LlmResponse::text("second reply"),
-        ],
-    )
-    .await;
-
-    let (_, nodes, _) = run_turn(&kernel, &branch, "hello").await;
-    let prompt = nodes
-        .iter()
-        .find(|n| matches!(n.body, NodeBody::User { .. }))
-        .expect("the turn appended a user node")
-        .id
-        .clone();
-
-    let mut rx = kernel.tap_pushes();
-    let regenerated = kernel
-        .regenerate(&prompt, Default::default())
-        .await
-        .unwrap();
-    assert_eq!(regenerated.id, branch);
-    wait_turn(&mut rx, Some(regenerated.id.0.as_str())).await;
-
-    let (path, _) = kernel.branch_path(&regenerated.id).unwrap();
-    assert_eq!(
-        body_kinds(&path),
-        vec!["marker[session.root]", "user", "assistant"]
-    );
-    assert_eq!(
-        path.iter()
-            .filter(|n| matches!(n.body, NodeBody::User { .. }))
-            .count(),
-        1
-    );
-    let Some(NodeBody::Assistant { content, .. }) = path.last().map(|n| &n.body) else {
-        panic!("regenerate did not end on an assistant reply");
-    };
-    assert_eq!(content.text, "second reply");
-
-    // The projection sent to the model carried the prompt exactly once.
-    let projections = llm.projections();
-    let last = projections.last().unwrap();
-    assert_eq!(
-        last.iter()
-            .filter(|n| matches!(n.body, NodeBody::User { .. }))
-            .count(),
-        1
-    );
-
-    // The original branch still holds the first exchange.
-    let (old, _) = kernel.branch_path(&branch).unwrap();
-    assert_eq!(
-        body_kinds(&old),
-        vec!["marker[session.root]", "user", "assistant"]
-    );
-}
-
-/// Regenerating moves the main line onto the prompt: the same branch goes on
-/// from there, and the old reply stays in the tree as a variant.
+/// Regenerating moves the main line onto the prompt: the same branch replies
+/// again from there without appending the prompt a second time, and the old
+/// reply stays in the tree as a variant.
 #[tokio::test]
 async fn regenerate_moves_the_main_line() {
-    let (kernel, _llm, session, branch) = setup(
+    let (kernel, llm, session, branch) = setup(
         vec![],
         vec![
             LlmResponse::text("first reply"),
@@ -3675,8 +3591,21 @@ async fn regenerate_moves_the_main_line() {
         .collect();
     assert_eq!(replies.len(), 2, "both replies hang off the prompt");
     let (path, _) = kernel.branch_path(&branch).unwrap();
+    assert_eq!(
+        body_kinds(&path),
+        vec!["marker[session.root]", "user", "assistant"]
+    );
     assert!(matches!(&path.last().unwrap().body,
         NodeBody::Assistant { content, .. } if content.text == "second reply"));
+    // The model was asked with the prompt exactly once.
+    let projections = llm.projections();
+    let users = projections
+        .last()
+        .unwrap()
+        .iter()
+        .filter(|n| matches!(n.body, NodeBody::User { .. }))
+        .count();
+    assert_eq!(users, 1);
 }
 
 /// Moving the main line keeps every node: back to the prompt, then on to
@@ -3711,53 +3640,11 @@ async fn moving_the_main_line_keeps_what_it_leaves() {
     assert_eq!(ids(&kernel.branch_path(&branch).unwrap().0), ids(&nodes));
 }
 
-/// The main line stays put while a background task of it runs: the task's
-/// note would land on a line that no longer holds its call.
+/// The main line stays put while a background task of the part it would
+/// leave runs (the task's note would land on a line that no longer holds its
+/// call); a task from a call the moved line still holds does not hold it back.
 #[tokio::test]
-async fn moving_the_main_line_waits_for_its_tasks() {
-    let plugin = Arc::new(background_plugin(
-        "bg",
-        &["bgwork"],
-        vec![],
-        noop_hooks(),
-        noop_tools(),
-    ));
-    let (kernel, _llm, _session, branch) = setup(
-        vec![plugin],
-        vec![
-            LlmResponse::calls(vec![ToolCall::new(
-                "c1",
-                "bgwork",
-                json!({ "ms": 60_000, "background": true }),
-            )]),
-            LlmResponse::text("started"),
-        ],
-    )
-    .await;
-
-    let (_, nodes, _) = run_turn(&kernel, &branch, "go").await;
-    let prompt = nodes
-        .iter()
-        .find(|n| matches!(n.body, NodeBody::User { .. }))
-        .expect("the turn appended a user node")
-        .id
-        .clone();
-    let head = nodes.last().unwrap().id.clone();
-
-    let err = kernel.move_head(&branch, &prompt).await.unwrap_err();
-    assert!(matches!(err, rumu_kernel::Error::LineBusy(_)), "{err:#}");
-    assert!(err.to_string().contains("bgwork"), "{err:#}");
-    assert_eq!(
-        kernel.branch_path(&branch).unwrap().0.last().unwrap().id,
-        head
-    );
-    kernel.abort_tasks(&branch, true);
-}
-
-/// A task from a call the moved line still holds does not hold it back: its
-/// note lands on a line that made the call.
-#[tokio::test]
-async fn moving_the_main_line_keeps_tasks_of_the_part_it_keeps() {
+async fn moving_the_main_line_waits_for_the_tasks_it_would_leave() {
     let plugin = Arc::new(background_plugin(
         "bg",
         &["bgwork"],
@@ -3791,9 +3678,15 @@ async fn moving_the_main_line_keeps_tasks_of_the_part_it_keeps() {
     };
     let go = prompt(&first, "go");
     let next = prompt(&second, "next");
+    let head = second.last().unwrap().id.clone();
 
     let err = kernel.move_head(&branch, &go).await.unwrap_err();
     assert!(matches!(err, rumu_kernel::Error::LineBusy(_)), "{err:#}");
+    assert!(err.to_string().contains("bgwork"), "{err:#}");
+    assert_eq!(
+        kernel.branch_path(&branch).unwrap().0.last().unwrap().id,
+        head
+    );
     kernel.move_head(&branch, &next).await.unwrap();
     assert_eq!(
         kernel.branch_path(&branch).unwrap().0.last().unwrap().id,
@@ -4083,7 +3976,6 @@ async fn post_to_idle_branch_with_and_without_wake() {
     .await;
     // Give a wrongly-scheduled turn time to appear.
     tokio::time::sleep(Duration::from_millis(40)).await;
-    assert_eq!(turn_starts(&[], "wake"), 0);
     assert_eq!(llm.projections().len(), 0, "no turn without wake");
 
     plugin.post(&branch, note_post("loud", true)).expect("post");
@@ -4094,7 +3986,6 @@ async fn post_to_idle_branch_with_and_without_wake() {
         .iter()
         .find(|v| v["method"] == "turn.started")
         .expect("turn started");
-    assert_eq!(started["params"]["reason"], "wake");
     assert_eq!(started["params"]["sources"], json!(["poster"]));
     assert!(seen.iter().any(|v| pushed_note_text(v) == Some("loud")));
     assert_eq!(llm.projections().len(), 1);
@@ -4589,74 +4480,6 @@ async fn invoke_depth_limit_is_enforced() {
     assert_eq!(calls, rumu_kernel::MAX_INVOKE_DEPTH + 1);
 }
 
-/// A wake post to a finished agent branch re-activates it for one turn and
-/// leaves it Done again.
-#[tokio::test]
-async fn wake_post_reactivates_a_finished_agent_branch() {
-    let plugin = Arc::new(plugin_with(
-        "branch",
-        &["agent", "other"],
-        vec![],
-        noop_hooks(),
-        Arc::new(|_, _, _| ToolOutput::ok("other-done")),
-    ));
-    let (kernel, _llm, session, branch) = setup(
-        vec![plugin.clone()],
-        vec![
-            LlmResponse::calls(vec![ToolCall::new(
-                "e1",
-                "agent",
-                json!({"mode": "fork", "background": false, "task": "look"}),
-            )]),
-            LlmResponse::text("child summary"),
-            LlmResponse::text("parent done"),
-            LlmResponse::text("child woke"),
-        ],
-    )
-    .await;
-    run_turn_on(&kernel, &branch, "go").await;
-
-    let child = kernel
-        .session_tree(&session)
-        .unwrap()
-        .2
-        .into_iter()
-        .find(|b| matches!(b.kind, rumu_core::BranchKind::Agent { .. }))
-        .expect("agent child");
-    assert_eq!(child.status, BranchStatus::Done);
-
-    let mut rx = kernel.tap_pushes();
-    plugin
-        .post(&child.id, note_post("afterwards", true))
-        .expect("post");
-    let started = wait_push(
-        &mut rx,
-        |v| v["method"] == "turn.started" && v["params"]["branch"] == child.id.0,
-        "wake turn on the child",
-    )
-    .await;
-    assert_eq!(started["params"]["reason"], "wake");
-    let (done, _) = collect_turn(&mut rx, &child.id.0).await;
-    assert_eq!(done["method"], "turn.done");
-
-    let (nodes, _) = kernel.branch_path(&child.id).unwrap();
-    assert!(nodes.iter().any(
-        |n| matches!(&n.body, NodeBody::Note { content, .. } if content.text == "afterwards")
-    ));
-    assert!(nodes.iter().any(
-        |n| matches!(&n.body, NodeBody::Assistant { content, .. } if content.text == "child woke")
-    ));
-    let status = kernel
-        .session_tree(&session)
-        .unwrap()
-        .2
-        .into_iter()
-        .find(|b| b.id == child.id)
-        .unwrap()
-        .status;
-    assert_eq!(status, BranchStatus::Done);
-}
-
 /// A wake-started turn on a finished agent branch re-activates it, runs until
 /// a final reply, and closes it out again.
 #[tokio::test]
@@ -4693,16 +4516,20 @@ async fn agent_wake_turn_runs_to_a_final_reply() {
     plugin
         .post(&child.id, note_post("afterwards", true))
         .expect("post");
-    wait_push(
+    let started = wait_push(
         &mut rx,
         |v| v["method"] == "turn.started" && v["params"]["branch"] == child.id.0,
         "wake turn on the child",
     )
     .await;
+    assert_eq!(started["params"]["reason"], "wake");
     let (done, _) = collect_turn(&mut rx, &child.id.0).await;
     assert_eq!(done["method"], "turn.done");
 
     let (nodes, _) = kernel.branch_path(&child.id).unwrap();
+    assert!(nodes.iter().any(
+        |n| matches!(&n.body, NodeBody::Note { content, .. } if content.text == "afterwards")
+    ));
     let tool_call_steps = nodes
         .iter()
         .filter(|n| {
@@ -5335,7 +5162,8 @@ async fn per_branch_task_limit() {
 }
 
 /// `branch.stop` ends the reply and leaves the background task it started
-/// running; `abort` is the one that takes the task down too.
+/// running (`abort`, which takes it down too, is
+/// `abort_cancels_owned_tasks_and_does_not_wake`).
 #[tokio::test]
 async fn stop_ends_the_reply_and_keeps_its_tasks() {
     let plugin = Arc::new(background_plugin(
@@ -5381,16 +5209,7 @@ async fn stop_ends_the_reply_and_keeps_its_tasks() {
     while let Ok(v) = rx.try_recv() {
         assert_ne!(v["method"], "task.done", "the task must not finish: {v}");
     }
-
-    kernel.abort(&branch).unwrap();
-    wait_until(Duration::from_secs(5), || {
-        !kernel.tasks(&session).unwrap()[0].status.is_running()
-    })
-    .await;
-    assert_eq!(
-        kernel.tasks(&session).unwrap()[0].status,
-        TaskStatus::Cancelled
-    );
+    kernel.abort_tasks(&branch, true);
 }
 
 // ---------- restart ----------

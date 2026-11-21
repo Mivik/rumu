@@ -506,15 +506,6 @@ impl Author {
         }
     }
 
-    pub fn for_deck(deck: &Deck) -> Self {
-        Self {
-            id: deck.meta.id.clone(),
-            name: deck.meta.name.clone(),
-            session: None,
-            node: None,
-        }
-    }
-
     pub fn git(&self) -> GitAuthor {
         GitAuthor {
             name: self.name.clone(),

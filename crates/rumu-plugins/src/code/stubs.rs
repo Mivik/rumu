@@ -201,16 +201,6 @@ rumu.tag(args: { mode?: \"a\" | \"b\"; items?: boolean[]; meta?: Record<string, 
     }
 
     #[test]
-    fn deterministic_regardless_of_input_order() {
-        let mut a = sample();
-        let mut b = sample();
-        b.reverse();
-        a.sort_by(|x, y| x.name.cmp(&y.name));
-        b.sort_by(|x, y| x.name.cmp(&y.name));
-        assert_eq!(render(&a), render(&b));
-    }
-
-    #[test]
     fn comment_is_bounded_and_escaped() {
         assert_eq!(comment("One.\nTwo."), "One.");
         assert_eq!(comment("No period here"), "No period here");

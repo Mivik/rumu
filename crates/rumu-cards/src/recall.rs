@@ -324,18 +324,6 @@ mod tests {
     }
 
     #[test]
-    fn keywords_are_a_string_or_a_list() {
-        let cards = cards(&[
-            ("one", "---\nkeywords: k8s\n---\nbody\n"),
-            ("many", "---\nkeywords: [k8s, cluster]\n---\nbody\n"),
-            ("other", "---\ndescription: something\n---\nbody\n"),
-        ]);
-        assert_eq!(rank(&cards, "k8s", 10).len(), 2);
-        // `cluster` only names `many`.
-        assert_eq!(ids(rank(&cards, "cluster", 10)), ["many"]);
-    }
-
-    #[test]
     fn cjk_runs_match_by_bigram() {
         let cards = cards(&[("proxy", "---\ndescription: 代理服务器配置\n---\n正文\n")]);
         assert_eq!(ids(rank(&cards, "代理怎么配", 10)), ["proxy"]);
@@ -348,17 +336,19 @@ mod tests {
     }
 
     #[test]
-    fn cjk_overlap_unigrams_do_not_inflate_length() {
-        // `我是人类` indexes 4 overlap unigrams and 3 bigrams; only the
-        // bigrams count toward the field's token length, so CJK documents do
-        // not dwarf English ones in length normalization.
-        let doc = Doc::new([("我是人类", 1.0)], 1.0);
-        let (counts, len, _) = &doc.fields[0];
-        assert_eq!(*len, 3.0);
-        assert_eq!(counts.len(), 7);
-        // A lone run's char is a real token and still counts.
-        let doc = Doc::new([("我", 1.0)], 1.0);
-        assert_eq!(doc.fields[0].1, 1.0);
+    fn cjk_text_is_as_long_as_its_bigrams() {
+        // `我是人类` is 3 bigrams long, like three words: the overlap
+        // unigrams it also indexes must not lengthen it, so CJK cards are not
+        // dwarfed by English ones in length normalization. A lone char is one
+        // token, like one word.
+        for (cjk, words) in [("我是人类", "one two three"), ("我", "one")] {
+            let a = format!("---\n---\ndeploy {cjk}\n");
+            let b = format!("---\n---\ndeploy {words}\n");
+            let cards = cards(&[("a", &a), ("b", &b), ("c", "---\n---\nother\n")]);
+            let hits = search(&cards, "deploy", 10);
+            assert_eq!(hits.len(), 2, "{cjk}");
+            assert_eq!(hits[0].score, hits[1].score, "{cjk}");
+        }
     }
 
     #[test]

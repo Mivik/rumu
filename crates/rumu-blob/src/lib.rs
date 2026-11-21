@@ -197,11 +197,6 @@ impl Blobs {
         Ok(self.dir.join(hash))
     }
 
-    /// Whether a blob exists.
-    pub fn contains(&self, hash: &str) -> bool {
-        self.path(hash).is_ok_and(|p| p.is_file())
-    }
-
     /// The bytes of `hash` as a file at `dest` (parents created), unless one
     /// is already there.
     pub fn copy_to(&self, hash: &str, dest: &Path) -> Result<()> {

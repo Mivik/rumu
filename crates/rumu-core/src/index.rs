@@ -75,11 +75,6 @@ impl Index {
     pub fn by_tag<'a>(&'a self, tag: &'a str) -> impl Iterator<Item = &'a IndexedNote> + 'a {
         self.entries.iter().filter(move |e| e.data.tag == tag)
     }
-
-    /// True when no structured note is on the path.
-    pub fn is_empty(&self) -> bool {
-        self.entries.is_empty()
-    }
 }
 
 #[cfg(test)]
@@ -136,6 +131,5 @@ mod tests {
             [("a", "one", 1), ("c", "three", 2), ("d", "four", 3)]
         );
         assert_eq!(index.latest::<Thing>().unwrap().value.n, 3);
-        assert!(Index::build(&[]).is_empty());
     }
 }

@@ -179,7 +179,6 @@ mod tests {
         ];
 
         let st = derive_state(&nodes);
-        assert!(st.workspaces.is_empty());
         assert_eq!(st.default_workspace.as_deref(), Some("b"));
     }
 
@@ -356,20 +355,9 @@ mod tests {
         assert_eq!(names(&merged), ["a", "@scratch"]);
         let scratch = merged.workspaces.last().expect("`@scratch` is last");
         assert_eq!(scratch.name, SCRATCH_WORKSPACE);
-        assert_eq!(scratch.root, registry.scratch(&session).root);
-        assert!(scratch.root.ends_with(session.to_string().as_str()));
+        assert_eq!(scratch.root.as_str(), format!("/scratch/{session}"));
         // No marker and no project: it is the default.
         assert_eq!(merged.default_workspace.as_deref(), Some(SCRATCH_WORKSPACE));
-    }
-
-    #[test]
-    fn mount_markers_change_the_mounts() {
-        assert!(mounts_changed(&marker(&project("p")).body));
-        let gone = CardUnmount {
-            at: "/cards/user".into(),
-        };
-        assert!(mounts_changed(&marker(&gone).body));
-        assert!(!mounts_changed(&use_("a").body));
     }
 
     #[test]

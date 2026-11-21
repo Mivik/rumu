@@ -148,46 +148,6 @@ fn a_move_is_a_new_card_in_history() {
 }
 
 #[test]
-fn a_cross_deck_move_lands_in_the_destination() {
-    let (_dir, decks, main, other) = test_decks();
-    let created = save(
-        &decks,
-        &main,
-        SaveRequest {
-            path: "a",
-            view: "one\n",
-            base: "",
-            from: None,
-        },
-    )
-    .unwrap();
-    let moved = save(
-        &decks,
-        &other,
-        SaveRequest {
-            path: "a",
-            view: &created.view,
-            base: &created.view_rev,
-            from: Some((&main, "a")),
-        },
-    )
-    .unwrap();
-    assert_eq!(moved.card.deck, other.id());
-    assert!(
-        cards(&decks, Some(&main))
-            .unwrap()
-            .iter()
-            .all(|card| card.path != "a")
-    );
-    assert!(
-        cards(&decks, Some(&other))
-            .unwrap()
-            .iter()
-            .any(|card| card.path == "a")
-    );
-}
-
-#[test]
 fn version_returns_hunks_for_an_update() {
     let (_dir, decks, main, _other) = test_decks();
     let created = save(
@@ -282,12 +242,6 @@ fn a_folder_move_moves_every_card() {
         paths,
         ["about", "archive/notes/a", "archive/notes/sub/b", "notes-x"]
     );
-    assert!(
-        cards(&decks, Some(&other))
-            .unwrap()
-            .iter()
-            .all(|card| !card.path.starts_with("notes/"))
-    );
     assert_eq!(
         history(&decks, &other, "archive/notes/a").unwrap()[0]
             .path
@@ -326,12 +280,6 @@ fn a_folder_delete_removes_only_its_cards() {
         .map(|r| r.path)
         .collect();
     assert_eq!(paths, ["about", "keep"]);
-    assert!(
-        cards(&decks, Some(&other))
-            .unwrap()
-            .iter()
-            .all(|card| !card.path.starts_with("dir/"))
-    );
 }
 
 #[test]

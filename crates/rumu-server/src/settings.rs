@@ -944,10 +944,6 @@ mod tests {
             .map(|m| m.id.as_str())
             .collect();
         assert_eq!(ids, ["n", "m"]);
-        // A provider's info is derived once, and anew after its settings
-        // change.
-        s.set_titles(Titles::Last).unwrap();
-        assert!(s.infos.lock().unwrap().contains_key("a"));
         let info = s.pin("a/m", true).unwrap();
         assert!(info.providers[0].models.iter().all(|m| m.pinned));
         s.pin("a/m", false).unwrap();

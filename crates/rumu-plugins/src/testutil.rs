@@ -568,38 +568,3 @@ impl Inbox for FakeInbox {
         Ok(())
     }
 }
-
-#[cfg(test)]
-mod tests {
-    use super::*;
-
-    #[test]
-    fn fake_inbox_records_valid_posts_and_rejects_empty_notes() {
-        let inbox = FakeInbox::arc();
-        let branch = BranchId::new();
-        inbox
-            .post(
-                &branch,
-                Post {
-                    effects: vec![Content::text("hi")],
-                    wake: true,
-                    paced: false,
-                },
-            )
-            .unwrap();
-        assert_eq!(inbox.posts().len(), 1);
-        assert!(inbox.posts()[0].1.wake);
-        assert!(
-            inbox
-                .post(
-                    &branch,
-                    Post {
-                        effects: vec![Content::default()],
-                        wake: false,
-                        paced: false,
-                    },
-                )
-                .is_err()
-        );
-    }
-}

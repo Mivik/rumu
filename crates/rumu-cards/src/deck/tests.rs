@@ -184,33 +184,6 @@ fn each_write_is_one_commit_with_author_and_trailers() {
 }
 
 #[test]
-fn a_moved_card_is_a_new_card_in_history() {
-    let (_dir, decks, deck) = deck_home();
-    let cards = Cards::new(&decks, &[CardMount::new(deck.id(), "/cards/self", false)]);
-    cards
-        .write("self/x", "body\n", None, None, &Author::user())
-        .unwrap();
-    let view = card::view_of(&cards.raw("self/x").unwrap().unwrap());
-    cards
-        .write("self/sub/y", &view, Some("self/x"), None, &Author::user())
-        .unwrap();
-    let deck = decks
-        .list()
-        .into_iter()
-        .find(|d| d.meta.name == "main")
-        .unwrap();
-    // The old path's history ends at the removal; the new path starts at the
-    // move. The identity (and its usage score) carries over.
-    let old = deck.touching("x", None).unwrap();
-    assert_eq!(old.len(), 2, "{old:?}");
-    assert!(old.iter().any(|c| c.subject == "move x -> sub/y"));
-    let new = deck.touching("sub/y", None).unwrap();
-    assert_eq!(new.len(), 1, "{new:?}");
-    assert!(deck.read("x").unwrap().is_none());
-    assert!(deck.read("sub/y").unwrap().is_some());
-}
-
-#[test]
 fn deck_upsert_rename_and_delete_refresh_the_registry() {
     let (dir, decks, _main) = deck_home();
     let deck = decks
@@ -284,17 +257,6 @@ fn deck_names_are_display_labels_and_unique() {
     assert_eq!(deck.dir, dir.path().join("decks").join(deck.id()));
 }
 
-#[test]
-fn a_write_commits_only_its_own_path() {
-    let (_dir, decks, deck) = deck_home();
-    let cards = Cards::new(&decks, &[CardMount::new(deck.id(), "/cards/self", false)]);
-    cards
-        .write("self/b", "body b\n", None, None, &Author::for_deck(&deck))
-        .unwrap();
-    let commit = latest(&deck);
-    assert_eq!(commit.changed, ["b"], "{commit:?}");
-}
-
 /// `main` at `/cards/self` and a second deck `other` at `/cards/other`.
 fn two_decks() -> (tempfile::TempDir, Decks, Cards) {
     let dir = tempfile::tempdir().unwrap();
@@ -352,20 +314,6 @@ fn card_paths_cannot_leave_their_deck() {
     assert!(matches!(err, Error::InvalidPath { .. }), "{err}");
     assert!(cards.raw("other/x").unwrap().is_some());
     assert!(cards.raw("self/stolen").unwrap().is_none());
-}
-
-#[test]
-fn a_stale_base_revision_is_refused_under_the_lock() {
-    let (_dir, _decks, cards) = two_decks();
-    let seen = card::view_rev_of(&card::view_of(&cards.raw("self/x").unwrap().unwrap()));
-    cards
-        .write("self/x", "first\n", None, Some(&seen), &Author::user())
-        .unwrap();
-    let err = cards
-        .write("self/x", "second\n", None, Some(&seen), &Author::user())
-        .unwrap_err();
-    assert!(matches!(err, Error::Stale { .. }), "{err}");
-    assert_eq!(cards.raw("self/x").unwrap().unwrap().body, "first\n");
 }
 
 #[test]

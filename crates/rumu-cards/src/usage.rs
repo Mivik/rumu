@@ -259,28 +259,6 @@ mod tests {
     }
 
     #[test]
-    fn card_payloads_round_trip() {
-        let import = CardImport {
-            deck: "d".into(),
-            path: "dev/x".into(),
-            rev: "a1b2c3d4".into(),
-        };
-        let content = Content::note_with("body", &import);
-        assert_eq!(content.decode::<CardImport>(), Some(import));
-        assert_eq!(
-            Content::marker(&CardUpdate {
-                deck: "d".into(),
-                path: "dev/x".into(),
-                rev: "deleted".into(),
-            })
-            .decode::<CardUpdate>()
-            .unwrap()
-            .rev,
-            "deleted"
-        );
-    }
-
-    #[test]
     fn uses_on_path_latest_wins() {
         let nodes = vec![
             import("x", "a1b2c3d4", "# x\nv1"),

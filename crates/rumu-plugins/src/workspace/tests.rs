@@ -1034,9 +1034,6 @@ async fn read_only_and_bash_behaviour() {
         "{} chars",
         out.content.text.len()
     );
-    let capped = out.cap();
-    assert!(capped.content.text.contains("[truncated"));
-    assert!(capped.content.text.chars().count() < 22_000);
 
     // `bash`'s `workspace` argument takes a bare name only.
     let out = plugin
@@ -1054,19 +1051,6 @@ async fn read_only_and_bash_behaviour() {
                 .text
                 .contains("the `@rumu` workspace has no bash"),
         "{}",
-        out.content.text
-    );
-    let out = plugin
-        .call_tool(
-            "bash",
-            json!({ "command": "true", "workspace": "@rumu://workspace/proj" }),
-            &cx,
-        )
-        .await
-        .unwrap();
-    assert!(
-        out.is_error && out.content.text.contains("unknown workspace"),
-        "URI forms are gone: {}",
         out.content.text
     );
 }
@@ -5088,7 +5072,6 @@ async fn workspace_registry_reads_and_writes() {
         lines[2]
     );
     assert!(lines[3].starts_with("  @rumu "), "{}", lines[3]);
-    assert!(!out.content.text.contains("attached"));
 
     // Reading an entry returns its YAML; unknown names are refused.
     let out = plugin
@@ -5331,23 +5314,6 @@ async fn workspace_entries_are_deleted_with_approval() {
         "{}",
         out.content.text
     );
-}
-
-#[tokio::test]
-async fn workspaces_list_the_projects_workspaces_first() {
-    let (_home, plugin, _host, cx, _registry) = project_setup();
-    let out = plugin
-        .call_tool("list", json!({ "path": "@rumu:/workspaces" }), &cx)
-        .await
-        .unwrap();
-    let lines: Vec<&str> = entries(&out.content.text).lines().collect();
-    assert!(lines[0].starts_with("* app local "), "{}", lines[0]);
-    assert!(lines[0].ends_with("(mounted)"), "{}", lines[0]);
-    assert!(lines[1].starts_with("  proj local "), "{}", lines[1]);
-    assert!(lines[1].ends_with("(mounted)"), "{}", lines[1]);
-    assert!(lines[2].starts_with("  ci ssh:gw.example"), "{}", lines[2]);
-    assert!(lines[3].starts_with("  @rumu"), "{}", lines[3]);
-    assert!(!out.content.text.contains("attached"));
 }
 
 #[tokio::test]

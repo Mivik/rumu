@@ -1127,7 +1127,7 @@ mod tests {
                 json!({ "watch": { "silence": 0 } }),
                 "`watch.silence` must be at least 1",
             ),
-            (json!({ "watch": { "every": 5 } }), "unknown field"),
+            (json!({ "watch": { "bogus": 5 } }), "unknown field"),
         ] {
             let mut bad = json!({ "command": "echo hi" });
             bad.as_object_mut()

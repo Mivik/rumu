@@ -92,11 +92,6 @@ mod tests {
         assert_eq!(names, ["clock", "compact"]);
         assert_eq!(specs[0].argv, ["python3", "plugins/clock.py"]);
         assert_eq!(specs[0].cwd, home);
-
-        // No config at all is an empty (not failed) load.
-        let dir = tempfile::tempdir().unwrap();
-        let config = load_config(dir.path()).unwrap();
-        assert!(config.external_specs(dir.path()).unwrap().is_empty());
     }
 
     #[test]
@@ -105,9 +100,8 @@ mod tests {
         let config = load_config(dir.path()).unwrap();
         assert!(config.external_specs(dir.path()).unwrap().is_empty());
 
-        // Workspaces moved to workspaces.yaml.
-        std::fs::write(dir.path().join("config.yaml"), "workspaces: {}\n").unwrap();
+        std::fs::write(dir.path().join("config.yaml"), "bogus: {}\n").unwrap();
         let err = load_config(dir.path()).unwrap_err().to_string();
-        assert!(err.contains("unknown field `workspaces`"), "{err}");
+        assert!(err.contains("unknown field `bogus`"), "{err}");
     }
 }

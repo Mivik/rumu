@@ -735,45 +735,69 @@ mod tests {
         assert_eq!(out.combined, "done\n");
     }
 
+    /// The remote commands, run by a local POSIX shell the way ssh hands them
+    /// to the remote one.
+    #[cfg(unix)]
     #[test]
-    fn quoting_and_remote_commands() {
-        assert_eq!(sh_quote("plain"), "'plain'");
-        assert_eq!(sh_quote("with space"), "'with space'");
-        assert_eq!(sh_quote("$HOME `x` \"y\""), "'$HOME `x` \"y\"'");
-        // Embedded single quotes close, escape and reopen the string.
-        assert_eq!(sh_quote("it's"), "'it'\\''s'");
-        assert_eq!(sh_quote("a'b'c"), "'a'\\''b'\\''c'");
-        assert_eq!(sh_quote(""), "''");
-        assert_eq!(sh_quote("line1\nline2"), "'line1\nline2'");
+    fn remote_commands_survive_any_path_and_report_missing_ones() {
+        use std::io::Write;
+        let sh = |cmd: &str, stdin: &[u8]| {
+            let mut child = std::process::Command::new("sh")
+                .arg("-c")
+                .arg(cmd)
+                .stdin(Stdio::piped())
+                .stdout(Stdio::piped())
+                .spawn()
+                .unwrap();
+            child.stdin.take().unwrap().write_all(stdin).unwrap();
+            child.wait_with_output().unwrap()
+        };
+        for s in [
+            "plain",
+            "",
+            "it's",
+            "a'b'c",
+            "$HOME `x` \"y\"",
+            "line1\nline2",
+        ] {
+            let out = sh(&format!("printf %s {}", sh_quote(s)), b"");
+            assert_eq!(String::from_utf8_lossy(&out.stdout), s);
+        }
 
-        // Paths are machine-absolute: no root joining happens here.
+        let dir = tempfile::tempdir().unwrap();
+        let root = dir.path().to_str().unwrap();
+        let file = format!("{root}/a'b $x `y`.txt");
+        let file = Utf8UnixPath::new(&file);
+        assert!(sh(&remote_write_cmd(file), b"hello").status.success());
+        assert_eq!(sh(&remote_read_cmd(file), b"").stdout, b"hello");
+        std::fs::create_dir(dir.path().join("sub")).unwrap();
+        let listed = sh(&remote_list_cmd(Utf8UnixPath::new(root)), b"").stdout;
+        assert_eq!(String::from_utf8_lossy(&listed), "a'b $x `y`.txt\nsub/\n");
+        assert!(sh(&remote_remove_cmd(file), b"").status.success());
+
+        // Missing paths exit 44; a write never creates the parent.
+        let missing = |cmd: String| sh(&cmd, b"x").status.code();
+        let gone = format!("{root}/gone/f.txt");
+        let gone = Utf8UnixPath::new(&gone);
+        assert_eq!(missing(remote_read_cmd(file)), Some(REMOTE_MISSING_EXIT));
+        assert_eq!(missing(remote_remove_cmd(file)), Some(REMOTE_MISSING_EXIT));
+        assert_eq!(missing(remote_write_cmd(gone)), Some(REMOTE_MISSING_EXIT));
         assert_eq!(
-            remote_read_cmd(Utf8UnixPath::new("/srv/app/src/main.rs")),
-            "test -e '/srv/app/src/main.rs' || exit 44; cat '/srv/app/src/main.rs'"
+            missing(remote_list_cmd(gone.parent().unwrap())),
+            Some(REMOTE_MISSING_EXIT)
         );
-        assert_eq!(
-            remote_read_cmd(Utf8UnixPath::new("/srv/app/a'b.txt")),
-            "test -e '/srv/app/a'\\''b.txt' || exit 44; cat '/srv/app/a'\\''b.txt'"
+        assert!(!dir.path().join("gone").exists());
+
+        // The exec script starts in the root, with stderr merged in order.
+        std::fs::write(dir.path().join("marker"), "here\n").unwrap();
+        let out = sh(
+            &remote_exec_cmd(
+                Utf8UnixPath::new(root),
+                "echo 'out'; echo err >&2; cat marker",
+            ),
+            b"",
         );
-        // A nested write checks the parent exists, never creates it.
-        assert_eq!(
-            remote_write_cmd(Utf8UnixPath::new("/srv/app/a/b.txt")),
-            "test -d '/srv/app/a' || exit 44; cat > '/srv/app/a/b.txt'"
-        );
-        assert_eq!(
-            remote_write_cmd(Utf8UnixPath::new("/b.txt")),
-            "cat > '/b.txt'"
-        );
-        assert_eq!(
-            remote_list_cmd(Utf8UnixPath::new("/srv/app")),
-            "test -e '/srv/app' || exit 44; LC_ALL=C ls -1pA '/srv/app'"
-        );
-        // The exec script travels as one single-quoted argument and starts in
-        // the workspace root.
-        assert_eq!(
-            remote_exec_cmd(Utf8UnixPath::new("/srv/app"), "echo 'hi' >&2"),
-            "bash -c 'exec 2>&1\nexport PYTHONUNBUFFERED=1\ncd '\\''/srv/app'\\'' || exit 1\necho '\\''hi'\\'' >&2'"
-        );
+        assert_eq!(String::from_utf8_lossy(&out.stdout), "out\nerr\nhere\n");
     }
 
     #[test]
