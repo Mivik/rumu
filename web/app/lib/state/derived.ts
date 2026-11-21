@@ -17,6 +17,16 @@ export function isUnseen(s: SessionInfo): boolean {
   return s.seen_at != null && s.updated_at > s.seen_at
 }
 
+/** `s`'s main branch is working a turn — the list's question, not the open
+ *  session's: `busy` is set by every turn's start and end whatever session is
+ *  on screen (the pushes carry the branch alone). It fills in one session's
+ *  branches when that session's tree loads, so a turn that was already running
+ *  before this page loaded shows on its session only once the page has opened
+ *  it or the turn moved on. */
+export function isRunning(s: SessionInfo): boolean {
+  return !!state.busy[s.main_branch]
+}
+
 export const currentBranch = computed<Branch | null>(() =>
   state.mainBranch ? (state.branches[state.mainBranch] ?? null) : null,
 )

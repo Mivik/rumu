@@ -64,7 +64,7 @@ function isOpen(tk: TaskInfo): boolean {
                     @click="expanded = !expanded"
                   >
                     <span class="flex size-4 flex-none items-center justify-center">
-                      <span class="dot-live dot-task size-1.5 rounded-full bg-pine" />
+                      <span class="dot-live dot-run size-1.5 rounded-full bg-pine" />
                     </span>
                     <span class="flex min-w-0 flex-1 items-center gap-3">
                       <span class="truncate">{{ t('tools.tasks.running', { count: total }) }}</span>
@@ -143,7 +143,7 @@ function isOpen(tk: TaskInfo): boolean {
                         </span>
                       </button>
                       <span
-                        class="dot-live dot-task size-1.5 flex-none rounded-full bg-pine transition-opacity duration-300"
+                        class="dot-live dot-run size-1.5 flex-none rounded-full bg-pine transition-opacity duration-300"
                         :class="{ 'opacity-0': folds }"
                       />
                       <span class="flex-none font-mono text-micro text-ink-3 tabular-nums">{{

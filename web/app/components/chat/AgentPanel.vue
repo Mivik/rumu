@@ -42,7 +42,7 @@ const parent = computed(() => {
       <Icon name="agent" :size="16" class="flex-none text-agent" />
       <span class="flex flex-none items-center gap-1.5 text-[15px] font-bold">
         {{ t('chat.agentView.title') }}
-        <span v-if="view.busy.value" class="dot-live dot-task size-1.5 rounded-full bg-pine" />
+        <span v-if="view.busy.value" class="dot-live dot-run size-1.5 rounded-full bg-pine" />
       </span>
       <span class="min-w-0 flex-1 truncate text-meta text-ink-3" :title="kind.task">{{ kind.task }}</span>
       <button

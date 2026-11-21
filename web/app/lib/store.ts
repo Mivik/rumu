@@ -20,6 +20,7 @@ export {
   connected,
   currentBranch,
   isBusy,
+  isRunning,
   isUnseen,
   pathNodes,
   pathOf,
