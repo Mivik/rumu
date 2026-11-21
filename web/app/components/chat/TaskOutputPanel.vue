@@ -1,18 +1,33 @@
 <script setup lang="ts">
 // A background task's output beside the chat: what it runs, how it is doing,
 // and its buffered output, following the end while it streams.
-import { computed, onBeforeUnmount, onMounted, ref } from 'vue'
+import { computed, onBeforeUnmount, onMounted, ref, watch } from 'vue'
 import { t } from '../../i18n'
 import { vFollow } from '../../lib/motion'
-import { killTask, openTaskDetail, state } from '../../lib/store'
-import { taskElapsed, taskStatusWord } from '../../lib/tasks'
+import { ensureAgentNodes, killTask, openTaskDetail, state } from '../../lib/store'
+import { taskCommand, taskElapsed, taskStatusWord } from '../../lib/tasks'
 import { bashExit } from '../../lib/toolrows'
 import { toolIcon } from '../../lib/toolIcon'
 import Icon from '../ui/Icon.vue'
 import PanelBack from './PanelBack.vue'
+import TermCommand from './TermCommand.vue'
 
 const task = computed(() => (state.taskDetail ? (state.tasks[state.taskDetail] ?? null) : null))
 const running = computed(() => task.value?.status === 'running')
+
+/** The command itself: the task's own label carries only a summary of it
+ * (`description` first, cut to 80 chars), and the kernel keeps no args. */
+const command = computed(() => (task.value?.kind.type === 'tool' ? taskCommand(task.value) : ''))
+
+// A task started inside a sub-agent branch: its call sits in nodes the tree
+// leaves out until that branch's nodes are asked for.
+watch(
+  task,
+  (tk) => {
+    if (tk?.kind.type === 'tool' && !taskCommand(tk)) void ensureAgentNodes(tk.branch)
+  },
+  { immediate: true },
+)
 
 const now = ref(Date.now())
 let timer: ReturnType<typeof setInterval> | undefined
@@ -82,6 +97,15 @@ const output = computed(() => {
         </button>
       </span>
     </header>
+
+    <!-- The command above its output: the header has room for the summary
+         only, and a summary is not something to run again. -->
+    <div
+      v-if="command"
+      class="flex-none border-b border-line-soft bg-surface-2 px-5 py-2 font-mono text-meta leading-[1.55]"
+    >
+      <TermCommand :command="command" />
+    </div>
 
     <pre
       v-if="output.body"

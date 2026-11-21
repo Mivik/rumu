@@ -52,6 +52,24 @@ export function callsOf(nodes: Node[]): Map<string, { call: ToolCallLike; node: 
 export const callsOnPath = computed(() => callsOf(pathNodes.value))
 type ToolCallLike = { call_id: string; name: string; args: unknown }
 
+/** Every call in the loaded tree, by call_id: what a row that holds only a
+ * task (not its call) needs to read the call's arguments. One pass per tree,
+ * so a panel may ask per render. */
+const callsInTree = computed(() => {
+  const map = new Map<string, ToolCallLike>()
+  for (const n of Object.values(state.nodes)) {
+    if (n.body.type !== 'assistant') continue
+    for (const c of n.body.tool_calls) map.set(c.call_id, c)
+  }
+  return map
+})
+
+/** The call that started a task, when its node is loaded (a sub-agent's
+ * branch arrives only once `ensureAgentNodes` fetched it). */
+export function callById(call_id: string): ToolCallLike | null {
+  return callsInTree.value.get(call_id) ?? null
+}
+
 export const mainDelta = computed<DeltaBuffer | null>(() =>
   state.mainBranch ? (state.deltas[state.mainBranch] ?? null) : null,
 )

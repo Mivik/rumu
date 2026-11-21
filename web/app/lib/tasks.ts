@@ -3,6 +3,7 @@
 
 import type { TaskInfo, TaskStatus } from './types'
 import { t } from '../i18n'
+import { callById } from './state/derived'
 
 /** `bash: rm -rf dist`, `agent: find the config`. */
 export function taskLabel(t: TaskInfo): string {
@@ -10,6 +11,16 @@ export function taskLabel(t: TaskInfo): string {
     return t.kind.args_summary ? `${t.kind.name}: ${t.kind.args_summary}` : t.kind.name
   }
   return `agent: ${t.summary}`
+}
+
+/** The `bash` command that started a task, read back from its call: the
+ * task's own label is a summary (`description` wins, cut to 80 chars), and
+ * the kernel keeps no args on the task itself. Empty until the call's node is
+ * loaded (see `ensureAgentNodes` for a sub-agent's). */
+export function taskCommand(t: TaskInfo): string {
+  const raw = callById(t.call_id)?.args as Record<string, unknown> | null | undefined
+  const command = raw?.command
+  return typeof command === 'string' ? command.replace(/\s+$/, '') : ''
 }
 
 /** The word shown in notes and chips (`ok` / `error` / `cancelled`). */
