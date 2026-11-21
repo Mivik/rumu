@@ -49,10 +49,8 @@ import { refreshLibrary } from './library'
 import { refreshProjects } from './projects'
 import { loadPath } from './tree'
 import { toast } from './ui'
+import { LIVE_CHARS, appendTaskOutput, clipLive, resyncTaskWatch } from './taskOutput'
 import { t } from '../../i18n'
-
-/** Live tool/task output kept in memory (chars). */
-const MAX_LIVE_OUTPUT = 1_000_000
 
 /** Did this node change the card library on disk? A write/edit records a
  * `card.use`; the memory hook records `card_update` notices for cards that
@@ -172,22 +170,19 @@ function onToolProgress(p: ToolProgressPush): void {
     state.toolProgress[key] = buf
   }
   buf.at = Date.now()
-  if (p.append) buf.text = (buf.text + p.append).slice(-MAX_LIVE_OUTPUT)
+  // Kept past what is shown, so the view can tell it is clipped.
+  if (p.append) buf.text = clipLive(buf.text + p.append, 2 * LIVE_CHARS).text
   if (p.data) buf.data = p.data
 }
 
 /** `task.started` / `task.done`: the task table's authoritative snapshots. */
 function onTaskInfo(p: TaskInfoPush): void {
   state.tasks[p.task.id] = p.task
-  // A finished task keeps its buffered output for the detail view; a running
-  // one starts empty unless progress already arrived.
-  state.taskOutput[p.task.id] ??= ''
 }
 
 function onTaskProgress(p: TaskProgressPush): void {
   if (p.kind && state.tasks[p.id]) state.tasks[p.id]!.kind = p.kind
-  const prev = state.taskOutput[p.id] ?? ''
-  if (p.append) state.taskOutput[p.id] = (prev + p.append).slice(-MAX_LIVE_OUTPUT)
+  if (p.append) appendTaskOutput(p.id, p.append)
   if (p.data && state.tasks[p.id]) state.tasks[p.id]!.data = p.data
 }
 
@@ -359,6 +354,7 @@ export function startApp(): void {
     const target = sessionIdFromLocation() ?? state.sessionId
     // A new connection gets every push until told otherwise.
     if (!target) watchSession(null)
+    resyncTaskWatch()
     try {
       if (target && !(await openSession(target, { history: 'none' }))) {
         state.view = 'chat'

@@ -26,6 +26,7 @@
   "error": "error",
   "blocked": "blocked",
   "truncated": "truncated",
+  "clippedHead": "Showing only the end of the output",
   "copyFailed": "Copy failed",
   "copyCode": "Copy code",
   "copiedCode": "Copied code",

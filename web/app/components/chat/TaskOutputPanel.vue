@@ -4,7 +4,15 @@
 import { computed, onBeforeUnmount, onMounted, ref, watch } from 'vue'
 import { t } from '../../i18n'
 import { vFollow } from '../../lib/motion'
-import { ensureAgentNodes, killTask, openTaskDetail, state } from '../../lib/store'
+import {
+  clipLive,
+  ensureAgentNodes,
+  killTask,
+  openTaskDetail,
+  state,
+  taskOutput,
+  useTaskWatch,
+} from '../../lib/store'
 import { taskCommand, taskElapsed, taskState, taskStatusIcon, taskStatusWord } from '../../lib/tasks'
 import { bashExit } from '../../lib/toolrows'
 import { toolIcon } from '../../lib/toolIcon'
@@ -41,11 +49,15 @@ onMounted(() => {
 })
 onBeforeUnmount(() => clearInterval(timer))
 
-/** Live text when the page saw it arrive; otherwise the final result. */
+useTaskWatch(() => (task.value && running.value ? [task.value.id] : []))
+
+/** The live output while it runs, then the final result; only its tail. */
 const output = computed(() => {
   const tk = task.value
-  const { code, body } = bashExit(tk ? state.taskOutput[tk.id] || tk.result?.text || '' : '')
-  return { code, body: body.replace(/\n+$/, '') }
+  const text = tk ? (running.value ? taskOutput(tk.id) : (tk.result?.text ?? '')) : ''
+  const { code, body } = bashExit(text)
+  const clip = clipLive(body.replace(/\n+$/, ''))
+  return { code, body: clip.text, clipped: clip.clipped }
 })
 </script>
 
@@ -112,6 +124,7 @@ const output = computed(() => {
       >
         <TermCommand :command="command" :lines="3" @toggle="onCommandToggle" />
       </div>
+      <p v-if="output.clipped" class="px-5 pt-3 text-micro text-ink-3">{{ t('common.clippedHead') }}</p>
       <pre
         v-if="output.body"
         class="view-in px-5 py-4 font-mono text-micro leading-[1.6] break-words whitespace-pre-wrap"

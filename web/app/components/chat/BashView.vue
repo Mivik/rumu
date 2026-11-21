@@ -8,6 +8,7 @@
 import { computed } from 'vue'
 import { t } from '../../i18n'
 import { vFollow } from '../../lib/motion'
+import { clipLive } from '../../lib/store'
 import { bashExit } from '../../lib/toolrows'
 import TermCommand from './TermCommand.vue'
 
@@ -41,7 +42,9 @@ function tone(v: unknown): string {
 
 const result = computed(() => {
   const { code, body } = bashExit(props.output)
-  return { code, body: body.replace(/\n+$/, '') }
+  // Only the tail of a long output: laying out megabytes freezes the page.
+  const clip = clipLive(body.replace(/\n+$/, ''))
+  return { code, body: clip.text, clipped: clip.clipped }
 })
 </script>
 
@@ -55,6 +58,7 @@ const result = computed(() => {
         >
       </div>
     </div>
+    <div v-if="result.clipped" class="term-foot">{{ t('common.clippedHead') }}</div>
     <pre
       v-if="result.body"
       v-follow="running"

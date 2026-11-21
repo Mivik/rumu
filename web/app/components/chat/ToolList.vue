@@ -12,7 +12,7 @@
 import { computed } from 'vue'
 import { t } from '../../i18n'
 import type { ToolRowInfo } from '../../lib/store'
-import { openAgentView, state } from '../../lib/store'
+import { clipLive, openAgentView, state, taskOutput, useTaskWatch } from '../../lib/store'
 import type { Attachment } from '../../lib/types'
 import type { ToolRowView } from '../../lib/toolrows'
 import {
@@ -46,6 +46,13 @@ const props = defineProps<{ rows: ToolRowInfo[] }>()
 const work = useWorkView()
 
 const views = computed<ToolRowView[]>(() => props.rows.map(toolRowView))
+
+// An opened row of a running task shows its live output.
+useTaskWatch(() =>
+  views.value.flatMap((v) =>
+    v.taskId && v.taskStatus === 'running' && isRowOpen(v, work.value) ? [v.taskId] : [],
+  ),
+)
 
 /** Rows already there when the box opened reveal with it; later ones slide in. */
 const revealed = new Set(props.rows.map((r) => r.result.id))
@@ -103,7 +110,7 @@ function bashOf(v: ToolRowView): {
   const own = { command: callArg(v, 'command'), args: bashExtraArgs(argsOf(v.row.call)) }
   const task = v.taskId ? state.tasks[v.taskId] : undefined
   if (!task) return { ...own, output: v.output, failed: v.status !== 'ok', running: false }
-  const live = liveTaskOutput(task.id)
+  const live = taskOutput(task.id)
   const running = task.status === 'running'
   return { ...own, output: running ? live : (task.result?.text ?? live), failed: task.is_error, running }
 }
@@ -111,10 +118,6 @@ function bashOf(v: ToolRowView): {
 /** Status color of a row's icon and name: failures danger, else tool. */
 function statusClass(v: ToolRowView): string {
   return v.status === 'ok' ? 'text-tool' : 'text-danger'
-}
-
-function liveTaskOutput(id: string | null): string {
-  return id ? (state.taskOutput[id] ?? '') : ''
 }
 </script>
 
@@ -264,14 +267,14 @@ function liveTaskOutput(id: string | null): string {
             />
           </div>
         </div>
-        <div v-if="v.taskId && (v.taskStatus === 'running' || liveTaskOutput(v.taskId))">
+        <div v-if="v.taskId && (v.taskStatus === 'running' || taskOutput(v.taskId))">
           <div class="mb-1 flex items-center gap-2 text-micro font-semibold text-ink-3">
             {{ t('tools.detail.liveOutput') }}
             <span v-if="v.taskStatus === 'running'" class="flex items-center gap-1 text-pine">
               <Icon name="running" :size="12" />{{ taskStatusWord('running') }}
             </span>
           </div>
-          <pre class="code">{{ liveTaskOutput(v.taskId) || t('common.noOutput') }}</pre>
+          <pre class="code">{{ clipLive(taskOutput(v.taskId)).text || t('common.noOutput') }}</pre>
         </div>
         <CodeCalls v-if="v.name === 'code' && v.row.call" :invokes="v.row.invokes" />
       </div>

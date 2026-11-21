@@ -375,7 +375,8 @@ export interface TaskInfoPush {
 export interface TaskProgressPush {
   id: TaskId
   branch: BranchId
-  /** Append-only text chunk. */
+  /** Append-only text chunk; sent only for a task this client watches
+   *  (`task.watch`). */
   append?: string
   /** Latest structured payload (whole value, latest wins). */
   data?: Tagged

@@ -10,6 +10,7 @@
 //   pushes.ts   WebSocket pushes + boot
 
 export { state } from './state/state'
+export { clipLive, taskOutput, useTaskWatch } from './state/taskOutput'
 export type { DeltaBuffer, RetryState, Toast } from './state/state'
 export type { CardWindow } from './state/state'
 

@@ -238,7 +238,6 @@ export function closeSession(): void {
   state.retrying = {}
   state.toolProgress = {}
   state.tasks = {}
-  state.taskOutput = {}
   state.taskDetail = null
   state.agentView = null
   state.artifact = null

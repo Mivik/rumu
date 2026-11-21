@@ -181,6 +181,14 @@ impl Kernel {
         }))
     }
 
+    /// A task's raw output buffer and where it ends in its whole output (in
+    /// bytes): the `end` of the last `task.progress` push it includes.
+    pub fn task_buffer(&self, id: &TaskId) -> Option<(String, u64)> {
+        let inner = self.inner.lock().unwrap();
+        let e = inner.tasks.get(id)?;
+        Some((e.output.clone(), e.dropped + e.output.len() as u64))
+    }
+
     /// Cancel a task by id (the UI's `task.kill`, no ownership check) and
     /// wait briefly for its final status.
     pub async fn kill_task(&self, id: &TaskId) -> Result<TaskInfo> {
@@ -533,7 +541,7 @@ impl Kernel {
 
     /// Feed one progress update into a task's buffer and push it to clients.
     fn task_progress(&self, id: &TaskId, update: Progress) {
-        let (branch, append, data) = {
+        let (branch, append, data, end) = {
             let mut inner = self.inner.lock().unwrap();
             let Some(entry) = inner.tasks.get_mut(id) else {
                 return;
@@ -555,11 +563,15 @@ impl Kernel {
                     data = Some(tagged);
                 }
             }
-            (branch, append, data)
+            let end = entry.dropped + entry.output.len() as u64;
+            (branch, append, data, end)
         };
         let mut params = json!({ "id": id, "branch": branch });
         if let Some(append) = append {
+            // Where the chunk ends in the whole output: a client reading
+            // the buffer (`task.watch`) skips the chunks it already holds.
             params["append"] = json!(append);
+            params["end"] = json!(end);
         }
         if let Some(data) = data {
             params["data"] = json!(data);

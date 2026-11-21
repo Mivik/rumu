@@ -2,6 +2,7 @@
 
 use std::collections::{HashMap, HashSet};
 use std::sync::Arc;
+use std::time::Duration;
 
 use axum::Json;
 use axum::Router;
@@ -30,6 +31,7 @@ use rust_embed::{EmbeddedFile, RustEmbed};
 use serde::Deserialize;
 use serde_json::{Value, json};
 use tokio::sync::broadcast::error::RecvError;
+use tokio::time::Instant;
 use tracing::warn;
 
 /// The upload body limit: the largest ingest accepts, plus headroom for
@@ -324,21 +326,22 @@ async fn handle_socket(state: AppState, socket: WebSocket) {
         }
     });
 
-    // `session.watch`: the session this client shows (`Some(None)`: none).
-    // Until it is called, the client gets every push.
-    let mut watched: Option<Option<SessionId>> = None;
+    let mut feed = Feed::default();
     let mut sub = state.kernel.subscribe();
-    loop {
+    'conn: loop {
+        let due = feed.due.unwrap_or_else(Instant::now);
         tokio::select! {
             push = sub.recv() => match push {
                 Ok(v) => {
-                    if let Some(watched) = &watched
+                    if let Some(watched) = &feed.session
                         && push_session(&state.kernel, &v).is_some_and(|s| Some(&s) != watched.as_ref())
                     {
                         continue;
                     }
-                    if tx.send(Message::Text(v.to_string().into())).await.is_err() {
-                        break;
+                    for v in feed.take(v) {
+                        if tx.send(Message::Text(v.to_string().into())).await.is_err() {
+                            break 'conn;
+                        }
                     }
                 }
                 // The client missed pushes: close so it reconnects and
@@ -349,15 +352,20 @@ async fn handle_socket(state: AppState, socket: WebSocket) {
                 }
                 Err(RecvError::Closed) => break, // kernel gone
             },
+            () = tokio::time::sleep_until(due), if feed.due.is_some() => {
+                for v in feed.flush() {
+                    if tx.send(Message::Text(v.to_string().into())).await.is_err() {
+                        break 'conn;
+                    }
+                }
+            },
             msg = receiver.next() => match msg {
                 // Requests run concurrently so a slow one (task.kill waits up
                 // to 5 s) does not block the others; replies share `tx`.
                 Some(Ok(Message::Text(text))) => {
                     // Answered in order, not spawned: the pushes after the
                     // reply, and the requests after it, see the new filter.
-                    if let Some((id, session)) = watch_request(text.as_str()) {
-                        watched = Some(session);
-                        let reply = json!({ "jsonrpc": "2.0", "id": id, "result": null });
+                    if let Some(reply) = feed.control(&state.kernel, text.as_str()) {
                         if tx.send(Message::Text(reply.to_string().into())).await.is_err() {
                             break;
                         }
@@ -379,22 +387,172 @@ async fn handle_socket(state: AppState, socket: WebSocket) {
     writer.abort();
 }
 
-/// A `session.watch { session: id | null }` request: its id and session.
-fn watch_request(raw: &str) -> Option<(Value, Option<SessionId>)> {
-    #[derive(Deserialize)]
-    struct Req {
-        #[serde(default)]
-        id: Value,
-        method: String,
-        #[serde(default)]
-        params: Params,
+/// How long a client's live output (`tool.progress` / `task.progress`
+/// appends) gathers before it goes out as one push: a command printing in
+/// 4 KiB reads would otherwise send hundreds a second.
+const PROGRESS_EVERY: Duration = Duration::from_millis(100);
+
+/// The most of one gathered append that goes out (its tail, in bytes).
+/// The web shows only the last 64K chars of live output, which this always
+/// covers, so a flood drops nothing it would show.
+const PROGRESS_TAIL: usize = 256 * 1024;
+
+/// One client's push filters, and its live output gathering.
+#[derive(Default)]
+struct Feed {
+    /// `session.watch`: the session this client shows (`Some(None)`: none).
+    /// Until it is called, the client gets every push.
+    session: Option<Option<SessionId>>,
+    /// `task.watch`: the tasks whose output appends this client takes, each
+    /// with where the buffer it was handed ended. Until it is called, every
+    /// task's.
+    tasks: Option<HashMap<String, u64>>,
+    /// Appends waiting to go out, one per tool call or task.
+    pending: Vec<Value>,
+    /// When `pending` goes out.
+    due: Option<Instant>,
+}
+
+impl Feed {
+    /// Answer a request the connection itself handles (`session.watch`,
+    /// `task.watch`): in order, so the pushes after the reply see the new
+    /// filter.
+    fn control(&mut self, kernel: &Kernel, raw: &str) -> Option<Value> {
+        #[derive(Deserialize)]
+        struct Req {
+            #[serde(default)]
+            id: Value,
+            method: String,
+            #[serde(default)]
+            params: Params,
+        }
+        #[derive(Deserialize, Default)]
+        struct Params {
+            session: Option<SessionId>,
+            #[serde(default)]
+            ids: Vec<String>,
+        }
+        let req: Req = serde_json::from_str(raw).ok()?;
+        let result = match req.method.as_str() {
+            // `{ session: id | null }`: take only the pushes about that
+            // session (and the ones every client gets).
+            "session.watch" => {
+                self.session = Some(req.params.session);
+                Value::Null
+            }
+            // `{ ids }`: take output appends of these tasks only. Each one
+            // newly watched comes with the tail of its buffered output;
+            // appends that buffer already held are not sent again.
+            "task.watch" => {
+                let mut old = self.tasks.take().unwrap_or_default();
+                let mut tasks = HashMap::new();
+                let mut output = serde_json::Map::new();
+                for id in req.params.ids {
+                    if let Some(end) = old.remove(&id) {
+                        tasks.insert(id, end);
+                    } else if let Some((mut text, end)) = kernel.task_buffer(&TaskId(id.clone())) {
+                        keep_tail(&mut text, PROGRESS_TAIL);
+                        output.insert(id.clone(), json!(text));
+                        tasks.insert(id, end);
+                    }
+                }
+                self.tasks = Some(tasks);
+                json!({ "output": output })
+            }
+            _ => return None,
+        };
+        Some(json!({ "jsonrpc": "2.0", "id": req.id, "result": result }))
     }
-    #[derive(Deserialize, Default)]
-    struct Params {
-        session: Option<SessionId>,
+
+    /// Take one kernel push the session filter let through: what to send
+    /// now. An output append waits to go out with the next ones; anything
+    /// else sends the waiting appends first, so they keep their order
+    /// around it.
+    fn take(&mut self, mut push: Value) -> Vec<Value> {
+        if push["method"] == "task.progress"
+            && let Some(tasks) = &self.tasks
+            && let Some(params) = push["params"].as_object_mut()
+            && params.contains_key("append")
+        {
+            let held = params["id"].as_str().and_then(|id| tasks.get(id));
+            let end = params.get("end").and_then(Value::as_u64).unwrap_or(0);
+            // Unwatched, or already in the buffer `task.watch` handed over.
+            if held.is_none_or(|&held| end <= held) {
+                params.remove("append");
+                params.remove("end");
+                if !params.contains_key("data") && !params.contains_key("kind") {
+                    return Vec::new();
+                }
+            }
+        }
+        if let Some(key) = append_key(&push) {
+            self.gather(key, push);
+            return Vec::new();
+        }
+        let mut out = self.flush();
+        out.push(push);
+        out
     }
-    let req: Req = serde_json::from_str(raw).ok()?;
-    (req.method == "session.watch").then_some((req.id, req.params.session))
+
+    /// Add an append to the one waiting for the same call or task.
+    fn gather(&mut self, key: (String, String), push: Value) {
+        let waiting = self
+            .pending
+            .iter_mut()
+            .find(|v| append_key(v).as_ref() == Some(&key));
+        let Some(waiting) = waiting else {
+            self.pending.push(push);
+            self.due
+                .get_or_insert_with(|| Instant::now() + PROGRESS_EVERY);
+            return;
+        };
+        let params = &mut waiting["params"];
+        let mut text = params["append"].as_str().unwrap_or_default().to_owned();
+        text.push_str(push["params"]["append"].as_str().unwrap_or_default());
+        keep_tail(&mut text, PROGRESS_TAIL);
+        params["append"] = json!(text);
+        if let Some(end) = push["params"].get("end") {
+            params["end"] = end.clone();
+        }
+    }
+
+    /// The waiting appends, now due.
+    fn flush(&mut self) -> Vec<Value> {
+        self.due = None;
+        std::mem::take(&mut self.pending)
+    }
+}
+
+/// Drop the front of `text` down to its last `limit` bytes, on a char
+/// boundary.
+fn keep_tail(text: &mut String, limit: usize) {
+    if text.len() > limit {
+        let mut cut = text.len() - limit;
+        while !text.is_char_boundary(cut) {
+            cut += 1;
+        }
+        text.drain(..cut);
+    }
+}
+
+/// What an output-only progress push is about (method, then the call or
+/// task), or `None` for any other push.
+fn append_key(push: &Value) -> Option<(String, String)> {
+    let method = push["method"].as_str()?;
+    let p = push["params"].as_object()?;
+    if !p.contains_key("append") || p.contains_key("data") || p.contains_key("kind") {
+        return None;
+    }
+    let key = match method {
+        "tool.progress" => format!(
+            "{}:{}",
+            p.get("branch")?.as_str()?,
+            p.get("call_id")?.as_str()?
+        ),
+        "task.progress" => p.get("id")?.as_str()?.to_owned(),
+        _ => return None,
+    };
+    Some((method.to_owned(), key))
 }
 
 /// The session a push is about: the one owning the branch it names. `None`
@@ -1588,6 +1746,48 @@ mod tests {
     use rumu_core::{Branch, BranchKind, BranchStatus, Content, Node, NodeBody};
 
     use super::*;
+
+    fn task_append(id: &str, text: &str, end: u64) -> Value {
+        json!({ "method": "task.progress", "params": { "id": id, "branch": "b", "append": text, "end": end } })
+    }
+
+    /// Appends gather per task until something else goes out, which sends
+    /// them first; a watched task skips what its buffer already held and an
+    /// unwatched one sends no output, only its other updates.
+    #[test]
+    fn feed_gathers_appends_and_filters_tasks() {
+        let mut feed = Feed {
+            tasks: Some(HashMap::from([("t1".to_owned(), 3)])),
+            ..Feed::default()
+        };
+        assert!(feed.take(task_append("t1", "abc", 3)).is_empty()); // held
+        assert!(feed.take(task_append("t1", "de", 5)).is_empty());
+        assert!(feed.take(task_append("t1", "f", 6)).is_empty());
+        assert!(feed.take(task_append("t2", "zz", 2)).is_empty()); // unwatched
+        assert!(feed.due.is_some());
+        let data = json!({ "method": "task.progress", "params": { "id": "t2", "branch": "b", "append": "y", "end": 3, "data": 1 } });
+        let out = feed.take(data);
+        assert_eq!(out.len(), 2);
+        assert_eq!(out[0]["params"]["append"], "def");
+        assert_eq!(out[0]["params"]["end"], 6);
+        assert_eq!(
+            out[1]["params"],
+            json!({ "id": "t2", "branch": "b", "data": 1 })
+        );
+        assert!(feed.due.is_none() && feed.pending.is_empty());
+    }
+
+    /// A flood keeps only the tail of what gathered, cut on a char boundary.
+    #[test]
+    fn feed_keeps_the_tail_of_a_flood() {
+        let mut feed = Feed::default();
+        let push = |s: String| json!({ "method": "tool.progress", "params": { "branch": "b", "call_id": "c", "append": s } });
+        feed.take(push("é".repeat(PROGRESS_TAIL)));
+        feed.take(push("end".to_owned()));
+        let out = feed.flush();
+        let text = out[0]["params"]["append"].as_str().unwrap();
+        assert!(text.len() <= PROGRESS_TAIL && text.ends_with("éend"));
+    }
 
     fn node(id: &str, parent: Option<&str>) -> Node {
         Node {

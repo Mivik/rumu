@@ -177,8 +177,6 @@ const initial = {
   >,
   /** Kernel tasks of the open session (runtime-only; `task.list` + pushes). */
   tasks: {} as Record<TaskId, TaskInfo>,
-  /** Live task output buffer (`Progress::Append` text), keyed by task id. */
-  taskOutput: {} as Record<TaskId, string>,
   /** The task whose buffered output is open in the tasks panel. */
   taskDetail: null as TaskId | null,
   /** The sub-agent an open task output or artifact replaced beside the
