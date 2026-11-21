@@ -1259,25 +1259,40 @@ impl Kernel {
         }
         self.push("turn.started", json!({ "branch": child.id }));
 
-        let outcome = loop {
-            let outcome = self.run_loop(child.id.clone(), &token).await?;
-            if token.is_cancelled() {
-                break outcome;
+        let looped: Result<LoopOutcome> = async {
+            loop {
+                let outcome = self.run_loop(child.id.clone(), &token).await?;
+                if token.is_cancelled() {
+                    return Ok(outcome);
+                }
+                // A sub-agent is not finished while it still owns running tasks.
+                // Wait for them; their completion posts land on the child branch
+                // (registered as running for the whole `run_agent`) and are
+                // consumed by another loop iteration instead of a wake turn.
+                let owns_tasks = self.branch_has_running_tasks(&child.id);
+                if owns_tasks {
+                    self.wait_branch_tasks(&child.id, &token).await?;
+                }
+                let pending_wake = {
+                    let inner = self.inner.lock().unwrap();
+                    inner.wake_pending.get(&child.id).is_some_and(|p| p.active)
+                };
+                if !owns_tasks && !pending_wake {
+                    return Ok(outcome);
+                }
             }
-            // A sub-agent is not finished while it still owns running tasks.
-            // Wait for them; their completion posts land on the child branch
-            // (registered as running for the whole `run_agent`) and are
-            // consumed by another loop iteration instead of a wake turn.
-            let owns_tasks = self.branch_has_running_tasks(&child.id);
-            if owns_tasks {
-                self.wait_branch_tasks(&child.id, &token).await?;
-            }
-            let pending_wake = {
-                let inner = self.inner.lock().unwrap();
-                inner.wake_pending.get(&child.id).is_some_and(|p| p.active)
-            };
-            if !owns_tasks && !pending_wake {
-                break outcome;
+        }
+        .await;
+        // A failed loop is closed like a failed turn: recorded on the branch,
+        // the loop guard released and `turn.error` pushed — else the branch
+        // stays busy for good, with nothing left to stop. Its tasks go too.
+        let outcome = match looped {
+            Ok(outcome) => outcome,
+            Err(e) => {
+                self.set_branch_status(&child.id, BranchStatus::Done);
+                self.finish_turn(child.id.clone(), Some(&e), None).await;
+                self.abort_tasks(&child.id, true);
+                return Err(e);
             }
         };
 

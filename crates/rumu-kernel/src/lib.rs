@@ -1282,7 +1282,7 @@ impl Kernel {
     ) {
         let Some(parent) = self.reopen_agent(&branch) else {
             let res = run.await;
-            self.finish_turn(branch, res.err(), None).await;
+            self.finish_turn(branch, res.as_ref().err(), None).await;
             return;
         };
         let gate = self.inner.lock().unwrap().agent_gate.clone();
@@ -1306,7 +1306,7 @@ impl Kernel {
             )),
             Err(e) => Some(format!("(sub-agent failed: {e})")),
         };
-        self.finish_turn(branch, res.err(), Some((parent, report)))
+        self.finish_turn(branch, res.as_ref().err(), Some((parent, report)))
             .await;
     }
 
@@ -1382,7 +1382,7 @@ impl Kernel {
     pub(crate) async fn finish_turn(
         self: &Arc<Self>,
         branch: BranchId,
-        error: Option<Error>,
+        error: Option<&Error>,
         reopened: Option<(BranchId, Option<String>)>,
     ) {
         // The branch is gone (its session was deleted while the turn was being

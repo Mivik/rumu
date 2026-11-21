@@ -5557,6 +5557,71 @@ async fn user_abort_of_agent_branch_reports_cancelled() {
     assert_eq!(turn_starts(&seen2, "wake"), 1, "{seen2:?}");
 }
 
+/// A scripted parent whose sub-agents' model calls all fail.
+struct ChildFails {
+    parent: ScriptedLlm,
+}
+
+#[async_trait]
+impl Llm for ChildFails {
+    async fn complete(
+        &self,
+        pick: rumu_core::ModelPick<'_>,
+        system: &str,
+        tools: &[ToolSpec],
+        nodes: &[Node],
+        on_delta: Option<OnDelta>,
+    ) -> std::result::Result<LlmResponse, LlmError> {
+        let is_child = nodes.iter().any(|n| match &n.body {
+            NodeBody::User { content } => content.text.contains("You are now a sub-agent"),
+            _ => false,
+        });
+        if is_child {
+            return Err(LlmError::Request("400 bad request".into()));
+        }
+        self.parent
+            .complete(pick, system, tools, nodes, on_delta)
+            .await
+    }
+}
+
+/// A sub-agent whose loop fails releases its branch like a failed turn: Done,
+/// idle, the failure pushed — not left busy with nothing to stop.
+#[tokio::test]
+async fn failed_sub_agent_releases_its_branch() {
+    let store = Arc::new(Store::in_memory());
+    let llm = Arc::new(ChildFails {
+        parent: ScriptedLlm::looping(vec![
+            LlmResponse::calls(vec![ToolCall::new(
+                "a1",
+                "agent",
+                json!({ "task": "look" }),
+            )]),
+            LlmResponse::text("parent done"),
+        ]),
+    });
+    let kernel = Kernel::new(store.clone(), llm, vec![], Workspaces::default()).unwrap();
+    let (session, _) = kernel.create_session("assistant".into()).await.unwrap();
+    let branch = BranchId::from(session.main_branch.0.as_str());
+    let mut rx = kernel.tap_pushes();
+    kernel.prompt(&branch, "go").await.unwrap();
+
+    let error = wait_push(
+        &mut rx,
+        |v| v["method"] == "turn.error" && v["params"]["branch"] != branch.0,
+        "the child's turn.error",
+    )
+    .await;
+    let child = BranchId::from(error["params"]["branch"].as_str().unwrap());
+    assert!(kernel.is_idle(&child).unwrap());
+    let b = store.get_branch(&child).unwrap().unwrap();
+    assert_eq!(b.status, BranchStatus::Done);
+    wait_until(Duration::from_secs(5), || {
+        kernel.tasks(&session.id).unwrap()[0].status == TaskStatus::Failed
+    })
+    .await;
+}
+
 /// A sub-agent that started a background task does not return its summary
 /// until the task finished and its loop consumed the completion note — and no
 /// separate wake turn runs on the child.
