@@ -92,3 +92,20 @@ export function findAgentChild(callId: string): Branch | null {
   matches.sort((x, y) => Number(isOwn(y)) - Number(isOwn(x)))
   return matches[0] ?? null
 }
+
+/**
+ * The sub-agent branches a `code` script forked on `branch` while its call
+ * `codeCallId` runs: each records the script's inner call `"{codeCallId}.{n}"`.
+ */
+export function scriptAgents(branch: string, codeCallId: string): Branch[] {
+  const prefix = `${codeCallId}.`
+  return Object.values(state.branches)
+    .filter(
+      (b): b is Branch =>
+        b.kind.type === 'agent' &&
+        b.kind.via_plugin &&
+        b.kind.parent_branch === branch &&
+        b.kind.call_id.startsWith(prefix),
+    )
+    .sort((x, y) => x.created_at - y.created_at)
+}

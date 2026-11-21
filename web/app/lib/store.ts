@@ -65,7 +65,7 @@ export {
   closeLightbox,
 } from './state/ui'
 
-export { ensureAgentNodes, findAgentChild, moveHead } from './state/tree'
+export { ensureAgentNodes, findAgentChild, moveHead, scriptAgents } from './state/tree'
 export type { OpenHistory, PromptAttachment } from './state/sessions'
 
 export {
