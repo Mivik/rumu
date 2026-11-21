@@ -308,6 +308,77 @@ impl Default for CompactSettings {
 
 impl Eq for CompactSettings {}
 
+/// How the web looks. Kept with the server, so every device opening this
+/// rumu reads the same way (`system` still follows each one's own).
+#[derive(Debug, Clone, Copy, Default, PartialEq, Eq, Serialize, Deserialize, ts_rs::TS)]
+#[serde(default, deny_unknown_fields)]
+#[ts(export)]
+pub struct Appearance {
+    pub theme: Theme,
+    pub work: WorkView,
+}
+
+impl Appearance {
+    pub fn is_default(&self) -> bool {
+        *self == Self::default()
+    }
+}
+
+/// How much of a turn's work shows: what starts open. A click still opens
+/// or folds any of it.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize, ts_rs::TS)]
+#[serde(default, deny_unknown_fields)]
+#[ts(export)]
+pub struct WorkView {
+    /// The work steps; `auto`: open while the turn runs.
+    pub steps: Fold,
+    /// The files changed stay in view while the steps are folded.
+    pub always_show_edits: bool,
+    /// Each reasoning; `auto`: open while it streams.
+    pub thinking: Fold,
+    /// Each tool call; `auto`: open when it failed (a blocked one always is).
+    pub calls: Fold,
+    /// Each changed file's diff (`folded` or `open`).
+    pub edits: Fold,
+    /// The edits outside the folded steps stop at a few, the rest behind
+    /// "N more edits"; opened steps always show every one.
+    pub limit_edits: bool,
+}
+
+impl Default for WorkView {
+    fn default() -> Self {
+        Self {
+            steps: Fold::Auto,
+            always_show_edits: true,
+            thinking: Fold::Auto,
+            calls: Fold::Folded,
+            edits: Fold::Open,
+            limit_edits: true,
+        }
+    }
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize, ts_rs::TS)]
+#[serde(rename_all = "snake_case")]
+#[ts(export)]
+pub enum Fold {
+    Folded,
+    /// Open while it matters (each field says when).
+    Auto,
+    Open,
+}
+
+#[derive(Debug, Clone, Copy, Default, PartialEq, Eq, Serialize, Deserialize, ts_rs::TS)]
+#[serde(rename_all = "snake_case")]
+#[ts(export)]
+pub enum Theme {
+    /// The device's own.
+    #[default]
+    System,
+    Light,
+    Dark,
+}
+
 fn is_default<T: Default + PartialEq>(v: &T) -> bool {
     *v == T::default()
 }
@@ -450,6 +521,7 @@ pub struct SettingsInfo {
     pub roles: Roles,
     pub titles: Titles,
     pub compact: CompactSettings,
+    pub appearance: Appearance,
     pub presets: Vec<PresetInfo>,
     pub mcp: Vec<crate::McpServerInfo>,
     pub skills: crate::SkillsInfo,

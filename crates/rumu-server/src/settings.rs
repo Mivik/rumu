@@ -28,6 +28,15 @@
 //! mcp:                          # MCP servers (docs/mcp.md)
 //!   github: { command: [github-mcp-server, stdio], env: { GITHUB_TOKEN: … } }
 //!   linear: { url: https://mcp.example/mcp, headers: { Authorization: … } }
+//! appearance:                   # how the web looks, on every device
+//!   theme: dark                 # system, light or dark
+//!   work:                       # what of a turn's work starts open:
+//!     steps: open               #   folded, auto (while it runs) or open
+//!     always_show_edits: false  #   files changed show while steps fold
+//!     thinking: folded          #   auto: while it streams
+//!     calls: auto               #   auto: a failed one
+//!     edits: folded             #   a change's diff: folded or open
+//!     limit_edits: false        #   a few edits outside the fold, then "N more"
 //! ```
 //!
 //! The ids each provider lists are fetched from its endpoints and cached at
@@ -41,8 +50,8 @@ use std::sync::{Arc, Mutex, RwLock};
 use std::time::{Duration, SystemTime};
 
 use rumu_core::{
-    ALIAS_PROVIDER, Effort, IoError, McpServerSettings, ModelAlias, ModelConfig, ModelInfo,
-    PresetInfo, Protocol, ProviderInfo, ProviderSettings, Roles, SettingsInfo, Titles,
+    ALIAS_PROVIDER, Appearance, Effort, IoError, McpServerSettings, ModelAlias, ModelConfig,
+    ModelInfo, PresetInfo, Protocol, ProviderInfo, ProviderSettings, Roles, SettingsInfo, Titles,
     enabled_models, split_model_ref, valid_mcp_name,
 };
 use rumu_kernel::LlmError;
@@ -85,6 +94,8 @@ struct File {
     model: ModelConfig,
     #[serde(skip_serializing_if = "BTreeMap::is_empty")]
     mcp: BTreeMap<String, McpServerSettings>,
+    #[serde(skip_serializing_if = "Appearance::is_default")]
+    appearance: Appearance,
 }
 
 /// A `settings.set_provider` request. The web never sees stored keys, so
@@ -313,6 +324,7 @@ impl Settings {
             roles: m.roles.clone(),
             titles: m.titles,
             compact: m.compact,
+            appearance: file.appearance,
             presets: offered(&catalog),
             mcp: self.mcp.info(&file.mcp),
             skills,
@@ -519,6 +531,17 @@ impl Settings {
             file.roles = roles;
             Ok(())
         })
+    }
+
+    pub fn set_appearance(&self, appearance: Appearance) -> Result<SettingsInfo> {
+        {
+            let mut file = self.lock();
+            let mut next = file.clone();
+            next.appearance = appearance;
+            save(&self.home.join(SETTINGS_FILE), &next)?;
+            *file = next;
+        }
+        Ok(self.info())
     }
 
     /// Apply `f` to a copy of the settings, configure the adapter with it
@@ -1028,6 +1051,26 @@ mod tests {
                 .mode();
             assert_eq!(mode & 0o777, 0o600);
         }
+    }
+
+    #[test]
+    fn appearance_persists_and_defaults_when_absent() {
+        let home = tempfile::tempdir().unwrap();
+        let load = || {
+            let llm = Arc::new(GenaiLlm::default());
+            Settings::load(home.path(), llm, McpHub::new(home.path())).unwrap()
+        };
+        assert_eq!(load().info().appearance, Appearance::default());
+        let appearance = Appearance {
+            theme: rumu_core::Theme::Dark,
+            work: rumu_core::WorkView {
+                steps: rumu_core::Fold::Open,
+                calls: rumu_core::Fold::Auto,
+                ..Default::default()
+            },
+        };
+        load().set_appearance(appearance).unwrap();
+        assert_eq!(load().info().appearance, appearance);
     }
 
     #[test]

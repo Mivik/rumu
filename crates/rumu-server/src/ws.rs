@@ -749,6 +749,10 @@ async fn dispatch(state: &AppState, method: &str, p: &Value) -> Result<Value> {
             let roles = parse_params(p)?;
             settings_edit(state, |s| s.set_roles(roles))
         }
+        "settings.set_appearance" => {
+            let appearance = parse_params(&p["appearance"])?;
+            settings_edit(state, |s| s.set_appearance(appearance))
+        }
         // MCP servers: their status and tools follow as pushes.
         "settings.set_mcp" => {
             let edit = parse_params(p)?;
