@@ -1028,6 +1028,36 @@ pub struct SessionInfo {
     #[serde(default, skip_serializing_if = "Option::is_none")]
     #[ts(optional)]
     pub project: Option<String>,
+    /// What the session is doing. Kept by the kernel beside the session in
+    /// the store, never in the journal.
+    #[serde(default, skip_serializing_if = "SessionStatus::is_idle")]
+    #[ts(as = "Option<SessionStatus>", optional)]
+    pub status: SessionStatus,
+}
+
+/// What a session is doing, as the kernel sees it: the first that holds, in
+/// this order.
+#[derive(Debug, Clone, Copy, Default, PartialEq, Eq, Serialize, Deserialize, ts_rs::TS)]
+#[serde(rename_all = "snake_case")]
+#[ts(export)]
+pub enum SessionStatus {
+    /// A decision (an approval, a question) waits for the user.
+    Waiting,
+    /// A loop runs on the main line.
+    Running,
+    /// The main line's last turn ended in an error.
+    Failed,
+    /// The main line is idle, but a background task or a sub-agent of the
+    /// session still runs and may wake it.
+    Background,
+    #[default]
+    Idle,
+}
+
+impl SessionStatus {
+    pub fn is_idle(&self) -> bool {
+        *self == Self::Idle
+    }
 }
 
 /// State derived purely from the root→head path (`state = f(path)`), merged

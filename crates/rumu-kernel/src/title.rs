@@ -8,7 +8,6 @@ use std::sync::Arc;
 use rumu_core::{
     Content, ModelPick, Node, NodeBody, NodeId, Role, SessionId, SessionInfo, Titles, now,
 };
-use serde_json::json;
 
 use crate::{Error, Kernel};
 
@@ -62,7 +61,7 @@ impl Kernel {
         }
         session.title = title;
         self.store.update_session(&session)?;
-        self.push("session.updated", json!({ "session": session }));
+        self.push_session(session);
         Ok(())
     }
 
@@ -81,7 +80,7 @@ impl Kernel {
         if current.title == session.title && current.title != title {
             current.title = title;
             self.store.update_session(&current)?;
-            self.push("session.updated", json!({ "session": current }));
+            self.push_session(current);
         }
         Ok(())
     }

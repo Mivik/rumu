@@ -7,6 +7,8 @@
     "retitle": "重新生成标题",
     "rename": "重命名",
     "unseen": "有新动态",
+    "failed": "已出错",
+    "background": "后台仍在运行",
     "deleteConfirm": "删除",
     "deletePrompt": "删除此会话？",
     "deleteWarning": "此操作无法撤销。",

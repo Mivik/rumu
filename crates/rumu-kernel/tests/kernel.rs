@@ -1372,6 +1372,34 @@ async fn non_transient_failure_is_not_retried() {
     assert_eq!(body_kinds(&nodes).last().unwrap(), "marker[turn.error]");
 }
 
+/// The session's status follows its main line: running while a turn runs,
+/// failed once a turn ends in an error, idle again after a turn that ends
+/// well.
+#[tokio::test(start_paused = true)]
+async fn session_status_follows_the_main_line() {
+    use rumu_core::SessionStatus;
+    let (kernel, _llm, branch) = flaky_setup(vec![LlmResponse::text("ok")], 1, PERMANENT_400).await;
+    let mut rx = kernel.tap_pushes();
+    let status = || kernel.list_sessions().unwrap()[0].status;
+    assert_eq!(status(), SessionStatus::Idle);
+
+    kernel.prompt(&branch, "hello").await.unwrap();
+    assert_eq!(status(), SessionStatus::Running);
+    wait_turn(&mut rx, Some(&branch.0)).await;
+    assert_eq!(status(), SessionStatus::Failed);
+
+    kernel.prompt(&branch, "again").await.unwrap();
+    assert_eq!(status(), SessionStatus::Running);
+    // The loop ends after `turn.done`, and says so.
+    let session = loop {
+        let v = rx.recv().await.expect("session.updated at the loop's end");
+        if v["method"] == "session.updated" && v["params"]["session"].get("status").is_none() {
+            break v;
+        }
+    };
+    assert_eq!(status(), SessionStatus::Idle, "{session}");
+}
+
 /// Once a delta reached the UI, replaying is unsafe: even a transient
 /// failure fails the turn on the first attempt (the leaked text stays a
 /// transient push; the tree records only the marker).
@@ -6362,10 +6390,13 @@ fn tool_result(kernel: &Kernel, branch: &BranchId) -> String {
 #[tokio::test(start_paused = true)]
 async fn an_unanswered_decision_runs_out() {
     let (kernel, branch, mut rx, _) = asking().await;
+    let status = || kernel.list_sessions().unwrap()[0].status;
+    assert_eq!(status(), rumu_core::SessionStatus::Waiting);
     let (done, seen) = collect_turn(&mut rx, &branch.0).await;
     assert_eq!(done["method"], "turn.done", "{done}");
     assert!(seen.iter().any(|v| v["method"] == "decision.resolved"));
     assert!(kernel.decisions().is_empty());
+    assert_ne!(status(), rumu_core::SessionStatus::Waiting);
     assert_eq!(tool_result(&kernel, &branch), "timed out");
 }
 
@@ -6373,7 +6404,12 @@ async fn an_unanswered_decision_runs_out() {
 async fn a_held_decision_waits_for_the_answer() {
     let (kernel, branch, mut rx, id) = asking().await;
     kernel.hold_decision(&id).unwrap();
-    let held = rx.recv().await.unwrap();
+    let held = loop {
+        let v = rx.recv().await.unwrap();
+        if v["method"] != "session.updated" {
+            break v;
+        }
+    };
     assert_eq!(held["method"], "decision.held", "{held}");
     assert!(kernel.decisions()[0].get("expires_at").is_none());
     tokio::time::sleep(Duration::from_secs(600)).await;

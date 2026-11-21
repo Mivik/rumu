@@ -66,7 +66,7 @@ use std::sync::Mutex;
 
 use rumu_core::{
     Artifact, Branch, BranchId, BranchKind, BranchStatus, IoError, Node, NodeBody, NodeId,
-    SessionId, SessionInfo, TaskId, TaskInfo, Timestamp,
+    SessionId, SessionInfo, SessionStatus, TaskId, TaskInfo, Timestamp,
 };
 use serde::{Deserialize, Serialize};
 use serde_json::Value;
@@ -150,6 +150,9 @@ struct StoreState {
     branch_owner: HashMap<BranchId, SessionId>,
     /// When the user last looked at each session (`seen.json`).
     seen: BTreeMap<SessionId, Timestamp>,
+    /// What each session not idle is doing (`SessionInfo::status`); set by
+    /// the kernel, never written.
+    status: HashMap<SessionId, SessionStatus>,
 }
 
 enum Entry {
@@ -251,6 +254,7 @@ impl Store {
         }
         let info = SessionInfo {
             seen_at: None,
+            status: SessionStatus::Idle,
             ..s.clone()
         };
         self.append(&s.id, &Record::Session(info.clone()))?;
@@ -348,10 +352,22 @@ impl Store {
                 st.node_owner.remove(node);
             }
         }
+        st.status.remove(id);
         if st.seen.remove(id).is_some() {
             self.save_seen(&st.seen)?;
         }
         Ok(())
+    }
+
+    /// Record what `id` is doing; true when that changed.
+    pub fn set_status(&self, id: &SessionId, status: SessionStatus) -> bool {
+        let mut st = self.state.lock().unwrap();
+        let old = if status.is_idle() || !st.sessions.contains_key(id) {
+            st.status.remove(id)
+        } else {
+            st.status.insert(id.clone(), status)
+        };
+        old.unwrap_or_default() != status
     }
 
     // ---- branches ----
@@ -564,6 +580,7 @@ impl StoreState {
     fn info(&self, s: &SessionState) -> SessionInfo {
         SessionInfo {
             seen_at: self.seen.get(&s.info.id).copied(),
+            status: self.status.get(&s.info.id).copied().unwrap_or_default(),
             ..s.info.clone()
         }
     }
@@ -937,6 +954,7 @@ mod tests {
             seen_at: None,
             assistant: "assistant".into(),
             project: None,
+            status: SessionStatus::Idle,
         };
         store.insert_session(&session).unwrap();
         store.insert_branch(&branch).unwrap();

@@ -35,8 +35,8 @@ use rumu_core::kind;
 use rumu_core::{
     Branch, BranchId, BranchKind, BranchStatus, Content, Effect, Event, FilesReverted, HookSpec,
     Inbox, Node, NodeBody, NodeId, PathState, Plugin, Post, Runtime, SYSTEM_SOURCE, SessionId,
-    SessionInfo, SessionRoot, TaskId, Titles, ToolCall, ToolSpec, TurnError, WorkspaceUse,
-    Workspaces, now, tool_schema,
+    SessionInfo, SessionRoot, SessionStatus, TaskId, Titles, ToolCall, ToolSpec, TurnError,
+    WorkspaceUse, Workspaces, now, tool_schema,
 };
 use rumu_store::Store;
 use serde_json::{Value, json};
@@ -400,6 +400,10 @@ impl Kernel {
                 source: kernel.plugin_names[i].clone(),
             }));
         }
+        // A turn that failed before the restart still shows as failed.
+        for session in kernel.store.list_sessions()? {
+            kernel.refresh_status(&session.id, false);
+        }
         // The post worker drains `Inbox::post`; without it posts would queue
         // forever, so a kernel built outside a runtime is an error.
         let handle = tokio::runtime::Handle::try_current().map_err(|_| Error::NoRuntime)?;
@@ -546,7 +550,7 @@ impl Kernel {
             .store
             .get_session(session)?
             .ok_or_else(|| Error::SessionNotFound(session.clone()))?;
-        self.push("session.updated", json!({ "session": info }));
+        self.push_session(info.clone());
         Ok(info)
     }
 
@@ -737,6 +741,7 @@ impl Kernel {
             project: derive_state(std::slice::from_ref(&root))
                 .project()
                 .map(str::to_owned),
+            status: SessionStatus::Idle,
         };
         self.store.insert_session(&info)?;
         self.store.insert_branch(&branch)?;
@@ -1029,7 +1034,7 @@ impl Kernel {
                 if session.project != project {
                     session.project = project;
                     self.store.update_session(&session)?;
-                    self.push("session.updated", json!({ "session": session }));
+                    self.push_session(session);
                 }
             }
         }
@@ -1058,7 +1063,7 @@ impl Kernel {
                 }
             }
             // A prompt moves the session up the lists (`touched_at`).
-            self.push("session.updated", json!({ "session": session }));
+            self.push_session(session);
         }
 
         self.push("branch.updated", json!({ "branch": b }));
@@ -1242,6 +1247,7 @@ impl Kernel {
             return Ok(());
         };
 
+        self.refresh_status_of(branch, false);
         let reason = if user { "prompt" } else { "wake" };
         let mut params = json!({ "branch": branch, "reason": reason });
         if reason == "wake" {
@@ -1349,15 +1355,97 @@ impl Kernel {
         self.signal_tasks();
         // Node appends only touch `updated_at`; announce it once per loop so
         // session lists see the new activity.
-        if let Ok(session) = self.session_of(branch)
-            && let Ok(Some(info)) = self.store.get_session(&session)
-        {
-            self.push("session.updated", json!({ "session": info }));
-        }
+        self.refresh_status_of(branch, true);
         if pending {
             // Re-arm only: the queued items already decided `counted`.
             self.request_wake(branch, None, false, false);
         }
+    }
+
+    /// Push `info` as `session.updated` with its current status, under the
+    /// lock [`refresh_status`](Self::refresh_status) pushes under, so a
+    /// copy read a moment earlier never overtakes a newer status.
+    pub(crate) fn push_session(&self, mut info: SessionInfo) {
+        let _inner = self.inner.lock().unwrap();
+        if let Ok(Some(current)) = self.store.get_session(&info.id) {
+            info.status = current.status;
+        }
+        self.push("session.updated", json!({ "session": info }));
+    }
+
+    /// [`refresh_status`](Self::refresh_status) of `branch`'s session.
+    pub(crate) fn refresh_status_of(&self, branch: &BranchId, always: bool) {
+        if let Ok(session) = self.session_of(branch) {
+            self.refresh_status(&session, always);
+        }
+    }
+
+    /// Recompute what `session` is doing into the store, pushing the session
+    /// when that changed or with `always`. All under the kernel's lock, so
+    /// changes racing each other can neither leave a stale status nor
+    /// reorder the pushes. Call it without holding that lock.
+    pub(crate) fn refresh_status(&self, session: &SessionId, always: bool) {
+        let inner = self.inner.lock().unwrap();
+        let Ok(Some(info)) = self.store.get_session(session) else {
+            return;
+        };
+        let status = self.status_locked(&inner, &info);
+        let changed = self.store.set_status(session, status);
+        if (changed || always)
+            && let Ok(Some(info)) = self.store.get_session(session)
+        {
+            self.push("session.updated", json!({ "session": info }));
+        }
+    }
+
+    fn status_locked(&self, inner: &Inner, info: &SessionInfo) -> SessionStatus {
+        let main = &info.main_branch;
+        let ours = |b: &BranchId| {
+            self.store
+                .get_branch(b)
+                .ok()
+                .flatten()
+                .is_some_and(|b| b.session == info.id)
+        };
+        if inner
+            .decisions
+            .values()
+            .any(|d| d.params["session"] == json!(info.id))
+        {
+            SessionStatus::Waiting
+        } else if inner.running.contains_key(main) {
+            SessionStatus::Running
+        } else if self.ended_in_error(main) {
+            SessionStatus::Failed
+        } else if inner
+            .tasks
+            .values()
+            .any(|e| e.info.session == info.id && e.info.status.is_running())
+            || inner.running.keys().any(ours)
+        {
+            SessionStatus::Background
+        } else {
+            SessionStatus::Idle
+        }
+    }
+
+    /// Did the last turn on `branch` end in an error? Its [`TurnError`]
+    /// marker is the last node of the line, but for notes written after it.
+    fn ended_in_error(&self, branch: &BranchId) -> bool {
+        let Ok(Some(b)) = self.store.get_branch(branch) else {
+            return false;
+        };
+        let mut id = Some(b.head);
+        while let Some(node) = id.and_then(|id| self.store.get_node(&id).ok().flatten()) {
+            match &node.body {
+                NodeBody::Note { content, .. } if content.decode::<TurnError>().is_some() => {
+                    return true;
+                }
+                NodeBody::Note { .. } => id = node.parent,
+                _ => return false,
+            }
+        }
+        false
     }
 
     /// Shared post-turn cleanup: record a terminal failure, release the loop
@@ -1697,7 +1785,8 @@ impl Kernel {
             .map(str::to_owned);
         session.updated_at = now();
         self.store.update_session(&session)?;
-        self.push("session.updated", json!({ "session": session }));
+        // The line it moved to may end in a failed turn, or no longer.
+        self.refresh_status(&b.session, true);
 
         let mut ev = self.make_event(
             kind::BRANCH_MOVE,
@@ -1774,6 +1863,7 @@ impl Kernel {
             seen_at: Some(at),
             assistant: src.assistant.clone(),
             project: derive_state(&path).project().map(str::to_owned),
+            status: SessionStatus::Idle,
         };
         // The session row first: the store drops writes for unknown sessions.
         self.store.insert_session(&info)?;

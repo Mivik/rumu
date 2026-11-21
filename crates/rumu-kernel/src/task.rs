@@ -507,6 +507,7 @@ impl Kernel {
         self.save_task(&info);
         self.signal_tasks();
         self.push("task.started", json!({ "task": info }));
+        self.refresh_status(&info.session, false);
         Ok((id, token))
     }
 
@@ -625,6 +626,7 @@ impl Kernel {
 
         self.signal_tasks();
         self.push("task.done", json!({ "task": info }));
+        self.refresh_status(&info.session, false);
         self.save_task(&info);
         if silent {
             return;

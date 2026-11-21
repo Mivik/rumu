@@ -16,14 +16,14 @@
 // in its last activity time, which turns into the row's menu on hover.
 import { computed, onUnmounted, onUpdated, ref, watch, type Directive } from 'vue'
 import { LOCALE_LABELS, SUPPORTED_LOCALES, locale, setLocale, t } from '../i18n'
-import type { Locale } from '../i18n'
+import type { Locale, MessageKey } from '../i18n'
 import {
   connected,
   deleteSession,
   goHome,
   isBusy,
-  isRunning,
   isUnseen,
+  sessionStatus,
   landingAssistant,
   landingProject,
   moveSession,
@@ -260,11 +260,34 @@ function assistantName(id: string): string {
   return state.assistants.find((a) => a.id === id)?.name ?? id.slice(0, 8)
 }
 
-/** Other sessions with a tool call waiting on the user's approval (the open
- *  one shows it in its composer). */
+/** Other sessions with a decision waiting on the user (the open one shows
+ *  it in its composer). */
 const waiting = computed(
-  () => new Set(state.decisions.map((d) => d.session).filter((s) => s !== state.sessionId)),
+  () =>
+    new Set(
+      state.sessions.filter((s) => s.status === 'waiting' && s.id !== state.sessionId).map((s) => s.id),
+    ),
 )
+
+type RowDot = 'waiting' | 'running' | 'failed' | 'background' | 'unseen'
+
+/** The dot left of a row's title, one at a time: what the session is doing,
+ *  else activity not seen yet. The open session's composer asks for its
+ *  decisions, so there it reads as running. */
+function rowDot(s: SessionInfo): RowDot | null {
+  const status = sessionStatus(s)
+  if (status === 'waiting') return s.id === state.sessionId ? 'running' : 'waiting'
+  if (status !== 'idle') return status
+  return s.id !== state.sessionId && isUnseen(s) ? 'unseen' : null
+}
+
+const ROW_DOT: Record<RowDot, { class: string; title: MessageKey }> = {
+  waiting: { class: 'size-2 bg-brand ring-3 ring-brand-soft', title: 'chat.ask.waiting' },
+  running: { class: 'dot-live dot-run size-1.5 bg-pine', title: 'common.working' },
+  failed: { class: 'size-1.5 bg-danger', title: 'chat.sidebar.failed' },
+  background: { class: 'size-1.5 bg-pine', title: 'chat.sidebar.background' },
+  unseen: { class: 'size-1.5 bg-brand', title: 'chat.sidebar.unseen' },
+}
 
 /** Titles are the title model's to write, so a session's can be redone. */
 const titledByModel = computed(() => models.settings?.titles === 'model' && !!models.settings.roles.title)
@@ -554,7 +577,7 @@ const otherLocale = computed<Locale>(
           v-if="group.draft && !collapsed(group)"
           type="button"
           :aria-current="onLanding ? 'page' : undefined"
-          class="flex w-full min-w-0 items-center rounded-control border py-2 pr-1 pl-3 text-left text-secondary transition-colors duration-200 outline-none focus-visible:ring-2 focus-visible:ring-brand/25"
+          class="flex w-full min-w-0 items-center rounded-control border py-2 pr-1 pl-5.5 text-left text-secondary transition-colors duration-200 outline-none focus-visible:ring-2 focus-visible:ring-brand/25"
           :class="
             onLanding
               ? 'border-line bg-surface-2 font-bold text-ink shadow-soft'
@@ -586,7 +609,7 @@ const otherLocale = computed<Locale>(
             @dragstart="startDrag($event, row.s)"
             @dragend="endDrag"
           >
-            <span v-if="renaming?.id === row.s.id" class="flex min-w-0 flex-1 py-1 pr-2.5 pl-3">
+            <span v-if="renaming?.id === row.s.id" class="flex min-w-0 flex-1 py-1 pr-2.5 pl-4">
               <input
                 v-model="renameText"
                 v-select
@@ -601,34 +624,26 @@ const otherLocale = computed<Locale>(
             </span>
             <button
               v-else
-              class="flex min-w-0 flex-1 items-center gap-2 py-2 pr-2.5 pl-3 text-left outline-none pointer-coarse:pr-10"
+              class="flex min-w-0 flex-1 items-center gap-2 py-2 pr-2.5 pl-2 text-left outline-none pointer-coarse:pr-10"
               :aria-current="row.s.id === state.sessionId && !state.page ? 'page' : undefined"
               @click="pickSession(row.s.id)"
             >
+              <!-- the dot's column, under the group's chevron: titles line up
+                   whether a row has one or not -->
+              <span class="-mr-0.5 flex size-2 flex-none items-center justify-center">
+                <span
+                  v-if="rowDot(row.s)"
+                  class="flex-none rounded-full"
+                  :class="ROW_DOT[rowDot(row.s)!].class"
+                  :title="t(ROW_DOT[rowDot(row.s)!].title)"
+                />
+              </span>
               <span class="min-w-0 flex-1 truncate">{{ row.s.title || t('common.untitled') }}</span>
               <span
                 v-if="!group.assistant && row.s.assistant !== defaultAssistant"
                 class="max-w-[6.5rem] flex-none truncate text-micro font-normal text-ink-3"
                 >{{ assistantName(row.s.assistant) }}</span
               >
-              <!-- the row's dot, one state at a time: a call waiting on you
-                   (ringed), a turn running (pine, breathing — any session's,
-                   not just the open one), else activity you have not seen -->
-              <span
-                v-if="waiting.has(row.s.id)"
-                class="size-2 flex-none rounded-full bg-brand ring-3 ring-brand-soft"
-                :title="t('chat.ask.waiting')"
-              />
-              <span
-                v-else-if="isRunning(row.s)"
-                class="dot-live dot-run size-1.5 flex-none rounded-full bg-pine"
-                :title="t('common.working')"
-              />
-              <span
-                v-else-if="row.s.id !== state.sessionId && isUnseen(row.s)"
-                class="size-1.5 flex-none rounded-full bg-brand"
-                :title="t('chat.sidebar.unseen')"
-              />
               <!-- the menu takes this place on hover -->
               <span
                 class="flex-none text-micro font-normal text-ink-3 tabular-nums transition-opacity duration-150 pointer-fine:group-hover:opacity-0 pointer-fine:group-has-[:focus-visible]:opacity-0 pointer-fine:group-has-[[aria-expanded=true]]:opacity-0"

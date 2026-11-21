@@ -20,10 +20,10 @@ export {
   connected,
   currentBranch,
   isBusy,
-  isRunning,
   isUnseen,
   pathNodes,
   pathOf,
+  sessionStatus,
   siblingAlternatives,
   sortedSessions,
 } from './state/derived'

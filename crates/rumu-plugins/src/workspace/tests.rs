@@ -2047,6 +2047,7 @@ fn staged_session() -> (rumu_core::SessionInfo, Vec<Node>, Vec<rumu_core::Branch
         seen_at: None,
         assistant: crate::testutil::TEST_ASSISTANT.into(),
         project: None,
+        status: rumu_core::SessionStatus::Idle,
     };
     (info, nodes, vec![main, agent])
 }
@@ -2467,6 +2468,7 @@ async fn session_nodes_show_image_placeholders() {
         seen_at: None,
         assistant: crate::testutil::TEST_ASSISTANT.into(),
         project: None,
+        status: rumu_core::SessionStatus::Idle,
     };
     let host = session_host(info, nodes, vec![]);
     let cx = host.cx();
@@ -2589,6 +2591,7 @@ fn staged_tree(sid: &str, nodes: Vec<Node>, head: &str) -> std::sync::Arc<FakeRu
         seen_at: None,
         assistant: crate::testutil::TEST_ASSISTANT.into(),
         project: None,
+        status: rumu_core::SessionStatus::Idle,
     };
     let branch = rumu_core::Branch {
         id: rumu_core::BranchId::from("B"),
@@ -3154,6 +3157,7 @@ fn search_sessions() -> std::sync::Arc<FakeRuntime> {
         seen_at: None,
         assistant: crate::testutil::TEST_ASSISTANT.into(),
         project: None,
+        status: rumu_core::SessionStatus::Idle,
     };
     let branch = |sid: &str, head: &str| rumu_core::Branch {
         id: rumu_core::BranchId::from("B"),
@@ -3464,6 +3468,7 @@ async fn search_sessions_snippet_cjk_queries() {
         seen_at: None,
         assistant: crate::testutil::TEST_ASSISTANT.into(),
         project: None,
+        status: rumu_core::SessionStatus::Idle,
     };
     let mk = |nid: &str, at: i64, body: NodeBody| Node {
         id: rumu_core::NodeId::from(nid),
@@ -3541,6 +3546,7 @@ async fn search_downweights_tool_results_and_breaks_ties_by_time() {
         seen_at: None,
         assistant: crate::testutil::TEST_ASSISTANT.into(),
         project: None,
+        status: rumu_core::SessionStatus::Idle,
     };
     let mk = |nid: &str, at: i64, body: NodeBody| Node {
         id: rumu_core::NodeId::from(nid),
@@ -5345,6 +5351,7 @@ async fn sessions_belong_to_their_project_or_assistant_deck() {
         seen_at: None,
         assistant: assistant.into(),
         project: project.map(str::to_owned),
+        status: rumu_core::SessionStatus::Idle,
     };
     host.sessions.lock().unwrap().extend([
         session(

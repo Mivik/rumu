@@ -32,6 +32,7 @@ pub(crate) struct PendingDecision {
 struct Resolved {
     kernel: Arc<Kernel>,
     id: String,
+    session: SessionId,
 }
 
 impl Drop for Resolved {
@@ -39,6 +40,7 @@ impl Drop for Resolved {
         self.kernel.inner.lock().unwrap().decisions.remove(&self.id);
         self.kernel
             .push("decision.resolved", json!({ "id": self.id }));
+        self.kernel.refresh_status(&self.session, false);
     }
 }
 
@@ -94,11 +96,13 @@ impl Kernel {
             self.push("decision.requested", params);
             id
         };
+        self.refresh_status(&session, false);
         // An abort usually drops this future mid-wait (the kernel abandons the
         // tool call), so the cleanup lives in a guard, not after the await.
         let _resolved = Resolved {
             kernel: self.clone(),
             id,
+            session,
         };
         let expire = async {
             let Some(timeout) = timeout else {

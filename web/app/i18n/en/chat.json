@@ -7,6 +7,8 @@
     "retitle": "Regenerate title",
     "rename": "Rename",
     "unseen": "New activity",
+    "failed": "Failed",
+    "background": "Running in the background",
     "deleteConfirm": "Delete",
     "deletePrompt": "Delete this session?",
     "deleteWarning": "This can't be undone.",

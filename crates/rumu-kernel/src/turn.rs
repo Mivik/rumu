@@ -113,7 +113,10 @@ impl Kernel {
             }
         };
         match token {
-            Some(token) => self.spawn_turn(branch.clone(), token, TurnKind::Prompt(content.into())),
+            Some(token) => {
+                self.refresh_status_of(branch, false);
+                self.spawn_turn(branch.clone(), token, TurnKind::Prompt(content.into()))
+            }
             None => self.steer_prompt(branch, content.into()).await?,
         }
         Ok(())
@@ -321,6 +324,8 @@ impl Kernel {
         }
         let t = CancellationToken::new();
         inner.running.insert(branch.clone(), t.clone());
+        drop(inner);
+        self.refresh_status_of(branch, false);
         Ok(t)
     }
 
@@ -1279,6 +1284,7 @@ impl Kernel {
             let mut inner = self.inner.lock().unwrap();
             inner.running.insert(child.id.clone(), token.clone());
         }
+        self.refresh_status_of(&child.id, false);
         self.push("turn.started", json!({ "branch": child.id }));
 
         let looped: Result<LoopOutcome> = async {

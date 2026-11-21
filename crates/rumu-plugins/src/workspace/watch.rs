@@ -753,6 +753,7 @@ mod tests {
             seen_at: None,
             assistant: crate::testutil::TEST_ASSISTANT.into(),
             project: None,
+            status: rumu_core::SessionStatus::Idle,
         };
         let row = Branch {
             id: branch.clone(),
