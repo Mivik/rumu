@@ -84,7 +84,9 @@ const changed = computed(() => {
       for (const v of s.rows.flatMap(fileEditsOf)) {
         // cards are memory, not the workspace files the turn changed
         if (v.toolCardId) continue
-        files.add(v.callFull)
+        // the same file however the calls wrote its path
+        const file = v.patch?.file
+        files.add(file ? `${file.ws}:${file.path}` : v.callFull)
         added += v.diff?.added ?? 0
         removed += v.diff?.removed ?? 0
       }

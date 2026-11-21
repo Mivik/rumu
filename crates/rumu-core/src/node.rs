@@ -696,6 +696,21 @@ pub struct FileRef {
     pub path: String,
 }
 
+/// Payload of the `workspace.target` marker (v1) the kernel puts on a file
+/// tool's or `bash`'s result that carries no payload of its own: the
+/// workspace the call addressed, resolved when it ran, so the UI can name
+/// it whether or not the call wrote it.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, ts_rs::TS)]
+#[ts(export)]
+pub struct WorkspaceTarget {
+    pub ws: String,
+}
+
+impl Structured for WorkspaceTarget {
+    const TAG: &'static str = "workspace.target";
+    const V: u32 = 1;
+}
+
 /// Payload of the `workspace.revert` marker (v1): the user reverted the
 /// file changes made since `since` (the time of the user message they
 /// rewound to); `files` are the ones put back.

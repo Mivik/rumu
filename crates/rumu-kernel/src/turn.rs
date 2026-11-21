@@ -9,8 +9,9 @@ use rumu_core::kind;
 use rumu_core::{
     Branch, BranchId, BranchKind, BranchStatus, CODE_DENIED_TOOLS, Call, CallStats, CompactReason,
     Content, Cx, Effort, FILE_PATCH_TAG, Inherit, InheritContext, InnerCall, Invoke, ModelPick,
-    ModelUse, NodeBody, NodeId, Plugin, RUMU_WORKSPACE, SYSTEM_SOURCE, SessionId, ToolCall,
-    ToolError, ToolOutput, TurnError, WorkspaceSet, WorkspaceUse, parse_args, truncate_output,
+    ModelUse, NodeBody, NodeId, Plugin, RUMU_WORKSPACE, SYSTEM_SOURCE, SessionId, Tagged, ToolCall,
+    ToolError, ToolOutput, TurnError, WorkspaceSet, WorkspaceTarget, WorkspaceUse, parse_args,
+    truncate_output,
 };
 use schemars::JsonSchema;
 use serde::Deserialize;
@@ -57,6 +58,15 @@ pub(crate) struct ExecutedTool {
     pub dur_ms: u64,
     /// The block reason when `tool.pre` blocked the call.
     pub blocked: Option<String>,
+    /// The workspace a file tool or `bash` call addressed (the final
+    /// `tool.pre`'s `Fields::workspace`).
+    pub workspace: Option<String>,
+}
+
+/// The payload a result keeps on its node: the tool's own, else the
+/// workspace the call addressed, for the UI to name.
+fn with_target(data: Option<Tagged>, workspace: Option<String>) -> Option<Tagged> {
+    data.or_else(|| workspace.map(|ws| Tagged::new(&WorkspaceTarget { ws })))
 }
 
 #[derive(Debug, Default)]
@@ -624,6 +634,7 @@ impl Kernel {
                     out,
                     mut payload,
                     dur_ms,
+                    workspace,
                     ..
                 }) = step
                 else {
@@ -637,7 +648,8 @@ impl Kernel {
                 payload["is_error"] = json!(out.is_error);
                 let is_error = out.is_error;
                 // The whole content, attachments included, becomes the node.
-                let content = out.content.clone();
+                let mut content = out.content.clone();
+                content.data = with_target(content.data, workspace);
                 self.append_body_dur(
                     &branch,
                     NodeBody::ToolResult {
@@ -882,6 +894,7 @@ impl Kernel {
             payload: ev.payload,
             dur_ms: started.elapsed().as_millis() as u64,
             blocked,
+            workspace: ev.fields.workspace,
         }))
     }
 
@@ -948,6 +961,7 @@ impl Kernel {
             mut payload,
             dur_ms,
             blocked,
+            workspace,
         }) = self
             .exec_tool_call(
                 branch,
@@ -977,8 +991,8 @@ impl Kernel {
 
         // The node keeps what the model would have seen for a direct call;
         // the script already got the full output up to the invoke cap. Only
-        // the file patch is kept: it lets a reloaded session render an
-        // internal write/edit exactly like a direct one.
+        // the file patch (else the workspace addressed) is kept: it lets a
+        // reloaded session render an internal call exactly like a direct one.
         self.append_body_dur(
             branch,
             NodeBody::ToolResult {
@@ -986,7 +1000,10 @@ impl Kernel {
                 content: Content {
                     text: truncate_output(out.content.text.clone()),
                     attachments: Vec::new(),
-                    data: out.content.data.clone().filter(|d| d.tag == FILE_PATCH_TAG),
+                    data: with_target(
+                        out.content.data.clone().filter(|d| d.tag == FILE_PATCH_TAG),
+                        workspace,
+                    ),
                 },
                 is_error: out.is_error,
                 invoke: Some(Invoke {

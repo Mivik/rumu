@@ -5,7 +5,7 @@
 // ToolList (the rows), EditCard and ActivityRun (the summary line).
 
 import { reactive } from 'vue'
-import type { Attachment, Branch, FilePatch, Node, TaskStatus } from './types'
+import type { Attachment, Branch, Content, FilePatch, Node, TaskStatus } from './types'
 import { INTERNAL_WORKSPACE } from './types'
 import type { ToolRowInfo } from './store'
 import { findAgentChild, state } from './store'
@@ -15,6 +15,7 @@ import { renderedContent } from './attachments'
 import { diffCounts as foldCounts, diffLines, type DiffCounts, filePatchOf } from './diff'
 import { i18n, t } from '../i18n'
 import type { WorkView } from './generated/WorkView'
+import type { WorkspaceTarget } from './generated/WorkspaceTarget'
 import type { MessageKey } from '../i18n'
 
 export type ToolStatus = 'ok' | 'error' | 'blocked'
@@ -120,9 +121,20 @@ function strArg(args: Args, key: string): string {
   return args && typeof args[key] === 'string' ? (args[key] as string).trim() : ''
 }
 
-/** The call's full one-line summary (tooltip). File tools show the `path`
- * verbatim (it may carry a `<ws>:` prefix); `bash` names its workspace. */
-function callFull(name: string, call: Call): string {
+/** The workspace a file tool or `bash` call addressed, as the kernel
+ * recorded it: a write/edit/delete's patch names its file's, other results
+ * carry a `workspace.target`. Null on results older than both. */
+function targetOf(content: Content | undefined, patch: FilePatch | null): string | null {
+  if (patch?.file) return patch.file.ws
+  const d = content?.data
+  return d?.tag === 'workspace.target' && d.v === 1 ? (d.data as WorkspaceTarget).ws : null
+}
+
+/** The call's full one-line summary (tooltip, an edit's header). File tools
+ * show `<ws>:<path>` — the path as written, its workspace always named —
+ * and `bash` `<ws>: <command>`; a result older than the recorded
+ * workspace shows what the call wrote. */
+function callFull(name: string, call: Call, ws: string | null): string {
   if (!call) return ''
   const args = argsOf(call)
   const str = (key: string): string => strArg(args, key)
@@ -132,14 +144,17 @@ function callFull(name: string, call: Call): string {
     case 'edit':
     case 'delete':
     case 'list':
-    case 'show':
+    case 'show': {
+      const path = str('path')
       // `proj:` / `@rumu:` (empty rest) is that workspace's root.
-      return str('path') || (name === 'list' ? 'root' : '')
+      if (!ws) return path || (name === 'list' ? 'root' : '')
+      return `${ws}:${path.startsWith(`${ws}:`) ? path.slice(ws.length + 1) : path}`
+    }
     case 'bash': {
       const command = preview(oneLine(str('command')), 200)
-      const ws = str('workspace')
-      if (command) return ws ? `${ws}: ${command}` : command
-      return ws
+      const at = ws ?? str('workspace')
+      if (command) return at ? `${at}: ${command}` : command
+      return at
     }
     case 'workspace.use':
       return workspaceLabel(baseName(str('path')))
@@ -363,7 +378,7 @@ export function toolRowView(row: ToolRowInfo): ToolRowView {
     parsed = {
       locale,
       callShort: callShort(name, call),
-      callFull: callFull(name, call),
+      callFull: callFull(name, call, toolCardId ? null : targetOf(content, patch)),
       diff,
       // A blocked row is already explained by its stamp; an error keeps a
       // clipped first line so the row hints at what went wrong (a bash

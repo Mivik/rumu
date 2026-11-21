@@ -15,7 +15,7 @@ use rumu_core::{
     Attachment, BranchId, BranchStatus, CardMount, Content, Cx, Decision, Event, HookOutput,
     HookSpec, Inbox, Invoke, Manifest, Node, NodeBody, NodeId, PathState, Plugin, Post, Progress,
     SCRATCH_WORKSPACE, SessionId, SessionRoot, Tagged, TaskDone, TaskKind, TaskStatus, ToolCall,
-    ToolOutput, ToolSpec, Workspace, WorkspaceUse, Workspaces,
+    ToolOutput, ToolSpec, Workspace, WorkspaceTarget, WorkspaceUse, Workspaces,
 };
 use rumu_kernel::{Delta, Kernel, Llm, LlmError, LlmResponse, OnDelta, ScriptedLlm};
 use rumu_store::Store;
@@ -3193,6 +3193,69 @@ async fn code_invoke_keeps_the_file_patch() {
     assert_eq!(patch.v, 1);
     assert_eq!(patch.data["kind"], "update");
     assert!(content.attachments.is_empty());
+}
+
+/// A file tool's or `bash`'s result names the workspace the call addressed,
+/// written or defaulted, unless the tool left a payload of its own — on
+/// direct and on `code` calls alike.
+#[tokio::test]
+async fn results_name_the_workspace_addressed() {
+    let tools: ToolFn = Arc::new(|name: &str, _: Value, _: &Cx| {
+        let mut out = ToolOutput::ok("ok");
+        if name == "write" {
+            out.content.data = Some(Tagged {
+                tag: rumu_core::FILE_PATCH_TAG.to_owned(),
+                v: 1,
+                data: json!({ "kind": "create" }),
+            });
+        }
+        out
+    });
+    let plugin = Arc::new(script_host(
+        &["read", "bash", "write"],
+        vec![],
+        noop_hooks(),
+        tools,
+    ));
+    let (kernel, _llm, _session, branch) = setup_with_workspaces(
+        vec![plugin],
+        vec![
+            LlmResponse::calls(vec![
+                ToolCall::new("c1", "read", json!({ "path": "proj:src/a.rs" })),
+                ToolCall::new("c2", "bash", json!({ "command": "ls" })),
+                ToolCall::new("c3", "write", json!({ "path": "b.rs", "content": "" })),
+                ToolCall::new(
+                    "c4",
+                    "script",
+                    json!({ "calls": [{ "name": "bash", "args": { "command": "ls" } }] }),
+                ),
+            ]),
+            LlmResponse::text("done"),
+        ],
+        project("proj", "/p"),
+    )
+    .await;
+    let mut rx = kernel.tap_pushes();
+    let (_, _seen) = turn_collect(&kernel, &branch, &mut rx, "go").await;
+
+    let (nodes, _) = kernel.branch_path(&branch).unwrap();
+    let data = |id: &str| {
+        nodes
+            .iter()
+            .find_map(|n| match &n.body {
+                NodeBody::ToolResult {
+                    call_id, content, ..
+                } if call_id == id => Some(content.data.clone()),
+                _ => None,
+            })
+            .unwrap_or_else(|| panic!("no result for {id}"))
+    };
+    let target = |id: &str| data(id).and_then(|d| d.decode::<WorkspaceTarget>());
+    assert_eq!(target("c1").unwrap().ws, "proj");
+    assert_eq!(target("c2").unwrap().ws, SCRATCH_WORKSPACE);
+    assert_eq!(data("c3").unwrap().tag, rumu_core::FILE_PATCH_TAG);
+    assert_eq!(target("c4.1").unwrap().ws, SCRATCH_WORKSPACE);
+    assert!(target("c4").is_none(), "`code` addresses no workspace");
 }
 
 /// `caller` distinguishes inner (`code`) from direct (`model`) calls in both
