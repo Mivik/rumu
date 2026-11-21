@@ -7,7 +7,7 @@ import { t } from '../../i18n'
 import type { Branch, BranchId, BranchPathResult, Node, NodeId, SessionId, SessionTreeResult } from '../types'
 import { state } from './state'
 import { syncLive } from './stream'
-import { toast } from './ui'
+import { toast, withStop } from './ui'
 
 /** Replace nodes/branches with an authoritative `session.tree`. */
 export function replaceTree(tree: SessionTreeResult): void {
@@ -65,7 +65,8 @@ export async function moveHead(node: NodeId, label: 'switch' | 'edit' = 'switch'
   if (!branch) return false
   try {
     // The head moves by the `branch.updated` push, which comes first.
-    await rumu.request('branch.move', { branch, node })
+    const moved = await withStop((stop) => rumu.request('branch.move', { branch, node, stop }))
+    if (moved === undefined) return false
     state.mainBranch = branch
     await loadPath(branch)
     return true

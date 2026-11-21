@@ -1591,8 +1591,16 @@ impl Kernel {
     /// (its result would land on a line that no longer holds its call; one
     /// from a call the line keeps does not block), at an assistant node with
     /// calls still open, and at a node a sub-agent or side question added (it
-    /// is not part of the line).
-    pub async fn move_head(self: &Arc<Self>, branch: &BranchId, node: &NodeId) -> Result<Branch> {
+    /// is not part of the line). With `stop`, those tasks and sub-agents are
+    /// stopped instead, in the same step: nothing wakes for them, and a task
+    /// of the line itself leaves no completion note (the new line never made
+    /// its call).
+    pub async fn move_head(
+        self: &Arc<Self>,
+        branch: &BranchId,
+        node: &NodeId,
+        stop: bool,
+    ) -> Result<Branch> {
         let mut b = self
             .store
             .get_branch(branch)?
@@ -1614,7 +1622,7 @@ impl Kernel {
         let kept = self.ancestry(node)?;
         {
             // Checked and moved under one lock: no turn or task starts between.
-            let inner = self.inner.lock().unwrap();
+            let mut inner = self.inner.lock().unwrap();
             let wakers = Self::wakers_locked(&inner, &subtree);
             if wakers
                 .iter()
@@ -1626,7 +1634,19 @@ impl Kernel {
                 .iter()
                 .filter(|w| !anchors.of(branch, w).is_some_and(|a| kept.contains(a)))
                 .collect();
-            if !left.is_empty() {
+            // A task that ended but whose note is still on its way to the
+            // line cannot be stopped any more.
+            let posting = |inner: &Inner, w: &Waker| match &w.kind {
+                WakerKind::Task { id, .. } => {
+                    &w.branch == branch
+                        && inner
+                            .tasks
+                            .get(id)
+                            .is_some_and(|e| !e.info.status.is_running())
+                }
+                _ => false,
+            };
+            if !left.is_empty() && (!stop || left.iter().any(|w| posting(&inner, w))) {
                 // Name the tasks; a sub-agent's loop shows only when no task
                 // (its own among them) does.
                 let tasks: Vec<&&Waker> = left
@@ -1639,7 +1659,29 @@ impl Kernel {
                     tasks.iter().map(|w| anchors.label(w)).collect()
                 };
                 labels.dedup();
-                return Err(Error::LineBusy(labels.join(", ")));
+                return Err(Error::LineBusy(labels));
+            }
+            for w in &left {
+                match &w.kind {
+                    WakerKind::Task { id, .. } => {
+                        if let Some(e) = inner.tasks.get_mut(id) {
+                            e.quiet = true;
+                            e.silent = &w.branch == branch;
+                            e.token.cancel();
+                        }
+                    }
+                    // A sub-agent's (the main line's own are refused above):
+                    // a stopped one that ends after the move is detached, so
+                    // it does not report.
+                    WakerKind::Loop => {
+                        if let Some(t) = inner.running.get(&w.branch) {
+                            t.cancel();
+                        }
+                    }
+                    WakerKind::Wake => {
+                        inner.wake_pending.remove(&w.branch);
+                    }
+                }
             }
             self.store.set_branch_head(branch, node)?;
         }

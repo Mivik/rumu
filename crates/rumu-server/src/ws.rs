@@ -92,7 +92,18 @@ impl ServerError {
             Self::MissingParam(_) | Self::InvalidParams(_) => -32602,
             // A stale write: the web shows its "this card changed" banner.
             Self::Cards(rumu_cards::Error::Stale { .. }) => -32010,
+            // The main line cannot move yet: the web asks to stop what holds
+            // it (`data.tasks`) and sends the move again with `stop`.
+            Self::Kernel(rumu_kernel::Error::LineBusy(_)) => -32011,
             _ => -32000,
+        }
+    }
+
+    /// The JSON-RPC error's `data`, for the errors the web acts on.
+    fn data(&self) -> Option<Value> {
+        match self {
+            Self::Kernel(rumu_kernel::Error::LineBusy(tasks)) => Some(json!({ "tasks": tasks })),
+            _ => None,
         }
     }
 }
@@ -422,7 +433,7 @@ async fn handle_request(state: &AppState, raw: &str) -> String {
     let req: Value = match serde_json::from_str(raw) {
         Ok(v) => v,
         Err(e) => {
-            return error_frame(Value::Null, -32700, format!("parse error: {e}")).to_string();
+            return error_frame(Value::Null, -32700, format!("parse error: {e}"), None).to_string();
         }
     };
     let id = req.get("id").cloned().unwrap_or(Value::Null);
@@ -434,7 +445,7 @@ async fn handle_request(state: &AppState, raw: &str) -> String {
     let params = req.get("params").cloned().unwrap_or(json!({}));
     match call(state, &method, &params).await {
         Ok(result) => json!({ "jsonrpc": "2.0", "id": id, "result": result }).to_string(),
-        Err((code, message)) => error_frame(id, code, message).to_string(),
+        Err((code, message, data)) => error_frame(id, code, message, data).to_string(),
     }
 }
 
@@ -444,10 +455,16 @@ pub(crate) async fn call(
     state: &AppState,
     method: &str,
     params: &Value,
-) -> std::result::Result<Value, (i64, String)> {
+) -> std::result::Result<Value, (i64, String, Option<Value>)> {
     dispatch(state, method, params)
         .await
-        .map_err(|e| (e.code(), e.to_string()))
+        .map_err(|e| (e.code(), e.to_string(), e.data()))
+}
+
+/// The `stop` flag of the methods that move the main line: stop what the
+/// move leaves behind instead of refusing.
+fn stop_param(p: &Value) -> bool {
+    p.get("stop").and_then(Value::as_bool) == Some(true)
 }
 
 /// The assistant deck named by the `assistant` id param (the default
@@ -465,8 +482,12 @@ fn assistant_param(state: &AppState, p: &Value) -> Result<rumu_cards::Deck> {
 }
 
 /// A JSON-RPC 2.0 error response.
-fn error_frame(id: Value, code: i64, message: String) -> Value {
-    json!({ "jsonrpc": "2.0", "id": id, "error": { "code": code, "message": message } })
+fn error_frame(id: Value, code: i64, message: String, data: Option<Value>) -> Value {
+    let mut error = json!({ "code": code, "message": message });
+    if let Some(data) = data {
+        error["data"] = data;
+    }
+    json!({ "jsonrpc": "2.0", "id": id, "error": error })
 }
 
 async fn dispatch(state: &AppState, method: &str, p: &Value) -> Result<Value> {
@@ -1101,11 +1122,12 @@ async fn dispatch(state: &AppState, method: &str, p: &Value) -> Result<Value> {
         }
 
         // Move the main line `branch` to `node`: an edit's starting point,
-        // another variant's end.
+        // another variant's end. With `stop`, background tasks and
+        // sub-agents of the part it leaves are stopped rather than refusing.
         "branch.move" => {
             let branch: BranchId = str_param(p, "branch")?.into();
             let node: NodeId = str_param(p, "node")?.into();
-            let branch = kernel.move_head(&branch, &node).await?;
+            let branch = kernel.move_head(&branch, &node, stop_param(p)).await?;
             Ok(json!({ "branch": branch }))
         }
 
@@ -1124,7 +1146,9 @@ async fn dispatch(state: &AppState, method: &str, p: &Value) -> Result<Value> {
 
         "branch.regenerate" => {
             let node: NodeId = str_param(p, "node")?.into();
-            let branch = kernel.regenerate(&node, parse_params(p)?).await?;
+            let branch = kernel
+                .regenerate(&node, parse_params(p)?, stop_param(p))
+                .await?;
             Ok(json!({ "branch": branch }))
         }
 
@@ -1149,7 +1173,8 @@ async fn dispatch(state: &AppState, method: &str, p: &Value) -> Result<Value> {
             let files: Vec<rumu_core::FileRef> =
                 parse_params(p.get("files").unwrap_or(&Value::Null))?;
             let conversation = p.get("conversation").and_then(Value::as_bool) == Some(true);
-            if !kernel.is_idle(&branch)? {
+            // A move is checked (and with `stop` cleared) by `move_head`.
+            if !conversation && !kernel.is_idle(&branch)? {
                 return Err(ServerError::InvalidParams(
                     "the branch is still working".into(),
                 ));
@@ -1165,7 +1190,9 @@ async fn dispatch(state: &AppState, method: &str, p: &Value) -> Result<Value> {
             // The files are reverted on the path they were written on.
             let (_, path_state) = kernel.branch_path(&branch)?;
             let moved = match (conversation, &first.parent) {
-                (true, Some(before)) => Some(kernel.move_head(&branch, before).await?),
+                (true, Some(before)) => {
+                    Some(kernel.move_head(&branch, before, stop_param(p)).await?)
+                }
                 (true, None) => {
                     return Err(ServerError::InvalidParams(
                         "the first message has nothing before it".into(),

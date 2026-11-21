@@ -1242,7 +1242,7 @@ async fn regenerate_replays_the_prompt_attachments() {
         .id;
 
     let regenerated = kernel
-        .regenerate(&prompt_node, Default::default())
+        .regenerate(&prompt_node, Default::default(), false)
         .await
         .unwrap();
     let _ = collect_turn(&mut rx, regenerated.id.0.as_str()).await;
@@ -1648,7 +1648,7 @@ async fn retry_does_not_bypass_a_refused_prompt() {
 
     let mut rx = kernel.tap_pushes();
     let regenerated = kernel
-        .regenerate(&prompt, Default::default())
+        .regenerate(&prompt, Default::default(), false)
         .await
         .unwrap();
     let (done, _) = collect_turn(&mut rx, regenerated.id.0.as_str()).await;
@@ -2822,9 +2822,9 @@ async fn session_project_follows_the_main_line() {
 
     // Moving the head back before it leaves the project; forward again
     // returns to it.
-    kernel.move_head(&main, &root).await.unwrap();
+    kernel.move_head(&main, &root, false).await.unwrap();
     assert_eq!(kernel.session_tree(&s.id).unwrap().0.project, None);
-    kernel.move_head(&main, &head).await.unwrap();
+    kernel.move_head(&main, &head, false).await.unwrap();
     assert_eq!(
         kernel.session_tree(&s.id).unwrap().0.project.as_deref(),
         Some("proj-deck")
@@ -3634,7 +3634,7 @@ async fn regenerate_moves_the_main_line() {
 
     let mut rx = kernel.tap_pushes();
     let regenerated = kernel
-        .regenerate(&prompt, Default::default())
+        .regenerate(&prompt, Default::default(), false)
         .await
         .unwrap();
     wait_turn(&mut rx, Some(regenerated.id.0.as_str())).await;
@@ -3686,7 +3686,7 @@ async fn moving_the_main_line_keeps_what_it_leaves() {
         .clone();
     let reply = nodes.last().unwrap().id.clone();
 
-    let moved = kernel.move_head(&branch, &prompt).await.unwrap();
+    let moved = kernel.move_head(&branch, &prompt, false).await.unwrap();
     assert_eq!(
         (moved.id.clone(), moved.head.clone()),
         (branch.clone(), prompt.clone())
@@ -3698,7 +3698,7 @@ async fn moving_the_main_line_keeps_what_it_leaves() {
         prompt
     );
 
-    kernel.move_head(&branch, &reply).await.unwrap();
+    kernel.move_head(&branch, &reply, false).await.unwrap();
     let ids = |ns: &[Node]| ns.iter().map(|n| n.id.clone()).collect::<Vec<_>>();
     assert_eq!(ids(&kernel.branch_path(&branch).unwrap().0), ids(&nodes));
 }
@@ -3743,19 +3743,68 @@ async fn moving_the_main_line_waits_for_the_tasks_it_would_leave() {
     let next = prompt(&second, "next");
     let head = second.last().unwrap().id.clone();
 
-    let err = kernel.move_head(&branch, &go).await.unwrap_err();
+    let err = kernel.move_head(&branch, &go, false).await.unwrap_err();
     assert!(matches!(err, rumu_kernel::Error::LineBusy(_)), "{err:#}");
     assert!(err.to_string().contains("bgwork"), "{err:#}");
     assert_eq!(
         kernel.branch_path(&branch).unwrap().0.last().unwrap().id,
         head
     );
-    kernel.move_head(&branch, &next).await.unwrap();
+    kernel.move_head(&branch, &next, false).await.unwrap();
     assert_eq!(
         kernel.branch_path(&branch).unwrap().0.last().unwrap().id,
         next
     );
     kernel.abort_tasks(&branch, true);
+}
+
+/// With `stop`, the move goes through and stops the task it leaves behind:
+/// the task ends cancelled, leaves no note on the new line and wakes nothing.
+#[tokio::test]
+async fn moving_the_main_line_with_stop_stops_the_tasks_it_leaves() {
+    let plugin = Arc::new(background_plugin(
+        "bg",
+        &["bgwork"],
+        vec![],
+        noop_hooks(),
+        noop_tools(),
+    ));
+    let (kernel, _llm, session, branch) = setup(
+        vec![plugin],
+        vec![
+            LlmResponse::calls(vec![ToolCall::new(
+                "c1",
+                "bgwork",
+                json!({ "ms": 60_000, "background": true }),
+            )]),
+            LlmResponse::text("started"),
+        ],
+    )
+    .await;
+
+    let (_, first, _) = run_turn(&kernel, &branch, "go").await;
+    let go = first
+        .iter()
+        .find(|n| matches!(&n.body, NodeBody::User { .. }))
+        .expect("the turn's prompt")
+        .id
+        .clone();
+    let id = kernel.tasks(&session).unwrap()[0].id.clone();
+
+    kernel.move_head(&branch, &go, true).await.unwrap();
+    let mut status = TaskStatus::Running;
+    for _ in 0..100 {
+        status = kernel.task(&id).unwrap().unwrap().0.status;
+        if !status.is_running() {
+            break;
+        }
+        tokio::time::sleep(Duration::from_millis(20)).await;
+    }
+    assert_eq!(status, TaskStatus::Cancelled);
+    tokio::time::sleep(Duration::from_millis(100)).await;
+    let (nodes, _) = kernel.branch_path(&branch).unwrap();
+    assert_eq!(nodes.last().unwrap().id, go);
+    assert!(kernel.is_idle(&branch).unwrap());
 }
 
 /// `branch.move` refuses a sub-agent's branch and a node a sub-agent added,
@@ -3801,10 +3850,16 @@ async fn move_refuses_sub_agents_and_their_nodes() {
         .expect("agent branch exists");
 
     // The sub-agent's own branch is not a main line.
-    let err = kernel.move_head(&child.id, &child.head).await.unwrap_err();
+    let err = kernel
+        .move_head(&child.id, &child.head, false)
+        .await
+        .unwrap_err();
     assert!(matches!(err, rumu_kernel::Error::NotMainLine(_)), "{err:#}");
     // Nor is the main line moved onto the sub-agent's reply.
-    let err = kernel.move_head(&main, &child.head).await.unwrap_err();
+    let err = kernel
+        .move_head(&main, &child.head, false)
+        .await
+        .unwrap_err();
     assert!(matches!(err, rumu_kernel::Error::OffTheLine(_)), "{err:#}");
     assert_eq!(
         kernel.branch_path(&main).unwrap().0.last().unwrap().id,
@@ -4773,7 +4828,7 @@ async fn a_sub_agent_the_main_line_moved_off_keeps_its_reply() {
         .expect("the prompt")
         .id
         .clone();
-    kernel.move_head(&branch, &prompt).await.unwrap();
+    kernel.move_head(&branch, &prompt, false).await.unwrap();
 
     let mut rx = kernel.tap_pushes();
     kernel.prompt(&child.id, "one more thing").await.unwrap();
@@ -6202,7 +6257,7 @@ async fn side_question_forks_at_the_head_and_leaves_the_main_line_alone() {
 
     // It hangs off the main line, it is not one.
     assert!(matches!(
-        kernel.move_head(&side.id, &side.head).await,
+        kernel.move_head(&side.id, &side.head, false).await,
         Err(rumu_kernel::Error::NotMainLine(_))
     ));
     assert!(matches!(

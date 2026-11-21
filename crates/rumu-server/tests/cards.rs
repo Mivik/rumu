@@ -210,7 +210,7 @@ async fn update_notices_only_follow_actual_reads() {
         .unwrap()
         .id
         .clone();
-    let forked = kernel.move_head(&ba, &before_read).await.unwrap();
+    let forked = kernel.move_head(&ba, &before_read, false).await.unwrap();
     run_turn(&kernel, &forked.id, "fresh start").await;
     let (nodes_f, _) = kernel.branch_path(&forked.id).unwrap();
     assert!(

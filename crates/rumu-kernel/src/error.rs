@@ -84,12 +84,13 @@ pub enum Error {
     NotMainLine(BranchId),
 
     /// `branch.move` while background tasks or sub-agents run that came from
-    /// a call the new line would not hold.
+    /// a call the new line would not hold; their labels.
     #[error(
-        "busy: these came from a call the line would leave and are still running: {0}; stop \
-         them first"
+        "busy: these came from a call the line would leave and are still running: {}; stop \
+         them first",
+        .0.join(", ")
     )]
-    LineBusy(String),
+    LineBusy(Vec<String>),
 
     /// `branch.move` was given a node a sub-agent or side question added.
     #[error("node {0} is not on the main line")]

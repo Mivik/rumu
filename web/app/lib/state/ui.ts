@@ -3,6 +3,7 @@
 
 import { ref, shallowRef, watch } from 'vue'
 import type { Attachment, Node, ToastKind } from '../types'
+import { RpcError } from '../api'
 import { blobUrl } from '../attachments'
 import { mountedId, mountedRef } from '../cards'
 import { state, type LightboxImage, type Toast } from './state'
@@ -36,6 +37,48 @@ watch(
  *  the user in the writing box, not on the button they just clicked. */
 export function requestComposerFocus(): void {
   composerFocus.value++
+}
+
+/** The open "stop the background work and go on?" popup: how many things
+ *  hold the main line, the control the user acted on (it floats beside it),
+ *  and how the asker learns the answer. */
+export const stopConfirm = shallowRef<{
+  count: number
+  anchor: Element | null
+  answer: (ok: boolean) => void
+} | null>(null)
+
+/** The button last pressed (or the focused element, for a key): what a
+ *  `withStop` popup floats beside, so no caller has to pass it along. */
+let lastControl: Element | null = null
+if (typeof window !== 'undefined') {
+  window.addEventListener(
+    'pointerdown',
+    (e) => (lastControl = (e.target as Element | null)?.closest('button, [role="button"]') ?? null),
+    true,
+  )
+  window.addEventListener('keydown', () => (lastControl = document.activeElement), true)
+}
+
+/**
+ * Run a request that moves the main line (`branch.move`, `branch.regenerate`,
+ * `branch.rewind`). When background tasks or sub-agents of the part it
+ * leaves hold it (`-32011`), ask beside the control that started it whether
+ * to stop them, and send it again with `stop` if so. `undefined` when the
+ * user said no; other failures throw.
+ */
+export async function withStop<T>(request: (stop: boolean) => Promise<T>): Promise<T | undefined> {
+  const anchor = lastControl
+  try {
+    return await request(false)
+  } catch (err) {
+    if (!(err instanceof RpcError) || err.code !== -32011) throw err
+    const count = (err.data as { tasks?: string[] } | undefined)?.tasks?.length || 1
+    stopConfirm.value?.answer(false)
+    const ok = await new Promise<boolean>((answer) => (stopConfirm.value = { count, anchor, answer }))
+    stopConfirm.value = null
+    return ok ? await request(true) : undefined
+  }
 }
 
 let toastSeq = 1

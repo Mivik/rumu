@@ -32,7 +32,7 @@ import { isUnseen } from './derived'
 import { state } from './state'
 import { fetchTree, findAgentChild, loadPath, moveHead, replaceTree } from './tree'
 import { openAgentView } from './branchView'
-import { requestComposerFocus, toast } from './ui'
+import { requestComposerFocus, toast, withStop } from './ui'
 import {
   chooseLandingAssistant,
   chooseLandingProject,
@@ -447,10 +447,11 @@ export async function sendPrompt(
  */
 export async function regenerateFrom(nodeId: NodeId): Promise<void> {
   try {
-    const res = await rumu.request<{ branch: Branch }>('branch.regenerate', {
-      node: nodeId,
-      ...composerChoice(),
-    })
+    const choice = composerChoice()
+    const res = await withStop((stop) =>
+      rumu.request<{ branch: Branch }>('branch.regenerate', { node: nodeId, ...choice, stop }),
+    )
+    if (!res) return
     settlePicks()
     // The head moved by the `branch.updated` push, which comes first.
     state.busy[res.branch.id] = true
@@ -509,12 +510,16 @@ export async function rewindTo(
   const branch = state.mainBranch
   if (!branch) return null
   try {
-    const res = await rumu.request<{ files: RevertFile[]; branch: Branch | null }>('branch.rewind', {
-      branch,
-      node: node.id,
-      files,
-      conversation,
-    })
+    const res = await withStop((stop) =>
+      rumu.request<{ files: RevertFile[]; branch: Branch | null }>('branch.rewind', {
+        branch,
+        node: node.id,
+        files,
+        conversation,
+        stop,
+      }),
+    )
+    if (!res) return null
     if (res.branch) {
       await loadPath(res.branch.id)
       putBack(node)

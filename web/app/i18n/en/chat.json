@@ -77,6 +77,10 @@
     "unfold": "Show all",
     "revertTitle": "Rewind to here"
   },
+  "stopConfirm": {
+    "body": "{count} background task still running; going on stops it | {count} background tasks still running; going on stops them",
+    "submit": "Stop and continue"
+  },
   "revert": {
     "title": "Rewind to before this message",
     "modes": {

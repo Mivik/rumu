@@ -77,6 +77,10 @@
     "unfold": "展开全文",
     "revertTitle": "回退到此处"
   },
+  "stopConfirm": {
+    "body": "{count} 个后台任务仍在运行，继续将停止它们",
+    "submit": "停止并继续"
+  },
   "revert": {
     "title": "回退到此消息之前",
     "modes": {

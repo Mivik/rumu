@@ -127,7 +127,7 @@ export interface WsRequest {
 
 export type WsMessage =
   | { jsonrpc: '2.0'; id: number; result: unknown }
-  | { jsonrpc: '2.0'; id: number; error: { code: number; message: string } }
+  | { jsonrpc: '2.0'; id: number; error: { code: number; message: string; data?: unknown } }
   | { jsonrpc: '2.0'; method: string; params: Record<string, unknown> }
 
 export interface SessionTreeResult {

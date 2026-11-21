@@ -6,7 +6,9 @@
 
 use std::collections::{HashMap, HashSet};
 
-use rumu_core::{Branch, BranchId, BranchKind, Node, NodeBody, NodeId, TaskKind, Timestamp};
+use rumu_core::{
+    Branch, BranchId, BranchKind, Node, NodeBody, NodeId, TaskId, TaskKind, Timestamp,
+};
 
 use crate::{Inner, Kernel, Result};
 
@@ -18,6 +20,7 @@ pub(crate) enum WakerKind {
     Wake,
     /// A background task still runs, or its completion is not posted yet.
     Task {
+        id: TaskId,
         agent: bool,
         call_id: String,
         started_at: Timestamp,
@@ -108,6 +111,7 @@ impl Kernel {
                 out.push(Waker {
                     branch: e.info.branch.clone(),
                     kind: WakerKind::Task {
+                        id: e.info.id.clone(),
                         agent: matches!(e.info.kind, TaskKind::Agent { .. }),
                         call_id: e.info.call_id.clone(),
                         started_at: e.info.started_at,

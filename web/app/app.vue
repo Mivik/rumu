@@ -15,6 +15,7 @@ import ArtifactPanel from './components/chat/ArtifactPanel.vue'
 import TaskOutputPanel from './components/chat/TaskOutputPanel.vue'
 import { openArtifact } from './lib/artifacts'
 import Toasts from './components/Toasts.vue'
+import StopConfirm from './components/chat/StopConfirm.vue'
 import Modal from './components/ui/Modal.vue'
 import { t } from './i18n'
 import { closePanels, itemDialog, layout, leaveItem, WIDE } from './lib/layout'
@@ -150,6 +151,7 @@ onBeforeUnmount(() => {
       <SettingsPage modal />
     </Modal>
     <Lightbox />
+    <StopConfirm />
     <Toasts />
     <!-- a file dropped anywhere in the app lands in the composer -->
     <DropOverlay />

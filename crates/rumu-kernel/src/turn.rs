@@ -211,9 +211,14 @@ impl Kernel {
     /// prompt event is replayed so hooks and memory injection behave as they
     /// did the first time, but the message itself is not appended again.
     /// `choice` is applied first, so the reply runs on the composer's current
-    /// workspaces and model. Progress arrives via pushes; the main line is
-    /// returned immediately.
-    pub async fn regenerate(self: &Arc<Self>, node: &NodeId, choice: Choice) -> Result<Branch> {
+    /// workspaces and model. `stop` is [`Kernel::move_head`]'s. Progress
+    /// arrives via pushes; the main line is returned immediately.
+    pub async fn regenerate(
+        self: &Arc<Self>,
+        node: &NodeId,
+        choice: Choice,
+        stop: bool,
+    ) -> Result<Branch> {
         let n = self
             .store
             .get_node(node)?
@@ -226,7 +231,7 @@ impl Kernel {
             .store
             .get_session(&n.session)?
             .ok_or_else(|| Error::SessionNotFound(n.session.clone()))?;
-        let branch = self.move_head(&session.main_branch, &n.id).await?;
+        let branch = self.move_head(&session.main_branch, &n.id, stop).await?;
         self.apply_choice(&branch.id, choice).await?;
         let token = self.begin_loop(&branch.id)?;
         self.spawn_turn(branch.id.clone(), token, TurnKind::Regenerate(content));

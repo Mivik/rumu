@@ -53,7 +53,7 @@ impl Rumu {
     async fn call(&self, method: &str, params: Value) -> Result<Value, String> {
         ws::call(&self.state, method, &params)
             .await
-            .map_err(|(_, message)| message)
+            .map_err(|(_, message, _)| message)
     }
 
     /// Every push from now on.

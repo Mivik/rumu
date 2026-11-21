@@ -17,11 +17,13 @@ export type PushHandler = (params: Record<string, unknown>) => void
 const PROBE_TIMEOUT = 3000
 
 /** A JSON-RPC error response; `code` is the server's error code (the web
- *  checks `-32010` for a stale card write). */
+ *  checks `-32010` for a stale card write, `-32011` for a main line held
+ *  by background work, whose `data.tasks` names it). */
 export class RpcError extends Error {
   constructor(
     message: string,
     readonly code: number,
+    readonly data?: unknown,
   ) {
     super(message)
     this.name = 'RpcError'
@@ -190,7 +192,7 @@ export class RumuClient {
       const entry = this.pending.get(msg.id)
       if (!entry) return
       this.pending.delete(msg.id)
-      if ('error' in msg) entry.reject(new RpcError(msg.error.message, msg.error.code))
+      if ('error' in msg) entry.reject(new RpcError(msg.error.message, msg.error.code, msg.error.data))
       else entry.resolve(msg.result)
     } else if ('method' in msg) {
       const set = this.handlers.get(msg.method)

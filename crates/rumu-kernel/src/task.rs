@@ -49,6 +49,10 @@ pub(crate) struct TaskEntry {
     /// Cancelled by [`crate::Kernel::abort`] or with its stopped sub-agent:
     /// the completion note is written with `wake: false`.
     pub quiet: bool,
+    /// Cancelled because the main line moved off the call that started it
+    /// ([`crate::Kernel::move_head`] with `stop`): no completion note at all,
+    /// since the line it would land on never made the call.
+    pub silent: bool,
 }
 
 /// A plugin tool's work, owned so it can outlive the call that started it.
@@ -495,6 +499,7 @@ impl Kernel {
                     token: token.clone(),
                     post_done: false,
                     quiet: false,
+                    silent: false,
                 },
             );
             (id, token, info)
@@ -564,7 +569,7 @@ impl Kernel {
     /// Mark a task finished and deliver its completion through the post
     /// pipeline.
     async fn finish_task(self: &Arc<Self>, id: &TaskId, outcome: TaskOutcome) {
-        let (info, note, effects, wake, source) = {
+        let (info, note, effects, wake, source, silent) = {
             let mut inner = self.inner.lock().unwrap();
             let Some(entry) = inner.tasks.get_mut(id) else {
                 return;
@@ -603,6 +608,10 @@ impl Kernel {
             entry.info.result = Some(content.clone());
             let wake = !entry.quiet;
             entry.quiet = false;
+            let silent = entry.silent;
+            if silent {
+                entry.post_done = true;
+            }
             let note = completion_text(&entry.info, &content);
             (
                 entry.info.clone(),
@@ -610,12 +619,16 @@ impl Kernel {
                 effects,
                 wake,
                 entry.source.clone(),
+                silent,
             )
         };
 
         self.signal_tasks();
         self.push("task.done", json!({ "task": info }));
         self.save_task(&info);
+        if silent {
+            return;
+        }
         self.deliver_completion(&info, note, effects, &source, wake)
             .await;
     }
@@ -687,6 +700,7 @@ impl Kernel {
             // Its completion is already in the transcript: never wait on it.
             post_done: true,
             quiet: false,
+            silent: false,
         });
         drop(inner);
         self.signal_tasks();
