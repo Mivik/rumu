@@ -14,6 +14,7 @@ import { argSummary, preview, workspaceLabel } from './util'
 import { renderedContent } from './attachments'
 import { diffCounts as foldCounts, diffLines, type DiffCounts, filePatchOf } from './diff'
 import { i18n, t } from '../i18n'
+import type { WorkView } from './generated/WorkView'
 import type { MessageKey } from '../i18n'
 
 export type ToolStatus = 'ok' | 'error' | 'blocked'
@@ -468,24 +469,32 @@ export function isFileEdit(v: ToolRowView): boolean {
   return v.name === 'write' || v.name === 'edit'
 }
 
-/** Rows the user expanded, and blocked rows they collapsed (blocked rows
- * start expanded), by result node id. Shared: a `code` row's edits stand
- * outside it only while it is shut (ActivityRun), and a box re-split around
- * them keeps its rows' state. */
+/** Whether a row starts open: a blocked one always, the rest as the work
+ *  view says (`auto`: a failed one). */
+function opensByDefault(v: ToolRowView, work: WorkView): boolean {
+  const calls = work.calls
+  return v.status === 'blocked' || calls === 'open' || (calls === 'auto' && v.status === 'error')
+}
+
+/** Rows the user opened or folded against their default, by result node
+ * id. Shared: a `code` row's edits stand outside it only while it is shut
+ * (ActivityRun), and a box re-split around them keeps its rows' state. */
 const expandedRows = reactive(new Set<string>())
 const collapsedRows = reactive(new Set<string>())
 
-export function isRowOpen(v: ToolRowView): boolean {
+export function isRowOpen(v: ToolRowView, work: WorkView): boolean {
   const id = v.row.result.id
   if (collapsedRows.has(id)) return false
-  return v.status === 'blocked' || expandedRows.has(id)
+  return expandedRows.has(id) || opensByDefault(v, work)
 }
 
-export function toggleRow(v: ToolRowView): void {
+export function toggleRow(v: ToolRowView, work: WorkView): void {
   const id = v.row.result.id
-  if (v.status === 'blocked' && !expandedRows.has(id)) collapsedRows.add(id)
-  else if (expandedRows.has(id)) expandedRows.delete(id)
-  else expandedRows.add(id)
+  const open = isRowOpen(v, work)
+  expandedRows.delete(id)
+  collapsedRows.delete(id)
+  if (open !== opensByDefault(v, work)) return
+  ;(open ? collapsedRows : expandedRows).add(id)
 }
 
 /** The file edits a row stands for: itself, or those its script's calls

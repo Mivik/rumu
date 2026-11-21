@@ -1,60 +1,111 @@
-// How the app looks and behaves.
+// How the app looks: the theme, and how much of a turn's work shows (what
+// starts open). They live in the server's settings (`appearance`), so every
+// device opening this rumu reads the same way; `system` still follows each
+// device's own theme.
 //
-// The theme follows the system until the user picks one; the two folds are
-// how the conversation shows its work — an edit's diff, and the steps a
-// turn took. All of it belongs to this browser: the server never sees it,
-// so a phone and a desk each read the way their owner likes.
+// The theme is also kept in this browser, so the head script in
+// nuxt.config.ts puts it on <html> before the first paint, long before the
+// settings arrive.
 
-import { reactive, watch } from 'vue'
+import { computed, inject, provide, ref, watch, type ComputedRef, type InjectionKey } from 'vue'
+import type { Appearance } from '../generated/Appearance'
+import type { Theme } from '../generated/Theme'
+import type { WorkView } from '../generated/WorkView'
+import { editSettings, models } from './models'
 
-/** The theme: the system's, or a fixed one. */
-export type ThemeMode = 'system' | 'light' | 'dark'
-export interface Appearance {
-  theme: ThemeMode
-  /** An edit's diff starts folded. */
-  foldEdits: boolean
-  /** The work steps fold once the answer is done. */
-  foldWork: boolean
+const THEME_KEY = 'rumu.theme'
+
+/** The presets of the work view, the middle one the default. */
+export const WORK_PRESETS = {
+  quiet: {
+    steps: 'folded',
+    always_show_edits: false,
+    thinking: 'folded',
+    calls: 'folded',
+    edits: 'folded',
+    limit_edits: true,
+  },
+  standard: {
+    steps: 'auto',
+    always_show_edits: true,
+    thinking: 'auto',
+    calls: 'folded',
+    edits: 'open',
+    limit_edits: true,
+  },
+  verbose: {
+    steps: 'open',
+    always_show_edits: true,
+    thinking: 'open',
+    calls: 'auto',
+    edits: 'open',
+    limit_edits: false,
+  },
+} satisfies Record<string, WorkView>
+export type WorkPreset = keyof typeof WORK_PRESETS
+
+const DEFAULTS: Appearance = { theme: 'system', work: WORK_PRESETS.standard }
+
+/** The settings in effect: the defaults until the server's arrive. */
+export const appearance = computed<Appearance>(() => models.settings?.appearance ?? DEFAULTS)
+export const work = computed(() => appearance.value.work)
+
+/** The preset a work view matches, if any. */
+export function presetOf(w: WorkView): WorkPreset | null {
+  const hit = Object.entries(WORK_PRESETS).find(([, p]) =>
+    (Object.keys(p) as (keyof WorkView)[]).every((k) => p[k] === w[k]),
+  )
+  return (hit?.[0] as WorkPreset | undefined) ?? null
 }
 
-const KEY = 'rumu.appearance'
+export function sameWork(a: WorkView, b: WorkView): boolean {
+  return (Object.keys(a) as (keyof WorkView)[]).every((k) => a[k] === b[k])
+}
 
-function load(): Partial<Appearance> {
-  try {
-    const raw = JSON.parse(localStorage.getItem(KEY) ?? '{}') as Partial<Appearance>
-    // Only the keys we know: a stale one is dropped.
-    return { theme: raw.theme, foldEdits: raw.foldEdits, foldWork: raw.foldWork }
-  } catch {
-    return {}
+const WORK_KEY: InjectionKey<ComputedRef<WorkView>> = Symbol('work-view')
+
+/** Show the conversation's components under them a work view other than
+ *  the saved one (the settings' preview of an unapplied change). */
+export function provideWorkView(view: ComputedRef<WorkView>): void {
+  provide(WORK_KEY, view)
+}
+
+/** The work view a conversation component follows. */
+export function useWorkView(): ComputedRef<WorkView> {
+  return inject(WORK_KEY, work)
+}
+
+export function setAppearance(next: Appearance): Promise<boolean> {
+  return editSettings('settings.set_appearance', { appearance: next })
+}
+
+function storedTheme(): Theme {
+  const theme = localStorage.getItem(THEME_KEY)
+  return theme === 'light' || theme === 'dark' ? theme : 'system'
+}
+
+let systemDark: MediaQueryList
+
+/** A theme the settings section is trying on, not yet applied. */
+export const themeDraft = ref<Theme | null>(null)
+
+/** Put the theme on <html>, where the tokens in main.css read it, and on
+ *  the browser's own chrome (the `theme-color` metas). */
+function applyTheme(): void {
+  const saved = models.settings?.appearance.theme ?? storedTheme()
+  localStorage.setItem(THEME_KEY, saved)
+  const theme = themeDraft.value ?? saved
+  const dark = theme === 'dark' || (theme === 'system' && systemDark.matches)
+  document.documentElement.dataset.theme = dark ? 'dark' : 'light'
+  for (const m of document.querySelectorAll<HTMLMetaElement>('meta[name="theme-color"]')) {
+    const scheme = (m.dataset.scheme ??= m.media.includes('dark') ? 'dark' : 'light')
+    m.media = theme === 'system' ? `(prefers-color-scheme: ${scheme})` : theme === scheme ? 'all' : 'not all'
   }
 }
 
-export const appearance = reactive<Appearance>({
-  theme: 'system',
-  foldEdits: false,
-  foldWork: true,
-  ...load(),
-})
-
-/** The theme in effect: the user's choice, or the system's. */
-export function resolvedTheme(): 'light' | 'dark' {
-  if (appearance.theme !== 'system') return appearance.theme
-  return matchMedia('(prefers-color-scheme: dark)').matches ? 'dark' : 'light'
+/** Follow the setting, and the system's theme while it is the one in use. */
+export function followTheme(): void {
+  systemDark = matchMedia('(prefers-color-scheme: dark)')
+  systemDark.addEventListener('change', applyTheme)
+  watch([() => models.settings?.appearance.theme, themeDraft], applyTheme, { immediate: true })
 }
-
-/** Put the theme on <html>, where the tokens read it. */
-export function applyAppearance(): void {
-  document.documentElement.dataset.theme = resolvedTheme()
-}
-
-watch(
-  appearance,
-  () => {
-    localStorage.setItem(KEY, JSON.stringify(appearance))
-    applyAppearance()
-  },
-  { deep: true },
-)
-
-// The system's theme changes while the app is open: follow it.
-matchMedia('(prefers-color-scheme: dark)').addEventListener('change', applyAppearance)

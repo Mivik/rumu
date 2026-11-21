@@ -8,8 +8,10 @@
 // took:
 //   Worked for 3m 12s · 27 calls · 1 error [blocked] ›
 // (a lone call names itself instead: "read store.ts"). Folded or not, what
-// the run changed stands outside the fold: each edited file as an EditCard,
-// and the sub-agents it started as AgentCards. Recall and catalog go with
+// the run changed stands outside the fold — each edited file as an EditCard,
+// unless the settings fold them too — and so do the sub-agents it started,
+// as AgentCards. How much starts open is the settings' work view
+// (lib/state/appearance). Recall and catalog go with
 // every turn, so neither shows on the line; a run without calls names its
 // thinking ("Thought for 2s"), or its recall / catalog when that is all.
 // Opened, the steps show in order under a hairline: the catalog's cards,
@@ -30,7 +32,7 @@ import type { Node } from '../../lib/types'
 import type { PhrasePart, ToolRowView } from '../../lib/toolrows'
 import { fileEditsOf, isFileEdit, isRowOpen, toolPhrase, toolRowTitle, toolRowView } from '../../lib/toolrows'
 import { contentText, fmtThought } from '../../lib/util'
-import { appearance } from '../../lib/state/appearance'
+import { useWorkView } from '../../lib/state/appearance'
 import { vEnter } from '../../lib/motion'
 import Icon from '../ui/Icon.vue'
 import AgentCard from './AgentCard.vue'
@@ -46,6 +48,7 @@ const props = withDefaults(defineProps<{ steps: ActivityStep[]; live?: boolean; 
   current: false,
 })
 const activeDelta = useBranchView().delta
+const work = useWorkView()
 
 const thoughts = computed(() => props.steps.filter((s): s is ActivityThought => s.kind === 'thought'))
 const views = computed<ToolRowView[]>(() =>
@@ -54,6 +57,8 @@ const views = computed<ToolRowView[]>(() =>
 const edits = computed(() =>
   props.steps.flatMap((s) => (s.kind === 'tools' ? s.rows.flatMap(fileEditsOf) : [])),
 )
+/** The edits that stay in view while the run is folded. */
+const outsideEdits = computed(() => (work.value.always_show_edits ? edits.value : []))
 const running = computed(() => props.steps.find((s): s is ActivityRunning => s.kind === 'running') ?? null)
 const hasCatalog = computed(() => props.steps.some((s) => s.kind === 'catalog'))
 const recalls = computed(() => props.steps.filter((s): s is ActivityRecall => s.kind === 'recall'))
@@ -176,7 +181,7 @@ const blocks = computed<Block[]>(() => {
       const v = toolRowView(row)
       // A script's edits follow its row while it is shut; opened, they
       // are in its call list.
-      const edits = isFileEdit(v) ? [v] : isRowOpen(v) ? [] : fileEditsOf(row)
+      const edits = isFileEdit(v) ? [v] : isRowOpen(v, work.value) ? [] : fileEditsOf(row)
       if (edits[0] !== v) rows.push(row)
       for (const e of edits) {
         flush()
@@ -196,11 +201,14 @@ function stepKey(s: ActivityStep): string {
   return `tools:${s.rows[0]?.result.id ?? ''}`
 }
 
-/** Tri-state: null = auto — open while it is the turn's frontier, folded
- *  once the model moves on. The panel may say the work steps stay open
- *  (they then do, whatever the turn does). */
+/** Tri-state: null = as the appearance settings say — `auto` is open
+ *  while it is the turn's frontier, folded once the model moves on. */
 const manual = ref<boolean | null>(null)
-const open = computed(() => (manual.value !== null ? manual.value : props.current || !appearance.foldWork))
+const open = computed(() => {
+  if (manual.value !== null) return manual.value
+  const steps = work.value.steps
+  return steps === 'open' || (steps === 'auto' && props.current)
+})
 /** Blocks present when it opens reveal with it; later ones fade in. */
 const revealed = ref<Set<string>>(new Set())
 function toggleOpen(): void {
@@ -301,9 +309,10 @@ function foldFromFoot(): void {
         {{ t('tools.activity.fold') }}
       </button>
     </div>
-    <!-- folded, what it changed and what still runs stay in view -->
-    <div v-else-if="edits.length || running" class="mt-2 flex w-full flex-col gap-2">
-      <EditCard v-for="v in edits" :key="v.row.result.id" :view="v" />
+    <!-- folded, what it changed (unless the settings fold it too) and what
+         still runs stay in view -->
+    <div v-else-if="outsideEdits.length || running" class="mt-2 flex w-full flex-col gap-2">
+      <EditCard v-for="v in outsideEdits" :key="v.row.result.id" :view="v" />
       <RunningTools v-if="running" :step="running" />
     </div>
     <!-- the sub-agents it started stand outside the fold -->

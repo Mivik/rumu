@@ -9,15 +9,17 @@ import { t } from '../../i18n'
 import type { ToolRowView } from '../../lib/toolrows'
 import { argsOf, toolRowTitle } from '../../lib/toolrows'
 import { toolIcon } from '../../lib/toolIcon'
-import { appearance } from '../../lib/state/appearance'
+import { useWorkView } from '../../lib/state/appearance'
 import Icon from '../ui/Icon.vue'
 import FileDiff from './FileDiff.vue'
 
 const props = defineProps<{ view: ToolRowView }>()
+const work = useWorkView()
 
-// The diff opens folded when the panel says so; the header folds it away and
-// back either way.
-const open = ref(!appearance.foldEdits)
+/** Tri-state: null = as the appearance settings say, until the header is
+ *  clicked. */
+const manual = ref<boolean | null>(null)
+const open = computed(() => manual.value ?? work.value.edits !== 'folded')
 
 /** `ws:dir/name` → the muted head (`ws:dir/`) and the name. */
 const parts = computed(() => {
@@ -40,7 +42,7 @@ const hunks = computed(() => props.view.patch?.hunks?.length ?? 0)
       :class="open ? 'bg-surface-2/60 hover:bg-surface-2' : 'hover:bg-surface-2/70'"
       :title="toolRowTitle(view)"
       :aria-expanded="open"
-      @click="open = !open"
+      @click="manual = !open"
     >
       <Icon :name="toolIcon(view.name)" :size="12" class="flex-none text-tool" />
       <span class="min-w-0 truncate font-mono text-meta" dir="rtl"
