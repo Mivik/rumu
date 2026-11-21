@@ -142,8 +142,16 @@ export type OpenHistory = 'push' | 'replace' | 'none'
 /** Latest open request; a slower earlier one is dropped, not applied. */
 let openSeq = 0
 
+/** Take only the pushes about session `id` (`null`: none); the lists and
+ *  pending decisions come regardless. Sent before the tree is fetched, so
+ *  the stream joins the tree's snapshot without a gap. */
+export function watchSession(id: SessionId | null): void {
+  rumu.request('session.watch', { session: id }).catch(() => {})
+}
+
 export async function openSession(id: SessionId, opts: { history?: OpenHistory } = {}): Promise<boolean> {
   const seq = ++openSeq
+  watchSession(id)
   try {
     const tree = await fetchTree(id)
     if (seq !== openSeq) return false
@@ -170,6 +178,7 @@ export async function openSession(id: SessionId, opts: { history?: OpenHistory }
     void refreshTasks(tree.session.id)
     return true
   } catch (err) {
+    if (seq === openSeq) watchSession(state.sessionId)
     toast('error', t('errors.loadingSession'), (err as Error).message)
     return false
   }
@@ -216,6 +225,7 @@ export function closeSession(): void {
   state.view = 'chat'
   state.statsRange = null
   state.sessionId = null
+  watchSession(null)
   state.session = null
   state.nodes = {}
   state.branches = {}

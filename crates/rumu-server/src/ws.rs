@@ -313,11 +313,19 @@ async fn handle_socket(state: AppState, socket: WebSocket) {
         }
     });
 
+    // `session.watch`: the session this client shows (`Some(None)`: none).
+    // Until it is called, the client gets every push.
+    let mut watched: Option<Option<SessionId>> = None;
     let mut sub = state.kernel.subscribe();
     loop {
         tokio::select! {
             push = sub.recv() => match push {
                 Ok(v) => {
+                    if let Some(watched) = &watched
+                        && push_session(&state.kernel, &v).is_some_and(|s| Some(&s) != watched.as_ref())
+                    {
+                        continue;
+                    }
                     if tx.send(Message::Text(v.to_string().into())).await.is_err() {
                         break;
                     }
@@ -334,6 +342,16 @@ async fn handle_socket(state: AppState, socket: WebSocket) {
                 // Requests run concurrently so a slow one (task.kill waits up
                 // to 5 s) does not block the others; replies share `tx`.
                 Some(Ok(Message::Text(text))) => {
+                    // Answered in order, not spawned: the pushes after the
+                    // reply, and the requests after it, see the new filter.
+                    if let Some((id, session)) = watch_request(text.as_str()) {
+                        watched = Some(session);
+                        let reply = json!({ "jsonrpc": "2.0", "id": id, "result": null });
+                        if tx.send(Message::Text(reply.to_string().into())).await.is_err() {
+                            break;
+                        }
+                        continue;
+                    }
                     let state = state.clone();
                     let tx = tx.clone();
                     tokio::spawn(async move {
@@ -348,6 +366,42 @@ async fn handle_socket(state: AppState, socket: WebSocket) {
         }
     }
     writer.abort();
+}
+
+/// A `session.watch { session: id | null }` request: its id and session.
+fn watch_request(raw: &str) -> Option<(Value, Option<SessionId>)> {
+    #[derive(Deserialize)]
+    struct Req {
+        #[serde(default)]
+        id: Value,
+        method: String,
+        #[serde(default)]
+        params: Params,
+    }
+    #[derive(Deserialize, Default)]
+    struct Params {
+        session: Option<SessionId>,
+    }
+    let req: Req = serde_json::from_str(raw).ok()?;
+    (req.method == "session.watch").then_some((req.id, req.params.session))
+}
+
+/// The session a push is about: the one owning the branch it names. `None`
+/// for pushes every client gets (lists, settings, pending decisions — the
+/// sidebar shows every session's waiting ask).
+fn push_session(kernel: &Kernel, push: &Value) -> Option<SessionId> {
+    if push["method"].as_str()?.starts_with("decision.") {
+        return None;
+    }
+    let p = &push["params"];
+    match &p["branch"] {
+        Value::Object(b) => b.get("session")?.as_str().map(SessionId::from),
+        Value::String(b) => kernel.session_of(&BranchId::from(b.as_str())).ok(),
+        _ => {
+            let b = p["task"]["branch"].as_str()?;
+            kernel.session_of(&BranchId::from(b)).ok()
+        }
+    }
 }
 
 fn parse_params<T: serde::de::DeserializeOwned>(p: &Value) -> Result<T> {

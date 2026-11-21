@@ -41,6 +41,7 @@ import {
   refreshAssistants,
   refreshCards,
   refreshLists,
+  watchSession,
 } from './sessions'
 import { onSettingsUpdated, refreshSettings } from './models'
 import type { SettingsInfo } from '../generated/SettingsInfo'
@@ -356,6 +357,8 @@ export function startApp(): void {
     // URL naming an unknown session falls back to the landing page.
     if (state.page?.page === 'decks') void refreshLibrary()
     const target = sessionIdFromLocation() ?? state.sessionId
+    // A new connection gets every push until told otherwise.
+    if (!target) watchSession(null)
     try {
       if (target && !(await openSession(target, { history: 'none' }))) {
         state.view = 'chat'
