@@ -104,7 +104,7 @@ const output = computed(() => {
       v-if="command"
       class="flex-none border-b border-line-soft bg-surface-2 px-5 py-2 font-mono text-meta leading-[1.55]"
     >
-      <TermCommand :command="command" />
+      <TermCommand :command="command" :lines="3" />
     </div>
 
     <pre

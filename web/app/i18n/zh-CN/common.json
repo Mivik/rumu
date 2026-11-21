@@ -29,6 +29,8 @@
   "copyFailed": "复制失败",
   "copyCode": "复制代码",
   "copiedCode": "已复制代码",
+  "unfoldCommand": "展开命令",
+  "foldCommand": "收起命令",
   "copiedAddress": "已复制地址",
   "time": {
     "justNow": "刚刚",

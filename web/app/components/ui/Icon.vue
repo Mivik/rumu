@@ -7,6 +7,8 @@
 import {
   mdiAccountOutline,
   mdiApplicationOutline,
+  mdiArrowCollapseVertical,
+  mdiArrowExpandVertical,
   mdiArrowLeft,
   mdiArrowRight,
   mdiArrowTopRight,
@@ -106,6 +108,8 @@ const paths: Record<string, string> = {
   more: mdiDotsHorizontal,
   chevron: mdiChevronRight,
   down: mdiChevronDown,
+  'unfold-v': mdiArrowExpandVertical,
+  'fold-v': mdiArrowCollapseVertical,
   stats: mdiChartBoxOutline,
   search: mdiMagnify,
   plus: mdiPlus,
