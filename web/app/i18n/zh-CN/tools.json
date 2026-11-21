@@ -41,7 +41,8 @@
   "edit": {
     "created": "新文件",
     "deleted": "已删除",
-    "hunks": "{count} 处"
+    "hunks": "{count} 处",
+    "moreEdits": "其余 {count} 处修改"
   },
   "thought": {
     "thinking": "思考中",

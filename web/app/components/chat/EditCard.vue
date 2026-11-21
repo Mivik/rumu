@@ -1,9 +1,9 @@
 <script setup lang="ts">
 // A file or card the model changed, standing in the conversation rather than
 // folded into its run: a header with the path (directory muted), the +/−
-// counts and, for a diff of several hunks, how many places it touched; under
-// it the diff itself, clipped when long (FileDiff `clip`). The header folds
-// the diff away and back.
+// counts and, for several hunks, how many places it touched; under it the
+// diff itself, clipped when long (FileDiff `clip`). The header folds the
+// diff away and back.
 import { computed, ref } from 'vue'
 import { t } from '../../i18n'
 import type { ToolRowView } from '../../lib/toolrows'
@@ -13,7 +13,8 @@ import { useWorkView } from '../../lib/state/appearance'
 import Icon from '../ui/Icon.vue'
 import FileDiff from './FileDiff.vue'
 
-const props = defineProps<{ view: ToolRowView }>()
+/** `joined`: one of an EditList's edits, the box theirs. */
+const props = defineProps<{ view: ToolRowView; joined?: boolean }>()
 const work = useWorkView()
 
 /** Tri-state: null = as the appearance settings say, until the header is
@@ -33,7 +34,8 @@ const hunks = computed(() => props.view.patch?.hunks?.length ?? 0)
 
 <template>
   <div
-    class="w-full min-w-0 overflow-hidden rounded-control border border-line"
+    class="w-full min-w-0"
+    :class="{ 'overflow-hidden rounded-control border border-line': !joined }"
     :data-path-node="view.row.result.id"
   >
     <button

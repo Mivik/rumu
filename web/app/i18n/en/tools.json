@@ -41,7 +41,8 @@
   "edit": {
     "created": "new file",
     "deleted": "deleted",
-    "hunks": "{count} place | {count} places"
+    "hunks": "{count} place | {count} places",
+    "moreEdits": "{count} more edit | {count} more edits"
   },
   "thought": {
     "thinking": "Thinking",

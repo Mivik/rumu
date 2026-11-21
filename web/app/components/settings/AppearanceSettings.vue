@@ -43,6 +43,8 @@ const draft = ref<Appearance | null>(null)
 const shown = computed(() => draft.value ?? appearance.value)
 const work = computed(() => shown.value.work)
 const workPreset = computed(() => presetOf(work.value))
+/** Do files stand outside folded steps, for a limit to apply to? */
+const outsideList = computed(() => work.value.always_show_edits && work.value.steps !== 'open')
 const changed = computed(
   () => shown.value.theme !== appearance.value.theme || !sameWork(work.value, appearance.value.work),
 )
@@ -131,6 +133,15 @@ async function apply(): Promise<void> {
               :label="t('settings.work_always_show_edits')"
               :disabled="work.steps === 'open'"
               @update:model-value="setWork({ always_show_edits: $event })"
+            />
+          </SettingRow>
+          <!-- only the files outside the fold are limited -->
+          <SettingRow v-if="key === 'edits'" :label="t('settings.work_limit_edits')" :disabled="!outsideList">
+            <Switch
+              :model-value="work.limit_edits"
+              :label="t('settings.work_limit_edits')"
+              :disabled="!outsideList"
+              @update:model-value="setWork({ limit_edits: $event })"
             />
           </SettingRow>
         </template>
