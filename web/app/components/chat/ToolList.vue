@@ -39,8 +39,10 @@ import FileView from './FileView.vue'
 import ImageThumb from './ImageThumb.vue'
 import DocumentChip from './DocumentChip.vue'
 import JsonTree from './JsonTree.vue'
+import { useWorkView } from '../../lib/state/appearance'
 
 const props = defineProps<{ rows: ToolRowInfo[] }>()
+const work = useWorkView()
 
 const views = computed<ToolRowView[]>(() => props.rows.map(toolRowView))
 
@@ -56,7 +58,7 @@ function callArg(v: ToolRowView, key: string): string {
 /** An open bash row: the whole command and the exit code are in its body,
  * so the line keeps only its intent. */
 function isShellOpen(v: ToolRowView): boolean {
-  return v.name === 'bash' && isRowOpen(v)
+  return v.name === 'bash' && isRowOpen(v, work.value)
 }
 
 /** A bash row's label: `$` when the clipped command follows it, the tool
@@ -127,10 +129,10 @@ function liveTaskOutput(id: string | null): string {
     >
       <button
         class="flex w-full min-w-0 items-center gap-2 px-2.5 py-1 text-left transition-colors"
-        :class="isRowOpen(v) ? 'bg-surface-2' : 'hover:bg-surface-2/70'"
+        :class="isRowOpen(v, work) ? 'bg-surface-2' : 'hover:bg-surface-2/70'"
         :title="toolRowTitle(v)"
-        :aria-expanded="isRowOpen(v)"
-        @click="toggleRow(v)"
+        :aria-expanded="isRowOpen(v, work)"
+        @click="toggleRow(v, work)"
       >
         <Icon
           :name="v.status === 'ok' ? toolIcon(v.name) : v.status === 'blocked' ? 'blocked' : 'error'"
@@ -209,28 +211,28 @@ function liveTaskOutput(id: string | null): string {
             name="chevron"
             :size="12"
             class="transition-transform duration-100"
-            :class="isRowOpen(v) ? 'rotate-90 text-ink-2' : 'text-ink-3/70'"
+            :class="isRowOpen(v, work) ? 'rotate-90 text-ink-2' : 'text-ink-3/70'"
           />
         </span>
       </button>
 
       <!-- dedicated bodies fill the expanded row edge to edge -->
       <FileDiff
-        v-if="isRowOpen(v) && bodyOf(v) === 'diff'"
+        v-if="isRowOpen(v, work) && bodyOf(v) === 'diff'"
         class="reveal"
         :patch="v.patch"
         :path="v.toolCardId ? 'card.md' : v.callFull"
         :args="argsOf(v.row.call)"
       />
       <FileView
-        v-else-if="isRowOpen(v) && bodyOf(v) === 'file'"
+        v-else-if="isRowOpen(v, work) && bodyOf(v) === 'file'"
         class="reveal"
         :text="v.output"
         :path="v.toolCardId ? 'card.md' : v.callFull"
         :args="argsOf(v.row.call)"
       />
-      <BashView v-else-if="isRowOpen(v) && bodyOf(v) === 'bash'" class="reveal" v-bind="bashOf(v)" />
-      <div v-else-if="isRowOpen(v)" class="reveal flex flex-col gap-2 pt-1 pr-2.5 pb-2.5 pl-[30px]">
+      <BashView v-else-if="isRowOpen(v, work) && bodyOf(v) === 'bash'" class="reveal" v-bind="bashOf(v)" />
+      <div v-else-if="isRowOpen(v, work)" class="reveal flex flex-col gap-2 pt-1 pr-2.5 pb-2.5 pl-[30px]">
         <div v-if="v.row.call && v.name === 'code'">
           <div class="mb-1 text-micro font-semibold text-ink-3">{{ t('tools.detail.script') }}</div>
           <pre class="code">{{ callArg(v, 'code') }}</pre>

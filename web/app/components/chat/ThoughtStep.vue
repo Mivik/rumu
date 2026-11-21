@@ -2,7 +2,8 @@
 // A step's reasoning inside an opened activity run: a quiet disclosure
 // ("Thought for 4s") and, opened, the text under a hairline. The live one
 // (`node` null) reads "Thinking" and shows its stream while the model
-// thinks, folding once the answer starts unless toggled by hand. `flat` shows
+// thinks, folding once the answer starts unless toggled by hand (or the
+// appearance settings keep every thought open, or folded). `flat` shows
 // just the text, for a run (ActivityRun) whose own line is the disclosure.
 // The live stream's box follows its end as the reasoning grows.
 import { computed, ref } from 'vue'
@@ -11,10 +12,12 @@ import { type Node, reasoningText } from '../../lib/types'
 import { useBranchView } from '../../lib/store'
 import { fmtThought } from '../../lib/util'
 import { vFollow } from '../../lib/motion'
+import { useWorkView } from '../../lib/state/appearance'
 import Icon from '../ui/Icon.vue'
 
 const props = withDefaults(defineProps<{ node: Node | null; flat?: boolean }>(), { flat: false })
 const activeDelta = useBranchView().delta
+const work = useWorkView()
 
 const reasoning = computed(() => {
   if (!props.node) return activeDelta.value?.reasoning ?? ''
@@ -29,9 +32,14 @@ const ms = computed(() => {
 
 const thinking = computed(() => !props.node && ms.value === undefined)
 
-/** Tri-state: null = auto (the live one open while the model thinks). */
+/** Tri-state: null = as the appearance settings say — `auto` opens the
+ *  live one while the model thinks. */
 const manual = ref<boolean | null>(null)
-const open = computed(() => (manual.value !== null ? manual.value : !props.node && !activeDelta.value?.text))
+const open = computed(() => {
+  if (manual.value !== null) return manual.value
+  const mode = work.value.thinking
+  return mode === 'open' || (mode === 'auto' && !props.node && !activeDelta.value?.text)
+})
 function toggle(): void {
   manual.value = !open.value
 }

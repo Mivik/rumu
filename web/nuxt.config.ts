@@ -61,10 +61,10 @@ export default defineNuxtConfig({
         },
         {
           // The theme, before the first paint: the tokens in main.css read
-          // it off <html>. The plugin (app/plugins/appearance.client.ts)
-          // takes over from here.
+          // it off <html>. This browser's copy of the setting; the plugin
+          // (app/plugins/appearance.client.ts) takes over from here.
           innerHTML:
-            "try{var a=JSON.parse(localStorage.getItem('rumu.appearance')||'{}');var d=a.theme==='dark'||(a.theme!=='light'&&matchMedia('(prefers-color-scheme: dark)').matches);document.documentElement.dataset.theme=d?'dark':'light'}catch(e){}",
+            "try{var t=localStorage.getItem('rumu.theme');var d=t==='dark'||(t!=='light'&&matchMedia('(prefers-color-scheme: dark)').matches);document.documentElement.dataset.theme=d?'dark':'light'}catch(e){}",
         },
       ],
     },

@@ -12,22 +12,22 @@ import { layout } from '../../lib/layout'
 import { closePage, openPage, pageUp, replacePage } from '../../lib/router'
 import { refreshSettings } from '../../lib/state/models'
 import { connected, state } from '../../lib/store'
+import AppearanceSettings from '../settings/AppearanceSettings.vue'
 import DefaultsSettings from '../settings/DefaultsSettings.vue'
 import McpSettings from '../settings/McpSettings.vue'
 import ProvidersSettings from '../settings/ProvidersSettings.vue'
 import SkillsSettings from '../settings/SkillsSettings.vue'
-import UiSettings from '../settings/UiSettings.vue'
 import Icon from '../ui/Icon.vue'
 import PageSheet from './PageSheet.vue'
 
 defineProps<{ modal?: boolean }>()
 
 const SECTIONS = [
+  { key: 'appearance', icon: 'palette' },
   { key: 'defaults', icon: 'model' },
   { key: 'providers', icon: 'link' },
   { key: 'mcp', icon: 'mcp' },
   { key: 'skills', icon: 'note' },
-  { key: 'ui', icon: 'tune' },
 ] as const
 type Section = (typeof SECTIONS)[number]['key']
 
@@ -129,10 +129,10 @@ watch(connected, (up) => up && void refreshSettings(), { immediate: true })
       </nav>
     </template>
 
-    <DefaultsSettings v-if="section === 'defaults'" />
+    <AppearanceSettings v-if="section === 'appearance'" />
+    <DefaultsSettings v-else-if="section === 'defaults'" />
     <ProvidersSettings v-else-if="section === 'providers'" />
     <McpSettings v-else-if="section === 'mcp'" />
     <SkillsSettings v-else-if="section === 'skills'" />
-    <UiSettings v-else-if="section === 'ui'" />
   </PageSheet>
 </template>
