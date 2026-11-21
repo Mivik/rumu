@@ -50,7 +50,7 @@
     "thoughtFor": "Thought for {duration}"
   },
   "row": {
-    "task": "task {id} · {status}",
+    "task": "task {id}: {status}",
     "openSubAgent": "open sub-agent",
     "subAgentTitle": "sub-agent branch {id}",
     "status": {
@@ -66,8 +66,7 @@
     "images": "Images",
     "documents": "Documents",
     "outputError": "Output · error",
-    "liveOutput": "Task output",
-    "runningTag": "· running"
+    "liveOutput": "Task output"
   },
   "diff": {
     "moreLines": "{count} more line | {count} more lines",

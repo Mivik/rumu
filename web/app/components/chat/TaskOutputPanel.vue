@@ -5,7 +5,7 @@ import { computed, onBeforeUnmount, onMounted, ref, watch } from 'vue'
 import { t } from '../../i18n'
 import { vFollow } from '../../lib/motion'
 import { ensureAgentNodes, killTask, openTaskDetail, state } from '../../lib/store'
-import { taskCommand, taskElapsed, taskStatusWord } from '../../lib/tasks'
+import { taskCommand, taskElapsed, taskState, taskStatusIcon, taskStatusWord } from '../../lib/tasks'
 import { bashExit } from '../../lib/toolrows'
 import { toolIcon } from '../../lib/toolIcon'
 import Icon from '../ui/Icon.vue'
@@ -69,14 +69,16 @@ const output = computed(() => {
           <span class="ml-1.5 text-ink">{{ task.kind.args_summary }}</span>
         </span>
         <span v-else class="truncate text-meta font-semibold" :title="task.summary">{{ task.summary }}</span>
-        <span class="flex items-center gap-1.5 text-micro text-ink-3">
-          <span v-if="running" class="dot-live dot-task size-1.5 rounded-full bg-pine" />
-          <span :class="{ 'text-danger': task.is_error }">{{
-            taskStatusWord(task.status === 'done' && task.is_error ? 'failed' : task.status)
-          }}</span>
-          <span>·</span>
-          <span class="font-mono tabular-nums">{{ taskElapsed(task, now) }}</span>
-          <span>·</span>
+        <span class="flex items-center gap-3 text-micro text-ink-3">
+          <span class="flex items-center gap-1.5" :class="{ 'text-danger': task.is_error }">
+            <span v-if="running" class="dot-live dot-task size-1.5 rounded-full bg-pine" />
+            <Icon v-else :name="taskStatusIcon(taskState(task))" :size="12" />
+            {{ taskStatusWord(taskState(task)) }}
+          </span>
+          <span class="flex items-center gap-1">
+            <Icon name="timer" :size="12" />
+            <span class="font-mono tabular-nums">{{ taskElapsed(task, now) }}</span>
+          </span>
           <span class="font-mono">{{ task.id }}</span>
         </span>
       </span>

@@ -27,6 +27,16 @@ export function taskStatusWord(status: TaskStatus): string {
   return t(`tools.status.${key}`)
 }
 
+/** A task's status as shown: a finished task that reported an error failed. */
+export function taskState(t: TaskInfo): TaskStatus {
+  return t.status === 'done' && t.is_error ? 'failed' : t.status
+}
+
+/** The icon standing for a status where a word would need a separator. */
+export function taskStatusIcon(status: TaskStatus): string {
+  return { running: 'running', done: 'ok', failed: 'error', cancelled: 'cancelled', lost: 'lost' }[status]
+}
+
 /** The task id of a background call's result: `started task t-1a2b3c4d (…)`,
  * or `still running after 60s, so it moved to the background as task t-1a2b3c4d (…)`. */
 export function taskIdOf(output: string): string | null {

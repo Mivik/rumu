@@ -50,7 +50,7 @@
     "thoughtFor": "思考 {duration}"
   },
   "row": {
-    "task": "任务 {id} · {status}",
+    "task": "任务 {id}：{status}",
     "openSubAgent": "打开子代理",
     "subAgentTitle": "子代理分支 {id}",
     "status": {
@@ -66,8 +66,7 @@
     "images": "图片",
     "documents": "文档",
     "outputError": "输出 · 错误",
-    "liveOutput": "任务输出",
-    "runningTag": "· 运行中"
+    "liveOutput": "任务输出"
   },
   "diff": {
     "moreLines": "其余 {count} 行",

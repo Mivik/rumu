@@ -12,7 +12,7 @@
 import { computed } from 'vue'
 import { t } from '../../i18n'
 import type { ToolRowInfo } from '../../lib/store'
-import { openAgentView, openTaskDetail, state } from '../../lib/store'
+import { openAgentView, state } from '../../lib/store'
 import type { Attachment } from '../../lib/types'
 import type { ToolRowView } from '../../lib/toolrows'
 import {
@@ -33,6 +33,7 @@ import Icon from '../ui/Icon.vue'
 import Chip from '../ui/Chip.vue'
 import CardChip from './CardChip.vue'
 import CodeCalls from './CodeCalls.vue'
+import TaskChip from './TaskChip.vue'
 import BashView from './BashView.vue'
 import FileDiff from './FileDiff.vue'
 import FileView from './FileView.vue'
@@ -174,21 +175,7 @@ function liveTaskOutput(id: string | null): string {
           >
             {{ t('tools.row.openSubAgent') }}
           </Chip>
-          <Chip
-            v-if="v.taskId"
-            tone="tool"
-            mono
-            clickable
-            :title="v.taskLabel ?? v.taskId"
-            @click.stop="openTaskDetail(v.taskId)"
-          >
-            {{
-              t('tools.row.task', {
-                id: v.taskId,
-                status: taskStatusWord(v.taskStatus ?? 'running'),
-              })
-            }}
-          </Chip>
+          <TaskChip v-if="v.taskId" :id="v.taskId" />
           <CardChip
             v-if="v.toolCardId && v.status === 'ok'"
             :id="v.toolCardId"
@@ -278,11 +265,11 @@ function liveTaskOutput(id: string | null): string {
           </div>
         </div>
         <div v-if="v.taskId && (v.taskStatus === 'running' || liveTaskOutput(v.taskId))">
-          <div class="mb-1 text-micro font-semibold text-ink-3">
+          <div class="mb-1 flex items-center gap-2 text-micro font-semibold text-ink-3">
             {{ t('tools.detail.liveOutput') }}
-            <span v-if="v.taskStatus === 'running'" class="text-brand-strong">{{
-              t('tools.detail.runningTag')
-            }}</span>
+            <span v-if="v.taskStatus === 'running'" class="flex items-center gap-1 text-pine">
+              <Icon name="running" :size="12" />{{ taskStatusWord('running') }}
+            </span>
           </div>
           <pre class="code">{{ liveTaskOutput(v.taskId) || t('common.noOutput') }}</pre>
         </div>

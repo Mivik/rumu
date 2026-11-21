@@ -66,10 +66,13 @@ function isOpen(tk: TaskInfo): boolean {
                     <span class="flex size-4 flex-none items-center justify-center">
                       <span class="dot-live dot-task size-1.5 rounded-full bg-pine" />
                     </span>
-                    <span class="flex-1 truncate text-left">
-                      {{ t('tools.tasks.running', { count: total }) }}
-                      <span v-if="nestedRunningCount" class="text-ink-3">
-                        · {{ t('tools.tasks.nested', { count: nestedRunningCount }) }}
+                    <span class="flex min-w-0 flex-1 items-center gap-3">
+                      <span class="truncate">{{ t('tools.tasks.running', { count: total }) }}</span>
+                      <span v-if="nestedRunningCount" class="flex min-w-0 items-center gap-1 text-ink-3">
+                        <Icon name="agent" :size="12" class="flex-none" />
+                        <span class="truncate">{{
+                          t('tools.tasks.nested', { count: nestedRunningCount })
+                        }}</span>
                       </span>
                     </span>
                     <Icon
@@ -123,7 +126,7 @@ function isOpen(tk: TaskInfo): boolean {
                       <button
                         type="button"
                         class="flex min-w-0 flex-1 items-center gap-2"
-                        :title="`${tk.id} · ${taskCommand(tk) || taskLabel(tk)}`"
+                        :title="`${tk.id}\n${taskCommand(tk) || taskLabel(tk)}`"
                         @click="openTaskDetail(tk.id)"
                       >
                         <Icon

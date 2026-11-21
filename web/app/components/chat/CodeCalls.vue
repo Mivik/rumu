@@ -10,9 +10,9 @@ import { computed, ref } from 'vue'
 import { t } from '../../i18n'
 import type { Branch, FilePatch, Tagged } from '../../lib/types'
 import type { ToolRowInfo } from '../../lib/store'
-import { openAgentView, openTaskDetail, scriptAgents, state } from '../../lib/store'
+import { openAgentView, scriptAgents, state } from '../../lib/store'
 import { argSummary, fmtThought, shortId } from '../../lib/util'
-import { taskIdOf, taskStatusWord } from '../../lib/tasks'
+import { taskIdOf } from '../../lib/tasks'
 import { bashExtraArgs, displayCall } from '../../lib/toolrows'
 import { patchOfData } from '../../lib/diff'
 import { toolIcon } from '../../lib/toolIcon'
@@ -22,6 +22,7 @@ import BashView from './BashView.vue'
 import FileDiff from './FileDiff.vue'
 import FileView from './FileView.vue'
 import JsonTree from './JsonTree.vue'
+import TaskChip from './TaskChip.vue'
 
 const props = defineProps<{
   invokes: ToolRowInfo[]
@@ -87,9 +88,6 @@ const pending = computed(() => {
       elapsed: fmtThought(Math.max(0, live.now - b.created_at)),
     }))
 })
-function taskWord(id: string): string {
-  return t('tools.row.task', { id, status: taskStatusWord(state.tasks[id]?.status ?? 'running') })
-}
 const expanded = ref<Set<string>>(new Set())
 
 type Status = 'ok' | 'error' | 'blocked'
@@ -174,16 +172,7 @@ const iconTone: Record<Status, string> = {
             >{{ summary(c) }}</span
           >
           <span class="ml-auto flex flex-none items-center gap-2">
-            <Chip
-              v-if="c.task_id"
-              tone="tool"
-              mono
-              clickable
-              :title="c.task_id"
-              @click.stop="openTaskDetail(c.task_id)"
-            >
-              {{ taskWord(c.task_id) }}
-            </Chip>
+            <TaskChip v-if="c.task_id" :id="c.task_id" />
             <span v-else class="text-micro text-ink-3">{{ c.dur_ms }} ms</span>
             <span
               v-if="c.blocked"
