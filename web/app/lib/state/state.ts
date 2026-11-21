@@ -141,6 +141,8 @@ const initial = {
   view: 'chat' as SessionView,
   /** The replies the stats view narrows to; null for the whole path. */
   statsRange: null as StatsRange | null,
+  /** The sub-agent the stats view shows; null for the main line. */
+  statsAgent: null as BranchId | null,
   /** The management page over the session, if any (mirrored in the
    *  address); the session stays loaded beneath it. */
   page: null as PageRoute | null,
@@ -152,6 +154,8 @@ const initial = {
   agentNodes: {} as Record<BranchId, 'loading' | 'loaded'>,
   /** Token totals over every model call of the open session. */
   usage: { calls: 0, input: 0, cached: 0, output: 0 } as SessionUsage,
+  /** Each sub-agent's totals over its own model calls. */
+  agentUsage: {} as Record<BranchId, SessionUsage>,
   /** The branch the chat shows: the session's main line. */
   mainBranch: null as BranchId | null,
   pathState: null as PathState | null,

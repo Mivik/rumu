@@ -4,18 +4,70 @@
 // call of the range as a column, then the replies as rows — a click narrows
 // to one, a shift-click stretches the range to it. The range lives in the
 // address (`?view=stats&from=&to=`), so a reply's usage card links here and
-// Back returns. The whole session (every branch) closes it as one line.
-import { computed } from 'vue'
+// Back returns. A sub-agent's stats are the same view over its own nodes
+// (`&agent=`); each scope lists the sub-agents it started, and the whole
+// session (every branch) closes it as one line.
+import { computed, watchEffect } from 'vue'
 import { t } from '../../i18n'
 import { modelByRef } from '../../lib/state/models'
-import { pathNodes, repliesOf, showStats, state, summarize } from '../../lib/store'
+import { pathOf } from '../../lib/state/derived'
+import {
+  ensureAgentNodes,
+  openAgentView,
+  pathNodes,
+  repliesOf,
+  showStats,
+  state,
+  summarize,
+} from '../../lib/store'
 import type { ReplyStat } from '../../lib/store'
+import type { Branch, BranchId } from '../../lib/types'
 import { contentText, fmtBytes, fmtDuration, fmtTokens, preview } from '../../lib/util'
 import CallBars from '../stats/CallBars.vue'
 import TimeSplit from '../stats/TimeSplit.vue'
 import TokenChips from '../stats/TokenChips.vue'
+import Icon from '../ui/Icon.vue'
 
-const replies = computed(() => repliesOf(pathNodes.value))
+/** The sub-agent shown; null for the main line (also when the id is stale). */
+const agent = computed<Branch | null>(() => {
+  const b = state.statsAgent ? state.branches[state.statsAgent] : undefined
+  return b?.kind.type === 'agent' ? b : null
+})
+// The tree leaves sub-agents' nodes out, and a replaced tree drops them.
+watchEffect(() => {
+  const id = agent.value?.id
+  if (id && !state.agentNodes[id]) void ensureAgentNodes(id)
+})
+const loading = computed(() => !!agent.value && state.agentNodes[agent.value.id] !== 'loaded')
+
+/** Its own nodes: a sub-agent's from its fork point on. */
+const replies = computed(() =>
+  agent.value ? repliesOf(pathOf(agent.value, agent.value.forked_from)) : repliesOf(pathNodes.value),
+)
+
+const taskOf = (b: Branch): string => (b.kind.type === 'agent' ? b.kind.task : '')
+
+/** Main line › … › the sub-agent shown, each step a link to its stats. */
+const trail = computed(() => {
+  const out: Branch[] = []
+  for (let b = agent.value, guard = 0; b?.kind.type === 'agent' && guard++ < 100;) {
+    out.unshift(b)
+    b = state.branches[b.kind.parent_branch] ?? null
+  }
+  return out
+})
+
+/** The sub-agents the shown branch started, oldest first, with their totals. */
+const agents = computed(() => {
+  const parent: BranchId | null = agent.value?.id ?? state.mainBranch
+  return Object.values(state.branches)
+    .filter((b) => b.kind.type === 'agent' && b.kind.parent_branch === parent)
+    .sort((a, b) => a.created_at - b.created_at)
+    .map((b) => {
+      const u = state.agentUsage[b.id] ?? { calls: 0, input: 0, cached: 0, output: 0 }
+      return { b, ...u, hit: u.input > 0 ? u.cached / u.input : null }
+    })
+})
 
 /** The range as indices into `replies`; the whole path when unset or stale. */
 const span = computed<[number, number] | null>(() => {
@@ -53,11 +105,11 @@ function pick(i: number, e: MouseEvent): void {
     // Stretch from the end of the range farther from the click.
     const anchor = i < s[0] ? s[1] : s[0]
     const [a, b] = anchor <= i ? [anchor, i] : [i, anchor]
-    showStats({ from: replies.value[a]!.id, to: replies.value[b]!.id })
+    showStats({ from: replies.value[a]!.id, to: replies.value[b]!.id }, state.statsAgent)
   } else if (s && s[0] === i && s[1] === i) {
-    showStats(null)
+    showStats(null, state.statsAgent)
   } else {
-    showStats({ from: r.id, to: r.id })
+    showStats({ from: r.id, to: r.id }, state.statsAgent)
   }
 }
 
@@ -144,10 +196,46 @@ const session = computed(() => state.usage)
   <div class="flex min-h-0 flex-1 flex-col">
     <div class="scroll-fade flex-1 overflow-y-auto pt-3 pb-6">
       <div
-        :key="state.sessionId ?? ''"
+        :key="`${state.sessionId ?? ''}:${agent?.id ?? ''}`"
         class="view-in mx-auto flex max-w-[var(--col-max)] flex-col px-4 sm:px-6"
       >
-        <div v-if="!replies.length" class="py-10 text-center text-meta text-ink-3">
+        <nav v-if="agent" class="mb-3 flex min-w-0 items-center gap-1 text-meta">
+          <button
+            type="button"
+            class="flex-none text-ink-2 transition-colors hover:text-ink"
+            @click="showStats(null)"
+          >
+            {{ t('usage.mainLine') }}
+          </button>
+          <template v-for="b in trail" :key="b.id">
+            <Icon name="chevron" :size="12" class="flex-none text-ink-3" />
+            <button
+              type="button"
+              class="min-w-0 truncate transition-colors"
+              :class="b.id === agent.id ? 'font-semibold text-ink' : 'text-ink-2 hover:text-ink'"
+              :title="taskOf(b)"
+              @click="showStats(null, b.id)"
+            >
+              <Icon
+                v-if="b.id === agent.id"
+                name="agent"
+                :size="13"
+                class="-mt-0.5 mr-1 inline text-agent"
+              />{{ taskOf(b) }}
+            </button>
+          </template>
+          <button
+            type="button"
+            class="ml-auto flex-none rounded-full bg-surface-2 px-2 py-0.5 text-micro font-semibold text-ink-2 transition-colors hover:text-ink"
+            @click="openAgentView(agent.id)"
+          >
+            {{ t('usage.openAgent') }}
+          </button>
+        </nav>
+        <div v-if="loading" class="py-10 text-center text-meta text-ink-3">
+          {{ t('usage.loading') }}
+        </div>
+        <div v-else-if="!replies.length" class="py-10 text-center text-meta text-ink-3">
           {{ t('usage.empty') }}
         </div>
         <template v-else>
@@ -157,7 +245,7 @@ const session = computed(() => state.usage)
               v-if="span"
               type="button"
               class="rounded-full bg-surface-2 px-2 py-0.5 text-micro font-semibold text-ink-2 transition-colors hover:text-ink"
-              @click="showStats(null)"
+              @click="showStats(null, state.statsAgent)"
             >
               {{ t('usage.showAll') }}
             </button>
@@ -242,6 +330,37 @@ const session = computed(() => state.usage)
               </tr>
             </tbody>
           </table>
+
+          <template v-if="agents.length">
+            <div class="section-title mt-5 mb-1">{{ t('usage.agents') }}</div>
+            <table class="w-full table-fixed text-meta tabular-nums">
+              <thead>
+                <tr class="text-left text-micro text-ink-3">
+                  <th class="py-1 pl-1 font-normal" />
+                  <th class="w-14 py-1 text-right font-normal">{{ t('usage.modelCalls') }}</th>
+                  <th class="w-14 py-1 text-right font-normal">{{ t('usage.input') }}</th>
+                  <th class="w-14 py-1 text-right font-normal">{{ t('usage.output') }}</th>
+                  <th class="w-14 py-1 pr-1 text-right font-normal">{{ t('usage.hitRate') }}</th>
+                </tr>
+              </thead>
+              <tbody>
+                <tr
+                  v-for="row in agents"
+                  :key="row.b.id"
+                  class="cursor-pointer border-t border-line-soft transition-colors select-none hover:bg-surface-2/60"
+                  @click="showStats(null, row.b.id)"
+                >
+                  <td class="truncate py-1.5 pr-2 pl-1 text-ink" :title="taskOf(row.b)">
+                    <Icon name="agent" :size="13" class="-mt-0.5 mr-1 inline text-agent" />{{ taskOf(row.b) }}
+                  </td>
+                  <td class="py-1.5 text-right text-ink-2">{{ row.calls }}</td>
+                  <td class="py-1.5 text-right text-ink-2">{{ fmtTokens(row.input) }}</td>
+                  <td class="py-1.5 text-right text-ink-2">{{ fmtTokens(row.output) }}</td>
+                  <td class="py-1.5 pr-1 text-right text-ink-2">{{ pct(row.hit) }}</td>
+                </tr>
+              </tbody>
+            </table>
+          </template>
 
           <div class="mt-5 border-t border-line-soft pt-2 text-micro tabular-nums text-ink-3">
             <span class="font-semibold text-ink-2">{{ t('usage.session') }}</span>

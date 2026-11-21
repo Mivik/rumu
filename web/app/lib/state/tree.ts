@@ -16,6 +16,7 @@ export function replaceTree(tree: SessionTreeResult): void {
   state.branches = {}
   state.agentNodes = {}
   state.usage = tree.usage
+  state.agentUsage = tree.agent_usage ?? {}
   for (const n of tree.nodes) state.nodes[n.id] = n
   for (const b of tree.branches) state.branches[b.id] = b
   syncLive(tree)

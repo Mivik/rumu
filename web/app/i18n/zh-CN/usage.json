@@ -41,5 +41,9 @@
   "models": "模型",
   "session": "整个会话",
   "sessionLine": "{calls} 次调用 · 输入 {input} · 缓存 {cached} · 输出 {output}",
-  "empty": "暂无模型调用"
+  "empty": "暂无模型调用",
+  "mainLine": "主线",
+  "agents": "子代理",
+  "openAgent": "打开对话",
+  "loading": "读取中…"
 }

@@ -28,7 +28,7 @@ use rumu_plugins::{Assistant, assistant_of};
 
 use crate::settings::{Settings, SettingsError};
 use rust_embed::{EmbeddedFile, RustEmbed};
-use serde::Deserialize;
+use serde::{Deserialize, Serialize};
 use serde_json::{Value, json};
 use tokio::sync::broadcast::error::RecvError;
 use tokio::time::Instant;
@@ -1106,12 +1106,14 @@ async fn dispatch(state: &AppState, method: &str, p: &Value) -> Result<Value> {
 
         // `agents: false` leaves out the nodes only sub-agent branches reach
         // (most of a long session's bytes); `branch.nodes` fetches them.
-        // `usage` totals every model call of the session either way.
+        // `usage` totals every model call of the session either way, and
+        // `agent_usage` each sub-agent's own.
         "session.tree" => {
             let session: SessionId = str_param(p, "session")?.into();
             let agents = p.get("agents").and_then(Value::as_bool).unwrap_or(true);
             let (session, mut nodes, branches) = kernel.session_tree(&session)?;
             let usage = session_usage(&nodes);
+            let agent_usage = agent_usage(&nodes, &branches);
             if !agents {
                 let lines = line_nodes(&nodes, &branches);
                 nodes.retain(|n| lines.contains(&n.id));
@@ -1123,6 +1125,7 @@ async fn dispatch(state: &AppState, method: &str, p: &Value) -> Result<Value> {
                 "branches": branches,
                 "live": live,
                 "usage": usage,
+                "agent_usage": agent_usage,
             }))
         }
 
@@ -1686,18 +1689,57 @@ fn line_nodes(nodes: &[rumu_core::Node], branches: &[rumu_core::Branch]) -> Hash
         .collect()
 }
 
-/// Token totals over every model call in `nodes`.
-fn session_usage(nodes: &[rumu_core::Node]) -> Value {
-    let (mut calls, mut input, mut cached, mut output) = (0u64, 0u64, 0u64, 0u64);
-    for n in nodes {
+/// Token totals over some model calls.
+#[derive(Default, Serialize)]
+struct UsageTotals {
+    calls: u64,
+    input: u64,
+    cached: u64,
+    output: u64,
+}
+
+impl UsageTotals {
+    fn add(&mut self, n: &rumu_core::Node) {
         if let rumu_core::NodeBody::Assistant { usage, .. } = &n.body {
-            calls += 1;
-            input += usage.prompt_tokens;
-            cached += usage.cached_tokens;
-            output += usage.completion_tokens;
+            self.calls += 1;
+            self.input += usage.prompt_tokens;
+            self.cached += usage.cached_tokens;
+            self.output += usage.completion_tokens;
         }
     }
-    json!({ "calls": calls, "input": input, "cached": cached, "output": output })
+}
+
+/// Token totals over every model call in `nodes`.
+fn session_usage(nodes: &[rumu_core::Node]) -> UsageTotals {
+    let mut t = UsageTotals::default();
+    nodes.iter().for_each(|n| t.add(n));
+    t
+}
+
+/// Each sub-agent's totals over its own nodes (head up to its fork point),
+/// so the stats view lists them without fetching their nodes.
+fn agent_usage(
+    nodes: &[rumu_core::Node],
+    branches: &[rumu_core::Branch],
+) -> HashMap<BranchId, UsageTotals> {
+    let by_id: HashMap<&NodeId, &rumu_core::Node> = nodes.iter().map(|n| (&n.id, n)).collect();
+    let mut out = HashMap::new();
+    for b in branches {
+        if !matches!(b.kind, rumu_core::BranchKind::Agent { .. }) {
+            continue;
+        }
+        let mut t = UsageTotals::default();
+        let mut cur = Some(&b.head);
+        while let Some(n) = cur
+            .filter(|id| Some(*id) != b.forked_from.as_ref())
+            .and_then(|id| by_id.get(id))
+        {
+            t.add(n);
+            cur = n.parent.as_ref();
+        }
+        out.insert(b.id.clone(), t);
+    }
+    out
 }
 
 /// The project deck `id`; any other id is a bad request.

@@ -17,7 +17,7 @@ import type { CSSProperties, Ref } from 'vue'
 import { autoUpdate, flip, offset, shift, useFloating } from '@floating-ui/vue'
 import { showModel } from '../../lib/layout'
 import { modelByRef } from '../../lib/state/models'
-import { repliesOf, showStats, summarize, useBranchView } from '../../lib/store'
+import { openAgentView, repliesOf, showStats, summarize, useBranchView } from '../../lib/store'
 import type { TimelineGroup } from '../../lib/store'
 import { fmtDuration, fmtTokens } from '../../lib/util'
 import CallBars from '../stats/CallBars.vue'
@@ -126,7 +126,10 @@ function openStats(): void {
   const r = reply.value
   if (!r) return
   close()
-  showStats({ from: r.id, to: r.id })
+  // A sub-agent's stats take the sheet the panel would cover below xl.
+  const agent = view.sub ? view.branch.value : null
+  if (agent) openAgentView(null)
+  showStats({ from: r.id, to: r.id }, agent)
 }
 
 /** The reply's most used model, by catalog name (the id when no longer enabled). */
@@ -309,10 +312,9 @@ const tipStyle = computed<CSSProperties>(() => ({
             </template>
           </CallBars>
 
-          <div v-if="troubles.length || !view.sub" class="mt-1 flex items-center gap-2 px-1">
+          <div class="mt-1 flex items-center gap-2 px-1">
             <span v-if="troubles.length" class="text-micro text-warn">{{ troubles.join(' · ') }}</span>
             <button
-              v-if="!view.sub"
               type="button"
               class="-mr-1 ml-auto inline-flex items-center gap-0.5 rounded-control px-1.5 py-0.5 text-micro font-semibold text-ink-2 transition-colors hover:bg-surface-2 hover:text-ink"
               @click="openStats"

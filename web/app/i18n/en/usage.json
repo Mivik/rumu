@@ -41,5 +41,9 @@
   "models": "Models",
   "session": "Whole session",
   "sessionLine": "{calls} calls · in {input} · cached {cached} · out {output}",
-  "empty": "No model calls yet"
+  "empty": "No model calls yet",
+  "mainLine": "Main line",
+  "agents": "Sub-agents",
+  "openAgent": "Open conversation",
+  "loading": "Loading…"
 }

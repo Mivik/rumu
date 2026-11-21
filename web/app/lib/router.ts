@@ -67,6 +67,12 @@ export function rangeFromLocation(): StatsRange | null {
   return q.get('view') === 'stats' && from ? { from, to: q.get('to') ?? from } : null
 }
 
+/** The sub-agent the stats view shows (`?agent=`), if any. */
+export function statsAgentFromLocation(): string | null {
+  const q = new URLSearchParams(window.location.search)
+  return q.get('view') === 'stats' ? q.get('agent') : null
+}
+
 /** The page named by the current address, if any. */
 export function pageFromLocation(): PageRoute | null {
   const [, head, ...rest] = window.location.pathname.split('/')
@@ -88,6 +94,7 @@ function currentUrl(): string {
   if (state.view === 'chat') return `/s/${encodeURIComponent(id)}`
   const q = new URLSearchParams({ view: state.view })
   const range = state.view === 'stats' ? state.statsRange : null
+  if (state.view === 'stats' && state.statsAgent) q.set('agent', state.statsAgent)
   if (range) {
     q.set('from', range.from)
     if (range.to !== range.from) q.set('to', range.to)

@@ -205,16 +205,19 @@ export function goHome(): void {
 
 /** Show the open session another way; Back returns to the previous view. */
 export function showView(view: SessionView): void {
-  if (state.view === view && !state.statsRange) return
+  if (state.view === view && !state.statsRange && !state.statsAgent) return
   state.view = view
   state.statsRange = null
+  state.statsAgent = null
   commitRoute('push')
 }
 
-/** The stats view, narrowed to `range` (the whole path when null). */
-export function showStats(range: StatsRange | null): void {
+/** The stats view of `agent` (the main line when null), narrowed to
+ *  `range` (its whole path when null). */
+export function showStats(range: StatsRange | null, agent: BranchId | null = null): void {
   state.view = 'stats'
   state.statsRange = range
+  state.statsAgent = agent
   commitRoute('push')
 }
 
@@ -224,6 +227,7 @@ export function closeSession(): void {
   state.booting = false // and any boot into a session URL still pending
   state.view = 'chat'
   state.statsRange = null
+  state.statsAgent = null
   state.sessionId = null
   watchSession(null)
   state.session = null

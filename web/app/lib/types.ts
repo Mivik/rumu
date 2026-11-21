@@ -138,6 +138,8 @@ export interface SessionTreeResult {
   live: Record<BranchId, LiveTurn>
   /** Token totals over every model call of the session, sub-agents included. */
   usage: SessionUsage
+  /** Each sub-agent's totals over its own nodes (older servers send none). */
+  agent_usage?: Record<BranchId, SessionUsage>
 }
 
 export interface SessionUsage {

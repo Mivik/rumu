@@ -8,6 +8,7 @@ import {
   pageFromLocation,
   rangeFromLocation,
   sessionIdFromLocation,
+  statsAgentFromLocation,
   viewFromLocation,
 } from '../router'
 import type {
@@ -110,6 +111,13 @@ function onNodeAppended(p: NodeAppendedPush): void {
       state.usage.input += u.prompt_tokens
       state.usage.cached += u.cached_tokens
       state.usage.output += u.completion_tokens
+      if (state.branches[branch]?.kind.type === 'agent') {
+        const a = (state.agentUsage[branch] ??= { calls: 0, input: 0, cached: 0, output: 0 })
+        a.calls++
+        a.input += u.prompt_tokens
+        a.cached += u.cached_tokens
+        a.output += u.completion_tokens
+      }
     }
     state.nodes[node.id] = node
     // A node extending a branch's head grows its path live (the active
@@ -281,6 +289,7 @@ export function startApp(): void {
   state.booting = sessionIdFromLocation() !== null
   state.view = viewFromLocation()
   state.statsRange = rangeFromLocation()
+  state.statsAgent = statsAgentFromLocation()
   state.page = pageFromLocation()
 
   rumu.onPush('node.appended', (p) => onNodeAppended(p as unknown as NodeAppendedPush))
@@ -340,6 +349,7 @@ export function startApp(): void {
     const id = sessionIdFromLocation()
     state.view = viewFromLocation()
     state.statsRange = rangeFromLocation()
+    state.statsAgent = statsAgentFromLocation()
     if (id === state.sessionId) return
     if (id) void openSession(id, { history: 'none' })
     else closeSession()
