@@ -13,14 +13,12 @@ export function taskLabel(t: TaskInfo): string {
   return `agent: ${t.summary}`
 }
 
-/** The `bash` command that started a task, read back from its call: the
- * task's own label is a summary (`description` wins, cut to 80 chars), and
- * the kernel keeps no args on the task itself. Empty until the call's node is
- * loaded (see `ensureAgentNodes` for a sub-agent's). */
+/** A bash task's command, read from its call (the task keeps only a summary);
+ * empty until the call's node is loaded. */
 export function taskCommand(t: TaskInfo): string {
-  const raw = callById(t.call_id)?.args as Record<string, unknown> | null | undefined
-  const command = raw?.command
-  return typeof command === 'string' ? command.replace(/\s+$/, '') : ''
+  if (t.kind.type !== 'tool' || t.kind.name !== 'bash') return ''
+  const command = (callById(t.call_id)?.args as { command?: unknown } | null)?.command
+  return typeof command === 'string' ? command.trimEnd() : ''
 }
 
 /** The word shown in notes and chips (`ok` / `error` / `cancelled`). */

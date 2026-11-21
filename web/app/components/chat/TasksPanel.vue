@@ -40,12 +40,6 @@ function confirmStopAll(): void {
   void stopAllTasks(view.branch.value)
 }
 
-/** The row's tooltip: the command itself when the call is loaded (the row
- * text only has the 80-char summary), else the summary. */
-function rowTitle(tk: TaskInfo): string {
-  return `${tk.id} · ${taskCommand(tk) || taskLabel(tk)}`
-}
-
 function isOpen(tk: TaskInfo): boolean {
   if (tk.kind.type !== 'agent') return state.taskDetail === tk.id
   const child = taskChild(tk.id)
@@ -129,7 +123,7 @@ function isOpen(tk: TaskInfo): boolean {
                       <button
                         type="button"
                         class="flex min-w-0 flex-1 items-center gap-2"
-                        :title="rowTitle(tk)"
+                        :title="`${tk.id} · ${taskCommand(tk) || taskLabel(tk)}`"
                         @click="openTaskDetail(tk.id)"
                       >
                         <Icon
