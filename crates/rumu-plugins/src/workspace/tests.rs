@@ -802,14 +802,7 @@ async fn image_read_ingests_and_attaches() {
         .await
         .unwrap();
     assert!(!out.is_error, "{}", out.content.text);
-    assert!(
-        out.content
-            .text
-            .starts_with("image proj:img/demo.png (40×30, ")
-            && out.content.text.ends_with(" bytes stored)"),
-        "{}",
-        out.content.text
-    );
+    assert_eq!(out.content.text, "[Image #1]");
     assert_eq!(out.content.attachments.len(), 1);
     let a = &out.content.attachments[0];
     assert_eq!((a.width, a.height), (40, 30));
@@ -2451,8 +2444,7 @@ async fn session_nodes_show_image_placeholders() {
             "T1",
             NodeBody::ToolResult {
                 call_id: "c1".into(),
-                content: rumu_core::Content::text("image proj:a.png (800×600, 9 bytes stored)")
-                    .with_attachments([image]),
+                content: rumu_core::Content::text("[Image #1]").with_attachments([image]),
                 is_error: false,
                 invoke: None,
             },
@@ -2497,9 +2489,7 @@ async fn session_nodes_show_image_placeholders() {
         .await
         .unwrap();
     assert!(
-        out.content
-            .text
-            .contains("image proj:a.png (800×600, 9 bytes stored)\n[image: shot.png 800×600]"),
+        out.content.text.contains("[image: shot.png 800×600]"),
         "{}",
         out.content.text
     );

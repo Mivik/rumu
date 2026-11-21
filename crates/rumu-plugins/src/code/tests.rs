@@ -190,7 +190,7 @@ fn image(hash: char, name: &str) -> rumu_core::Attachment {
 #[tokio::test]
 async fn attachments_reach_the_result_only_through_attach() {
     let p = plugin(&["read"]);
-    let header = "image proj:a.png (800×600, 1234 bytes stored)";
+    let header = "[Image #1]";
     let host = FakeRuntime::arc();
     queue(
         &host,

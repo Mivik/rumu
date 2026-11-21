@@ -262,8 +262,7 @@ pub(super) fn manifest() -> Manifest {
             ToolSpec {
                 name: "read".into(),
                 description: "Read a file's raw text content (no line numbers), or view an \
-image (PNG, JPEG, GIF, WebP) as an image attachment beside a one-line header naming the file, \
-its dimensions and stored size. `path`: a plain path (default workspace) or \
+image (PNG, JPEG, GIF, WebP) as an image attachment. `path`: a plain path (default workspace) or \
 `<workspace>:<path>`. `offset` is a 1-based start line and `limit` a line count (text only — \
 they do not apply to images); a trailing `#L<n>` / `#L<a>-L<b>` anchor sets them when omitted."
                     .into(),
@@ -705,8 +704,8 @@ impl WorkspacePlugin {
     }
 
     /// An image read: ingest the bytes (normalized once, off the async
-    /// executor) into the blob store and return the attachment beside a
-    /// one-line header. `offset`/`limit` slice text lines — an image has
+    /// executor) into the blob store and return the attachment, anchored
+    /// and nothing else. `offset`/`limit` slice text lines — an image has
     /// none, so they are refused rather than silently ignored.
     async fn read_image(
         &self,
@@ -730,11 +729,9 @@ impl WorkspacePlugin {
             .await
             .map_err(|e| ToolError::model(format!("reading image: {e}")))?
             .map_err(|e| backend_err("read", Some(at.clone()), e))?;
-        Ok(ToolOutput::ok(format!(
-            "image {at} ({}×{}, {} bytes stored)",
-            attachment.width, attachment.height, attachment.size
-        ))
-        .with_attachments([attachment]))
+        // The call names the file already; text-only views render the
+        // anchor as `[image: name W×H]`.
+        Ok(ToolOutput::ok("[Image #1]").with_attachments([attachment]))
     }
 
     /// `show`: snapshot a file into the blob store and record it as an
