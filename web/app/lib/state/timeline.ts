@@ -93,10 +93,11 @@ export interface ActivityRecall {
   nodes: Node[]
 }
 /** The live turn's calls still waiting on their result, each with the
- *  assistant node that made it (its `at` is when the call started). */
+ *  assistant node that made it (its `at` is when the call started) and the
+ *  calls a `code` script made through it so far. */
 export interface ActivityRunning {
   kind: 'running'
-  calls: { call: ToolCall; assistant: Node }[]
+  calls: { call: ToolCall; assistant: Node; invokes: ToolRowInfo[] }[]
 }
 export type ActivityStep =
   ActivityThought | ActivityTools | ActivityCatalog | ActivityRecall | ActivityRunning
@@ -329,7 +330,9 @@ export function buildTimeline(nodes: Node[], calls: CallsOnPath, branch: BranchI
   if (live) {
     const running = live.assistants.flatMap((a) =>
       a.body.type === 'assistant'
-        ? a.body.tool_calls.filter((c) => !answered.has(c.call_id)).map((call) => ({ call, assistant: a }))
+        ? a.body.tool_calls
+            .filter((c) => !answered.has(c.call_id))
+            .map((call) => ({ call, assistant: a, invokes: invokes.get(call.call_id) ?? [] }))
         : [],
     )
     if (running.length) pushActivity(live, { kind: 'running', calls: running })

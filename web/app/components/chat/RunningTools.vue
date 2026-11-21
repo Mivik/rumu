@@ -15,13 +15,12 @@ const opened = reactive(new Set<string>())
 // soon as its tool_result node lands.
 // A row opens like a finished one: a bash its whole command and output, any
 // other call its args and output; a sub-agent's chip opens its transcript
-// beside the chat. A running `code` row lists the sub-agents its script has
-// forked so far, one chip each.
+// beside the chat. A running `code` row shows its script's calls so far,
+// the same list it keeps once it ends.
 import { computed, onBeforeUnmount, ref } from 'vue'
 import { t } from '../../i18n'
-import type { Branch } from '../../lib/types'
 import type { ActivityRunning } from '../../lib/store'
-import { findAgentChild, openAgentView, scriptAgents, state, useBranchView } from '../../lib/store'
+import { findAgentChild, openAgentView, state, useBranchView } from '../../lib/store'
 import { argsOf, bashExtraArgs, bashTimeout, displayCall } from '../../lib/toolrows'
 import { vFollow } from '../../lib/motion'
 import { argSummary, fmtThought, shortId } from '../../lib/util'
@@ -29,6 +28,7 @@ import { toolIcon } from '../../lib/toolIcon'
 import Icon from '../ui/Icon.vue'
 import Chip from '../ui/Chip.vue'
 import BashView from './BashView.vue'
+import CodeCalls from './CodeCalls.vue'
 import JsonTree from './JsonTree.vue'
 
 const props = defineProps<{ step: ActivityRunning }>()
@@ -42,7 +42,7 @@ onBeforeUnmount(() => clearInterval(timer))
 
 const rows = computed(() => {
   const branch = view.branch.value
-  return props.step.calls.map(({ call: raw, assistant }) => {
+  return props.step.calls.map(({ call: raw, assistant, invokes }) => {
     const call = displayCall(raw)
     const args = argsOf(call)
     const progress = branch ? state.toolProgress[`${branch}:${call.call_id}`] : undefined
@@ -50,14 +50,12 @@ const rows = computed(() => {
     const start = Math.min(assistant.at, now.value)
     const quietFor = now.value - Math.max(start, progress?.at ?? 0)
     const child = call.name === 'agent' ? findAgentChild(call.call_id) : null
-    // a script's sub-agents show while it runs, before their results land
-    const scripted = call.name === 'code' && branch ? scriptAgents(branch, call.call_id) : []
     const timeout = call.name === 'bash' ? bashTimeout(args) : null
     return {
       call,
       args,
       child,
-      scripted,
+      invokes,
       open: opened.has(call.call_id),
       description: typeof args?.description === 'string' ? args.description.trim() : '',
       target: argSummary(call),
@@ -86,12 +84,6 @@ function strArg(r: Row, key: string): string {
 /** An open bash row: the command is in its body, like a finished one. */
 function isShellOpen(r: Row): boolean {
   return r.call.name === 'bash' && r.open
-}
-
-/** A script's sub-agent chip: the first line of its task. */
-function agentLabel(b: Branch): string {
-  const task = b.kind.type === 'agent' ? b.kind.task.split('\n')[0]?.trim() : ''
-  return task || t('tools.row.openSubAgent')
 }
 
 /** The last few lines, for the row's live tail. */
@@ -159,22 +151,6 @@ function tail(text: string): string {
         </span>
       </button>
 
-      <div v-if="r.scripted.length" class="flex flex-wrap gap-1 px-2.5 pb-1.5 pl-[30px]">
-        <Chip
-          v-for="b in r.scripted"
-          :key="b.id"
-          class="max-w-full"
-          icon="agent"
-          icon-after="external"
-          tone="agent"
-          clickable
-          :title="t('tools.row.subAgentTitle', { id: shortId(b.id) })"
-          @click.stop="openAgentView(b.id)"
-        >
-          {{ agentLabel(b) }}
-        </Chip>
-      </div>
-
       <template v-if="r.open">
         <BashView
           v-if="r.call.name === 'bash'"
@@ -203,6 +179,12 @@ function tail(text: string): string {
       <pre v-else-if="r.progress" class="code mx-2.5 mb-1.5 max-h-40 overflow-auto">{{
         tail(r.progress)
       }}</pre>
+      <CodeCalls
+        v-if="r.call.name === 'code' && view.branch.value"
+        class="mr-2.5 mb-2 ml-[30px]"
+        :invokes="r.invokes"
+        :live="{ branch: view.branch.value, callId: r.call.call_id, now }"
+      />
     </div>
   </div>
 </template>

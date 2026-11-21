@@ -1,6 +1,8 @@
 <script setup lang="ts">
 // Internal tool calls made by one `code` script: a compact list under the
-// script body. Rows expand to their args/output.
+// script body. Rows expand to their args/output. While the script runs
+// (`live`) the sub-agents it forked and is still waiting on follow as
+// running rows, so the list keeps its shape when the script ends.
 // Each invoke is an ordinary ToolResult node whose `invoke.parent` names the
 // `code` call; they nest here instead of showing as chat rows. While the
 // row is shut, the files the script changed stand after it as EditCards.
@@ -8,8 +10,9 @@ import { computed, ref } from 'vue'
 import { t } from '../../i18n'
 import type { Branch, FilePatch, Tagged } from '../../lib/types'
 import type { ToolRowInfo } from '../../lib/store'
-import { openAgentView, state } from '../../lib/store'
-import { argSummary, shortId } from '../../lib/util'
+import { openAgentView, openTaskDetail, scriptAgents, state } from '../../lib/store'
+import { argSummary, fmtThought, shortId } from '../../lib/util'
+import { taskIdOf, taskStatusWord } from '../../lib/tasks'
 import { bashExtraArgs, displayCall } from '../../lib/toolrows'
 import { patchOfData } from '../../lib/diff'
 import { toolIcon } from '../../lib/toolIcon'
@@ -20,7 +23,11 @@ import FileDiff from './FileDiff.vue'
 import FileView from './FileView.vue'
 import JsonTree from './JsonTree.vue'
 
-const props = defineProps<{ row: ToolRowInfo }>()
+const props = defineProps<{
+  invokes: ToolRowInfo[]
+  /** The script is still running: its branch, its `code` call, the clock. */
+  live?: { branch: string; callId: string; now: number }
+}>()
 
 /** One invoke node under this `code` call, flattened for display. */
 interface CodeCallRow {
@@ -32,11 +39,13 @@ interface CodeCallRow {
   output: string
   patch: Tagged | null
   dur_ms: number
+  /** A `background: true` call's task. */
+  task_id: string | null
 }
 
 const calls = computed<CodeCallRow[]>(() => {
   const out: CodeCallRow[] = []
-  for (const { result: n } of props.row.invokes) {
+  for (const { result: n } of props.invokes) {
     const b = n.body
     if (b.type !== 'tool_result' || !b.invoke) continue
     out.push({
@@ -47,6 +56,7 @@ const calls = computed<CodeCallRow[]>(() => {
       output: b.content.text,
       patch: b.content.data ?? null,
       dur_ms: n.dur_ms ?? 0,
+      task_id: b.is_error ? null : taskIdOf(b.content.text),
     })
   }
   return out
@@ -62,6 +72,23 @@ const agentChildren = computed(() => {
 })
 function openAgent(b: Branch): void {
   openAgentView(b.id)
+}
+
+/** Sub-agents the running script forked whose call has not returned yet. */
+const pending = computed(() => {
+  const live = props.live
+  if (!live) return []
+  const done = new Set(calls.value.map((c) => c.call_id))
+  return scriptAgents(live.branch, live.callId)
+    .filter((b) => b.kind.type === 'agent' && !done.has(b.kind.call_id))
+    .map((b) => ({
+      branch: b,
+      task: b.kind.type === 'agent' ? (b.kind.task.split('\n')[0]?.trim() ?? '') : '',
+      elapsed: fmtThought(Math.max(0, live.now - b.created_at)),
+    }))
+})
+function taskWord(id: string): string {
+  return t('tools.row.task', { id, status: taskStatusWord(state.tasks[id]?.status ?? 'running') })
 }
 const expanded = ref<Set<string>>(new Set())
 
@@ -114,9 +141,8 @@ const iconTone: Record<Status, string> = {
 </script>
 
 <template>
-  <div v-if="calls.length" class="mt-2 flex flex-col gap-1.5">
+  <div v-if="calls.length || pending.length" class="flex flex-col gap-1.5" :class="{ 'mt-2': !live }">
     <div
-      v-if="calls.length"
       class="flex flex-col divide-y divide-line-soft overflow-hidden rounded-control border border-line-soft"
     >
       <div
@@ -148,7 +174,17 @@ const iconTone: Record<Status, string> = {
             >{{ summary(c) }}</span
           >
           <span class="ml-auto flex flex-none items-center gap-2">
-            <span class="text-micro text-ink-3">{{ c.dur_ms }} ms</span>
+            <Chip
+              v-if="c.task_id"
+              tone="tool"
+              mono
+              clickable
+              :title="c.task_id"
+              @click.stop="openTaskDetail(c.task_id)"
+            >
+              {{ taskWord(c.task_id) }}
+            </Chip>
+            <span v-else class="text-micro text-ink-3">{{ c.dur_ms }} ms</span>
             <span
               v-if="c.blocked"
               class="rotate-[-4deg] rounded-xs border-[1.5px] border-danger/60 px-1.5 text-micro font-bold tracking-wide text-danger"
@@ -213,6 +249,29 @@ const iconTone: Record<Status, string> = {
             }}</pre>
           </div>
         </div>
+      </div>
+      <div v-for="p in pending" :key="p.branch.id" class="flex flex-col">
+        <div class="flex w-full min-w-0 items-center gap-2 px-2 py-1">
+          <span class="flex size-3 flex-none items-center justify-center">
+            <span class="dot-live size-1.5 rounded-full bg-brand" />
+          </span>
+          <span class="font-mono text-micro font-medium text-tool">agent</span>
+          <span v-if="p.task" class="min-w-0 truncate font-mono text-micro text-ink-2">{{ p.task }}</span>
+          <span class="ml-auto flex-none text-micro text-ink-3 tabular-nums" :title="t('common.running')">{{
+            p.elapsed
+          }}</span>
+        </div>
+        <Chip
+          class="mt-0.5 mb-1.5 ml-[28px] self-start"
+          icon="agent"
+          icon-after="external"
+          tone="agent"
+          clickable
+          :title="t('tools.row.subAgentTitle', { id: shortId(p.branch.id) })"
+          @click="openAgent(p.branch)"
+        >
+          {{ t('tools.row.openSubAgent') }}
+        </Chip>
       </div>
     </div>
   </div>
