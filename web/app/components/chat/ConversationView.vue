@@ -29,9 +29,14 @@
 // owns its measurement and drawing. This file owns the scroll state and
 // jumping; the composer below belongs to the shell (ChatView), which lends
 // it to the rail through `composerOf`.
+//
+// A long conversation is a virtual list (virtualEntries): assistant turns
+// away from the view are blanks of their measured height, so the column
+// keeps its full height and nothing in view moves as they render back in.
 import { computed, nextTick, onBeforeUnmount, ref, watch, watchEffect } from 'vue'
 import { ensureAgentNodes, state, useBranchView } from '../../lib/store'
 import { prefersReduced, timelineLive, vEnter } from '../../lib/motion'
+import { onReveal, useVirtualEntries } from '../../lib/virtualEntries'
 import { focusTarget } from '../../lib/state/ui'
 import type { TimelineEntry } from '../../lib/store'
 import type { Node } from '../../lib/types'
@@ -50,9 +55,37 @@ const props = defineProps<{
 const view = useBranchView()
 const { timeline, busy: isBusy, owed: owedReply } = view
 
+/**
+ * Render keys. A group is keyed by the entry before it, not by its nodes:
+ * those change all through a turn (stream → assistant → tool results → …),
+ * and a changing key would remount the group mid-turn — replaying its
+ * entrance and dropping its open reasoning / expanded tools. Two groups are
+ * never adjacent (a group only ends at a user message), so this is unique.
+ */
+const entries = computed(() => {
+  let prev = 'root'
+  return timeline.value.map((entry) => {
+    const key = entry.kind === 'group' ? `group:${prev}` : dataId(entry)
+    prev = key
+    return { entry, key }
+  })
+})
+
 const scrollEl = ref<HTMLElement | null>(null)
 const innerEl = ref<HTMLElement | null>(null)
 const railEl = ref<InstanceType<typeof TimelineRail> | null>(null)
+/** Which entries render their content (the rest hold their measured place). */
+const vt = useVirtualEntries({
+  scrollEl,
+  columnEl: innerEl,
+  entries: () =>
+    entries.value.map(({ entry, key }) => ({
+      key,
+      virtual: entry.kind === 'group',
+      weight: entry.kind === 'group' ? entry.items.length + entry.assistants.length : 1,
+    })),
+  forced: () => liveKeys(),
+})
 const nearBottom = ref(true)
 /** Where the page ended (scrollHeight) at the last layoutTail. */
 let laidEnd = 0
@@ -185,6 +218,17 @@ function entryOf(prefix: string): number {
   })
 }
 
+// Code about to look a node up in the DOM (a side question's "show me")
+// renders its entry first.
+const offReveal = onReveal((node) => {
+  const i = entryOf(node)
+  const key = i < 0 ? undefined : entries.value[i]?.key
+  if (key === undefined) return false
+  vt.pin(key)
+  return true
+})
+onBeforeUnmount(offReveal)
+
 // A linked message (`focusTarget`) opens once its session shows it, in
 // place of the end a fresh open lands on.
 watch(
@@ -258,6 +302,7 @@ function layoutTail(): void {
   const inner = innerEl.value
   const spacer = spacerEl.value
   if (!sc || !inner || !spacer) return
+  vt.resized(inner.clientWidth)
   const height = inner.offsetHeight
   const shown = spacer.offsetHeight
   const sent = sentPending && isBusy.value
@@ -338,6 +383,8 @@ watch(
 // already seen. Anything mounted afterwards is live.
 function resetView(): void {
   timelineLive.value = false
+  vt.reset()
+  vt.sync()
   sentPending = false
   floor = 0
   lent = 0
@@ -381,21 +428,26 @@ function dataId(e: TimelineEntry): string {
   return e.safeNode?.id ?? e.assistants.at(-1)?.id ?? ''
 }
 
-/**
- * Render keys. A group is keyed by the entry before it, not by its nodes:
- * those change all through a turn (stream → assistant → tool results → …),
- * and a changing key would remount the group mid-turn — replaying its
- * entrance and dropping its open reasoning / expanded tools. Two groups are
- * never adjacent (a group only ends at a user message), so this is unique.
- */
-const entries = computed(() => {
-  let prev = 'root'
-  return timeline.value.map((entry) => {
-    const key = entry.kind === 'group' ? `group:${prev}` : dataId(entry)
-    prev = key
-    return { entry, key }
-  })
-})
+/** While a turn runs, everything from its prompt on keeps rendering. */
+function liveKeys(): string[] {
+  if (!isBusy.value) return []
+  const list = entries.value
+  const at = list.findLastIndex((e) => e.entry.kind === 'user')
+  return list.slice(Math.max(0, at)).map((e) => e.key)
+}
+
+watch(entries, () => vt.sync())
+watch(isBusy, () => vt.update())
+watch(
+  scrollEl,
+  (el) => {
+    if (!el) return
+    vt.observer()
+    void vt.fill()
+  },
+  { flush: 'post' },
+)
+onBeforeUnmount(() => vt.dispose())
 
 /** Only the last group can be the one streaming. */
 const lastGroup = computed(() => timeline.value.findLastIndex((e) => e.kind === 'group'))
@@ -433,20 +485,27 @@ function jumpTo(i: number, smooth = true): void {
           <div
             v-for="({ entry, key }, i) in entries"
             :key="key"
-            v-enter="entry.kind === 'user' ? 'enter-send' : 'enter-rise'"
+            :ref="vt.wrapRef(key)"
+            v-enter="vt.enters(key) ? (entry.kind === 'user' ? 'enter-send' : 'enter-rise') : false"
             :data-node-id="dataId(entry)"
             :data-entry="i"
             class="min-w-0 scroll-mt-3"
+            :class="{ 'tl-quiet': vt.quiet.value.has(key) }"
+            @click="vt.pin(key)"
+            @focusin="vt.pin(key)"
           >
-            <UserRow v-if="entry.kind === 'user'" :node="entry.node" :context="entry.contextNodes" />
-            <AssistantGroup
-              v-else-if="entry.kind === 'group'"
-              :group="entry"
-              :prompt="promptOf(i)"
-              :live="isBusy && i === lastGroup"
-            />
-            <ContextPills v-else-if="entry.kind === 'context'" :nodes="entry.nodes" />
-            <CompactionRow v-else-if="entry.kind === 'compaction'" :node="entry.node" />
+            <!-- flow-root: the measured box holds its children's margins -->
+            <div v-if="vt.shown.value.has(key)" :ref="vt.bodyRef(key)" class="flow-root">
+              <UserRow v-if="entry.kind === 'user'" :node="entry.node" :context="entry.contextNodes" />
+              <AssistantGroup
+                v-else-if="entry.kind === 'group'"
+                :group="entry"
+                :prompt="promptOf(i)"
+                :live="isBusy && i === lastGroup"
+              />
+              <ContextPills v-else-if="entry.kind === 'context'" :nodes="entry.nodes" />
+              <CompactionRow v-else-if="entry.kind === 'compaction'" :node="entry.node" />
+            </div>
           </div>
         </template>
         <!-- the reply this branch still owes: its last exchange failed

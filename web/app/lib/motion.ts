@@ -39,7 +39,8 @@ function settleEntrances(): void {
  * disclosure, which animates as one instead). */
 export const vEnter: Directive<HTMLElement, string | false | undefined> = {
   mounted(el, binding) {
-    if (!timelineLive.value || binding.value === false) return
+    // `.tl-quiet`: history the virtual timeline renders back in (virtualEntries)
+    if (!timelineLive.value || binding.value === false || el.closest('.tl-quiet')) return
     const cls = binding.value || 'enter-rise'
     const finish = (): void => {
       el.classList.remove(cls)

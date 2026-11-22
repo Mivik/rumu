@@ -15,6 +15,7 @@ import { renderMarkdown } from '../../lib/markdown'
 import { pathNodes } from '../../lib/state/derived'
 import { addQuote, askSide, closeSide, openSide, side, sideBranches } from '../../lib/state/side'
 import { requestComposerFocus } from '../../lib/state/ui'
+import { revealNode, timelineRendered } from '../../lib/virtualEntries'
 import Icon from '../ui/Icon.vue'
 
 const quoteOf = (id: BranchId | null): Quote | null => {
@@ -96,7 +97,8 @@ watch([turns, streaming], () => {
 })
 
 /** Scroll the conversation to a quoted passage's message. */
-function locate(q: Quote): void {
+async function locate(q: Quote): Promise<void> {
+  await revealNode(q.node)
   const el = document.querySelector<HTMLElement>(`.tl-col [data-path-node="${CSS.escape(q.node)}"]`)
   el?.scrollIntoView({ behavior: 'smooth', block: 'center' })
 }
@@ -143,9 +145,12 @@ function paint(): void {
   CSS.highlights.set('side-quote', new Highlight(...marked.keys()))
 }
 
-watch([sideBranches, () => pathNodes.value.length, () => state.sessionId], () => void nextTick(paint), {
-  immediate: true,
-})
+// (the virtual timeline renders entries in and out: look again when it does)
+watch(
+  [sideBranches, () => pathNodes.value.length, () => state.sessionId, timelineRendered],
+  () => void nextTick(paint),
+  { immediate: true },
+)
 
 /** A click on an underlined passage opens what was asked about it. */
 function onClick(e: MouseEvent): void {
