@@ -17,17 +17,20 @@ export function prefersReduced(): boolean {
 }
 
 /** Entrances whose animation just ended, settled together in the next frame:
- * getAnimations() forces style and layout, and a cold boot ends hundreds of
- * entrances at once — one forced pass each, interleaved with the class
- * removals, cost over a second on a long conversation. */
+ * a cold boot ends hundreds of entrances at once, and each `el.getAnimations()`
+ * forces its own style pass (~12ms each on a long conversation, 10s for 850
+ * entrances) — so ask the document once. */
 const ended = new Map<HTMLElement, () => void>()
 let settleFrame = 0
 
 function settleEntrances(): void {
   settleFrame = 0
-  const finished = [...ended].filter(
-    ([el]) => !el.getAnimations().some((a) => a.playState === 'running' || a.pending),
-  )
+  const busy = new Set<Element>()
+  for (const a of document.getAnimations()) {
+    const target = (a.effect as KeyframeEffect | null)?.target
+    if (target && (a.playState === 'running' || a.pending)) busy.add(target)
+  }
+  const finished = [...ended].filter(([el]) => !busy.has(el))
   ended.clear()
   for (const [, finish] of finished) finish()
 }
