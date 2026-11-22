@@ -17,7 +17,18 @@
     "showMore": "Show {n} more",
     "showLess": "Show less",
     "newSession": "New session",
-    "projectSettings": "Project settings"
+    "projectSettings": "Project settings",
+    "sessions": "Sessions",
+    "listView": "List view",
+    "byProject": "By project",
+    "byTime": "By time",
+    "attentionFirst": "Needs you on top",
+    "attention": "Needs you",
+    "today": "Today",
+    "yesterday": "Yesterday",
+    "week": "Previous 7 days",
+    "month": "Previous 30 days",
+    "earlier": "Earlier"
   },
   "newSession": {
     "assistant": "Assistant",

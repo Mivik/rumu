@@ -1,11 +1,13 @@
 <script setup lang="ts">
 // Left column: the wordmark with the language key beside it, the landing,
-// library, assistants and projects entries, and the sessions grouped by
-// project (a two-level tree). A session is in its project's group, or in its
-// assistant's when it has none. Each group carries its sessions, newest
-// first, the newest few until "show more". Dropping a session on another
-// project's group moves it there, on its assistant's group out of its
-// project. At the foot, the connection status.
+// library, assistants and projects entries, and the sessions in groups (a
+// two-level tree). By project, a session is in its project's group, or in
+// its assistant's when it has none; by time, in the stretch it was last
+// touched in, its project's chip on a second line. Sessions that need the
+// user can sit in a section of their own on top. Each group carries its
+// sessions, newest first, the newest few until "show more". Dropping a
+// session on another project's group moves it there, on its assistant's
+// group out of its project. At the foot, the connection status.
 //
 // Alignment: the column pads 8px; session rows add 12px more, so every line
 // of text starts 20px in from the card's edge on both sides.
@@ -126,9 +128,11 @@ interface SessionRow {
   last: string
 }
 
-/** One group of the tree: a project, or an assistant's sessions in none. */
+/** One group of the tree: a project, an assistant's sessions in none, a
+ *  stretch of time, or the sessions that need the user. */
 interface Group {
   key: string
+  kind: 'project' | 'assistant' | 'time' | 'attention'
   /** The project a dropped session moves into (`null`: out of its own). */
   projectId: string | null
   project: Project | null
@@ -140,6 +144,8 @@ interface Group {
   /** The landing composer is a new session of this group that sending will
    *  create; until then it is only the intent. */
   draft: boolean
+  /** Rows shown before "show more". */
+  peek: number
 }
 
 /** How a session row's menu names its last activity. */
@@ -157,14 +163,59 @@ function lastActive(s: SessionInfo): string {
       })
 }
 
-/** The groups with sessions, the latest activity first (projects and
- *  assistants alike), then the empty projects by name; sessions newest first.
- *  A session is in its project's group when this client knows the project
- *  (one a model just made shows once the list is refreshed, a deleted one
- *  never), else in its assistant's. */
-const groups = computed<Group[]>(() => {
+/** Rows a group shows before "show more": a long project must not push the
+ *  others out of reach. */
+const PEEK = 5
+
+type GroupInit = Omit<Group, 'key' | 'sessions' | 'activity' | 'draft'>
+
+function toRow(s: SessionInfo): SessionRow {
+  return { s, ago: relTime(s.touched_at, now.value), last: lastActive(s) }
+}
+
+/** Does the session need the user: a decision waiting on them, a turn that
+ *  failed, or a finished one they have not seen. */
+function needsYou(s: SessionInfo): boolean {
+  const status = sessionStatus(s)
+  return status === 'waiting' || status === 'failed' || (status === 'idle' && isUnseen(s))
+}
+
+/** The open session, when it needed the user as it was opened: it stays in
+ *  their section until another is opened, so the row clicked there does not
+ *  leave from under the pointer as the session is seen. */
+const held = ref<string | null>(null)
+watch(
+  () => state.sessionId,
+  (id) => {
+    const s = id ? state.sessions.find((x) => x.id === id) : undefined
+    held.value = s && needsYou(s) ? s.id : null
+  },
+  { flush: 'sync', immediate: true },
+)
+
+/** The sessions in the section on top: the others that need the user, and
+ *  the open one held there. The open one never enters it: what it needs is
+ *  in its composer. */
+const attention = computed(
+  () =>
+    new Set(
+      prefs.attentionFirst
+        ? state.sessions
+            .filter((s) => s.id === held.value || (s.id !== state.sessionId && needsYou(s)))
+            .map((s) => s.id)
+        : [],
+    ),
+)
+
+/** By project: the groups with sessions, the latest activity first (projects
+ *  and assistants alike), then the empty projects by name; sessions newest
+ *  first. A session is in its project's group when this client knows the
+ *  project (one a model just made shows once the list is refreshed, a
+ *  deleted one never), else in its assistant's. A session in the section on
+ *  top still counts to its group's activity, so the groups stay put. */
+function byProject(): Group[] {
   const map = new Map<string, Group>()
-  const group = (key: string, init: () => Omit<Group, 'key' | 'sessions' | 'activity' | 'draft'>): Group => {
+  const group = (key: string, init: () => GroupInit): Group => {
     let g = map.get(key)
     if (!g) {
       g = { key, ...init(), sessions: [], activity: -Infinity, draft: false }
@@ -173,19 +224,32 @@ const groups = computed<Group[]>(() => {
     return g
   }
   const projectGroup = (p: Project) =>
-    group(p.id, () => ({ projectId: p.id, project: p, assistant: null, name: p.name }))
+    group(p.id, () => ({
+      kind: 'project',
+      projectId: p.id,
+      project: p,
+      assistant: null,
+      name: p.name,
+      peek: PEEK,
+    }))
   const assistantGroup = (id: string) =>
-    group(id, () => ({ projectId: null, project: null, assistant: id, name: assistantName(id) }))
+    group(id, () => ({
+      kind: 'assistant',
+      projectId: null,
+      project: null,
+      assistant: id,
+      name: assistantName(id),
+      peek: PEEK,
+    }))
   for (const p of state.projects) projectGroup(p)
   for (const s of sortedSessions.value) {
     const g = map.get(s.project ?? '') ?? assistantGroup(s.assistant)
-    g.sessions.push({ s, ago: relTime(s.touched_at, now.value), last: lastActive(s) })
+    if (!attention.value.has(s.id)) g.sessions.push(toRow(s))
     g.activity = Math.max(g.activity, s.touched_at)
   }
   // The landing composer is a new session not created yet: its row sits in
-  // the group it would be born into, unless a boot is still resolving. Once
-  // written it stays while other sessions are open, until sent or emptied.
-  if (!state.booting && (onLanding.value || landingWritten.value)) {
+  // the group it would be born into.
+  if (draftShown()) {
     const into = landingProject.value
       ? map.get(landingProject.value)
       : landingAssistant.value
@@ -197,14 +261,94 @@ const groups = computed<Group[]>(() => {
     // The unsent session is not a reason to move a group: going home would
     // reshuffle the whole column under the pointer, and opening the session
     // shuffle it back. It lands where its group already stands.
-    const busyA = a.sessions.length > 0
-    const busyB = b.sessions.length > 0
+    const busyA = a.activity > -Infinity
+    const busyB = b.activity > -Infinity
     if (busyA !== busyB) return busyA ? -1 : 1
     if (busyA && a.activity !== b.activity) return b.activity - a.activity
     if (!a.projectId !== !b.projectId) return a.projectId ? -1 : 1
     return a.name.localeCompare(b.name, locale.value)
   })
+}
+
+/** The stretches of the time view, newest first: the start of each (local
+ *  midnights), the recent ones shown whole. */
+const STRETCHES = [
+  { key: 'today', days: 0, peek: Infinity },
+  { key: 'yesterday', days: 1, peek: Infinity },
+  { key: 'week', days: 7, peek: PEEK * 2 },
+  { key: 'month', days: 30, peek: PEEK * 2 },
+  { key: 'earlier', days: Infinity, peek: PEEK * 2 },
+] as const
+
+/** By time: the stretches with sessions, newest first. The unsent session
+ *  sits on top of today. */
+function byTime(): Group[] {
+  const midnight = new Date(now.value).setHours(0, 0, 0, 0)
+  const groups: Group[] = STRETCHES.map((st) => ({
+    key: `@${st.key}`,
+    kind: 'time',
+    projectId: null,
+    project: null,
+    assistant: null,
+    name: STRETCH_NAMES[st.key],
+    peek: st.peek,
+    sessions: [],
+    activity: midnight - st.days * 86_400_000,
+    draft: false,
+  }))
+  for (const s of sortedSessions.value) {
+    if (attention.value.has(s.id)) continue
+    groups.find((g) => s.touched_at >= g.activity)?.sessions.push(toRow(s))
+  }
+  groups[0]!.draft = draftShown()
+  return groups.filter((g) => g.sessions.length || g.draft)
+}
+
+const STRETCH_NAMES = {
+  today: 'chat.sidebar.today',
+  yesterday: 'chat.sidebar.yesterday',
+  week: 'chat.sidebar.week',
+  month: 'chat.sidebar.month',
+  earlier: 'chat.sidebar.earlier',
+} as const satisfies Record<(typeof STRETCHES)[number]['key'], MessageKey>
+
+/** The landing composer is a new session not created yet: it shows as a row
+ *  unless a boot is still resolving. Once written it stays while other
+ *  sessions are open, until sent or emptied. */
+function draftShown(): boolean {
+  return !state.booting && (onLanding.value || landingWritten.value)
+}
+
+/** The groups in view: the section of sessions that need the user on top,
+ *  then the chosen grouping. */
+const groups = computed<Group[]>(() => {
+  const list = prefs.sidebarGrouping === 'time' ? byTime() : byProject()
+  const needing = sortedSessions.value.filter((s) => attention.value.has(s.id))
+  if (!needing.length) return list
+  const top: Group = {
+    key: '@attention',
+    kind: 'attention',
+    projectId: null,
+    project: null,
+    assistant: null,
+    name: 'chat.sidebar.attention',
+    peek: Infinity,
+    sessions: needing.map(toRow),
+    activity: Infinity,
+    draft: false,
+  }
+  return [top, ...list]
 })
+
+/** A group's name: a project's or assistant's own, else a message key. */
+function groupName(group: Group): string {
+  return group.kind === 'time' || group.kind === 'attention' ? t(group.name as MessageKey) : group.name
+}
+
+/** Rows of a group outside its project's group carry the project's chip. */
+function detached(group: Group): boolean {
+  return group.kind === 'time' || group.kind === 'attention'
+}
 
 function collapsed(group: Group): boolean {
   return !!prefs.collapsedProjects[group.key]
@@ -214,20 +358,33 @@ function toggleGroup(group: Group): void {
   prefs.collapsedProjects[group.key] = !collapsed(group)
 }
 
-/** Rows a group shows before "show more": a long project must not push the
- *  others out of reach. */
-const PEEK = 5
-
-/** Groups unfolded past PEEK, for this page's life. */
+/** Groups unfolded past their peek, for this page's life. */
 const unfolded = ref(new Set<string>())
 
-/** The newest PEEK rows, plus any older one that is open or waiting on the
- *  user (hiding those would hide where the user is, or what needs them). */
+/** The newest rows up to the group's peek, plus any older one that is open
+ *  or waiting on the user (hiding those would hide where the user is, or
+ *  what needs them). */
 function shown(group: Group): SessionRow[] {
   if (unfolded.value.has(group.key)) return group.sessions
   return group.sessions.filter(
-    (row, i) => i < PEEK || row.s.id === state.sessionId || waiting.value.has(row.s.id),
+    (row, i) => i < group.peek || row.s.id === state.sessionId || waiting.value.has(row.s.id),
   )
+}
+
+/** The project a session is in, as this client knows it. */
+function projectOf(s: SessionInfo): Project | null {
+  return s.project ? (state.projects.find((p) => p.id === s.project) ?? null) : null
+}
+
+/** A chip on a row's second line. */
+const ROW_CHIP =
+  'inline-flex h-[18px] min-w-0 max-w-[10rem] items-center gap-1 rounded-full border border-line-soft pr-1.5 pl-1'
+
+const MENU_ITEM =
+  'flex w-full items-center gap-2 rounded-control px-2.5 py-1.5 text-left text-secondary text-ink-2 transition-colors duration-150 hover:bg-surface-2 hover:text-ink focus-visible:bg-surface-2 focus-visible:text-ink'
+
+function assistantOf(id: string) {
+  return assistantCat(state.assistants.find((a) => a.id === id) ?? { id })
 }
 
 function toggleMore(group: Group): void {
@@ -497,7 +654,53 @@ const otherLocale = computed<Locale>(
       <span class="text-micro text-ink-3 tabular-nums">{{ state.projects.length }}</span>
     </button>
 
-    <div class="mt-2 h-px flex-none bg-line-soft" />
+    <!-- the list's heading, with how it is grouped -->
+    <div class="mt-2 flex flex-none items-center border-t border-line-soft pt-1.5 pr-1.5 pl-3">
+      <span class="flex-1 text-micro font-bold text-ink-3">{{ t('chat.sidebar.sessions') }}</span>
+      <Popover :label="t('chat.sidebar.listView')" placement="bottom-end" menu role="menu">
+        <template #trigger="{ open, toggle }">
+          <button
+            type="button"
+            class="icon-btn size-6"
+            :class="{ 'bg-surface-2 text-ink': open }"
+            :title="t('chat.sidebar.listView')"
+            :aria-label="t('chat.sidebar.listView')"
+            aria-haspopup="menu"
+            :aria-expanded="open"
+            @click="toggle"
+          >
+            <Icon name="view" :size="14" />
+          </button>
+        </template>
+        <template #default>
+          <button
+            v-for="g in ['project', 'time'] as const"
+            :key="g"
+            type="button"
+            role="menuitemradio"
+            :aria-checked="prefs.sidebarGrouping === g"
+            :class="MENU_ITEM"
+            @click="prefs.sidebarGrouping = g"
+          >
+            <span class="flex-1">{{
+              t(g === 'project' ? 'chat.sidebar.byProject' : 'chat.sidebar.byTime')
+            }}</span>
+            <Icon name="ok" :size="14" :class="prefs.sidebarGrouping === g ? 'text-ink' : 'invisible'" />
+          </button>
+          <div class="mx-1 my-1 h-px bg-line-soft/70" />
+          <button
+            type="button"
+            role="menuitemcheckbox"
+            :aria-checked="prefs.attentionFirst"
+            :class="MENU_ITEM"
+            @click="prefs.attentionFirst = !prefs.attentionFirst"
+          >
+            <span class="flex-1">{{ t('chat.sidebar.attentionFirst') }}</span>
+            <Icon name="ok" :size="14" :class="prefs.attentionFirst ? 'text-ink' : 'invisible'" />
+          </button>
+        </template>
+      </Popover>
+    </div>
 
     <!-- Groups slide as wholes when their order changes; otherwise each group's
          rows see only their own displacement and fly across the column. -->
@@ -542,7 +745,7 @@ const otherLocale = computed<Locale>(
               :size="16"
               class="mr-0.5"
             />
-            <span class="min-w-0 truncate text-meta text-ink-2">{{ group.name }}</span>
+            <span class="min-w-0 truncate text-meta text-ink-2">{{ groupName(group) }}</span>
             <span v-if="group.sessions.length" class="text-micro text-ink-3 tabular-nums">{{
               group.sessions.length
             }}</span>
@@ -551,6 +754,7 @@ const otherLocale = computed<Locale>(
             class="flex flex-none items-center gap-1 py-1.5 pr-1.5 transition-opacity duration-150 pointer-fine:opacity-0 pointer-fine:group-hover/head:opacity-100 pointer-fine:focus-within:opacity-100"
           >
             <button
+              v-if="group.kind === 'project' || group.kind === 'assistant'"
               type="button"
               class="icon-btn size-6"
               :title="t('chat.sidebar.newSession')"
@@ -624,33 +828,54 @@ const otherLocale = computed<Locale>(
             </span>
             <button
               v-else
-              class="flex min-w-0 flex-1 items-center gap-2 py-2 pr-2.5 pl-2 text-left outline-none pointer-coarse:pr-10"
+              class="flex min-w-0 flex-1 flex-col py-2 pr-2.5 pl-2 text-left outline-none pointer-coarse:pr-10"
               :aria-current="row.s.id === state.sessionId && !state.page ? 'page' : undefined"
               @click="pickSession(row.s.id)"
             >
-              <!-- the dot's column, under the group's chevron: titles line up
-                   whether a row has one or not -->
-              <span class="-mr-0.5 flex size-2 flex-none items-center justify-center">
+              <span class="flex w-full min-w-0 items-center gap-2">
+                <!-- the dot's column, under the group's chevron: titles line up
+                     whether a row has one or not -->
+                <span class="-mr-0.5 flex size-2 flex-none items-center justify-center">
+                  <span
+                    v-if="rowDot(row.s)"
+                    class="flex-none rounded-full"
+                    :class="ROW_DOT[rowDot(row.s)!].class"
+                    :title="t(ROW_DOT[rowDot(row.s)!].title)"
+                  />
+                </span>
+                <span class="min-w-0 flex-1 truncate">{{ row.s.title || t('common.untitled') }}</span>
                 <span
-                  v-if="rowDot(row.s)"
-                  class="flex-none rounded-full"
-                  :class="ROW_DOT[rowDot(row.s)!].class"
-                  :title="t(ROW_DOT[rowDot(row.s)!].title)"
-                />
+                  v-if="group.kind === 'project' && row.s.assistant !== defaultAssistant"
+                  class="max-w-[6.5rem] flex-none truncate text-micro font-normal text-ink-3"
+                  >{{ assistantName(row.s.assistant) }}</span
+                >
+                <!-- the menu takes this place on hover -->
+                <span
+                  class="flex-none text-micro font-normal text-ink-3 tabular-nums transition-opacity duration-150 pointer-fine:group-hover:opacity-0 pointer-fine:group-has-[:focus-visible]:opacity-0 pointer-fine:group-has-[[aria-expanded=true]]:opacity-0"
+                  >{{ row.ago }}</span
+                >
               </span>
-              <span class="min-w-0 flex-1 truncate">{{ row.s.title || t('common.untitled') }}</span>
+              <!-- away from its group, a row's second line says where it belongs:
+                   its project's chip (its assistant's in none) -->
               <span
-                v-if="!group.assistant && row.s.assistant !== defaultAssistant"
-                class="max-w-[6.5rem] flex-none truncate text-micro font-normal text-ink-3"
-                >{{ assistantName(row.s.assistant) }}</span
+                v-if="detached(group)"
+                class="mt-1 flex min-w-0 items-center gap-1.5 pl-3.5 text-micro font-normal text-ink-3"
               >
-              <!-- the menu takes this place on hover -->
-              <span
-                class="flex-none text-micro font-normal text-ink-3 tabular-nums transition-opacity duration-150 pointer-fine:group-hover:opacity-0 pointer-fine:group-has-[:focus-visible]:opacity-0 pointer-fine:group-has-[[aria-expanded=true]]:opacity-0"
-                >{{ row.ago }}</span
-              >
+                <span v-if="row.s.project" :class="ROW_CHIP">
+                  <ProjectSeal v-if="projectOf(row.s)" :project="projectOf(row.s)!" :size="12" />
+                  <Icon v-else name="mount" :size="11" class="flex-none text-tool" />
+                  <span class="truncate">{{ projectOf(row.s)?.name ?? row.s.project.slice(0, 8) }}</span>
+                </span>
+                <span v-if="!row.s.project || row.s.assistant !== defaultAssistant" :class="ROW_CHIP">
+                  <AssistantAvatar :id="row.s.assistant" :cat="assistantOf(row.s.assistant)" :size="12" />
+                  <span class="truncate">{{ assistantName(row.s.assistant) }}</span>
+                </span>
+              </span>
             </button>
-            <span class="absolute inset-y-0 right-1.5 flex items-center">
+            <span
+              class="absolute right-1.5 flex items-center"
+              :class="detached(group) ? 'top-2' : 'inset-y-0'"
+            >
               <Popover
                 :label="pendingDelete === row.s.id ? t('chat.sidebar.delete') : t('chat.sidebar.actions')"
                 placement="bottom-end"
@@ -720,7 +945,7 @@ const otherLocale = computed<Locale>(
           </div>
         </TransitionGroup>
         <button
-          v-if="!collapsed(group) && group.sessions.length > PEEK"
+          v-if="!collapsed(group) && group.sessions.length > group.peek"
           type="button"
           class="-mt-1 mb-1 self-start rounded-control py-1 pl-3 pr-2 text-micro text-ink-3 transition-colors duration-150 hover:text-ink-2"
           @click="toggleMore(group)"

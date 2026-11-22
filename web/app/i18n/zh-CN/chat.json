@@ -17,7 +17,18 @@
     "showMore": "再显示 {n} 个",
     "showLess": "收起",
     "newSession": "新会话",
-    "projectSettings": "项目设置"
+    "projectSettings": "项目设置",
+    "sessions": "会话",
+    "listView": "列表显示",
+    "byProject": "按项目",
+    "byTime": "按时间",
+    "attentionFirst": "待处理置顶",
+    "attention": "待处理",
+    "today": "今天",
+    "yesterday": "昨天",
+    "week": "近 7 天",
+    "month": "近 30 天",
+    "earlier": "更早"
   },
   "newSession": {
     "assistant": "助手",
