@@ -973,6 +973,39 @@
     transition: top 0.14s var(--ease-soft);
   }
 
+  .tl-wheel-face {
+    position: relative;
+  }
+
+  /* the rail's range, under the drum */
+  .tl-wheel-foot {
+    display: flex;
+    align-items: center;
+    gap: 10px;
+    padding: 0 12px;
+    border-top: 1px solid var(--line-soft);
+    font-size: var(--text-meta);
+    color: var(--ink-3);
+    /* the slider takes its own drag (the drum's swipe stays on the drum) */
+    touch-action: auto;
+  }
+
+  .tl-wheel-foot input {
+    accent-color: var(--ink-2);
+  }
+
+  /* a slider is not a text field: no focus glow from the pointer */
+  .tl-wheel-foot input:focus:not(:focus-visible) {
+    box-shadow: none;
+  }
+
+  .tl-wheel-foot output {
+    flex: none;
+    min-width: 3.5rem;
+    text-align: right;
+    font-variant-numeric: tabular-nums;
+  }
+
   .tl-wheel-band {
     position: absolute;
     left: 6px;

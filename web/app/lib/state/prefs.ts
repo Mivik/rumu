@@ -1,7 +1,8 @@
 // The composer's last pick, remembered in this browser so a new session
 // starts where the previous one left off: the model, the project last in
 // view, the assistant last used in each project; and how the sidebar lists
-// sessions, with the groups left collapsed.
+// sessions, with the groups left collapsed; how much of a conversation the
+// timeline rail holds.
 
 import { reactive, watch } from 'vue'
 import type { ModelUse } from '../generated/ModelUse'
@@ -22,6 +23,9 @@ interface Prefs {
   sidebarGrouping: 'project' | 'time'
   /** Sessions that need the user sit in a section of their own on top. */
   attentionFirst: boolean
+  /** The most views of conversation the timeline rail holds before it
+   *  shows a sliding window instead (ctrl + wheel over the rail). */
+  railScreens: number
 }
 
 function load(): Partial<Prefs> {
@@ -45,6 +49,7 @@ export const prefs = reactive<Prefs>({
   collapsedProjects: {},
   sidebarGrouping: 'project',
   attentionFirst: true,
+  railScreens: 100,
   ...load(),
 })
 

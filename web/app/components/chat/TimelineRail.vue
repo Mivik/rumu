@@ -33,6 +33,7 @@ import type { TimelineUserEntry } from '../../lib/store'
 import { preview } from '../../lib/util'
 import { prefersReduced } from '../../lib/motion'
 import { contentSegments, kindOf } from '../../lib/attachments'
+import { prefs } from '../../lib/state/prefs'
 import Icon from '../ui/Icon.vue'
 import type { Node as RumuNode } from '../../lib/types'
 
@@ -64,9 +65,19 @@ const composerEl = computed(() => props.composerOf())
 const RAIL_INSET = 18
 /** The dashed stretch for what is not loaded yet. */
 const DASH_LEN = 40
-/** The most views of conversation the track holds: past that, it shows a
- *  window of it that slides with the page instead. */
-const MAX_SCREENS = 30
+/** How far ctrl + wheel over the rail sets the views of conversation it
+ *  holds (`prefs.railScreens`): past them, it shows a window that slides
+ *  with the page instead. Per px of wheel, the range grows by this factor's
+ *  log (a notch, about a fifth). */
+const SCREENS_MIN = 4
+const SCREENS_MAX = 5000
+const ZOOM_PER_PX = 0.0015
+/** The wheel's slider for the same range: log-scaled, this many steps. */
+const RANGE_STEPS = 1000
+/** The mouse wheel over the rail scrolls faster than over the page, as a
+ *  scrollbar's track pages: this much of a view per px of wheel (a notch,
+ *  about 100px, scrolls most of a view). */
+const VIEWS_PER_PX = 0.008
 /** Ticks never sit closer than this on the track. */
 const TICK_GAP = 4
 /** The hit strip's width at the sheet's right edge (the line is its center). */
@@ -93,6 +104,8 @@ const ITEM_H = 30
 const STEP_DEG = 18
 const RADIUS = ITEM_H / ((STEP_DEG * Math.PI) / 180)
 const WHEEL_H = 212
+/** The wheel's footer: the rail's range. */
+const FOOT_H = 36
 /** Rows rendered on each side of the front one (the rest are behind). */
 const WHEEL_SPAN = 5
 /** Scroll over the wheel: px of wheel delta per row (about a notch of a
@@ -112,7 +125,7 @@ const GLIDE_MS = 280
  * the dashed stretch for what is not loaded above (Dt), the conversation at
  * `scale` (S·scale), the dashed stretch for what is not loaded below (Db) —
  * V long in all, content y at `Dt + y * scale`. When the conversation runs
- * past MAX_SCREENS views, the scale stops shrinking and the track (T long,
+ * past `prefs.railScreens` views, the scale stops shrinking and the track (T long,
  * from `off`) shows a window of V that slides as the page scrolls:
  * `shift` of it lies above the track.
  */
@@ -219,7 +232,7 @@ function composerGap(parent: HTMLElement): number {
  * entrance transforms — and the column's own offsetTop is its place in the
  * scroll content, since the scroller starts at the layer's top.
  */
-function measure(): void {
+function measure(animate = true): void {
   const sc = scrollEl.value
   const inner = innerEl.value
   const parent = layerEl.value?.parentElement
@@ -237,13 +250,13 @@ function measure(): void {
   // A conversation that doesn't overflow maps 1:1 (ticks level with their
   // messages); one that overflows compresses onto the track between the
   // insets (never stretched past 1:1, though the track may be taller), down
-  // to MAX_SCREENS views on it.
+  // to `prefs.railScreens` views on it.
   const dash = Math.min(DASH_LEN, T / 6)
   const Dt = props.earlier ? dash : 0
   const Db = props.later ? dash : 0
   const overflow = S > C || Dt + Db > 0
   const fit = Math.max(1, T - Dt - Db) / Math.max(1, S)
-  const scale = overflow ? Math.min(1, Math.max(fit, T / (MAX_SCREENS * Math.max(1, C)))) : 1
+  const scale = overflow ? Math.min(1, Math.max(fit, T / (prefs.railScreens * Math.max(1, C)))) : 1
   const off = overflow ? RAIL_INSET : 0
   const virt = (c: number): number => Dt + c * scale
   const base = inner.offsetTop
@@ -268,7 +281,7 @@ function measure(): void {
   const hi = Dt + S * scale
   for (let k = 1; k < ys.length; k++) ys[k] = Math.min(hi, Math.max(ys[k], ys[k - 1] + TICK_GAP))
   for (let k = ys.length - 2; k >= 0; k--) ys[k] = Math.max(lo, Math.min(ys[k], ys[k + 1] - TICK_GAP))
-  glideFrom()
+  if (animate) glideFrom()
   marks.value = raw.map((r, k) => ({ ...r, y: ys[k] }))
 
   // the head: the running turn's node
@@ -560,7 +573,8 @@ function pick(i: number): void {
 
 const wheelTop = computed(() => {
   const L = metrics.value.L
-  return Math.max(6, Math.min(wheelY.value - WHEEL_H / 2, L - WHEEL_H - 6))
+  const h = WHEEL_H + FOOT_H
+  return Math.max(6, Math.min(wheelY.value - h / 2, L - h - 6))
 })
 
 /** The rows on the drum's visible face, each turned to its angle. */
@@ -734,13 +748,40 @@ function onStripClick(e: MouseEvent): void {
 }
 
 /** The mouse wheel over the rail scrolls the conversation, as it would
- * over the scrollbar the rail stands in for. */
+ * over the scrollbar the rail stands in for; with ctrl (a trackpad pinch
+ * too) it sets how much of the conversation the rail holds: down for more,
+ * up for less. */
 function onStripScroll(e: WheelEvent): void {
   const sc = scrollEl.value
   if (!sc) return
   e.preventDefault()
-  sc.scrollBy({ top: e.deltaMode === 1 ? e.deltaY * 16 : e.deltaY })
+  const dy = e.deltaMode === 1 ? e.deltaY * 16 : e.deltaMode === 2 ? e.deltaY * 100 : e.deltaY
+  if (e.ctrlKey || e.metaKey) {
+    setScreens(prefs.railScreens * Math.exp(dy * ZOOM_PER_PX))
+    return
+  }
+  sc.scrollBy({ top: dy * sc.clientHeight * VIEWS_PER_PX })
 }
+
+function setScreens(n: number): void {
+  prefs.railScreens = Math.min(SCREENS_MAX, Math.max(SCREENS_MIN, n))
+}
+
+/** The range on the wheel's slider (log-scaled steps), and back. */
+const rangeStep = computed(() =>
+  Math.round((RANGE_STEPS * Math.log(prefs.railScreens / SCREENS_MIN)) / Math.log(SCREENS_MAX / SCREENS_MIN)),
+)
+
+function onRangeInput(e: Event): void {
+  const step = +(e.target as HTMLInputElement).value
+  setScreens(SCREENS_MIN * (SCREENS_MAX / SCREENS_MIN) ** (step / RANGE_STEPS))
+}
+
+// a new range: the ticks follow at once, as the viewport does
+watch(
+  () => prefs.railScreens,
+  () => measure(false),
+)
 
 /** A touch-pinned wheel is dismissed by a press anywhere outside the rail
  * (the strip or the wheel; a row's own click then owns the jump). */
@@ -1006,29 +1047,46 @@ onBeforeUnmount(() => {
         <div
           v-if="wheelOpen"
           class="tl-wheel shadow-pop"
-          :style="{ top: `${wheelTop}px`, height: `${WHEEL_H}px` }"
+          :style="{ top: `${wheelTop}px` }"
           @pointerenter="onWheelEnter"
           @pointerleave="onWheelLeave"
           @pointerdown="onWheelDown"
           @wheel.prevent="onWheelScroll"
         >
-          <span aria-hidden="true" class="tl-wheel-band" :style="{ height: `${ITEM_H}px` }" />
-          <div class="tl-wheel-drum">
-            <button
-              v-for="r in wheelRows"
-              :key="r.d.i"
-              type="button"
-              tabindex="-1"
-              class="tl-wheel-row"
-              :class="{ 'is-hot': r.k === frontK, 'is-cur': r.d.i === currentPrompt }"
-              :style="{ ...r.style, height: `${ITEM_H}px`, marginTop: `${-ITEM_H / 2}px` }"
-              :title="r.d.label"
-              @click="pickRow(r.d.i)"
-            >
-              <span class="min-w-0 flex-1 truncate">{{ r.d.label || t('chat.timeline.emptyPrompt') }}</span>
-              <span class="tl-wheel-num">{{ r.k + 1 }}</span>
-            </button>
+          <div class="tl-wheel-face" :style="{ height: `${WHEEL_H}px` }">
+            <span aria-hidden="true" class="tl-wheel-band" :style="{ height: `${ITEM_H}px` }" />
+            <div class="tl-wheel-drum">
+              <button
+                v-for="r in wheelRows"
+                :key="r.d.i"
+                type="button"
+                tabindex="-1"
+                class="tl-wheel-row"
+                :class="{ 'is-hot': r.k === frontK, 'is-cur': r.d.i === currentPrompt }"
+                :style="{ ...r.style, height: `${ITEM_H}px`, marginTop: `${-ITEM_H / 2}px` }"
+                :title="r.d.label"
+                @click="pickRow(r.d.i)"
+              >
+                <span class="min-w-0 flex-1 truncate">{{ r.d.label || t('chat.timeline.emptyPrompt') }}</span>
+                <span class="tl-wheel-num">{{ r.k + 1 }}</span>
+              </button>
+            </div>
           </div>
+          <!-- how much of the conversation the rail holds (ctrl + wheel
+               over the rail sets it too) -->
+          <label class="tl-wheel-foot" :style="{ height: `${FOOT_H}px` }" @pointerdown.stop>
+            <span class="flex-none">{{ t('chat.timeline.range') }}</span>
+            <input
+              type="range"
+              class="min-w-0 flex-1"
+              min="0"
+              :max="RANGE_STEPS"
+              step="1"
+              :value="rangeStep"
+              @input="onRangeInput"
+            />
+            <output>{{ t('chat.timeline.screens', { n: Math.round(prefs.railScreens) }) }}</output>
+          </label>
         </div>
       </Transition>
     </template>

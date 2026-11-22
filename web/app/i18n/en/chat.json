@@ -151,7 +151,9 @@
     "earlier": "Loading earlier messages…",
     "later": "Loading later messages…",
     "toStart": "Go to the start",
-    "toEnd": "Go to the latest"
+    "toEnd": "Go to the latest",
+    "range": "Range",
+    "screens": "{n} views"
   },
   "ask": {
     "title": "{from} wants to hand {to} a task",
