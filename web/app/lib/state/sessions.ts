@@ -237,6 +237,8 @@ export function closeSession(): void {
   state.agentNodes = {}
   state.variantEnds = {}
   state.lineEnd = null
+  state.turnsBefore = {}
+  state.turnsTotal = null
   state.mainBranch = null
   state.pathState = null
   state.deltas = {}

@@ -153,7 +153,12 @@
     "toStart": "回到开头",
     "toEnd": "跳到最新",
     "range": "范围",
-    "screens": "{n} 屏"
+    "screens": "{n} 屏",
+    "prevTurn": "上一轮",
+    "nextTurn": "下一轮",
+    "turnBefore": "第",
+    "turnAfter": "轮",
+    "goTurn": "跳到第几轮"
   },
   "ask": {
     "title": "{from} 想请 {to} 完成任务",

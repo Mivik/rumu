@@ -430,6 +430,76 @@
     color: var(--ink-3);
   }
 
+  /* A slider in the app's look (not a text field): a thin line filled in
+   * ink up to the thumb (`--fill`, set beside its value), the thumb a
+   * small ink dot ringed in the surface. */
+  input.slider {
+    appearance: none;
+    height: 18px;
+    margin: 0;
+    padding: 0;
+    border: 0;
+    border-radius: 0;
+    background: transparent;
+    cursor: pointer;
+  }
+
+  input.slider:focus {
+    box-shadow: none;
+  }
+
+  input.slider::-webkit-slider-runnable-track {
+    height: 2px;
+    border-radius: 1px;
+    background: linear-gradient(to right, var(--ink-2) var(--fill, 50%), var(--line) var(--fill, 50%));
+  }
+
+  input.slider::-moz-range-track {
+    height: 2px;
+    border-radius: 1px;
+    background: var(--line);
+  }
+
+  input.slider::-moz-range-progress {
+    height: 2px;
+    border-radius: 1px;
+    background: var(--ink-2);
+  }
+
+  input.slider::-webkit-slider-thumb {
+    appearance: none;
+    width: 12px;
+    height: 12px;
+    margin-top: -5px;
+    border: 2px solid var(--surface);
+    border-radius: 50%;
+    background: var(--ink-2);
+    box-shadow: 0 0 0 1px var(--line);
+    transition: scale 0.15s var(--ease-soft);
+  }
+
+  input.slider::-moz-range-thumb {
+    width: 12px;
+    height: 12px;
+    border: 2px solid var(--surface);
+    border-radius: 50%;
+    background: var(--ink-2);
+    box-shadow: 0 0 0 1px var(--line);
+  }
+
+  input.slider:hover::-webkit-slider-thumb,
+  input.slider:active::-webkit-slider-thumb {
+    scale: 1.15;
+  }
+
+  input.slider:focus-visible {
+    outline: none;
+  }
+
+  input.slider:focus-visible::-webkit-slider-thumb {
+    box-shadow: 0 0 0 3px color-mix(in srgb, var(--brand) 25%, transparent);
+  }
+
   /* small ghost icon buttons (hover actions) */
   .icon-btn {
     display: inline-flex;
@@ -973,37 +1043,63 @@
     transition: top 0.14s var(--ease-soft);
   }
 
-  .tl-wheel-face {
-    position: relative;
-  }
-
-  /* the rail's range, under the drum */
+  /* under the drum: turn by turn or by number, and the rail's range */
   .tl-wheel-foot {
-    display: flex;
-    align-items: center;
-    gap: 10px;
-    padding: 0 12px;
     border-top: 1px solid var(--line-soft);
+    padding: 2px 0;
     font-size: var(--text-meta);
     color: var(--ink-3);
-    /* the slider takes its own drag (the drum's swipe stays on the drum) */
+    /* the field and the slider take their own touches (the drum's swipe
+     * stays on the drum) */
     touch-action: auto;
   }
 
-  .tl-wheel-foot input {
-    accent-color: var(--ink-2);
+  .tl-wheel-tools,
+  .tl-wheel-range {
+    display: flex;
+    align-items: center;
+    height: 32px;
+    padding: 0 12px 0 8px;
   }
 
-  /* a slider is not a text field: no focus glow from the pointer */
-  .tl-wheel-foot input:focus:not(:focus-visible) {
-    box-shadow: none;
+  .tl-wheel-tools {
+    gap: 2px;
   }
 
-  .tl-wheel-foot output {
+  .tl-wheel-goto {
+    display: flex;
+    align-items: center;
+    gap: 6px;
+    margin-left: auto;
+  }
+
+  .tl-wheel-goto input {
+    width: 3.25rem;
+    height: 24px;
+    padding: 0 6px;
+    font-size: var(--text-meta);
+    font-variant-numeric: tabular-nums;
+    text-align: center;
+  }
+
+  .tl-wheel-total {
+    font-variant-numeric: tabular-nums;
+  }
+
+  .tl-wheel-range {
+    gap: 10px;
+    padding-left: 12px;
+  }
+
+  .tl-wheel-range output {
     flex: none;
     min-width: 3.5rem;
     text-align: right;
     font-variant-numeric: tabular-nums;
+  }
+
+  .tl-wheel-face {
+    position: relative;
   }
 
   .tl-wheel-band {

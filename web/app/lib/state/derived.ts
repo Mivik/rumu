@@ -57,6 +57,39 @@ export const hasEarlier = computed(() => !!pathNodes.value[0]?.parent)
 /** The main line goes on past what is loaded (`loadLater`). */
 export const hasLater = computed(() => !!state.lineEnd)
 
+/** Each prompt on the loaded main line, by node: its turn number along
+ *  the whole line (1-based). Counted from the root once that is loaded,
+ *  else from a window's first node with a known count; empty when there is
+ *  none (an older server). */
+export const turnNumbers = computed(() => {
+  const path = pathNodes.value
+  const out = new Map<NodeId, number>()
+  let base: number | null = path[0] && !path[0].parent ? 0 : null
+  if (base === null) {
+    let users = 0
+    for (const n of path) {
+      const known = state.turnsBefore[n.id]
+      if (known !== undefined) {
+        base = known - users
+        break
+      }
+      if (n.body.type === 'user') users++
+    }
+  }
+  if (base === null) return out
+  let k = base
+  for (const n of path) if (n.body.type === 'user') out.set(n.id, ++k)
+  return out
+})
+
+/** How many turns the main line has: counted when its end is loaded. */
+export const turnCount = computed<number | null>(() => {
+  if (state.lineEnd) return state.turnsTotal
+  let last: number | null = null
+  for (const n of turnNumbers.value.values()) last = n
+  return last ?? state.turnsTotal
+})
+
 /** call_id → ToolCall, from the assistant nodes in `nodes` (for pairing results). */
 export function callsOf(nodes: Node[]): Map<string, { call: ToolCallLike; node: Node }> {
   const map = new Map<string, { call: ToolCallLike; node: Node }>()

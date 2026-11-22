@@ -7,6 +7,7 @@
 // and the tag/version constants are written by hand.
 
 import type { Branch } from './generated/Branch'
+import type { Content } from './generated/Content'
 import type { BranchId } from './generated/BranchId'
 import type { Node } from './generated/Node'
 import type { NodeId } from './generated/NodeId'
@@ -130,7 +131,7 @@ export type WsMessage =
   | { jsonrpc: '2.0'; id: number; error: { code: number; message: string; data?: unknown } }
   | { jsonrpc: '2.0'; method: string; params: Record<string, unknown> }
 
-export interface SessionTreeResult {
+export interface SessionTreeResult extends TurnCounts {
   session: SessionInfo
   nodes: Node[]
   branches: Branch[]
@@ -148,7 +149,24 @@ export interface SessionTreeResult {
 
 /** `branch.window`: a stretch of a branch's path, as `session.tree` sends
  *  its end. */
-export interface BranchWindowResult {
+/** `branch.prompts`: prompts on the main line by turn number, each its
+ *  opening (text cut short, attachments as references) — what the rail's
+ *  wheel lists of turns not loaded. */
+export interface PromptPreview {
+  id: NodeId
+  turn: number
+  content: Content
+}
+
+/** A window's first node on the main line, the user messages before it,
+ *  and on all of it (older servers send none). */
+export interface TurnCounts {
+  first?: NodeId | null
+  turns_before?: number
+  turns?: number
+}
+
+export interface BranchWindowResult extends TurnCounts {
   nodes: Node[]
   variant_ends?: Record<NodeId, NodeId>
   end?: NodeId | null

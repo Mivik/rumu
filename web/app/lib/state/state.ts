@@ -161,8 +161,14 @@ const initial = {
   lineEnd: null as NodeId | null,
   /** Bumped when the main line is shown at its end again (`goToEnd`). */
   endJumps: 0,
-  /** Bumped when the main line is shown from its start (`goToStart`). */
-  startJumps: 0,
+  /** Bumped when the main line is shown from somewhere else than its end
+   *  (`goToStart`, `goToTurn`): the view opens at `node`, or at the top. */
+  lineJump: { seq: 0, node: null as NodeId | null },
+  /** How many user messages the main line has before a node, for the
+   *  first node of each window loaded (they number the turns shown), and
+   *  how many on all of it at the last load. */
+  turnsBefore: {} as Record<NodeId, number>,
+  turnsTotal: null as number | null,
   /** Token totals over every model call of the open session. */
   usage: { calls: 0, input: 0, cached: 0, output: 0 } as SessionUsage,
   /** Each sub-agent's totals over its own model calls. */

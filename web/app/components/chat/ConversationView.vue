@@ -40,12 +40,14 @@ import {
   ensureFullPath,
   goToEnd,
   goToStart,
+  goToTurn,
   hasEarlier,
   hasLater,
   loadEarlier,
   loadLater,
   pathNodes,
   state,
+  turnNumbers,
   useBranchView,
 } from '../../lib/store'
 import { prefersReduced, timelineLive, vEnter } from '../../lib/motion'
@@ -588,24 +590,31 @@ watch(
   },
 )
 
-// Shown from the line's start instead (the rail's jump to the top): it
-// opens at the first entry the way a reload opens at its place.
+// Shown from elsewhere instead (the rail's jumps to the top or to a turn):
+// it opens at that prompt, or the first entry, the way a reload opens at
+// its place.
 watch(
-  () => state.startJumps,
+  () => state.lineJump.seq,
   () => {
     if (view.sub) return
     seenLineEnd = state.lineEnd
     // the place first: the virtual list boots from it
-    const first = entries.value[0]
+    const want = state.lineJump.node
+    const at = want ? entries.value.find(({ entry }) => dataId(entry) === want) : entries.value[0]
     const session = state.sessionId
-    if (first && session) {
-      pendingPlace.value = { session, node: dataId(first.entry), offset: innerEl.value?.offsetTop ?? 0 }
+    if (at && session) {
+      // a prompt lands where a jump to it does (its scroll margin)
+      const offset = want ? PROMPT_MARGIN : (innerEl.value?.offsetTop ?? 0)
+      pendingPlace.value = { session, node: dataId(at.entry), offset }
       openedAtPlace.value = true
     }
     resetView()
     requestEndScroll()
   },
 )
+
+/** A prompt jumped to sits this far below the view's top (scroll-mt-3). */
+const PROMPT_MARGIN = 12
 
 watch(
   () => [state.sessionId, view.branch.value],
@@ -670,6 +679,17 @@ function jumpToStart(): void {
 function jumpToEnd(): void {
   if (!view.sub && hasLater.value) return void goToEnd()
   scrollToEnd(true)
+}
+
+/** The rail's jump to turn `n` of the main line: in place when its prompt
+ *  is here, else loaded there. */
+function jumpToTurn(n: number): void {
+  if (view.sub) return
+  const i = entries.value.findIndex(
+    ({ entry }) => entry.kind === 'user' && turnNumbers.value.get(entry.node.id) === n,
+  )
+  if (i >= 0) return jumpTo(i)
+  void goToTurn(n)
 }
 
 /** Jump to where an entry starts; a quiet flash marks where it landed. */
@@ -760,5 +780,6 @@ function jumpTo(i: number, smooth = true): void {
     @jump="jumpTo"
     @top="jumpToStart"
     @bottom="jumpToEnd"
+    @turn="jumpToTurn"
   />
 </template>

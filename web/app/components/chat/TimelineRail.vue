@@ -28,14 +28,14 @@
 // of jumping.
 import { computed, onBeforeUnmount, onMounted, ref, shallowRef, watch } from 'vue'
 import { t } from '../../i18n'
-import { useBranchView } from '../../lib/store'
+import { fetchPrompts, state, turnCount, turnNumbers, useBranchView } from '../../lib/store'
 import type { TimelineUserEntry } from '../../lib/store'
 import { preview } from '../../lib/util'
 import { prefersReduced } from '../../lib/motion'
 import { contentSegments, kindOf } from '../../lib/attachments'
 import { prefs } from '../../lib/state/prefs'
 import Icon from '../ui/Icon.vue'
-import type { Node as RumuNode } from '../../lib/types'
+import type { Content, Node as RumuNode, NodeId } from '../../lib/types'
 
 // The scroller, the content column and the composer arrive as getters
 // (ConversationView's and ChatView's template refs), not elements: passing a template ref straight
@@ -53,7 +53,7 @@ const props = withDefaults(
   }>(),
   { reveal: false, earlier: false, later: false },
 )
-const emit = defineEmits<{ jump: [i: number]; top: []; bottom: [] }>()
+const emit = defineEmits<{ jump: [i: number]; top: []; bottom: []; turn: [n: number] }>()
 const view = useBranchView()
 const { timeline, busy: isBusy } = view
 
@@ -104,8 +104,9 @@ const ITEM_H = 30
 const STEP_DEG = 18
 const RADIUS = ITEM_H / ((STEP_DEG * Math.PI) / 180)
 const WHEEL_H = 212
-/** The wheel's footer: the rail's range. */
-const FOOT_H = 36
+/** The wheel's footer: turn steps and a turn to go to, then the rail's
+ *  range (two rows of 32px and a hairline). */
+const FOOT_H = 69
 /** Rows rendered on each side of the front one (the rest are behind). */
 const WHEEL_SPAN = 5
 /** Scroll over the wheel: px of wheel delta per row (about a notch of a
@@ -184,7 +185,10 @@ const dragging = ref(false)
  *  carries nothing else). The `[image: …]` placeholders belong to text-only
  *  readers, not the wheel. */
 function promptLabel(e: TimelineUserEntry): string {
-  const content = (e.node.body as Extract<RumuNode['body'], { type: 'user' }>).content
+  return labelOf((e.node.body as Extract<RumuNode['body'], { type: 'user' }>).content)
+}
+
+function labelOf(content: Content): string {
   const text = preview(
     contentSegments(content)
       .map((seg) => (seg.type === 'text' ? seg.text : ''))
@@ -297,11 +301,14 @@ function measure(animate = true): void {
 }
 
 // ---- gliding: a new layout eases the ticks over from where they were ----
-// (on the virtual track: a scroll meanwhile slides the window as usual)
+// (on the track, where they were drawn: a stretch loaded above moves the
+// whole virtual track down and slides the window by about as much, so
+// easing on the virtual track would first throw the ticks up the window by
+// that much and then glide them back)
 
 /** Where each tick (by node), the dashed stretch above and the
- *  conversation's end were when the glide started; empty when there is
- *  none. */
+ *  conversation's end were on the track when the glide started; empty when
+ *  there is none. */
 let from = new Map<string, number>()
 /** The glide's progress, 0 → 1 (eased). */
 const glide = ref(1)
@@ -317,10 +324,10 @@ const TOP = ' top'
 function glideFrom(): void {
   if (!marks.value.length || prefersReduced()) return
   const now = new Map<string, number>()
-  for (const d of drawnMarks.value) now.set(d.id, d.y)
-  now.set(DASH, dashV.value)
-  now.set(END, endV.value)
-  now.set(TOP, drawnMarks.value[0]!.y)
+  for (const d of drawnMarks.value) now.set(d.id, onTrack(d.y))
+  now.set(DASH, onTrack(dashV.value))
+  now.set(END, onTrack(endV.value))
+  now.set(TOP, onTrack(drawnMarks.value[0]!.y))
   from = now
   glide.value = 0
   const t0 = performance.now()
@@ -335,14 +342,15 @@ function glideFrom(): void {
   glideFrame = requestAnimationFrame(step)
 }
 
-/** A virtual y on its way from `key`'s glide start to `y`; a tick new
- *  above the old first one starts from there. */
+/** A virtual y on its way (on the track) from `key`'s glide start to `y`;
+ *  a tick new above the old first one starts from there. */
 function glided(key: string, y: number): number {
   if (glide.value >= 1) return y
+  const to = onTrack(y)
   let a = from.get(key)
   const top = from.get(TOP)
-  if (a === undefined && top !== undefined && y < top) a = top
-  return a === undefined ? y : a + (y - a) * glide.value
+  if (a === undefined && top !== undefined && to < top) a = top
+  return a === undefined ? y : y + (a - to) * (1 - glide.value)
 }
 
 /** The ticks where they are drawn, on the virtual track. */
@@ -490,7 +498,7 @@ const currentPrompt = computed(() => current.value.i)
 // ---- the wheel ----
 
 const wheelOpen = ref(false)
-/** The drum's turn, as a fractional index into dots (front row = round). */
+/** The drum's turn, as a fractional index into its rows (front row = round). */
 const wheelPos = ref(0)
 /** The wheel's center on the track (it follows the pointer). */
 const wheelY = ref(0)
@@ -510,12 +518,111 @@ function cancelTimers(): void {
   clearTimeout(closeTimer)
 }
 
-const maxPos = computed(() => Math.max(0, dots.value.length - 1))
+// ---- the drum's rows: the ticks, and turns beyond what is loaded ----
+
+/** A row on the drum: a prompt with its tick, or one not loaded (listed by
+ *  `branch.prompts`, only its label and turn: picking it loads there). */
+interface DrumRow {
+  key: NodeId
+  label: string
+  turn: number | null
+  dot: RailDot | null
+}
+
+/** The main line's prompts not loaded, by turn, as the drum turned past
+ *  either end of the ticks asked for them. */
+const titles = shallowRef(new Map<number, { id: NodeId; label: string }>())
+const asking = new Set<number>()
+
+/** How many prompts to ask for at a time, and how near the drum's end the
+ *  front row gets before it asks. */
+const TITLE_BATCH = 50
+const TITLE_AHEAD = 4
+
+/** The listed turns that run on from the ticks: before the first, and
+ *  after the last while the line goes on unloaded. */
+const farRows = computed(() => {
+  const before: DrumRow[] = []
+  const after: DrumRow[] = []
+  const list = dots.value
+  if (view.sub || !list.length) return { before, after }
+  const first = turnOf(list[0]!, 0)
+  const last = turnOf(list[list.length - 1]!, list.length - 1)
+  const row = (n: number): DrumRow | null => {
+    const got = titles.value.get(n)
+    return got ? { key: got.id, label: got.label, turn: n, dot: null } : null
+  }
+  for (let n = (first ?? 1) - 1, r; first !== null && n >= 1 && (r = row(n)); n--) before.unshift(r)
+  for (let n = (last ?? 0) + 1, r; last !== null && props.later && (r = row(n)); n++) after.push(r)
+  return { before, after }
+})
+
+const drum = computed<DrumRow[]>(() => [
+  ...farRows.value.before,
+  ...dots.value.map((d, k) => ({ key: d.id, label: d.label, turn: turnOf(d, k), dot: d })),
+  ...farRows.value.after,
+])
+/** The first tick's row on the drum. */
+const drumOff = computed(() => farRows.value.before.length)
+
+/** Rows coming or going keep the front one where it is. */
+watch(drum, (now, old) => {
+  const k = Math.round(Math.max(0, Math.min(old.length - 1, wheelPos.value)))
+  const key = old[k]?.key
+  const at = key === undefined ? -1 : now.findIndex((r) => r.key === key)
+  if (at < 0 || at === k) return
+  wheelPos.value += at - k
+  dragFromPos += at - k
+})
+
+/** The drum turned near an end of what it lists: ask for the turns past it. */
+function askTitles(): void {
+  if (view.sub || !wheelOpen.value) return
+  const rows = drum.value
+  const k = frontK.value
+  const first = rows[0]?.turn
+  const last = rows[rows.length - 1]?.turn
+  if (k < TITLE_AHEAD && first != null && first > 1) {
+    const from = Math.max(1, first - TITLE_BATCH)
+    void ask(from, first - from)
+  }
+  const total = turnCount.value
+  if (k > rows.length - 1 - TITLE_AHEAD && last != null && props.later && (total === null || last < total)) {
+    void ask(last + 1, TITLE_BATCH)
+  }
+}
+
+async function ask(from: number, limit: number): Promise<void> {
+  if (asking.has(from)) return
+  asking.add(from)
+  const got = await fetchPrompts(from, limit)
+  asking.delete(from)
+  if (!got) return
+  const next = new Map(titles.value)
+  for (const p of got) next.set(p.turn, { id: p.id, label: labelOf(p.content) })
+  titles.value = next
+}
+
+/** The listing holds for one line: a head moved anywhere but on down it
+ *  (an edit, a version switched, another session) drops it. */
+watch(
+  () => [state.sessionId, state.mainBranch ? state.branches[state.mainBranch]?.head : null] as const,
+  ([session, head], [oldSession, oldHead]) => {
+    if (!titles.value.size) return
+    let cur: NodeId | null | undefined = head
+    for (let up = 0; cur && cur !== oldHead && up < 64; up++) cur = state.nodes[cur]?.parent
+    if (session !== oldSession || !cur) titles.value = new Map()
+  },
+)
+
+const maxPos = computed(() => Math.max(0, drum.value.length - 1))
 const clampPos = (p: number): number => Math.max(0, Math.min(maxPos.value, p))
 
-/** The front row's prompt (the one a click jumps to), while the wheel is open. */
+/** The front row (the one a click jumps to), and its prompt's entry while
+ *  the wheel is open (-1 for a row not loaded). */
 const frontK = computed(() => Math.round(clampPos(wheelPos.value)))
-const hot = computed(() => (wheelOpen.value ? (dots.value[frontK.value]?.i ?? -1) : -1))
+const hot = computed(() => (wheelOpen.value ? (drum.value[frontK.value]?.dot?.i ?? -1) : -1))
+watch(frontK, askTitles)
 
 /** Ease in-out between two ticks: the drum lingers on each prompt and
  * rolls briskly between them, so the front row is always the nearest. */
@@ -523,7 +630,8 @@ function detent(f: number): number {
   return f < 0.5 ? 4 * f ** 3 : 1 - (-2 * f + 2) ** 3 / 2
 }
 
-/** A track y → the drum's turn (fractional, between the nearest two ticks). */
+/** A track y → the drum's turn (fractional, between the nearest two ticks;
+ *  an index into the ticks). */
 function posAt(y: number): number {
   const list = dots.value
   const n = list.length
@@ -548,13 +656,14 @@ function trackY(e: PointerEvent | MouseEvent): number {
 /** Turn the drum to the pointer, and bring the wheel beside it. */
 function follow(y: number): void {
   wheelY.value = y
-  wheelPos.value = posAt(y)
+  wheelPos.value = drumOff.value + posAt(y)
 }
 
 function openWheel(): void {
   if (!dots.value.length) return
   cancelTimers()
   wheelOpen.value = true
+  askTitles()
 }
 
 function closeWheel(): void {
@@ -582,14 +691,14 @@ const wheelRows = computed(() => {
   if (!wheelOpen.value) return []
   const p = clampPos(wheelPos.value)
   const from = Math.max(0, Math.floor(p) - WHEEL_SPAN)
-  const to = Math.min(dots.value.length, Math.ceil(p) + WHEEL_SPAN + 1)
+  const to = Math.min(drum.value.length, Math.ceil(p) + WHEEL_SPAN + 1)
   const rows = []
   for (let k = from; k < to; k++) {
     const a = (k - p) * STEP_DEG
     if (Math.abs(a) >= 90) continue
     const facing = Math.cos((a * Math.PI) / 180)
     rows.push({
-      d: dots.value[k],
+      r: drum.value[k]!,
       k,
       style: {
         transform: `translateZ(${-RADIUS}px) rotateX(${-a}deg) translateZ(${RADIUS}px)`,
@@ -608,9 +717,82 @@ function onWheelEnter(): void {
 function onWheelLeave(): void {
   inWheel.value = false
   cancelTimers()
-  if (touchPinned) return
+  if (touchPinned || typing()) return
   closeTimer = setTimeout(closeWheel, CLOSE_GRACE)
 }
+
+// ---- the wheel's footer: turn by turn, or a turn by number ----
+
+const wheelEl = ref<HTMLElement | null>(null)
+
+/** A turn number is being typed in the wheel: it stays open meanwhile. */
+function typing(): boolean {
+  const a = document.activeElement
+  return a instanceof HTMLInputElement && a.type === 'text' && !!wheelEl.value?.contains(a)
+}
+
+/** Leaving the turn field with the pointer elsewhere closes the wheel. */
+function onFootOut(): void {
+  requestAnimationFrame(() => {
+    if (!inWheel.value && !railHover.value && !touchPinned && !typing()) closeWheel()
+  })
+}
+
+/** A prompt's turn number: along the whole main line (a sub-agent's from
+ *  its own start); null while unknown. */
+function turnOf(d: RailDot, k: number): number | null {
+  return view.sub ? k + 1 : (turnNumbers.value.get(d.id) ?? null)
+}
+
+/** The current prompt's turn, and how many there are. */
+const curTurn = computed(() => {
+  const k = dots.value.findIndex((d) => d.i === currentPrompt.value)
+  return k < 0 ? null : turnOf(dots.value[k]!, k)
+})
+const totalTurns = computed(() => (view.sub ? dots.value.length : turnCount.value))
+
+/** What the turn field holds. */
+const turnText = ref('')
+
+/** Go to turn `n` (clamped to the line): the main line loads it if need be;
+ *  a sub-agent's are all here. The drum follows. */
+function goTurn(n: number): void {
+  const total = totalTurns.value
+  const to = Math.max(1, total ? Math.min(total, n) : n)
+  following = performance.now() + FOLLOW_MS
+  if (!view.sub) return emit('turn', to)
+  const d = dots.value[to - 1]
+  if (d) emit('jump', d.i)
+}
+
+/** The previous / next turn from the current one; deep in a reply, the
+ *  previous is the prompt it answers. */
+function stepTurn(dir: -1 | 1): void {
+  const n = curTurn.value
+  if (n === null) {
+    const first = dots.value[0]
+    const f = first ? turnOf(first, 0) : null
+    if (dir > 0 && f !== null) goTurn(f)
+    return
+  }
+  goTurn(dir < 0 && !current.value.visible ? n : n + dir)
+}
+
+function onTurnEnter(): void {
+  const n = parseInt(turnText.value, 10)
+  turnText.value = ''
+  if (Number.isFinite(n)) goTurn(n)
+}
+
+/** After a step or a jump from the footer, the drum's front follows the
+ *  current prompt for a while (the scroll there passes others). */
+const FOLLOW_MS = 1500
+let following = 0
+watch(currentPrompt, (i) => {
+  if (!wheelOpen.value || performance.now() > following) return
+  const k = drum.value.findIndex((r) => r.dot?.i === i)
+  if (k >= 0) wheelPos.value = k
+})
 
 /** Scrolling over the wheel turns the drum; it settles on a row at rest. */
 function onWheelScroll(e: WheelEvent): void {
@@ -668,12 +850,14 @@ function endWheelDrag(): void {
 }
 
 /** A row's click picks it, unless it is the tail of a swipe on the drum. */
-function pickRow(i: number): void {
+function pickRow(r: DrumRow): void {
   if (dragMoved) {
     dragMoved = false
     return
   }
-  pick(i)
+  if (r.dot) return pick(r.dot.i)
+  if (r.turn !== null) emit('turn', r.turn)
+  closeWheel()
 }
 
 // ---- the strip: hover / click / scrub ----
@@ -852,18 +1036,20 @@ function onStripKey(e: KeyboardEvent): void {
   if (e.altKey || e.isComposing) return
   if (e.key === 'ArrowUp' || e.key === 'ArrowDown') {
     e.preventDefault()
-    const at = dots.value.findIndex((d) => d.i === currentPrompt.value)
+    const at = drum.value.findIndex((r) => r.dot !== null && r.dot.i === currentPrompt.value)
     const k = wheelOpen.value
       ? clampPos(frontK.value + (e.key === 'ArrowDown' ? 1 : -1))
       : at >= 0
         ? at
-        : maxPos.value
+        : drumOff.value + dots.value.length - 1
     wheelPos.value = k
-    wheelY.value = dots.value[k]?.y ?? 0
+    const dot = drum.value[k]?.dot
+    if (dot) wheelY.value = dot.y
     openWheel()
   } else if ((e.key === 'Enter' || e.key === ' ') && wheelOpen.value) {
     e.preventDefault()
-    pick(hot.value)
+    const r = drum.value[frontK.value]
+    if (r) pickRow(r)
   }
 }
 
@@ -1046,6 +1232,7 @@ onBeforeUnmount(() => {
       >
         <div
           v-if="wheelOpen"
+          ref="wheelEl"
           class="tl-wheel shadow-pop"
           :style="{ top: `${wheelTop}px` }"
           @pointerenter="onWheelEnter"
@@ -1057,36 +1244,75 @@ onBeforeUnmount(() => {
             <span aria-hidden="true" class="tl-wheel-band" :style="{ height: `${ITEM_H}px` }" />
             <div class="tl-wheel-drum">
               <button
-                v-for="r in wheelRows"
-                :key="r.d.i"
+                v-for="{ r, k, style } in wheelRows"
+                :key="r.key"
                 type="button"
                 tabindex="-1"
                 class="tl-wheel-row"
-                :class="{ 'is-hot': r.k === frontK, 'is-cur': r.d.i === currentPrompt }"
-                :style="{ ...r.style, height: `${ITEM_H}px`, marginTop: `${-ITEM_H / 2}px` }"
-                :title="r.d.label"
-                @click="pickRow(r.d.i)"
+                :class="{ 'is-hot': k === frontK, 'is-cur': !!r.dot && r.dot.i === currentPrompt }"
+                :style="{ ...style, height: `${ITEM_H}px`, marginTop: `${-ITEM_H / 2}px` }"
+                :title="r.label"
+                @click="pickRow(r)"
               >
-                <span class="min-w-0 flex-1 truncate">{{ r.d.label || t('chat.timeline.emptyPrompt') }}</span>
-                <span class="tl-wheel-num">{{ r.k + 1 }}</span>
+                <span class="min-w-0 flex-1 truncate">{{ r.label || t('chat.timeline.emptyPrompt') }}</span>
+                <span class="tl-wheel-num">{{ r.turn ?? '' }}</span>
               </button>
             </div>
           </div>
           <!-- how much of the conversation the rail holds (ctrl + wheel
                over the rail sets it too) -->
-          <label class="tl-wheel-foot" :style="{ height: `${FOOT_H}px` }" @pointerdown.stop>
-            <span class="flex-none">{{ t('chat.timeline.range') }}</span>
-            <input
-              type="range"
-              class="min-w-0 flex-1"
-              min="0"
-              :max="RANGE_STEPS"
-              step="1"
-              :value="rangeStep"
-              @input="onRangeInput"
-            />
-            <output>{{ t('chat.timeline.screens', { n: Math.round(prefs.railScreens) }) }}</output>
-          </label>
+          <div class="tl-wheel-foot" @pointerdown.stop @focusout="onFootOut">
+            <div class="tl-wheel-tools">
+              <button
+                type="button"
+                class="icon-btn"
+                :title="t('chat.timeline.prevTurn')"
+                :aria-label="t('chat.timeline.prevTurn')"
+                @click="stepTurn(-1)"
+              >
+                <Icon name="chev-up" :size="14" />
+              </button>
+              <button
+                type="button"
+                class="icon-btn"
+                :title="t('chat.timeline.nextTurn')"
+                :aria-label="t('chat.timeline.nextTurn')"
+                @click="stepTurn(1)"
+              >
+                <Icon name="down" :size="14" />
+              </button>
+              <label class="tl-wheel-goto">
+                {{ t('chat.timeline.turnBefore') }}
+                <input
+                  v-model="turnText"
+                  type="text"
+                  inputmode="numeric"
+                  enterkeyhint="go"
+                  :placeholder="curTurn === null ? '' : String(curTurn)"
+                  :aria-label="t('chat.timeline.goTurn')"
+                  @keydown.enter.prevent="onTurnEnter"
+                />
+                {{ t('chat.timeline.turnAfter') }}
+                <span v-if="totalTurns" class="tl-wheel-total">/ {{ totalTurns }}</span>
+              </label>
+            </div>
+            <!-- how much of the conversation the rail holds (ctrl + wheel
+                 over the rail sets it too) -->
+            <label class="tl-wheel-range">
+              <span class="flex-none">{{ t('chat.timeline.range') }}</span>
+              <input
+                type="range"
+                class="slider min-w-0 flex-1"
+                min="0"
+                :max="RANGE_STEPS"
+                step="1"
+                :value="rangeStep"
+                :style="{ '--fill': `${(rangeStep / RANGE_STEPS) * 100}%` }"
+                @input="onRangeInput"
+              />
+              <output>{{ t('chat.timeline.screens', { n: Math.round(prefs.railScreens) }) }}</output>
+            </label>
+          </div>
         </div>
       </Transition>
     </template>

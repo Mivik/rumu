@@ -153,7 +153,12 @@
     "toStart": "Go to the start",
     "toEnd": "Go to the latest",
     "range": "Range",
-    "screens": "{n} views"
+    "screens": "{n} views",
+    "prevTurn": "Previous turn",
+    "nextTurn": "Next turn",
+    "turnBefore": "Turn",
+    "turnAfter": "",
+    "goTurn": "Go to turn"
   },
   "ask": {
     "title": "{from} wants to hand {to} a task",

@@ -11,8 +11,10 @@ import type {
   BranchWindowResult,
   Node,
   NodeId,
+  PromptPreview,
   SessionId,
   SessionTreeResult,
+  TurnCounts,
 } from '../types'
 import { state } from './state'
 import { hasEarlier, pathNodes } from './derived'
@@ -27,6 +29,9 @@ export function replaceTree(tree: SessionTreeResult): void {
   state.agentNodes = {}
   state.variantEnds = { ...tree.variant_ends }
   state.lineEnd = tree.end ?? null
+  state.turnsBefore = {}
+  state.turnsTotal = null
+  countTurns(tree)
   state.usage = tree.usage
   state.agentUsage = tree.agent_usage ?? {}
   for (const n of tree.nodes) state.nodes[n.id] = n
@@ -52,6 +57,15 @@ function merge(session: SessionId | null, res: BranchWindowResult): void {
   if (state.sessionId !== session) return
   for (const n of res.nodes) state.nodes[n.id] ??= n
   Object.assign(state.variantEnds, res.variant_ends)
+  countTurns(res)
+}
+
+/** A window's turn counts: its first node has that many user messages
+ *  before it, for good — its ancestors never change. */
+function countTurns(res: TurnCounts): void {
+  if (!res.first || res.turns_before === undefined) return
+  state.turnsBefore[res.first] = res.turns_before
+  state.turnsTotal = res.turns ?? null
 }
 
 let earlier: Promise<void> | null = null
@@ -161,20 +175,47 @@ export async function goToEnd(): Promise<void> {
   }
 }
 
+/** The main line's prompts from turn `from` on, `limit` of them, as
+ *  previews (nothing is loaded into the tree); null when the session or
+ *  the line changed meanwhile, or the request failed. */
+export async function fetchPrompts(from: number, limit: number): Promise<PromptPreview[] | null> {
+  const branch = state.mainBranch
+  if (!branch) return null
+  const session = state.sessionId
+  try {
+    const res = await rumu.request<{ prompts: PromptPreview[] }>('branch.prompts', { branch, from, limit })
+    return state.sessionId === session && state.mainBranch === branch ? res.prompts : null
+  } catch {
+    return null
+  }
+}
+
 /** Show the main line from its start, from a stretch that does not reach
  *  back there: its start loads in place of what is shown (joined to it
  *  when they meet), and the view opens there. */
-export async function goToStart(): Promise<void> {
+export function goToStart(): Promise<void> {
+  return jumpLine({ start: true }, null)
+}
+
+/** Show the main line from its `n`th turn (1-based), not loaded: as
+ *  `goToStart`, the view opening at that prompt. */
+export function goToTurn(n: number): Promise<void> {
+  return jumpLine({ turn: n }, n)
+}
+
+async function jumpLine(at: { start: true } | { turn: number }, turn: number | null): Promise<void> {
   const branch = state.mainBranch
   const first = pathNodes.value[0]
-  if (!branch || !first?.parent) return
+  if (!branch) return
   const session = state.sessionId
   try {
-    const res = await rumu.request<BranchWindowResult>('branch.window', { branch, start: true, limit: TAIL })
+    const res = await rumu.request<BranchWindowResult>('branch.window', { branch, ...at, limit: TAIL })
     if (state.sessionId !== session) return
     merge(session, res)
-    if (!res.nodes.some((n) => n.id === first.id)) state.lineEnd = res.end ?? null
-    state.startJumps++
+    if (!first || !res.nodes.some((n) => n.id === first.id)) state.lineEnd = res.end ?? null
+    // the window opens at the turn's user message (or the last one)
+    const node = turn === null ? null : (res.first ?? null)
+    state.lineJump = { seq: state.lineJump.seq + 1, node }
   } catch (err) {
     toast('error', t('errors.loadingBranch'), (err as Error).message)
   }
