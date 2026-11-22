@@ -11,6 +11,7 @@
 // `rumu.prompt(text)`, which puts text in the composer for the user to send.
 
 import { mdiApplicationOutline } from '@mdi/js'
+import WIDGET_CSS from '../assets/css/widget.css?raw'
 import { t } from '../i18n'
 import { rumu as api } from './api'
 import type { Artifact } from './types'
@@ -81,19 +82,69 @@ const PAGE_CSP =
   `default-src 'none'; script-src 'unsafe-inline' 'unsafe-eval' ${CDNS}; ` +
   `style-src 'unsafe-inline' ${CDNS}; font-src data: ${CDNS}; img-src data: blob:; media-src data: blob:`
 
-/** Runs in the frame before the page's own markup. */
+/** Runs in the frame before the page's own markup: the height, the theme,
+ *  `rumu.prompt`, a slider's fill (widget.css), and Chart.js in the app's
+ *  colors — its defaults set the moment the library defines itself, and
+ *  set again, charts redrawn, when the theme switches. */
 const BRIDGE = `(() => {
   const post = (m) => parent.postMessage(m, '*')
   window.rumu = { prompt: (text) => post({ rumu: 'prompt', text: String(text) }) }
+  const root = document.documentElement
+  new ResizeObserver(() => post({ rumu: 'height', height: Math.ceil(root.getBoundingClientRect().height) })).observe(root)
+  const fill = (r) => {
+    const lo = r.min === '' ? 0 : +r.min, hi = r.max === '' ? 100 : +r.max
+    r.style.setProperty('--fill', (hi > lo ? ((r.valueAsNumber - lo) / (hi - lo)) * 100 : 0) + '%')
+  }
+  addEventListener('input', (e) => e.target.type === 'range' && fill(e.target), true)
+  addEventListener('DOMContentLoaded', () => document.querySelectorAll('input[type=range]').forEach(fill))
+
+  const v = (n) => getComputedStyle(root).getPropertyValue(n).trim()
+  const ROUND = ['pie', 'doughnut', 'polarArea']
+  let chart, series = []
+  /** Datasets this colored, so a new theme recolors them and no other. */
+  const ours = new WeakSet()
+  const paint = () => {
+    const d = chart && chart.defaults
+    // Only a widget's page has the app's colors (widget.css).
+    if (!d || !v('--c1')) return false
+    d.color = v('--ink-2')
+    d.borderColor = v('--line')
+    d.font.family = v('--font-sans')
+    series = ['--c1', '--c2', '--c3', '--c4', '--c5', '--c6'].map(v)
+    return true
+  }
+  Object.defineProperty(window, 'Chart', {
+    configurable: true,
+    get: () => chart,
+    set: (c) => {
+      chart = c
+      if (!c || !c.register || !paint()) return
+      if (c.defaults.plugins && c.defaults.plugins.colors) c.defaults.plugins.colors.enabled = false
+      // Datasets without colors of their own take the series colors, one
+      // per dataset (one per slice on a round chart).
+      c.register({
+        id: 'rumuColors',
+        beforeLayout: (ch) => {
+          const round = ROUND.includes(ch.config.type)
+          ch.data.datasets.forEach((ds, i) => {
+            if (!ours.has(ds) && (ds.backgroundColor !== undefined || ds.borderColor !== undefined)) return
+            ours.add(ds)
+            const each = round ? ch.data.labels.map((_, j) => series[j % series.length]) : series[i % series.length]
+            ds.backgroundColor = each
+            ds.borderColor = round ? v('--surface') : each
+          })
+        },
+      })
+    },
+  })
+
   addEventListener('message', (e) => {
     const m = e.data
     if (e.source !== parent || !m || m.rumu !== 'theme') return
-    const root = document.documentElement.style
-    root.colorScheme = m.theme.scheme
-    for (const [k, v] of Object.entries(m.theme.colors)) root.setProperty(k, v)
+    root.style.colorScheme = m.theme.scheme
+    for (const [k, val] of Object.entries(m.theme.colors)) root.style.setProperty(k, val)
+    if (paint()) Object.values(chart.instances || {}).forEach((ch) => ch.update())
   })
-  const root = document.documentElement
-  new ResizeObserver(() => post({ rumu: 'height', height: Math.ceil(root.getBoundingClientRect().height) })).observe(root)
 })()`
 
 /** A model-written page as a frame runs it: the CSP meta and the bridge
@@ -106,8 +157,8 @@ export function sandboxedPage(html: string): string {
   return html.slice(0, at) + prelude + html.slice(at)
 }
 
-/** A widget as a page of its own, in today's colors: what a frame runs it
- *  in, and the file it is saved as. */
+/** A widget as a page of its own, in today's colors and the base style
+ *  (widget.css): what a frame runs it in, and the file it is saved as. */
 function standalone(source: string): string {
   const { scheme, colors } = theme()
   const vars = Object.entries(colors)
@@ -115,8 +166,7 @@ function standalone(source: string): string {
     .join('')
   return (
     '<!doctype html><html><head><meta charset="utf-8">' +
-    `<style>:root{color-scheme:${scheme};${vars}}` +
-    'body{margin:0;color:var(--ink);accent-color:var(--brand);font:15px/1.6 system-ui,sans-serif}</style>' +
+    `<style>${WIDGET_CSS}\n:root{color-scheme:${scheme};${vars}}</style>` +
     `</head><body>${source}</body></html>`
   )
 }
