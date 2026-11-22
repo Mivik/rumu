@@ -913,6 +913,18 @@ impl Kernel {
         self.deliver_note(branch, text, marker).await
     }
 
+    /// Record on `branch` that the user made a file of something of the
+    /// conversation (a reply's widget), telling the model `text`: the note
+    /// carries the snapshot, so the file is one of the branch's artifacts.
+    pub async fn record_artifact(
+        self: &Arc<Self>,
+        branch: &BranchId,
+        text: String,
+        artifact: &rumu_core::Artifact,
+    ) -> Result<()> {
+        self.deliver_note(branch, text, artifact).await
+    }
+
     /// The nodes of `branch`'s path from `from` (a node on it) to its head,
     /// then those of the sub-agent branches started from them (and from
     /// theirs) since `from`: everything that may have written files since.

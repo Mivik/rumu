@@ -1,6 +1,7 @@
-// Artifacts: snapshots of workspace files the model `show`s the user. Each
-// lives on the path as the `workspace.artifact` payload of a `show` result, its bytes a
-// blob, so a branch sees exactly the versions it showed; the snapshots of one
+// Artifacts: snapshots of workspace files the model `show`s the user, or of
+// a reply's widget the user saved. Each lives on the path as the
+// `workspace.artifact` payload of a `show` result (or of the save's note), its
+// bytes a blob, so a branch sees exactly the versions it showed; the snapshots of one
 // file on the path are its versions, in order. The open one is
 // `state.artifact`: a result node id, shown only while that node is on the
 // current path, or a file a link snapshotted (`fs.snapshot`), on no node.
@@ -18,6 +19,14 @@ export function artifactOf(content: Content | null | undefined): Artifact | null
   return d && d.tag === 'workspace.artifact' && d.v === 1 ? (d.data as Artifact) : null
 }
 
+/** The snapshot a node records: a `show` that worked, or the note of a
+ *  widget the user saved (`fs.save_page`). */
+export function artifactOfNode(node: Node): Artifact | null {
+  const b = node.body
+  if (b.type === 'tool_result') return b.is_error ? null : artifactOf(b.content)
+  return b.type === 'note' ? artifactOf(b.content) : null
+}
+
 export interface ArtifactVersion {
   artifact: Artifact
   node: Node
@@ -29,8 +38,7 @@ export interface ArtifactVersion {
 export const artifactsOnPath = computed(() => {
   const byPath = new Map<string, ArtifactVersion[]>()
   for (const node of pathNodes.value) {
-    if (node.body.type !== 'tool_result' || node.body.is_error) continue
-    const artifact = artifactOf(node.body.content)
+    const artifact = artifactOfNode(node)
     if (!artifact) continue
     const versions = byPath.get(artifact.path) ?? []
     versions.push({ artifact, node, version: versions.length + 1 })
@@ -97,7 +105,7 @@ export const imagesOnPath = computed(() => {
       const image = { src: blobUrl(a.hash), name: a.name, width: a.width, height: a.height }
       add(`${SCRATCH_WORKSPACE}:${scratchPath(a)}`, image, at)
     }
-    const artifact = body.type === 'tool_result' && !body.is_error ? artifactOf(body.content) : null
+    const artifact = artifactOfNode(node)
     if (artifact?.kind === 'image')
       add(artifact.path, { src: artifactUrl(artifact), name: artifact.title }, at)
   })

@@ -171,8 +171,10 @@ function standalone(source: string): string {
   )
 }
 
-async function save(source: string): Promise<void> {
-  const branch = state.mainBranch
+/** Save a widget as a file, recorded on the branch whose reply it is in
+ *  (a sub-agent's, in its panel), and open it. */
+async function save(source: string, from: Element): Promise<void> {
+  const branch = from.closest('[data-agent-panel]') ? state.agentView : state.mainBranch
   if (!branch) return
   try {
     const { artifact } = await api.request<{ artifact: Artifact }>('fs.save_page', {
@@ -206,7 +208,7 @@ class RumuWidget extends HTMLElement {
     button.className = 'md-widget-save'
     button.title = button.ariaLabel = t('chat.widget.save')
     button.innerHTML = SAVE_ICON
-    button.addEventListener('click', () => void save(source))
+    button.addEventListener('click', () => void save(source, this))
     this.append(frame, button)
   }
 }

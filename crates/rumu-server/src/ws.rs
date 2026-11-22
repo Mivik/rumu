@@ -1090,7 +1090,8 @@ async fn dispatch(state: &AppState, method: &str, p: &Value) -> Result<Value> {
         }
 
         // A reply's widget the user saved: a page in the branch's `@scratch`,
-        // snapshotted like `fs.snapshot`.
+        // snapshotted like `fs.snapshot` and recorded on the branch, so the
+        // model learns of the file and the branch lists it as an artifact.
         "fs.save_page" => {
             let branch: BranchId = str_param(p, "branch")?.into();
             let page = str_param(p, "page")?;
@@ -1098,6 +1099,12 @@ async fn dispatch(state: &AppState, method: &str, p: &Value) -> Result<Value> {
             let artifact = rumu_plugins::save_page(&path_state, page, state.blobs.clone())
                 .await
                 .map_err(ServerError::File)?;
+            let text = format!(
+                "The user saved a widget of your reply as {}: a page of its own now, \
+which you can read, edit and `show`.",
+                artifact.path
+            );
+            kernel.record_artifact(&branch, text, &artifact).await?;
             Ok(json!({ "artifact": artifact }))
         }
 

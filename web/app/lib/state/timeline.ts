@@ -259,6 +259,12 @@ export function buildTimeline(nodes: Node[], calls: CallsOnPath, branch: BranchI
       out.push(userEntry)
     } else if (b.type === 'note') {
       if (isSilentMarker(n)) continue
+      // A widget the user saved: its card joins the reply it came from.
+      const g = group as TimelineGroup | null
+      if (artifactOf(b.content) && g) {
+        g.items.push({ kind: 'artifact', node: n })
+        continue
+      }
       if (isCatalogNote(n) || isRecallNote(n)) ctx.push(n)
       else if (userEntry) userEntry.contextNodes.push(n)
       else ctx.push(n)
