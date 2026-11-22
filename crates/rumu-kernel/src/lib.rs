@@ -621,19 +621,9 @@ impl Kernel {
             .store
             .get_branch(branch)?
             .ok_or_else(|| Error::BranchNotFound(branch.clone()))?;
-        let all = self.store.nodes_of_session(&b.session)?;
-        let by_id: HashMap<&NodeId, &Node> = all.iter().map(|n| (&n.id, n)).collect();
-        let mut path = vec![];
-        let mut cur = Some(b.head);
-        while let Some(id) = cur {
-            let n = by_id
-                .get(&id)
-                .ok_or_else(|| Error::NodeNotFound(id.clone()))?;
-            cur = n.parent.clone();
-            path.push((*n).clone());
-        }
-        path.reverse();
-        Ok(path)
+        self.store
+            .path_to(&b.session, &b.head)?
+            .ok_or(Error::NodeNotFound(b.head))
     }
 
     /// [`path_nodes`](Self::path_nodes) plus the appends queued for the next

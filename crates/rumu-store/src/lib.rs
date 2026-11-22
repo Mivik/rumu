@@ -529,6 +529,32 @@ impl Store {
         })
     }
 
+    /// The nodes from a session's root down to `head`, root first, or `None`
+    /// if the chain breaks. Clones only the path, not the whole session
+    /// ([`nodes_of_session`] sorts and clones every node — too slow to run on
+    /// every event of a long session).
+    ///
+    /// [`nodes_of_session`]: Self::nodes_of_session
+    pub fn path_to(&self, session: &SessionId, head: &NodeId) -> Result<Option<Vec<Node>>> {
+        let st = self.state.lock().unwrap();
+        let s = match st.sessions.get(session) {
+            Some(Entry::Loaded(s)) => s,
+            Some(Entry::Corrupt(msg)) => return Err(unreadable(session, msg)),
+            None => return Ok(None),
+        };
+        let mut path = vec![];
+        let mut cur = Some(head);
+        while let Some(id) = cur {
+            let Some(n) = s.nodes.get(id) else {
+                return Ok(None);
+            };
+            path.push(n.clone());
+            cur = n.parent.as_ref();
+        }
+        path.reverse();
+        Ok(Some(path))
+    }
+
     /// All nodes of a session, oldest first.
     pub fn nodes_of_session(&self, session: &SessionId) -> Result<Vec<Node>> {
         let st = self.state.lock().unwrap();
