@@ -1,6 +1,7 @@
 <script setup lang="ts">
 // A file or card the model changed, standing in the conversation rather than
-// folded into its run: a header with the path (directory muted), the +/−
+// folded into its run: a header with the path (directory muted; a card's
+// link for a card), the +/−
 // counts and, for several hunks, how many places it touched; under it the
 // diff itself, clipped when long (FileDiff `clip`). The header folds the
 // diff away and back.
@@ -11,6 +12,7 @@ import { argsOf, toolRowTitle } from '../../lib/toolrows'
 import { toolIcon } from '../../lib/toolIcon'
 import { useWorkView } from '../../lib/state/appearance'
 import Icon from '../ui/Icon.vue'
+import CardChip from './CardChip.vue'
 import FileDiff from './FileDiff.vue'
 
 /** `joined`: one of an EditList's edits, the box theirs. */
@@ -47,7 +49,13 @@ const hunks = computed(() => props.view.patch?.hunks?.length ?? 0)
       @click="manual = !open"
     >
       <Icon :name="toolIcon(view.name)" :size="12" class="flex-none text-tool" />
-      <span class="min-w-0 truncate font-mono text-meta" dir="rtl"
+      <CardChip
+        v-if="view.toolCardId"
+        class="text-meta"
+        :id="view.toolCardId"
+        :use-ref="view.cardUseRef ?? undefined"
+      />
+      <span v-else class="min-w-0 truncate font-mono text-meta" dir="rtl"
         ><bdi
           ><span class="text-ink-3">{{ parts.dir }}</span
           ><span class="text-ink">{{ parts.name }}</span></bdi

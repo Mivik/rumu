@@ -149,6 +149,12 @@ function statusClass(v: ToolRowView): string {
           >{{ nameLabel(v) }}</span
         >
         <span v-if="v.description" class="min-w-0 truncate text-meta text-ink-2">{{ v.description }}</span>
+        <CardChip
+          v-else-if="v.toolCardId && v.status === 'ok'"
+          class="text-meta"
+          :id="v.toolCardId"
+          :use-ref="v.cardUseRef ?? undefined"
+        />
         <span
           v-else-if="v.callText && !isShellOpen(v)"
           class="min-w-0 truncate font-mono text-meta text-ink-2"
@@ -179,11 +185,6 @@ function statusClass(v: ToolRowView): string {
             {{ t('tools.row.openSubAgent') }}
           </Chip>
           <TaskChip v-if="v.taskId" :id="v.taskId" />
-          <CardChip
-            v-if="v.toolCardId && v.status === 'ok'"
-            :id="v.toolCardId"
-            :use-ref="v.cardUseRef ?? undefined"
-          />
           <span
             v-if="v.status === 'blocked'"
             v-enter="'enter-stamp'"
