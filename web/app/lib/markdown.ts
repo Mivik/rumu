@@ -179,6 +179,11 @@ function renderWidget(text: string, raw: string): string {
   return text.trim() ? `<rumu-widget class="md-widget" data-key="${registerWidget(text)}"></rumu-widget>` : ''
 }
 
+/** Whether the render under way draws widget fences: only a reply's text
+ *  does; anywhere else (a user's message, a card) they stay code. Set
+ *  around the synchronous parse in `renderMarkdown`. */
+let drawWidgets = false
+
 function renderCode(text: string, info: string | undefined): string {
   // `rust title="…"`, `ts{1,5}` → the leading word.
   const raw = info?.trim().split(/\s+/)[0]?.replace(/\{.*$/, '').toLowerCase() ?? ''
@@ -192,7 +197,8 @@ marked.setOptions({ gfm: true })
 marked.use(markedCjkFriendly())
 marked.use({
   renderer: {
-    code: ({ text, lang, raw }) => (isWidgetFence(lang) ? renderWidget(text, raw) : renderCode(text, lang)),
+    code: ({ text, lang, raw }) =>
+      drawWidgets && isWidgetFence(lang) ? renderWidget(text, raw) : renderCode(text, lang),
   },
 })
 
@@ -455,21 +461,30 @@ function addressImage(rawSrc: string, alt: string, rest: string, image?: ImageRe
  * `breaks: false`. When rendering a card, pass it as `base` so links
  * relative to it (`./x`, `../x/y.md`) open cards of the same deck. An image
  * at a workspace address (`![alt](@scratch:a.png)`) shows what `image`
- * resolves it to, else becomes a link to the address.
+ * resolves it to, else becomes a link to the address. `widgets` draws
+ * ```widget fences (lib/widgets.ts): a reply's text passes it.
  */
 export function renderMarkdown(
   src: string,
-  { breaks = true, base, image }: { breaks?: boolean; base?: CardBase; image?: ImageResolver } = {},
+  {
+    breaks = true,
+    base,
+    image,
+    widgets = false,
+  }: { breaks?: boolean; base?: CardBase; image?: ImageResolver; widgets?: boolean } = {},
 ): string {
-  const html = marked
-    .parse(src ?? '', { async: false, breaks })
-    .replace(
-      /<img src="([^"]*)" alt="([^"]*)"([^>]*)>/g,
-      (whole, rawSrc: string, alt: string, rest: string) =>
-        anchorFor(rawSrc.replaceAll('&amp;', '&'), undefined)
-          ? addressImage(rawSrc, alt, rest, image)
-          : whole,
-    )
+  drawWidgets = widgets
+  let parsed: string
+  try {
+    parsed = marked.parse(src ?? '', { async: false, breaks })
+  } finally {
+    drawWidgets = false
+  }
+  const html = parsed.replace(
+    /<img src="([^"]*)" alt="([^"]*)"([^>]*)>/g,
+    (whole, rawSrc: string, alt: string, rest: string) =>
+      anchorFor(rawSrc.replaceAll('&amp;', '&'), undefined) ? addressImage(rawSrc, alt, rest, image) : whole,
+  )
   const linked = html.replace(/<a href="([^"]*)"([^>]*)>/g, (whole, rawHref: string, rest: string) => {
     const href = rawHref.replaceAll('&amp;', '&').replaceAll('&quot;', '"')
     const attrs = anchorFor(href, base)
@@ -478,5 +493,5 @@ export function renderMarkdown(
     const title = rest.includes(' title=') ? '' : ` title="${rawHref}"`
     return `<a href="#" ${attrs}${title}${rest}>`
   })
-  return DOMPurify.sanitize(linked, { ADD_TAGS: ['rumu-widget'] })
+  return DOMPurify.sanitize(linked, widgets ? { ADD_TAGS: ['rumu-widget'] } : {})
 }

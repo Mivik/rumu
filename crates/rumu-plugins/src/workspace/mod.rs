@@ -44,7 +44,7 @@ mod tests;
 
 pub use backend::BackendError;
 pub use revert::{RevertAction, RevertFile, RevertPlan, revert_files, revert_note, revert_plan};
-pub use tools::snapshot_file;
+pub use tools::{save_page, snapshot_file};
 
 use std::collections::HashMap;
 use std::path::{Path, PathBuf};

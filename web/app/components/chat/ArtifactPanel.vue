@@ -1,9 +1,9 @@
 <script setup lang="ts">
 // The open artifact: a sheet beside the chat on a wide screen, over it below.
 // It shows one snapshot, steps through the versions of its file on the path,
-// and flips between the rendered file and its source. A page runs in an
-// opaque-origin frame with scripts and no network, so it can reach neither
-// rumu's origin nor anything else; an SVG renders as an image, which runs no
+// and flips between the rendered file and its source. A page runs the way a
+// reply's widget does (lib/widgets.ts): an opaque-origin frame, its network
+// the script CDNs alone; an SVG renders as an image, which runs no
 // script at all. Images, audio, video and PDFs load straight from their blob;
 // any other file only offers a download.
 import { computed, ref, watch } from 'vue'
@@ -14,9 +14,9 @@ import {
   artifactUrl,
   isTextKind,
   openArtifact,
-  sandboxedPage,
   showArtifact,
 } from '../../lib/artifacts'
+import { sandboxedPage } from '../../lib/widgets'
 import { renderMarkdown } from '../../lib/markdown'
 import { toast } from '../../lib/state/ui'
 import { copyText, fmtBytes, workspaceLabel } from '../../lib/util'

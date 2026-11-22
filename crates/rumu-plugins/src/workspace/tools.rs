@@ -134,16 +134,17 @@ files; what should outlive the session belongs in a card or a project workspace.
 `.inbox/` is written by rumu (attachments, events): read it, don't change it.\n\n\
 To give the user a page, document, diagram, code, image, audio or video to look at, or any file \
 to download, write it to a file (usually in \
-`@scratch`) and `show` it; `show` it again after a change for a new version. HTML runs sandboxed \
-with no network: inline its scripts, styles and images. To put an image in your reply itself, \
+`@scratch`) and `show` it; `show` it again after a change for a new version. To put an image in \
+your reply itself, \
 write `![alt](<address>)` with the address of one already in the conversation: a `show`n file, \
 or an attachment's `@scratch:.inbox/…` copy; any other address shows as a link. For something \
 interactive in the reply itself (a chart, a slider, a small calculator), write a ```widget \
 fence holding an HTML fragment: the web client runs it in place, sandboxed, as wide as the reply \
 and as tall as its content, the page's colors as CSS variables (`--ink`, `--ink-2`, `--line`, \
-`--surface-2`, `--brand`…). Scripts and styles may load from cdn.jsdelivr.net, \
-cdnjs.cloudflare.com and unpkg.com, nothing else from the network; `rumu.prompt(text)` puts \
-text in the user's message box for them to send. The user sees the widget, not its source.\n\n\
+`--surface-2`, `--brand`…); the user can save it as a file. The user sees the widget, not its \
+source. Both a widget and a `show`n HTML page run sandboxed: scripts and styles may load from \
+cdn.jsdelivr.net, cdnjs.cloudflare.com and unpkg.com, nothing else from the network (inline \
+images); `rumu.prompt(text)` puts text in the user's message box for them to send.\n\n\
 `@rumu` holds rumu's own data as paths (no bash): `list @rumu:/` shows what is there, and \
 `list` on any of its paths says what it holds, what may be written and what asks the user, and \
 the actions `invoke` runs on it. Its cards (`@rumu:/cards/<mount>/<path>`) are your memory: \
@@ -344,7 +345,7 @@ the output."
             ToolSpec {
                 name: "show".into(),
                 description: "Show a file to the user as an artifact: a snapshot rendered \
-beside the chat by its extension (`.html` runs sandboxed with no network; `.md`, `.svg`; images, \
+beside the chat by its extension (`.html` runs sandboxed, network only to script CDNs; `.md`, `.svg`; images, \
 audio, video and PDF display or play; other text as highlighted code; anything else as a \
 download). Same `path` addressing as `read`; not on `@rumu`. Showing the same path again adds a \
 version."
@@ -504,14 +505,7 @@ pub async fn snapshot_file(
     raw: &str,
     blobs: rumu_blob::Blobs,
 ) -> std::result::Result<Artifact, String> {
-    let not_file = || format!("`{raw}` is not a workspace file");
-    let target = target_of(state, raw).map_err(|e| match e {
-        ToolError::Model(out) => out.content.text,
-        ToolError::Fatal(e) => e.to_string(),
-    })?;
-    let Target::Real { ws, abs } = target else {
-        return Err(not_file());
-    };
+    let (ws, abs) = real_file(state, raw)?;
     snapshot(
         &*super::backend_for(&super::ssh_ctl_dir(), &ws),
         Ok(blobs),
@@ -519,6 +513,45 @@ pub async fn snapshot_file(
         &abs,
     )
     .await
+}
+
+/// A page the user saved from a reply's widget, written into the branch's
+/// `@scratch` under its hash and snapshotted the way `show` would, so it
+/// opens as an artifact and stays a file the model can work on. Nothing is
+/// recorded.
+pub async fn save_page(
+    state: &PathState,
+    page: &str,
+    blobs: rumu_blob::Blobs,
+) -> std::result::Result<Artifact, String> {
+    let hash = rumu_blob::hash_of(page.as_bytes());
+    let raw = format!(
+        "{}:widget-{}.html",
+        rumu_core::SCRATCH_WORKSPACE,
+        &hash[..12]
+    );
+    let (ws, abs) = real_file(state, &raw)?;
+    let backend = super::backend_for(&super::ssh_ctl_dir(), &ws);
+    backend
+        .write_bytes(&abs, page.as_bytes())
+        .await
+        .map_err(|e| e.to_string())?;
+    snapshot(&*backend, Ok(blobs), &ws, &abs).await
+}
+
+/// A workspace file's address, resolved; errors are messages about it.
+fn real_file(
+    state: &PathState,
+    raw: &str,
+) -> std::result::Result<(Workspace, Utf8TypedPathBuf), String> {
+    let target = target_of(state, raw).map_err(|e| match e {
+        ToolError::Model(out) => out.content.text,
+        ToolError::Fatal(e) => e.to_string(),
+    })?;
+    match target {
+        Target::Real { ws, abs } => Ok((ws, abs)),
+        _ => Err(format!("`{raw}` is not a workspace file")),
+    }
 }
 
 /// Resolve a `path` argument into a [`Target`].

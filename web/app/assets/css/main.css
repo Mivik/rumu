@@ -1154,6 +1154,7 @@
    * its page reports. ---- */
 
   .md .md-widget {
+    position: relative;
     display: block;
     margin: 0.85em 0;
   }
@@ -1163,6 +1164,41 @@
     width: 100%;
     border: 0;
     background: transparent;
+  }
+
+  /* the corner button, quiet like a fence's copy button */
+  .md-widget-save {
+    position: absolute;
+    top: 6px;
+    right: 6px;
+    display: inline-flex;
+    align-items: center;
+    justify-content: center;
+    width: 24px;
+    height: 24px;
+    border-radius: var(--radius-xs);
+    background: var(--surface-2);
+    color: var(--ink-3);
+    transition:
+      opacity 0.15s,
+      background-color 0.15s,
+      color 0.15s;
+  }
+
+  @media (hover: hover) {
+    .md-widget-save {
+      opacity: 0;
+    }
+
+    .md-widget:hover .md-widget-save,
+    .md-widget-save:focus-visible {
+      opacity: 1;
+    }
+  }
+
+  .md-widget-save:hover {
+    background: var(--line);
+    color: var(--ink);
   }
 
   .md .md-widget-pending {

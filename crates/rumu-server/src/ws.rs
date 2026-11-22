@@ -69,7 +69,8 @@ enum ServerError {
     #[error("invalid params: {0}")]
     InvalidParams(String),
 
-    /// A workspace file could not be opened (`fs.snapshot`).
+    /// A workspace file could not be opened or saved (`fs.snapshot`,
+    /// `fs.save_page`).
     #[error("{0}")]
     File(String),
 
@@ -1083,6 +1084,18 @@ async fn dispatch(state: &AppState, method: &str, p: &Value) -> Result<Value> {
             let path = str_param(p, "path")?;
             let (_, path_state) = kernel.branch_path(&branch)?;
             let artifact = rumu_plugins::snapshot_file(&path_state, path, state.blobs.clone())
+                .await
+                .map_err(ServerError::File)?;
+            Ok(json!({ "artifact": artifact }))
+        }
+
+        // A reply's widget the user saved: a page in the branch's `@scratch`,
+        // snapshotted like `fs.snapshot`.
+        "fs.save_page" => {
+            let branch: BranchId = str_param(p, "branch")?.into();
+            let page = str_param(p, "page")?;
+            let (_, path_state) = kernel.branch_path(&branch)?;
+            let artifact = rumu_plugins::save_page(&path_state, page, state.blobs.clone())
                 .await
                 .map_err(ServerError::File)?;
             Ok(json!({ "artifact": artifact }))

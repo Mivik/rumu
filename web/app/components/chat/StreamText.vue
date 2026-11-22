@@ -36,7 +36,7 @@ function clear(): void {
 
 function nodesOf(src: string): ChildNode[] {
   const t = document.createElement('template')
-  t.innerHTML = renderMarkdown(src, { image: (a) => pathImage(a) })
+  t.innerHTML = renderMarkdown(src, { image: (a) => pathImage(a), widgets: true })
   return [...t.content.childNodes]
 }
 

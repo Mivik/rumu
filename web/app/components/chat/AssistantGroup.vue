@@ -238,7 +238,9 @@ const bare = computed(() => !items.value.length && !props.group.assistants.lengt
         v-else-if="item.node"
         :data-path-node="item.node.id"
         class="md"
-        v-html="renderMarkdown(textOf(item.node), { image: (a) => pathImage(a, item.node!.id) })"
+        v-html="
+          renderMarkdown(textOf(item.node), { image: (a) => pathImage(a, item.node!.id), widgets: true })
+        "
       />
     </template>
 

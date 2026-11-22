@@ -214,7 +214,9 @@
   },
   "widget": {
     "title": "小组件",
-    "drawing": "正在绘制小组件…"
+    "drawing": "正在绘制小组件…",
+    "save": "存为文件",
+    "saveFailed": "无法保存小组件"
   },
   "agentView": {
     "title": "子代理",

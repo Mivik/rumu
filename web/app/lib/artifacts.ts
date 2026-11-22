@@ -130,17 +130,3 @@ export function artifactText(hash: string): Promise<string> {
   }
   return text
 }
-
-/** No network for a page: inline scripts, styles and data: media only. */
-const PAGE_CSP =
-  "default-src 'none'; script-src 'unsafe-inline' 'unsafe-eval'; style-src 'unsafe-inline'; " +
-  'img-src data: blob:; font-src data:; media-src data: blob:'
-
-/** The page as an opaque-origin frame runs it, the CSP meta first thing
- *  after the doctype: the parser opens the head for it, so it applies before
- *  any of the page's own markup (a script ahead of `<head>` included). */
-export function sandboxedPage(html: string): string {
-  const meta = `<meta http-equiv="Content-Security-Policy" content="${PAGE_CSP}">`
-  const at = /^\s*<!doctype[^>]*>/i.exec(html)?.[0].length ?? 0
-  return html.slice(0, at) + meta + html.slice(at)
-}

@@ -214,7 +214,9 @@
   },
   "widget": {
     "title": "Widget",
-    "drawing": "Drawing a widget…"
+    "drawing": "Drawing a widget…",
+    "save": "Save as a file",
+    "saveFailed": "Couldn't save the widget"
   },
   "agentView": {
     "title": "Sub-agent",

@@ -44,7 +44,7 @@ pub use skills::{SKILLS_DIR, Skills, SkillsPlugin};
 pub use stdio::{StdioError, StdioPlugin};
 pub use workspace::{
     BackendError, RevertAction, RevertFile, RevertPlan, WorkspacePlugin, revert_files, revert_note,
-    revert_plan, snapshot_file,
+    revert_plan, save_page, snapshot_file,
 };
 pub use workspaces::{
     PROJECTS_FILE, Project, WORKSPACES_FILE, create_project, cwd_workspace_name, drop_project,
