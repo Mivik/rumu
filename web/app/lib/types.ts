@@ -142,6 +142,8 @@ export interface SessionTreeResult {
   agent_usage?: Record<BranchId, SessionUsage>
   /** See `state.variantEnds`. */
   variant_ends?: Record<NodeId, NodeId>
+  /** See `state.lineEnd`. */
+  end?: NodeId | null
 }
 
 /** `branch.window`: a stretch of a branch's path, as `session.tree` sends
@@ -149,6 +151,7 @@ export interface SessionTreeResult {
 export interface BranchWindowResult {
   nodes: Node[]
   variant_ends?: Record<NodeId, NodeId>
+  end?: NodeId | null
 }
 
 export interface SessionUsage {

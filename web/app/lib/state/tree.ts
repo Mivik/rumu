@@ -26,6 +26,7 @@ export function replaceTree(tree: SessionTreeResult): void {
   state.branches = {}
   state.agentNodes = {}
   state.variantEnds = { ...tree.variant_ends }
+  state.lineEnd = tree.end ?? null
   state.usage = tree.usage
   state.agentUsage = tree.agent_usage ?? {}
   for (const n of tree.nodes) state.nodes[n.id] = n
@@ -37,13 +38,13 @@ export function replaceTree(tree: SessionTreeResult): void {
  *  (nodes; widened to start at a user message). */
 const TAIL = 400
 
-/** The open session's tree: the main line's end (`TAIL` nodes, back to
- *  `through` at least — where a reload left off) with the variants and side
- *  questions off it. What came before comes as it is needed
- *  (`loadEarlier`); sub-agents' nodes when one is opened
+/** The open session's tree: the main line's end (`TAIL` nodes; from node
+ *  `from` on instead — where a reload left off) with the variants and side
+ *  questions off it. What comes before or after comes as it is needed
+ *  (`loadEarlier`, `loadLater`); sub-agents' nodes when one is opened
  *  (`ensureAgentNodes`). */
-export function fetchTree(session: SessionId, through?: NodeId): Promise<SessionTreeResult> {
-  return rumu.request<SessionTreeResult>('session.tree', { session, tail: TAIL, through })
+export function fetchTree(session: SessionId, from?: NodeId): Promise<SessionTreeResult> {
+  return rumu.request<SessionTreeResult>('session.tree', { session, tail: TAIL, from })
 }
 
 /** What a window of the open session's tree brought; what is loaded stays. */
@@ -84,9 +85,48 @@ export async function loadEarlier(all = false): Promise<void> {
   await earlier
 }
 
+let later: Promise<void> | null = null
+let laterAll = false
+
+/**
+ * Load what comes after the loaded part of the main line, when that stops
+ * short of the head (`state.lineEnd`): one step on, or (`all`) the rest
+ * of it. One request at a time; resolves once the asked-for part is in.
+ */
+export async function loadLater(all = false): Promise<void> {
+  while (later) {
+    const running = later
+    const covers = laterAll || !all
+    await running
+    if (covers) return
+  }
+  const branch = state.mainBranch
+  const after = state.lineEnd
+  if (!branch || !after) return
+  const session = state.sessionId
+  laterAll = all
+  later = rumu
+    .request<BranchWindowResult>('branch.window', { branch, after, limit: all ? undefined : TAIL })
+    .then((res) => {
+      if (state.sessionId !== session || state.lineEnd !== after) return
+      merge(session, res)
+      state.lineEnd = res.end ?? null
+      // what the head grew while the stretch was on its way came as
+      // pushes it could not place yet
+      const head = state.branches[branch]?.head
+      if (!state.lineEnd && head && !state.nodes[head]) return loadHead(branch)
+    })
+    .catch((err: Error) => toast('error', t('errors.loadingBranch'), err.message))
+    .finally(() => {
+      later = null
+    })
+  await later
+}
+
 /** The whole main line, loaded. */
-export function ensureFullPath(): Promise<void> {
-  return hasEarlier.value ? loadEarlier(true) : Promise.resolve()
+export async function ensureFullPath(): Promise<void> {
+  if (state.lineEnd) await loadLater(true)
+  if (hasEarlier.value) await loadEarlier(true)
 }
 
 /** The main line's head moved somewhere not loaded (a variant picked in
@@ -95,6 +135,46 @@ export async function loadHead(branch: BranchId): Promise<void> {
   const session = state.sessionId
   try {
     merge(session, await rumu.request<BranchWindowResult>('branch.window', { branch, limit: TAIL }))
+  } catch (err) {
+    toast('error', t('errors.loadingBranch'), (err as Error).message)
+  }
+}
+
+/** Show the main line at its end again, from a stretch short of it: its
+ *  end loads in place of what is shown, and the view opens there. */
+export async function goToEnd(): Promise<void> {
+  const branch = state.mainBranch
+  if (!branch || !state.lineEnd) return
+  const session = state.sessionId
+  try {
+    // the end may still be here from before (a jump to the start)
+    const head = state.branches[branch]?.head
+    if (!head || !state.nodes[head]) {
+      const res = await rumu.request<BranchWindowResult>('branch.window', { branch, limit: TAIL })
+      if (state.sessionId !== session) return
+      merge(session, res)
+    }
+    state.lineEnd = null
+    state.endJumps++
+  } catch (err) {
+    toast('error', t('errors.loadingBranch'), (err as Error).message)
+  }
+}
+
+/** Show the main line from its start, from a stretch that does not reach
+ *  back there: its start loads in place of what is shown (joined to it
+ *  when they meet), and the view opens there. */
+export async function goToStart(): Promise<void> {
+  const branch = state.mainBranch
+  const first = pathNodes.value[0]
+  if (!branch || !first?.parent) return
+  const session = state.sessionId
+  try {
+    const res = await rumu.request<BranchWindowResult>('branch.window', { branch, start: true, limit: TAIL })
+    if (state.sessionId !== session) return
+    merge(session, res)
+    if (!res.nodes.some((n) => n.id === first.id)) state.lineEnd = res.end ?? null
+    state.startJumps++
   } catch (err) {
     toast('error', t('errors.loadingBranch'), (err as Error).message)
   }
@@ -133,7 +213,11 @@ export async function loadPath(branch: BranchId): Promise<void> {
  * leaves stays reachable from the message's variant switcher. `label`
  * names the action in the error toast.
  */
-export async function moveHead(node: NodeId, label: 'switch' | 'edit' = 'switch'): Promise<boolean> {
+export async function moveHead(
+  node: NodeId,
+  label: 'switch' | 'edit' = 'switch',
+  fork?: NodeId,
+): Promise<boolean> {
   const branch = state.session?.main_branch
   if (!branch) return false
   try {
@@ -141,6 +225,18 @@ export async function moveHead(node: NodeId, label: 'switch' | 'edit' = 'switch'
     const moved = await withStop((stop) => rumu.request('branch.move', { branch, node, stop }))
     if (moved === undefined) return false
     state.mainBranch = branch
+    // Shown short of its end, the line goes on along the variant picked
+    // after `fork` (the switcher's message): a stretch of it from there.
+    // An edit stays put; the prompt it sends goes to the end.
+    if (state.lineEnd && fork && label === 'switch') {
+      const res = await rumu.request<BranchWindowResult>('branch.window', {
+        branch,
+        after: fork,
+        limit: TAIL,
+      })
+      merge(state.sessionId, res)
+      state.lineEnd = res.end ?? null
+    }
     await loadPath(branch)
     return true
   } catch (err) {

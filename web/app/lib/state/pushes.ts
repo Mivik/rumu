@@ -211,8 +211,9 @@ function onBranchUpdated(p: BranchUpdatedPush): void {
     const moved = old && old.head !== p.branch.head && state.nodes[p.branch.head]?.parent !== old.head
     if (moved && p.branch.id === state.mainBranch) {
       void loadPath(p.branch.id)
-      // moved past what is loaded: load the end there
-      if (!state.nodes[p.branch.head]) void loadHead(p.branch.id)
+      // moved past what is loaded: load the end there (unless the line is
+      // shown short of its end: it is loaded when the view goes there)
+      if (!state.nodes[p.branch.head] && !state.lineEnd) void loadHead(p.branch.id)
     }
   }
 }

@@ -21,6 +21,7 @@ export {
   connected,
   currentBranch,
   hasEarlier,
+  hasLater,
   isBusy,
   isUnseen,
   pathNodes,
@@ -70,6 +71,9 @@ export {
 export {
   ensureAgentNodes,
   ensureFullPath,
+  goToEnd,
+  goToStart,
+  loadLater,
   findAgentChild,
   loadEarlier,
   moveHead,

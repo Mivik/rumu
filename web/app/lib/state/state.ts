@@ -155,6 +155,14 @@ const initial = {
   /** A variant's newest end by its first node, for the variants the tree
    *  sent only that node of: where its switcher moves the head. */
   variantEnds: {} as Record<NodeId, NodeId>,
+  /** Where the loaded stretch of the main line ends, when that is short of
+   *  its head (a reload opened where it was read): the line is shown up to
+   *  here, and what comes after loads as the view nears it. */
+  lineEnd: null as NodeId | null,
+  /** Bumped when the main line is shown at its end again (`goToEnd`). */
+  endJumps: 0,
+  /** Bumped when the main line is shown from its start (`goToStart`). */
+  startJumps: 0,
   /** Token totals over every model call of the open session. */
   usage: { calls: 0, input: 0, cached: 0, output: 0 } as SessionUsage,
   /** Each sub-agent's totals over its own model calls. */

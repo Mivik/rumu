@@ -38,15 +38,22 @@ function branchView(id: () => BranchId | null, sub: boolean): BranchView {
     branch.value ? (state.branches[branch.value] ?? null) : null,
   )
   const nodes = computed(() => pathOf(current.value))
+  // the main line shown short of its end (`state.lineEnd`): nothing live
+  // or owed shows at the end of what is shown
+  const cut = computed(() => !sub && !!state.lineEnd)
   return {
     branch,
     nodes,
     timeline: computed(() =>
-      buildTimeline(shownOf(current.value, nodes.value), callsOf(nodes.value), branch.value),
+      buildTimeline(
+        shownOf(current.value, nodes.value),
+        callsOf(nodes.value),
+        cut.value ? null : branch.value,
+      ),
     ),
     delta: computed(() => (branch.value ? (state.deltas[branch.value] ?? null) : null)),
     busy: computed(() => !!branch.value && !!state.busy[branch.value]),
-    owed: computed(() => owedOf(branch.value, nodes.value)),
+    owed: computed(() => (cut.value ? null : owedOf(branch.value, nodes.value))),
     queued: computed(() => (branch.value ? (state.queuedPrompts[branch.value] ?? []) : [])),
     tasks: computed(() => runningOf(branch.value)),
     nestedTasks: computed(() => nestedRunningOf(branch.value)),

@@ -19,7 +19,7 @@ function pick(index: number): void {
   if (isBusy.value) return
   const target = alternatives.value[index]
   if (!target || target.current) return
-  void moveHead(target.node)
+  void moveHead(target.node, 'switch', props.parentId ?? undefined)
 }
 
 function step(delta: number): void {

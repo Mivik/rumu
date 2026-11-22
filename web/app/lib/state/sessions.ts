@@ -30,7 +30,7 @@ import { typedText } from '../attachments'
 import { currentPick, models } from './models'
 import { isUnseen } from './derived'
 import { state } from './state'
-import { fetchTree, findAgentChild, loadPath, moveHead, replaceTree } from './tree'
+import { fetchTree, findAgentChild, goToEnd, loadPath, moveHead, replaceTree } from './tree'
 import { takePlace } from './scrollPlace'
 import { openAgentView } from './branchView'
 import { requestComposerFocus, toast, withStop } from './ui'
@@ -236,6 +236,7 @@ export function closeSession(): void {
   state.branches = {}
   state.agentNodes = {}
   state.variantEnds = {}
+  state.lineEnd = null
   state.mainBranch = null
   state.pathState = null
   state.deltas = {}
@@ -429,6 +430,8 @@ export async function sendPrompt(
   }
   const branch = to ?? state.mainBranch
   if (!branch) return false
+  // a prompt lands at the end: show it
+  if (branch === state.mainBranch && state.lineEnd) await goToEnd()
   state.busy[branch] = true
   try {
     const params: Record<string, unknown> = { branch, text, ...choice }

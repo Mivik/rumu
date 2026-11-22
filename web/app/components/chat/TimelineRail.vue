@@ -33,6 +33,7 @@ import type { TimelineUserEntry } from '../../lib/store'
 import { preview } from '../../lib/util'
 import { prefersReduced } from '../../lib/motion'
 import { contentSegments, kindOf } from '../../lib/attachments'
+import Icon from '../ui/Icon.vue'
 import type { Node as RumuNode } from '../../lib/types'
 
 // The scroller, the content column and the composer arrive as getters
@@ -45,11 +46,13 @@ const props = withDefaults(
     composerOf: () => HTMLElement | null
     /** The conversation goes back further than is loaded. */
     earlier?: boolean
+    /** …or on further. */
+    later?: boolean
     reveal?: boolean
   }>(),
-  { reveal: false, earlier: false },
+  { reveal: false, earlier: false, later: false },
 )
-const emit = defineEmits<{ jump: [i: number] }>()
+const emit = defineEmits<{ jump: [i: number]; top: []; bottom: [] }>()
 const view = useBranchView()
 const { timeline, busy: isBusy } = view
 
@@ -61,6 +64,9 @@ const composerEl = computed(() => props.composerOf())
 const RAIL_INSET = 18
 /** The dashed stretch for what is not loaded yet. */
 const DASH_LEN = 40
+/** The most views of conversation the track holds: past that, it shows a
+ *  window of it that slides with the page instead. */
+const MAX_SCREENS = 30
 /** Ticks never sit closer than this on the track. */
 const TICK_GAP = 4
 /** The hit strip's width at the sheet's right edge (the line is its center). */
@@ -101,10 +107,16 @@ const GLIDE_MS = 280
 // ---- state: y positions are track coordinates (0 = the layer's top, which
 // is the scroll area's top, and the scroll content's origin at scrollTop 0) ----
 
-/** S: the scroll content's height, C: the view's, L: the layer's, T: the
- *  track's, D: the dashed stretch's above it; content y maps to
- *  `off + D + y * scale`. */
-const metrics = ref({ S: 0, C: 0, L: 0, T: 0, D: 0, scale: 1, off: 0 })
+/**
+ * The track's geometry. Positions are laid out on a virtual track first:
+ * the dashed stretch for what is not loaded above (Dt), the conversation at
+ * `scale` (S·scale), the dashed stretch for what is not loaded below (Db) —
+ * V long in all, content y at `Dt + y * scale`. When the conversation runs
+ * past MAX_SCREENS views, the scale stops shrinking and the track (T long,
+ * from `off`) shows a window of V that slides as the page scrolls:
+ * `shift` of it lies above the track.
+ */
+const metrics = ref({ S: 0, C: 0, L: 0, T: 0, Dt: 0, Db: 0, V: 0, scale: 1, off: 0 })
 const viewTop = ref(0)
 /** Where the composer reaches the rail, the layer stops above it (px). */
 const bottomGap = ref(0)
@@ -121,9 +133,34 @@ interface RailDot {
   end: number
   label: string
 }
-const dots = ref<RailDot[]>([])
-/** The running turn's node, while rumu works. */
-const headY = ref<number | null>(null)
+/** The ticks on the virtual track (`y` there). */
+const marks = ref<RailDot[]>([])
+/** The running turn's node on the virtual track, while rumu works. */
+const headV = ref<number | null>(null)
+
+/** How much of the virtual track lies above the track: none when it fits,
+ *  else as much of the overhang as the page is scrolled through. */
+const shift = computed(() => {
+  const { S, C, T, V } = metrics.value
+  if (V <= T || S <= C) return 0
+  return Math.min(1, Math.max(0, viewTop.value / (S - C))) * (V - T)
+})
+
+/** Virtual track → track. */
+function onTrack(v: number): number {
+  return metrics.value.off + v - shift.value
+}
+
+/** The ticks where they are going, on the track. */
+const dots = computed<RailDot[]>(() => marks.value.map((d) => ({ ...d, y: onTrack(d.y) })))
+
+/** How far the viewport stretch moves per px of scroll: the scale, less
+ *  what the window slides meanwhile. */
+const handleRate = computed(() => {
+  const { S, C, T, V, Dt, Db, scale } = metrics.value
+  if (V <= T || S <= C) return scale
+  return Math.max(0.001, (T - C * scale - Dt - Db) / (S - C))
+})
 
 const railHover = ref(false)
 const railFocus = ref(false)
@@ -167,7 +204,10 @@ const layerEl = shallowRef<HTMLElement | null>(null)
 function composerGap(parent: HTMLElement): number {
   const wrap = composerEl.value
   if (!wrap) return 0
-  const card = (wrap.firstElementChild as HTMLElement | null) ?? wrap
+  // the composer card itself: the wrapper's first child is the selection
+  // bar's full-width overlay, whose right edge sits on the strip's (a
+  // fraction past it in Chrome, which cut the rail off above the composer)
+  const card = wrap.querySelector<HTMLElement>(':scope > .composer') ?? wrap
   const reach = card.getBoundingClientRect().right
   const strip = parent.getBoundingClientRect().right - STRIP_W
   return reach > strip ? parent.getBoundingClientRect().bottom - wrap.getBoundingClientRect().top : 0
@@ -184,9 +224,9 @@ function measure(): void {
   const inner = innerEl.value
   const parent = layerEl.value?.parentElement
   if (!sc || !inner || !parent) {
-    metrics.value = { S: 0, C: 0, L: 0, T: 0, D: 0, scale: 1, off: 0 }
-    dots.value = []
-    headY.value = null
+    metrics.value = { S: 0, C: 0, L: 0, T: 0, Dt: 0, Db: 0, V: 0, scale: 1, off: 0 }
+    marks.value = []
+    headV.value = null
     return
   }
   bottomGap.value = composerGap(parent)
@@ -196,16 +236,20 @@ function measure(): void {
   const T = Math.max(0, L - RAIL_INSET * 2)
   // A conversation that doesn't overflow maps 1:1 (ticks level with their
   // messages); one that overflows compresses onto the track between the
-  // insets (never stretched past 1:1, though the track may be taller).
-  const D = props.earlier ? Math.min(DASH_LEN, T / 4) : 0
-  const overflow = S > C || D > 0
-  const scale = overflow ? Math.min(1, (T - D) / S) : 1
+  // insets (never stretched past 1:1, though the track may be taller), down
+  // to MAX_SCREENS views on it.
+  const dash = Math.min(DASH_LEN, T / 6)
+  const Dt = props.earlier ? dash : 0
+  const Db = props.later ? dash : 0
+  const overflow = S > C || Dt + Db > 0
+  const fit = Math.max(1, T - Dt - Db) / Math.max(1, S)
+  const scale = overflow ? Math.min(1, Math.max(fit, T / (MAX_SCREENS * Math.max(1, C)))) : 1
   const off = overflow ? RAIL_INSET : 0
-  const mapY = (c: number): number => off + D + c * scale
+  const virt = (c: number): number => Dt + c * scale
   const base = inner.offsetTop
 
   // ticks: one per prompt. A forward pass pushes them apart to the gap, a
-  // backward pass clamps them back into the track.
+  // backward pass clamps them back into the conversation's stretch.
   const raw: Omit<RailDot, 'y'>[] = []
   const natural: number[] = []
   timeline.value.forEach((e, i) => {
@@ -217,47 +261,53 @@ function measure(): void {
     const bubble = el.querySelector<HTMLElement>('[data-path-node]')
     const end = start + (bubble?.offsetHeight ?? el.offsetHeight)
     raw.push({ i, id: e.node.id, start, end, label: promptLabel(e) })
-    natural.push(mapY(start + NODE_Y.user))
+    natural.push(virt(start + NODE_Y.user))
   })
   const ys = [...natural]
-  const lo = off + D
-  const hi = off + T
+  const lo = Dt
+  const hi = Dt + S * scale
   for (let k = 1; k < ys.length; k++) ys[k] = Math.min(hi, Math.max(ys[k], ys[k - 1] + TICK_GAP))
   for (let k = ys.length - 2; k >= 0; k--) ys[k] = Math.max(lo, Math.min(ys[k], ys[k + 1] - TICK_GAP))
   glideFrom()
-  dots.value = raw.map((r, k) => ({ ...r, y: ys[k] }))
+  marks.value = raw.map((r, k) => ({ ...r, y: ys[k] }))
 
   // the head: the running turn's node
   const g = lastGroup.value
   const gEl = g >= 0 ? inner.querySelector<HTMLElement>(`[data-entry="${g}"]`) : null
-  headY.value =
-    isBusy.value && gEl ? Math.min(hi, Math.max(lo, mapY(base + gEl.offsetTop + NODE_Y.group))) : null
+  headV.value =
+    isBusy.value && !props.later && gEl
+      ? Math.min(hi, Math.max(lo, virt(base + gEl.offsetTop + NODE_Y.group)))
+      : null
 
   viewTop.value = sc.scrollTop
-  metrics.value = { S, C, L, T, D, scale, off }
+  metrics.value = { S, C, L, T, Dt, Db, V: Dt + S * scale + Db, scale, off }
 }
 
 // ---- gliding: a new layout eases the ticks over from where they were ----
+// (on the virtual track: a scroll meanwhile slides the window as usual)
 
-/** Where each tick (by node) and the dashed stretch's end were drawn when
- *  the glide started; empty when there is none. */
+/** Where each tick (by node), the dashed stretch above and the
+ *  conversation's end were when the glide started; empty when there is
+ *  none. */
 let from = new Map<string, number>()
 /** The glide's progress, 0 → 1 (eased). */
 const glide = ref(1)
 let glideFrame = 0
 
 const DASH = ' dash'
-/** The first tick's y at the glide's start: ticks loaded in above it unroll
+const END = ' end'
+/** The first tick at the glide's start: ticks loaded in above it unroll
  *  from there. */
 const TOP = ' top'
 
 /** Start a glide from what is drawn now (call before the layout changes). */
 function glideFrom(): void {
-  if (!dots.value.length || prefersReduced()) return
+  if (!marks.value.length || prefersReduced()) return
   const now = new Map<string, number>()
-  for (const d of drawnDots.value) now.set(d.id, d.y)
-  now.set(DASH, dashEnd.value)
-  now.set(TOP, drawnDots.value[0]!.y)
+  for (const d of drawnMarks.value) now.set(d.id, d.y)
+  now.set(DASH, dashV.value)
+  now.set(END, endV.value)
+  now.set(TOP, drawnMarks.value[0]!.y)
   from = now
   glide.value = 0
   const t0 = performance.now()
@@ -272,8 +322,8 @@ function glideFrom(): void {
   glideFrame = requestAnimationFrame(step)
 }
 
-/** A y on its way from `key`'s glide start to `y`; a tick new above the
- *  old first one starts from there. */
+/** A virtual y on its way from `key`'s glide start to `y`; a tick new
+ *  above the old first one starts from there. */
 function glided(key: string, y: number): number {
   if (glide.value >= 1) return y
   let a = from.get(key)
@@ -282,11 +332,25 @@ function glided(key: string, y: number): number {
   return a === undefined ? y : a + (y - a) * glide.value
 }
 
-/** The ticks where they are drawn (`dots` holds where they are going). */
-const drawnDots = computed(() => dots.value.map((d) => ({ ...d, y: glided(d.id, d.y) })))
+/** The ticks where they are drawn, on the virtual track. */
+const drawnMarks = computed(() => marks.value.map((d) => ({ ...d, y: glided(d.id, d.y) })))
+/** …and on the track, the ones on it. */
+const drawnDots = computed(() => {
+  const { off, T } = metrics.value
+  return drawnMarks.value
+    .map((d) => ({ ...d, y: onTrack(d.y) }))
+    .filter((d) => d.y >= off - TICK_GAP && d.y <= off + T + TICK_GAP)
+})
 
-/** Where the dashed stretch ends on the track. */
-const dashEnd = computed(() => glided(DASH, metrics.value.off + metrics.value.D))
+/** Where the dashed stretch above ends, and the conversation, on the
+ *  virtual track. */
+const dashV = computed(() => glided(DASH, metrics.value.Dt))
+const endV = computed(() => {
+  const { Dt, S, scale } = metrics.value
+  return glided(END, Dt + S * scale)
+})
+
+const headY = computed(() => (headV.value === null ? null : onTrack(headV.value)))
 
 /** Only the composer is watched here: the scroller and the column are laid
  *  out by ConversationView, which sizes the blank under the timeline in its
@@ -310,7 +374,7 @@ watch(
   },
   { immediate: true, flush: 'post' },
 )
-watch([timeline, isBusy, () => props.earlier], () => measure(), { flush: 'post' })
+watch([timeline, isBusy, () => props.earlier, () => props.later], () => measure(), { flush: 'post' })
 
 defineExpose({ measure })
 
@@ -320,36 +384,60 @@ const railOn = computed(
   () => props.reveal || railHover.value || railFocus.value || wheelOpen.value || dragging.value,
 )
 
-/** Where the conversation ends on the track (the tail of the thread). */
-const endY = computed(() => {
-  const { S, D, scale, T, off } = metrics.value
-  return off + D + Math.min(S * scale, T - D)
-})
+/** A stretch of the track from `a` to `b` (track y), cut to the track;
+ *  `cut` says whether its top was cut off. */
+function onTrackSpan(a: number, b: number): { top: number; height: number; cut: boolean } | null {
+  const { off, T } = metrics.value
+  const top = Math.max(a, off)
+  const bottom = Math.min(b, off + T)
+  return bottom > top ? { top, height: bottom - top, cut: a < off - 0.5 } : null
+}
 
+/** The thread: from the first tick to the conversation's end (fading out
+ *  there, and where the window cuts it above). */
 const baseLine = computed(() => {
-  const top = drawnDots.value[0]?.y
-  if (top === undefined) return null
-  return { top: `${top - 1}px`, height: `${Math.max(0, endY.value - top)}px` }
+  const first = drawnMarks.value[0]?.y
+  if (first === undefined) return null
+  const span = onTrackSpan(onTrack(first) - 1, onTrack(endV.value))
+  if (!span) return null
+  return {
+    top: `${span.top}px`,
+    height: `${span.height}px`,
+    ...(span.cut
+      ? {
+          maskImage:
+            'linear-gradient(to bottom, transparent, #000 24px, #000 calc(100% - 32px), transparent)',
+        }
+      : {}),
+  }
 })
 
-/** What is not loaded yet: dashed, from the track's top down to the first
- *  tick (or the stretch's end, if that is lower). */
+/** What is not loaded yet: dashed, above the first tick and below the end. */
 const dashLine = computed(() => {
-  const { D, off } = metrics.value
-  if (D <= 0 && dashEnd.value <= off + 0.5) return null
-  const end = Math.max(dashEnd.value, drawnDots.value[0]?.y ?? 0)
-  return { top: `${off}px`, height: `${Math.max(0, end - off - 1)}px` }
+  const { Dt } = metrics.value
+  if (Dt <= 0 && dashV.value <= 0.5) return null
+  const first = drawnMarks.value[0]?.y ?? 0
+  const span = onTrackSpan(onTrack(0), onTrack(Math.max(dashV.value, first)) - 1)
+  return span && { top: `${span.top}px`, height: `${span.height}px` }
+})
+const dashBelow = computed(() => {
+  const { Db } = metrics.value
+  if (Db <= 0) return null
+  const span = onTrackSpan(onTrack(endV.value) + 3, onTrack(endV.value + Db))
+  return span && { top: `${span.top}px`, height: `${span.height}px` }
 })
 
 /**
  * The viewport: which slice of the conversation is on screen. Drawn as the
  * stretch of line it covers, inked darker; the drag handle over it is
- * invisible and a little taller, so a short slice stays grabbable.
+ * invisible and a little taller, so a short slice stays grabbable. It moves
+ * like a scrollbar's thumb, top to bottom of the track over the whole
+ * conversation, while a windowed track slides under it.
  */
 const viewSpan = computed(() => {
-  const { S, C, D, scale, off, T } = metrics.value
+  const { S, C, Dt, scale, off, T } = metrics.value
   if (S <= C || T <= 0) return null
-  const top = Math.min(off + D + viewTop.value * scale, off + T)
+  const top = Math.min(off + Dt + viewTop.value * handleRate.value, off + T)
   const height = Math.min(C * scale, off + T - top)
   return { top, height }
 })
@@ -670,10 +758,11 @@ watch(wheelOpen, (v) => {
 
 // ---- the viewport handle: drag to scroll, tap to jump, hold to open (touch) ----
 
-/** Track point → scroll-content position (negative on the dashed stretch). */
+/** Where the viewport stretch's top at track point `y` puts the page's
+ *  scroll (negative on the dashed stretch). */
 function unmap(y: number): number {
-  const { scale, off, D } = metrics.value
-  return (y - off - D) / scale
+  const { off, Dt } = metrics.value
+  return (y - off - Dt) / handleRate.value
 }
 
 /** Past the slop, scrollTop follows the pointer 1:1 in track space; a press
@@ -834,6 +923,12 @@ onBeforeUnmount(() => {
           :style="dashLine"
         />
         <span
+          v-if="dashBelow"
+          aria-hidden="true"
+          class="thread-mark tl-rail-line tl-rail-dash"
+          :style="dashBelow"
+        />
+        <span
           v-if="baseLine"
           aria-hidden="true"
           class="thread-mark tl-rail-line is-tail bg-ink-3/30"
@@ -863,6 +958,33 @@ onBeforeUnmount(() => {
           class="thread-mark tl-rail-head dot-live"
           :style="{ top: `${headY - 4}px` }"
         />
+        <!-- the fixed jumps to the very top and end, in the insets -->
+        <template v-if="metrics.off > 0">
+          <button
+            type="button"
+            tabindex="-1"
+            class="thread-mark tl-rail-end"
+            :style="{ top: '0px', height: `${metrics.off}px` }"
+            :title="t('chat.timeline.toStart')"
+            :aria-label="t('chat.timeline.toStart')"
+            @pointerdown.stop
+            @click.stop="emit('top')"
+          >
+            <Icon name="chev-up" :size="12" />
+          </button>
+          <button
+            type="button"
+            tabindex="-1"
+            class="thread-mark tl-rail-end"
+            :style="{ top: `${metrics.off + metrics.T}px`, height: `${metrics.off}px` }"
+            :title="t('chat.timeline.toEnd')"
+            :aria-label="t('chat.timeline.toEnd')"
+            @pointerdown.stop
+            @click.stop="emit('bottom')"
+          >
+            <Icon name="down" :size="12" />
+          </button>
+        </template>
         <!-- the viewport's drag handle on top, invisible -->
         <div
           v-if="boxStyle"

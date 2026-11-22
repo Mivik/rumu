@@ -38,8 +38,12 @@ import { t } from '../../i18n'
 import {
   ensureAgentNodes,
   ensureFullPath,
+  goToEnd,
+  goToStart,
   hasEarlier,
+  hasLater,
   loadEarlier,
+  loadLater,
   pathNodes,
   state,
   useBranchView,
@@ -63,7 +67,10 @@ const props = defineProps<{
 }>()
 
 const view = useBranchView()
-const { timeline, busy: isBusy, owed: owedReply } = view
+const { timeline, busy: branchBusy, owed: owedReply } = view
+/** The branch runs a turn, and its end is what this view shows (the main
+ *  line shown short of its end shows nothing live). */
+const isBusy = computed(() => branchBusy.value && (view.sub || !hasLater.value))
 
 /**
  * Render keys. A group is keyed by the entry before it, not by its nodes:
@@ -102,6 +109,7 @@ const vt = useVirtualEntries({
     })),
   forced: () => liveKeys(),
   measured: () => loadMore(true),
+  quietArrivals: () => laterLanded(),
   bootAt: () => entries.value[placeIndex()]?.key ?? null,
 })
 
@@ -116,6 +124,16 @@ const vt = useVirtualEntries({
 const BACKGROUND_NODES = 3000
 /** A scroll this many screens from the top loads more. */
 const EARLIER_SCREENS = 3
+
+/** Where the shown stretch of the line ended at the last look: a change
+ *  means a later stretch landed (or the end was reached), and what it
+ *  brought below is history. */
+let seenLineEnd = state.lineEnd
+function laterLanded(): boolean {
+  const landed = !view.sub && state.lineEnd !== seenLineEnd
+  seenLineEnd = state.lineEnd
+  return landed
+}
 
 function loadMore(background: boolean): void {
   if (view.sub || !hasEarlier.value) return
@@ -149,9 +167,17 @@ function onScroll(): void {
   // layoutTail runs again (the scroll event of our own pin can fire after it)
   // is not you scrolling away from the end.
   const end = laidEnd ? Math.min(el.scrollHeight, laidEnd) : el.scrollHeight
-  nearBottom.value = end - el.scrollTop - el.clientHeight < 90
-  // nearing the top of what is loaded: load what came before
+  // short of the line's end, the bottom of what is loaded does not pin
+  nearBottom.value = end - el.scrollTop - el.clientHeight < 90 && (view.sub || !hasLater.value)
+  // nearing the top of what is loaded: load what came before; nearing its
+  // bottom short of the line's end, what comes after
   if (el.scrollTop < el.clientHeight * EARLIER_SCREENS) loadMore(false)
+  if (
+    !view.sub &&
+    hasLater.value &&
+    el.scrollHeight - el.scrollTop - el.clientHeight < el.clientHeight * EARLIER_SCREENS
+  )
+    void loadLater()
   // Chromium does not anchor a scroller at offset 0: what lands above
   // would push the view down. A px down it holds still.
   if (el.scrollTop < 1 && !view.sub && hasEarlier.value) el.scrollTop = 1
@@ -473,14 +499,26 @@ function layoutTail(): void {
       )
   }
   turnEnded = false
+  // An earlier stretch landing above during the smooth settle onto a sent
+  // prompt: Chromium does not anchor mid smooth scroll, so the view would
+  // stay where the content moved from. The prompt is at the end: go there.
+  const first = entries.value[0]?.key
+  const landedAbove = first !== laidFirst
+  laidFirst = first
   if (sent) {
     settlingUntil = performance.now() + 600
     scrollToEnd(true)
+  } else if (landedAbove && performance.now() < settlingUntil) {
+    settlingUntil = 0
+    scrollToEnd()
   } else if (nearBottom.value && performance.now() >= settlingUntil) {
     scrollToEnd()
   }
   railEl.value?.measure()
 }
+
+/** The first entry at the last layoutTail. */
+let laidFirst: string | undefined
 
 // A finished turn gives back the blank it held, whether or not its last
 // render resized anything.
@@ -538,6 +576,37 @@ watchEffect(() => {
 // panel is the same: another conversation. A variant switch (the inline
 // switcher) only moves the head: the path before it stays mounted and the
 // swapped tail renders in place.
+// Back at the line's end from a stretch short of it (a prompt sent from
+// there): it opens there as a session does.
+watch(
+  () => state.endJumps,
+  () => {
+    if (view.sub) return
+    seenLineEnd = state.lineEnd
+    resetView()
+    requestEndScroll()
+  },
+)
+
+// Shown from the line's start instead (the rail's jump to the top): it
+// opens at the first entry the way a reload opens at its place.
+watch(
+  () => state.startJumps,
+  () => {
+    if (view.sub) return
+    seenLineEnd = state.lineEnd
+    // the place first: the virtual list boots from it
+    const first = entries.value[0]
+    const session = state.sessionId
+    if (first && session) {
+      pendingPlace.value = { session, node: dataId(first.entry), offset: innerEl.value?.offsetTop ?? 0 }
+      openedAtPlace.value = true
+    }
+    resetView()
+    requestEndScroll()
+  },
+)
+
 watch(
   () => [state.sessionId, view.branch.value],
   () => {
@@ -588,6 +657,19 @@ function promptOf(i: number): Node | null {
     if (e.kind === 'user') return e.node
   }
   return null
+}
+
+/** The rail's fixed jumps: to the very top of the line, loading its start
+ *  when that is not here, and to its very end. */
+function jumpToStart(): void {
+  if (!view.sub && hasEarlier.value) return void goToStart()
+  const el = scrollEl.value
+  el?.scrollTo({ top: 0, behavior: prefersReduced() ? 'auto' : 'smooth' })
+}
+
+function jumpToEnd(): void {
+  if (!view.sub && hasLater.value) return void goToEnd()
+  scrollToEnd(true)
 }
 
 /** Jump to where an entry starts; a quiet flash marks where it landed. */
@@ -648,6 +730,14 @@ function jumpTo(i: number, smooth = true): void {
             </div>
           </div>
         </template>
+        <!-- the main line goes on past here: it loads as the view nears
+             it (never the scroll anchor either) -->
+        <div
+          v-if="!view.sub && hasLater"
+          class="h-8 text-center text-meta leading-8 text-ink-3 [overflow-anchor:none]"
+        >
+          {{ t('chat.timeline.later') }}
+        </div>
         <!-- the reply this branch still owes: its last exchange failed
              (or was never finished) — offer to run it again -->
         <ErrorRow v-if="owedReply" :owed="owedReply" />
@@ -665,7 +755,10 @@ function jumpTo(i: number, smooth = true): void {
     :column-of="columnRoot"
     :composer-of="props.composerOf"
     :earlier="!view.sub && hasEarlier"
+    :later="!view.sub && hasLater"
     :reveal="isBusy || scrolling"
     @jump="jumpTo"
+    @top="jumpToStart"
+    @bottom="jumpToEnd"
   />
 </template>

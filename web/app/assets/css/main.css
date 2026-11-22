@@ -804,6 +804,10 @@
     bottom: 0;
     right: 0;
     width: 24px;
+    /* above the composer row it spans when the composer stands clear of
+     * the edge (as the wheel is): its padding would take the track's foot
+     * and the jump to the end */
+    z-index: 30;
     pointer-events: auto;
     touch-action: none;
     user-select: none;
@@ -901,6 +905,25 @@
   .tl-rail-view.is-drag {
     width: 3px;
     margin-left: -1.5px;
+  }
+
+  /* the fixed jumps to the very top and end, in the track's insets */
+  .tl-rail-end {
+    position: absolute;
+    left: 0;
+    width: 100%;
+    display: flex;
+    align-items: center;
+    justify-content: center;
+    color: var(--ink-3);
+    cursor: pointer;
+    transition:
+      opacity 0.25s var(--ease-soft),
+      color 0.15s;
+  }
+
+  .tl-rail-end:hover {
+    color: var(--ink);
   }
 
   .tl-rail-box {

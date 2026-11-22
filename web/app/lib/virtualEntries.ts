@@ -68,6 +68,9 @@ export function useVirtualEntries(opts: {
    *  off), when it is in the list. Such an open is history: it plays no
    *  entrance. */
   bootAt?: () => string | null
+  /** What arrived below the entries known is history too (a later stretch
+   *  of the line loaded), not something that just happened. */
+  quietArrivals?: () => boolean
 }) {
   /** Measured heights, whole px. */
   const heights = new Map<string, number>()
@@ -219,9 +222,10 @@ export function useVirtualEntries(opts: {
       // main line's earlier part): measured at once, quiet — left to the
       // observer, the ones near the top would render on its report instead
       const top = list.findIndex((e) => known.has(e.key))
+      const later = opts.quietArrivals?.() ?? false
       list.forEach((e, i) => {
         if (known.has(e.key)) return
-        if (i < top) {
+        if (i < top || later) {
           if (e.virtual) batch.add(e.key)
           return
         }

@@ -32,12 +32,13 @@ export const currentBranch = computed<Branch | null>(() =>
  *  path is tens of thousands of nodes). */
 export const WALK_LIMIT = 1_000_000
 
-/** root → head of `b`, as far as it is loaded; with `stop`, only the nodes
- *  after that one. */
+/** root → head of `b`, as far as it is loaded (the main line: up to
+ *  `state.lineEnd` when that is set); with `stop`, only the nodes after
+ *  that one. */
 export function pathOf(b: Branch | null | undefined, stop?: NodeId | null): Node[] {
   if (!b) return []
   const out: Node[] = []
-  let cur: NodeId | null | undefined = b.head
+  let cur: NodeId | null | undefined = b.id === state.mainBranch && state.lineEnd ? state.lineEnd : b.head
   let guard = 0
   while (cur && cur !== stop && state.nodes[cur] && guard++ < WALK_LIMIT) {
     const n: Node = state.nodes[cur]
@@ -52,6 +53,9 @@ export const pathNodes = computed<Node[]>(() => pathOf(currentBranch.value))
 
 /** The main line goes back further than is loaded (`loadEarlier`). */
 export const hasEarlier = computed(() => !!pathNodes.value[0]?.parent)
+
+/** The main line goes on past what is loaded (`loadLater`). */
+export const hasLater = computed(() => !!state.lineEnd)
 
 /** call_id → ToolCall, from the assistant nodes in `nodes` (for pairing results). */
 export function callsOf(nodes: Node[]): Map<string, { call: ToolCallLike; node: Node }> {

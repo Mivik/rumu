@@ -148,7 +148,10 @@
     "images": "{count} image | {count} images",
     "documents": "{count} document | {count} documents",
     "attachments": "{count} attachment | {count} attachments",
-    "earlier": "Loading earlier messages…"
+    "earlier": "Loading earlier messages…",
+    "later": "Loading later messages…",
+    "toStart": "Go to the start",
+    "toEnd": "Go to the latest"
   },
   "ask": {
     "title": "{from} wants to hand {to} a task",
