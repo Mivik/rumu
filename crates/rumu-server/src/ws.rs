@@ -1533,7 +1533,7 @@ which you can read, edit and `show`.",
         // task tab's "stop all"); the branch's reply keeps going.
         "task.kill_all" => {
             let branch: BranchId = str_param(p, "branch")?.into();
-            kernel.abort_tasks(&branch, false);
+            kernel.abort_tasks(&branch, false, rumu_kernel::CancelSource::User);
             Ok(json!({}))
         }
 

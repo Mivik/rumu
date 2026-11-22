@@ -4,6 +4,7 @@ use std::sync::Arc;
 use std::sync::atomic::{AtomicBool, Ordering};
 use std::time::{Duration, Instant};
 
+use crate::task::CancelSource;
 use crate::{Error, Result};
 use rumu_core::kind;
 use rumu_core::{
@@ -312,7 +313,7 @@ impl Kernel {
     /// (or a sub-agent below it) started. Their completion notes are still
     /// written, without waking.
     pub fn abort(&self, branch: &BranchId) -> Result<()> {
-        self.abort_tasks(branch, true);
+        self.abort_tasks(branch, true, CancelSource::User);
         self.stop(branch)
     }
 
@@ -1319,7 +1320,7 @@ impl Kernel {
             Err(e) => {
                 self.set_branch_status(&child.id, BranchStatus::Done);
                 self.finish_turn(child.id.clone(), Some(&e), None).await;
-                self.abort_tasks(&child.id, true);
+                self.abort_tasks(&child.id, true, CancelSource::SubAgent);
                 return Err(e);
             }
         };
@@ -1333,7 +1334,7 @@ impl Kernel {
         // A finished sub-agent waited for its tasks above; a stopped one takes
         // them down with it, or their notes would wake it back up.
         if token.is_cancelled() {
-            self.abort_tasks(&child.id, true);
+            self.abort_tasks(&child.id, true, CancelSource::SubAgent);
         }
 
         let b = self

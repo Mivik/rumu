@@ -49,10 +49,33 @@ pub(crate) struct TaskEntry {
     /// Cancelled by [`crate::Kernel::abort`] or with its stopped sub-agent:
     /// the completion note is written with `wake: false`.
     pub quiet: bool,
+    /// Who cancelled it, named in its completion note.
+    pub cancelled_by: Option<CancelSource>,
     /// Cancelled because the main line moved off the call that started it
     /// ([`crate::Kernel::move_head`] with `stop`): no completion note at all,
     /// since the line it would land on never made the call.
     pub silent: bool,
+}
+
+/// Who cancelled a task; its completion note says so.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum CancelSource {
+    /// The user: the UI's `task.kill` / `task.kill_all`, an abort.
+    User,
+    /// The model, through `task.kill`.
+    Model,
+    /// The sub-agent that started it was stopped, and took it down too.
+    SubAgent,
+}
+
+impl CancelSource {
+    fn label(self) -> &'static str {
+        match self {
+            Self::User => "by the user",
+            Self::Model => "by the model",
+            Self::SubAgent => "with its stopped sub-agent",
+        }
+    }
 }
 
 /// A plugin tool's work, owned so it can outlive the call that started it.
@@ -189,13 +212,23 @@ impl Kernel {
         Some((e.output.clone(), e.dropped + e.output.len() as u64))
     }
 
-    /// Cancel a task by id (the UI's `task.kill`, no ownership check) and
-    /// wait briefly for its final status.
+    /// Cancel a task by id for the user (the UI's `task.kill`, no ownership
+    /// check) and wait briefly for its final status.
     pub async fn kill_task(&self, id: &TaskId) -> Result<TaskInfo> {
-        let Some((token, _)) = self.task_token(id) else {
-            return Err(Error::TaskNotFound { id: id.clone() });
-        };
-        token.cancel();
+        self.cancel_task(id, CancelSource::User).await
+    }
+
+    async fn cancel_task(&self, id: &TaskId, by: CancelSource) -> Result<TaskInfo> {
+        {
+            let mut inner = self.inner.lock().unwrap();
+            let Some(entry) = inner.tasks.get_mut(id) else {
+                return Err(Error::TaskNotFound { id: id.clone() });
+            };
+            if entry.info.status.is_running() {
+                entry.cancelled_by = Some(by);
+            }
+            entry.token.cancel();
+        }
         self.wait_final(id, Duration::from_secs(5))
             .await
             .ok_or_else(|| Error::TaskNotFound { id: id.clone() })
@@ -507,6 +540,7 @@ impl Kernel {
                     token: token.clone(),
                     post_done: false,
                     quiet: false,
+                    cancelled_by: None,
                     silent: false,
                 },
             );
@@ -625,7 +659,7 @@ impl Kernel {
             if silent {
                 entry.post_done = true;
             }
-            let note = completion_text(&entry.info, &content);
+            let note = completion_text(&entry.info, &content, entry.cancelled_by);
             (
                 entry.info.clone(),
                 note,
@@ -690,7 +724,7 @@ impl Kernel {
                 let content = Content::text(LOST_TASK);
                 info.result = Some(content.clone());
                 self.save_task(&info);
-                let note = completion_text(&info, &content);
+                let note = completion_text(&info, &content, None);
                 self.adopt_task(info.clone());
                 self.push("task.done", json!({ "task": info }));
                 // A note, not a wake: the branch may have work of its own as
@@ -714,6 +748,7 @@ impl Kernel {
             // Its completion is already in the transcript: never wait on it.
             post_done: true,
             quiet: false,
+            cancelled_by: None,
             silent: false,
         });
         drop(inner);
@@ -852,7 +887,7 @@ impl Kernel {
     /// notes are still written; they wake their owners like a `task.kill`
     /// (`task.kill_all`), or with `quiet` not at all ([`Kernel::abort`], a
     /// stopped sub-agent).
-    pub fn abort_tasks(&self, branch: &BranchId, quiet: bool) {
+    pub fn abort_tasks(&self, branch: &BranchId, quiet: bool, by: CancelSource) {
         let subtree = self.branch_subtree(branch).unwrap_or_else(|_| {
             let mut set = std::collections::HashSet::new();
             set.insert(branch.clone());
@@ -862,6 +897,7 @@ impl Kernel {
         for entry in inner.tasks.values_mut() {
             if subtree.contains(&entry.info.branch) && entry.info.status.is_running() {
                 entry.quiet = quiet;
+                entry.cancelled_by = Some(by);
                 entry.token.cancel();
             }
         }
@@ -913,7 +949,7 @@ impl Kernel {
         if !self.owns_task(branch, &info.branch) {
             return Err(Error::TaskNotOwned { id: id.clone() });
         }
-        self.kill_task(id).await
+        self.cancel_task(id, CancelSource::Model).await
     }
 }
 
@@ -963,13 +999,19 @@ fn last_chars(text: &str, n: usize) -> String {
 }
 
 /// The completion note: one header line, then the (truncated) result.
-fn completion_text(info: &TaskInfo, content: &Content) -> String {
+fn completion_text(info: &TaskInfo, content: &Content, by: Option<CancelSource>) -> String {
     let mut text = format!(
         "task {} ({}) finished: {}",
         info.id,
         info.what(),
         info.status.label()
     );
+    if let Some(by) = by
+        && info.status == TaskStatus::Cancelled
+    {
+        text.push(' ');
+        text.push_str(by.label());
+    }
     if !content.text.is_empty() {
         text.push('\n');
         text.push_str(&content.text);

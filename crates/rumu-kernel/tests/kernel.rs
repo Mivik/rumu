@@ -3783,7 +3783,7 @@ async fn moving_the_main_line_waits_for_the_tasks_it_would_leave() {
         kernel.branch_path(&branch).unwrap().0.last().unwrap().id,
         next
     );
-    kernel.abort_tasks(&branch, true);
+    kernel.abort_tasks(&branch, true, rumu_kernel::CancelSource::User);
 }
 
 /// With `stop`, the move goes through and stops the task it leaves behind:
@@ -5071,7 +5071,7 @@ async fn background_completion_while_busy_lands_at_next_safe_point() {
 }
 
 /// `Cx::kill_task` cancels a running task and reports its status; the
-/// cancelled task still posts a completion note.
+/// cancelled task still posts a completion note naming the model.
 #[tokio::test]
 async fn kill_task_cancels_and_reports_cancelled() {
     let plugin = Arc::new(background_plugin(
@@ -5100,14 +5100,20 @@ async fn kill_task_cancels_and_reports_cancelled() {
     let (text, err) = result_text(&nodes, "c2");
     assert!(!err, "{text}");
     assert_eq!(text, format!("task {id}: cancelled"));
-    let note = nodes
+    let (note, note_text) = nodes
         .iter()
         .find_map(|n| match &n.body {
-            NodeBody::Note { content, .. } => content.decode::<TaskDone>(),
+            NodeBody::Note { content, .. } => content
+                .decode::<TaskDone>()
+                .map(|d| (d, content.text.clone())),
             _ => None,
         })
         .expect("a cancelled-task completion note");
     assert_eq!(note.status, TaskStatus::Cancelled);
+    assert!(
+        note_text.contains("finished: cancelled by the model"),
+        "{note_text}"
+    );
     assert_eq!(
         kernel.tasks(&session).unwrap()[0].status,
         TaskStatus::Cancelled
@@ -5164,7 +5170,7 @@ async fn abort_cancels_owned_tasks_and_does_not_wake() {
     assert!(
         pushed_note_text(&note)
             .unwrap()
-            .contains("finished: cancelled")
+            .contains("finished: cancelled by the user")
     );
     // The note did not start a wake turn.
     tokio::time::sleep(Duration::from_millis(100)).await;
@@ -5211,6 +5217,12 @@ async fn ui_kill_wakes() {
     let (done, seen) = collect_turn(&mut rx, &branch.0).await;
     assert_eq!(done["method"], "turn.done");
     assert_eq!(turn_starts(&seen, "wake"), 1, "{seen:?}");
+    let note = seen
+        .iter()
+        .find(|v| pushed_note_tag(v) == Some("task.done"))
+        .and_then(pushed_note_text)
+        .expect("the completion note");
+    assert!(note.contains("finished: cancelled by the user"), "{note}");
 }
 
 /// Killing a background sub-agent takes down the tasks it started, quietly,
@@ -5355,7 +5367,7 @@ async fn stop_ends_the_reply_and_keeps_its_tasks() {
     while let Ok(v) = rx.try_recv() {
         assert_ne!(v["method"], "task.done", "the task must not finish: {v}");
     }
-    kernel.abort_tasks(&branch, true);
+    kernel.abort_tasks(&branch, true, rumu_kernel::CancelSource::User);
 }
 
 // ---------- restart ----------

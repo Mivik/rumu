@@ -23,6 +23,7 @@ pub use llm::{Budget, Delta, Llm, LlmError, LlmResponse, OnDelta};
 pub use predicate::{Pred, PredicateError};
 pub use scripted::{Script, ScriptTurn, ScriptedLlm};
 pub use state::{derive_state, merge_workspaces, mounts_changed};
+pub use task::CancelSource;
 
 use std::collections::{HashMap, HashSet};
 use std::sync::{Arc, Mutex};
