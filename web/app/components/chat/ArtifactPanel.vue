@@ -16,6 +16,7 @@ import {
   openArtifact,
   showArtifact,
 } from '../../lib/artifacts'
+import { ensureFullPath } from '../../lib/store'
 import { sandboxedPage } from '../../lib/widgets'
 import { renderMarkdown } from '../../lib/markdown'
 import { toast } from '../../lib/state/ui'
@@ -26,6 +27,8 @@ import PanelBack from './PanelBack.vue'
 
 const shown = computed(() => openArtifact.value)
 const artifact = computed(() => shown.value?.artifact ?? null)
+// The versions are counted over the whole main line.
+void ensureFullPath()
 const versions = computed(() =>
   artifact.value && shown.value?.version ? (artifactsOnPath.value.get(artifact.value.path) ?? []) : [],
 )

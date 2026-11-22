@@ -21,11 +21,17 @@
 // drive the wheel when the rail has focus. The thread (.thread-mark, keyed off
 // the layer's data-thread) shows while rumu works, while scrolling, or while
 // pointing at the rail, and fades out otherwise; the hit strip stays live.
+//
+// A long session loads its earlier part as it is needed: while there is
+// more, a fixed stretch of dashed thread above the first tick says so. As
+// what loads takes its place, the ticks glide to their new places instead
+// of jumping.
 import { computed, onBeforeUnmount, onMounted, ref, shallowRef, watch } from 'vue'
 import { t } from '../../i18n'
 import { useBranchView } from '../../lib/store'
 import type { TimelineUserEntry } from '../../lib/store'
 import { preview } from '../../lib/util'
+import { prefersReduced } from '../../lib/motion'
 import { contentSegments, kindOf } from '../../lib/attachments'
 import type { Node as RumuNode } from '../../lib/types'
 
@@ -37,9 +43,11 @@ const props = withDefaults(
     scrollOf: () => HTMLElement | null
     columnOf: () => HTMLElement | null
     composerOf: () => HTMLElement | null
+    /** The conversation goes back further than is loaded. */
+    earlier?: boolean
     reveal?: boolean
   }>(),
-  { reveal: false },
+  { reveal: false, earlier: false },
 )
 const emit = defineEmits<{ jump: [i: number] }>()
 const view = useBranchView()
@@ -51,6 +59,8 @@ const composerEl = computed(() => props.composerOf())
 
 /** Track inset, keeping the ends clear of the sheet's fade and corners. */
 const RAIL_INSET = 18
+/** The dashed stretch for what is not loaded yet. */
+const DASH_LEN = 40
 /** Ticks never sit closer than this on the track. */
 const TICK_GAP = 4
 /** The hit strip's width at the sheet's right edge (the line is its center). */
@@ -85,11 +95,16 @@ const WHEEL_SPAN = 5
 const WHEEL_ROW_DELTA = 80
 const WHEEL_SNAP = 140
 const SWIPE_ROW_DELTA = 36
+/** How long the ticks take to glide to where a new layout puts them. */
+const GLIDE_MS = 280
 
 // ---- state: y positions are track coordinates (0 = the layer's top, which
 // is the scroll area's top, and the scroll content's origin at scrollTop 0) ----
 
-const metrics = ref({ S: 0, C: 0, L: 0, T: 0, scale: 1, off: 0 })
+/** S: the scroll content's height, C: the view's, L: the layer's, T: the
+ *  track's, D: the dashed stretch's above it; content y maps to
+ *  `off + D + y * scale`. */
+const metrics = ref({ S: 0, C: 0, L: 0, T: 0, D: 0, scale: 1, off: 0 })
 const viewTop = ref(0)
 /** Where the composer reaches the rail, the layer stops above it (px). */
 const bottomGap = ref(0)
@@ -97,6 +112,8 @@ const bottomGap = ref(0)
 interface RailDot {
   /** timeline index (the entry's data-entry) */
   i: number
+  /** the prompt's node: the same tick across loads that shift indices */
+  id: string
   /** tick center on the track */
   y: number
   /** the bubble's span in scroll-content coordinates (for "current") */
@@ -167,7 +184,7 @@ function measure(): void {
   const inner = innerEl.value
   const parent = layerEl.value?.parentElement
   if (!sc || !inner || !parent) {
-    metrics.value = { S: 0, C: 0, L: 0, T: 0, scale: 1, off: 0 }
+    metrics.value = { S: 0, C: 0, L: 0, T: 0, D: 0, scale: 1, off: 0 }
     dots.value = []
     headY.value = null
     return
@@ -180,10 +197,11 @@ function measure(): void {
   // A conversation that doesn't overflow maps 1:1 (ticks level with their
   // messages); one that overflows compresses onto the track between the
   // insets (never stretched past 1:1, though the track may be taller).
-  const overflow = S > C
-  const scale = overflow ? Math.min(1, T / S) : 1
+  const D = props.earlier ? Math.min(DASH_LEN, T / 4) : 0
+  const overflow = S > C || D > 0
+  const scale = overflow ? Math.min(1, (T - D) / S) : 1
   const off = overflow ? RAIL_INSET : 0
-  const mapY = (c: number): number => off + c * scale
+  const mapY = (c: number): number => off + D + c * scale
   const base = inner.offsetTop
 
   // ticks: one per prompt. A forward pass pushes them apart to the gap, a
@@ -198,14 +216,15 @@ function measure(): void {
     const start = base + el.offsetTop
     const bubble = el.querySelector<HTMLElement>('[data-path-node]')
     const end = start + (bubble?.offsetHeight ?? el.offsetHeight)
-    raw.push({ i, start, end, label: promptLabel(e) })
+    raw.push({ i, id: e.node.id, start, end, label: promptLabel(e) })
     natural.push(mapY(start + NODE_Y.user))
   })
   const ys = [...natural]
-  const lo = off
+  const lo = off + D
   const hi = off + T
   for (let k = 1; k < ys.length; k++) ys[k] = Math.min(hi, Math.max(ys[k], ys[k - 1] + TICK_GAP))
   for (let k = ys.length - 2; k >= 0; k--) ys[k] = Math.max(lo, Math.min(ys[k], ys[k + 1] - TICK_GAP))
+  glideFrom()
   dots.value = raw.map((r, k) => ({ ...r, y: ys[k] }))
 
   // the head: the running turn's node
@@ -215,8 +234,59 @@ function measure(): void {
     isBusy.value && gEl ? Math.min(hi, Math.max(lo, mapY(base + gEl.offsetTop + NODE_Y.group))) : null
 
   viewTop.value = sc.scrollTop
-  metrics.value = { S, C, L, T, scale, off }
+  metrics.value = { S, C, L, T, D, scale, off }
 }
+
+// ---- gliding: a new layout eases the ticks over from where they were ----
+
+/** Where each tick (by node) and the dashed stretch's end were drawn when
+ *  the glide started; empty when there is none. */
+let from = new Map<string, number>()
+/** The glide's progress, 0 → 1 (eased). */
+const glide = ref(1)
+let glideFrame = 0
+
+const DASH = ' dash'
+/** The first tick's y at the glide's start: ticks loaded in above it unroll
+ *  from there. */
+const TOP = ' top'
+
+/** Start a glide from what is drawn now (call before the layout changes). */
+function glideFrom(): void {
+  if (!dots.value.length || prefersReduced()) return
+  const now = new Map<string, number>()
+  for (const d of drawnDots.value) now.set(d.id, d.y)
+  now.set(DASH, dashEnd.value)
+  now.set(TOP, drawnDots.value[0]!.y)
+  from = now
+  glide.value = 0
+  const t0 = performance.now()
+  cancelAnimationFrame(glideFrame)
+  const step = (t: number): void => {
+    // a frame's time can be from before the glide started
+    const f = Math.min(1, Math.max(0, (t - t0) / GLIDE_MS))
+    glide.value = 1 - (1 - f) ** 3
+    if (f < 1) glideFrame = requestAnimationFrame(step)
+    else from = new Map()
+  }
+  glideFrame = requestAnimationFrame(step)
+}
+
+/** A y on its way from `key`'s glide start to `y`; a tick new above the
+ *  old first one starts from there. */
+function glided(key: string, y: number): number {
+  if (glide.value >= 1) return y
+  let a = from.get(key)
+  const top = from.get(TOP)
+  if (a === undefined && top !== undefined && y < top) a = top
+  return a === undefined ? y : a + (y - a) * glide.value
+}
+
+/** The ticks where they are drawn (`dots` holds where they are going). */
+const drawnDots = computed(() => dots.value.map((d) => ({ ...d, y: glided(d.id, d.y) })))
+
+/** Where the dashed stretch ends on the track. */
+const dashEnd = computed(() => glided(DASH, metrics.value.off + metrics.value.D))
 
 /** Only the composer is watched here: the scroller and the column are laid
  *  out by ConversationView, which sizes the blank under the timeline in its
@@ -240,7 +310,7 @@ watch(
   },
   { immediate: true, flush: 'post' },
 )
-watch([timeline, isBusy], () => measure(), { flush: 'post' })
+watch([timeline, isBusy, () => props.earlier], () => measure(), { flush: 'post' })
 
 defineExpose({ measure })
 
@@ -251,14 +321,24 @@ const railOn = computed(
 )
 
 /** Where the conversation ends on the track (the tail of the thread). */
-const endY = computed(
-  () => metrics.value.off + Math.min(metrics.value.S * metrics.value.scale, metrics.value.T),
-)
+const endY = computed(() => {
+  const { S, D, scale, T, off } = metrics.value
+  return off + D + Math.min(S * scale, T - D)
+})
 
 const baseLine = computed(() => {
-  const top = dots.value[0]?.y
+  const top = drawnDots.value[0]?.y
   if (top === undefined) return null
   return { top: `${top - 1}px`, height: `${Math.max(0, endY.value - top)}px` }
+})
+
+/** What is not loaded yet: dashed, from the track's top down to the first
+ *  tick (or the stretch's end, if that is lower). */
+const dashLine = computed(() => {
+  const { D, off } = metrics.value
+  if (D <= 0 && dashEnd.value <= off + 0.5) return null
+  const end = Math.max(dashEnd.value, drawnDots.value[0]?.y ?? 0)
+  return { top: `${off}px`, height: `${Math.max(0, end - off - 1)}px` }
 })
 
 /**
@@ -267,9 +347,9 @@ const baseLine = computed(() => {
  * invisible and a little taller, so a short slice stays grabbable.
  */
 const viewSpan = computed(() => {
-  const { S, C, scale, off, T } = metrics.value
+  const { S, C, D, scale, off, T } = metrics.value
   if (S <= C || T <= 0) return null
-  const top = Math.min(off + viewTop.value * scale, off + T)
+  const top = Math.min(off + D + viewTop.value * scale, off + T)
   const height = Math.min(C * scale, off + T - top)
   return { top, height }
 })
@@ -590,10 +670,10 @@ watch(wheelOpen, (v) => {
 
 // ---- the viewport handle: drag to scroll, tap to jump, hold to open (touch) ----
 
-/** Track point → scroll-content position. */
+/** Track point → scroll-content position (negative on the dashed stretch). */
 function unmap(y: number): number {
-  const { scale, off } = metrics.value
-  return (y - off) / scale
+  const { scale, off, D } = metrics.value
+  return (y - off - D) / scale
 }
 
 /** Past the slop, scrollTop follows the pointer 1:1 in track space; a press
@@ -713,6 +793,7 @@ onBeforeUnmount(() => {
   cancelTimers()
   clearTimeout(holdTimer)
   clearTimeout(snapTimer)
+  cancelAnimationFrame(glideFrame)
 })
 </script>
 
@@ -745,6 +826,13 @@ onBeforeUnmount(() => {
         @focus="railFocus = true"
         @blur="onStripBlur"
       >
+        <!-- the part not loaded (or not measured) yet, held open -->
+        <span
+          v-if="dashLine"
+          aria-hidden="true"
+          class="thread-mark tl-rail-line tl-rail-dash"
+          :style="dashLine"
+        />
         <span
           v-if="baseLine"
           aria-hidden="true"
@@ -762,8 +850,8 @@ onBeforeUnmount(() => {
         <!-- one tick per prompt (grey; the current one inked, the wheel's
              front one longer still); the head, while rumu works -->
         <span
-          v-for="d in dots"
-          :key="d.i"
+          v-for="d in drawnDots"
+          :key="d.id"
           aria-hidden="true"
           class="thread-mark tl-rail-mark"
           :class="{ 'is-cur': d.i === currentPrompt, 'is-hot': d.i === hot }"

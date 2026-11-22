@@ -832,6 +832,15 @@
     mask-image: linear-gradient(to bottom, #000 calc(100% - 32px), transparent);
   }
 
+  /* the part of a long conversation not loaded yet: the thread, dashed */
+  .tl-rail-dash {
+    background: repeating-linear-gradient(
+      to bottom,
+      color-mix(in srgb, var(--ink-3) 45%, transparent) 0 3px,
+      transparent 3px 7px
+    );
+  }
+
   /* A prompt's tick on the rail. Two tones only: grey for the rest, ink-2
    * for "you are here" (the current prompt and the viewport's stretch of
    * line, read as one thing); the wheel's front prompt goes full ink and

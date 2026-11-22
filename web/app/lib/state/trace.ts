@@ -3,7 +3,7 @@
 
 import { computed } from 'vue'
 import type { Branch, Node, NodeId } from '../types'
-import { pathNodes } from './derived'
+import { WALK_LIMIT, pathNodes } from './derived'
 import { state } from './state'
 
 export type TraceRow =
@@ -20,7 +20,7 @@ const MAX_DEPTH = 8
 function ownNodes(b: Branch): Node[] {
   const out: Node[] = []
   let cur: NodeId | null | undefined = b.head
-  while (cur && cur !== b.forked_from && state.nodes[cur] && out.length < 10_000) {
+  while (cur && cur !== b.forked_from && state.nodes[cur] && out.length < WALK_LIMIT) {
     const n: Node = state.nodes[cur]
     out.push(n)
     cur = n.parent

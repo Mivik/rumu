@@ -20,6 +20,7 @@ export {
   callsOnPath,
   connected,
   currentBranch,
+  hasEarlier,
   isBusy,
   isUnseen,
   pathNodes,
@@ -66,7 +67,14 @@ export {
   closeLightbox,
 } from './state/ui'
 
-export { ensureAgentNodes, findAgentChild, moveHead, scriptAgents } from './state/tree'
+export {
+  ensureAgentNodes,
+  ensureFullPath,
+  findAgentChild,
+  loadEarlier,
+  moveHead,
+  scriptAgents,
+} from './state/tree'
 export type { OpenHistory, PromptAttachment } from './state/sessions'
 
 export {

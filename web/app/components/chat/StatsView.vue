@@ -13,6 +13,7 @@ import { modelByRef } from '../../lib/state/models'
 import { pathOf } from '../../lib/state/derived'
 import {
   ensureAgentNodes,
+  ensureFullPath,
   openAgentView,
   pathNodes,
   repliesOf,
@@ -38,6 +39,8 @@ watchEffect(() => {
   const id = agent.value?.id
   if (id && !state.agentNodes[id]) void ensureAgentNodes(id)
 })
+// Every reply of the main line, not only its loaded end.
+void ensureFullPath()
 const loading = computed(() => !!agent.value && state.agentNodes[agent.value.id] !== 'loaded')
 
 /** Its own nodes: a sub-agent's from its fork point on. */

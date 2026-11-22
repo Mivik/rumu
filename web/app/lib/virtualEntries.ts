@@ -62,6 +62,12 @@ export function useVirtualEntries(opts: {
   entries: () => VirtualEntry[]
   /** Keys that render whatever their place (the live turn). */
   forced: () => Iterable<string>
+  /** The backfill measured everything there is: the place to load more. */
+  measured?: () => void
+  /** The key a view opens at instead of its tail (where a reload left
+   *  off), when it is in the list. Such an open is history: it plays no
+   *  entrance. */
+  bootAt?: () => string | null
 }) {
   /** Measured heights, whole px. */
   const heights = new Map<string, number>()
@@ -190,23 +196,42 @@ export function useVirtualEntries(opts: {
       booted = true
       const whole = list.reduce((s, e) => s + e.weight, 0) <= WHOLE_WEIGHT
       let weight = 0
-      for (let i = list.length - 1; i >= 0; i--) {
-        const e = list[i]!
-        if (e.virtual && weight >= BOOT_WEIGHT && !whole) break
+      // the tail, or from where the view opens on down (and up from there,
+      // if that runs out first)
+      const at = opts.bootAt?.()
+      const from = at == null ? -1 : list.findIndex((e) => e.key === at)
+      const hold = (e: VirtualEntry): boolean => {
+        if (e.virtual && weight >= BOOT_WEIGHT && !whole) return false
         held.add(e.key)
-        entering.add(e.key)
+        if (from < 0) entering.add(e.key)
         weight += e.weight
+        return true
       }
-      for (const e of list) if (!e.virtual) entering.add(e.key)
+      if (from >= 0) {
+        for (let i = from; i < list.length && hold(list[i]!); i++);
+        for (let i = from - 1; i >= 0 && hold(list[i]!); i--);
+      } else {
+        for (let i = list.length - 1; i >= 0 && hold(list[i]!); i--);
+      }
+      if (from < 0) for (const e of list) if (!e.virtual) entering.add(e.key)
     } else {
-      for (const e of list) {
-        if (known.has(e.key)) continue
+      // what arrived above the entries known is history loaded late (the
+      // main line's earlier part): measured at once, quiet — left to the
+      // observer, the ones near the top would render on its report instead
+      const top = list.findIndex((e) => known.has(e.key))
+      list.forEach((e, i) => {
+        if (known.has(e.key)) return
+        if (i < top) {
+          if (e.virtual) batch.add(e.key)
+          return
+        }
         held.add(e.key)
         entering.add(e.key)
-      }
+      })
     }
     known = new Set(list.map((e) => e.key))
     update()
+    if (batch.size) release(batch)
     if (!filled) void nextTick(fill)
     scheduleBackfill()
   }
@@ -272,11 +297,18 @@ export function useVirtualEntries(opts: {
       batch.add(e.key)
       weight += e.weight
     }
-    if (!batch.size) return
+    if (!batch.size) {
+      opts.measured?.()
+      return
+    }
     update()
-    // a body the observer never reports (no size change to report) still
-    // lets its batch go
-    const pending = new Set(batch)
+    release(batch)
+  }
+
+  /** A body the observer never reports (no size change to report) still
+   *  lets its batch go. */
+  function release(keys: Set<string>): void {
+    const pending = new Set(keys)
     requestAnimationFrame(() =>
       requestAnimationFrame(() => {
         let released = false

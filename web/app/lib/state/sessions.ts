@@ -31,6 +31,7 @@ import { currentPick, models } from './models'
 import { isUnseen } from './derived'
 import { state } from './state'
 import { fetchTree, findAgentChild, loadPath, moveHead, replaceTree } from './tree'
+import { takePlace } from './scrollPlace'
 import { openAgentView } from './branchView'
 import { requestComposerFocus, toast, withStop } from './ui'
 import {
@@ -153,7 +154,7 @@ export async function openSession(id: SessionId, opts: { history?: OpenHistory }
   const seq = ++openSeq
   watchSession(id)
   try {
-    const tree = await fetchTree(id)
+    const tree = await fetchTree(id, takePlace(id)?.node)
     if (seq !== openSeq) return false
     if (state.sessionId !== tree.session.id) {
       // Panels beside the chat belong to the session that opened them.
@@ -234,6 +235,7 @@ export function closeSession(): void {
   state.nodes = {}
   state.branches = {}
   state.agentNodes = {}
+  state.variantEnds = {}
   state.mainBranch = null
   state.pathState = null
   state.deltas = {}

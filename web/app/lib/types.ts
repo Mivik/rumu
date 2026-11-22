@@ -140,6 +140,15 @@ export interface SessionTreeResult {
   usage: SessionUsage
   /** Each sub-agent's totals over its own nodes (older servers send none). */
   agent_usage?: Record<BranchId, SessionUsage>
+  /** See `state.variantEnds`. */
+  variant_ends?: Record<NodeId, NodeId>
+}
+
+/** `branch.window`: a stretch of a branch's path, as `session.tree` sends
+ *  its end. */
+export interface BranchWindowResult {
+  nodes: Node[]
+  variant_ends?: Record<NodeId, NodeId>
 }
 
 export interface SessionUsage {

@@ -48,7 +48,7 @@ import { onSettingsUpdated, refreshSettings } from './models'
 import type { SettingsInfo } from '../generated/SettingsInfo'
 import { refreshLibrary } from './library'
 import { refreshProjects } from './projects'
-import { loadPath } from './tree'
+import { loadHead, loadPath } from './tree'
 import { toast } from './ui'
 import { LIVE_CHARS, appendTaskOutput, clipLive, resyncTaskWatch } from './taskOutput'
 import { t } from '../../i18n'
@@ -105,6 +105,12 @@ function onNodeAppended(p: NodeAppendedPush): void {
     if (state.page?.page === 'decks') void refreshLibrary()
   }
   if (state.sessionId && node.session === state.sessionId) {
+    // The main line's window loads from the end back: a node off what is
+    // loaded (a side question asked in another tab about a message not
+    // loaded here) comes with its stretch instead. A sub-agent's nodes
+    // come regardless; its panel loads the rest.
+    const unplaced =
+      !!node.parent && !state.nodes[node.parent] && state.branches[branch]?.kind.type !== 'agent'
     if (node.body.type === 'assistant' && !state.nodes[node.id]) {
       const u = node.body.usage
       state.usage.calls++
@@ -119,12 +125,14 @@ function onNodeAppended(p: NodeAppendedPush): void {
         a.output += u.completion_tokens
       }
     }
-    state.nodes[node.id] = node
-    // A node extending a branch's head grows its path live (the active
-    // one, or a sub-agent open beside it).
-    const b = state.branches[branch]
-    if (b && node.parent === b.head) {
-      b.head = node.id
+    if (!unplaced) {
+      state.nodes[node.id] = node
+      // A node extending a branch's head grows its path live (the active
+      // one, or a sub-agent open beside it).
+      const b = state.branches[branch]
+      if (b && node.parent === b.head) {
+        b.head = node.id
+      }
     }
   }
   // A file the model just showed opens beside the chat on a wide screen, or
@@ -201,7 +209,11 @@ function onBranchUpdated(p: BranchUpdatedPush): void {
     // A head moved rather than grown (a variant picked, an edit — maybe in
     // another tab): the shown path's state is another one.
     const moved = old && old.head !== p.branch.head && state.nodes[p.branch.head]?.parent !== old.head
-    if (moved && p.branch.id === state.mainBranch) void loadPath(p.branch.id)
+    if (moved && p.branch.id === state.mainBranch) {
+      void loadPath(p.branch.id)
+      // moved past what is loaded: load the end there
+      if (!state.nodes[p.branch.head]) void loadHead(p.branch.id)
+    }
   }
 }
 

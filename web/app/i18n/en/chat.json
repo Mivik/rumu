@@ -147,7 +147,8 @@
     "emptyPrompt": "(empty prompt)",
     "images": "{count} image | {count} images",
     "documents": "{count} document | {count} documents",
-    "attachments": "{count} attachment | {count} attachments"
+    "attachments": "{count} attachment | {count} attachments",
+    "earlier": "Loading earlier messages…"
   },
   "ask": {
     "title": "{from} wants to hand {to} a task",

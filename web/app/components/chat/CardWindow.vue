@@ -16,7 +16,7 @@ import {
   useIsCurrent,
 } from '../../lib/cards'
 import type { CardUse, CardView } from '../../lib/cards'
-import { beginDrawerClose, closeDrawer, state } from '../../lib/store'
+import { beginDrawerClose, closeDrawer, ensureFullPath, state } from '../../lib/store'
 import type { CardWindow } from '../../lib/store'
 import type { Card } from '../../lib/types'
 import { renderMarkdown } from '../../lib/markdown'
@@ -25,6 +25,9 @@ import CardEditor from '../library/CardEditor.vue'
 import Icon from '../ui/Icon.vue'
 
 const props = defineProps<{ entry: CardWindow }>()
+
+// A use is looked up over the whole main line.
+if (props.entry.useRef) void ensureFullPath()
 
 const dialog = ref<HTMLDialogElement | null>(null)
 const pane = ref<InstanceType<typeof CardEditor> | null>(null)

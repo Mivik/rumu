@@ -4,8 +4,18 @@
 
 import { rumu } from '../api'
 import { t } from '../../i18n'
-import type { Branch, BranchId, BranchPathResult, Node, NodeId, SessionId, SessionTreeResult } from '../types'
+import type {
+  Branch,
+  BranchId,
+  BranchPathResult,
+  BranchWindowResult,
+  Node,
+  NodeId,
+  SessionId,
+  SessionTreeResult,
+} from '../types'
 import { state } from './state'
+import { hasEarlier, pathNodes } from './derived'
 import { syncLive } from './stream'
 import { toast, withStop } from './ui'
 
@@ -15,6 +25,7 @@ export function replaceTree(tree: SessionTreeResult): void {
   state.nodes = {}
   state.branches = {}
   state.agentNodes = {}
+  state.variantEnds = { ...tree.variant_ends }
   state.usage = tree.usage
   state.agentUsage = tree.agent_usage ?? {}
   for (const n of tree.nodes) state.nodes[n.id] = n
@@ -22,10 +33,71 @@ export function replaceTree(tree: SessionTreeResult): void {
   syncLive(tree)
 }
 
-/** The open session's tree, sub-agents' nodes left out (`ensureAgentNodes`
- *  fetches one's when it is opened). */
-export function fetchTree(session: SessionId): Promise<SessionTreeResult> {
-  return rumu.request<SessionTreeResult>('session.tree', { session, agents: false })
+/** How much of the main line a session opens on, and each step back loads
+ *  (nodes; widened to start at a user message). */
+const TAIL = 400
+
+/** The open session's tree: the main line's end (`TAIL` nodes, back to
+ *  `through` at least — where a reload left off) with the variants and side
+ *  questions off it. What came before comes as it is needed
+ *  (`loadEarlier`); sub-agents' nodes when one is opened
+ *  (`ensureAgentNodes`). */
+export function fetchTree(session: SessionId, through?: NodeId): Promise<SessionTreeResult> {
+  return rumu.request<SessionTreeResult>('session.tree', { session, tail: TAIL, through })
+}
+
+/** What a window of the open session's tree brought; what is loaded stays. */
+function merge(session: SessionId | null, res: BranchWindowResult): void {
+  if (state.sessionId !== session) return
+  for (const n of res.nodes) state.nodes[n.id] ??= n
+  Object.assign(state.variantEnds, res.variant_ends)
+}
+
+let earlier: Promise<void> | null = null
+let earlierAll = false
+
+/**
+ * Load what comes before the loaded part of the main line: one step back,
+ * or (`all`) the rest of it — for the views that read the whole path
+ * (stats, trace, an artifact's versions, a card's uses, a linked message).
+ * One request at a time; resolves once the asked-for part is in.
+ */
+export async function loadEarlier(all = false): Promise<void> {
+  while (earlier) {
+    const running = earlier
+    const covers = earlierAll || !all
+    await running
+    if (covers) return
+  }
+  const branch = state.mainBranch
+  const first = pathNodes.value[0]
+  if (!branch || !first?.parent) return
+  const session = state.sessionId
+  earlierAll = all
+  earlier = rumu
+    .request<BranchWindowResult>('branch.window', { branch, before: first.id, limit: all ? undefined : TAIL })
+    .then((res) => merge(session, res))
+    .catch((err: Error) => toast('error', t('errors.loadingBranch'), err.message))
+    .finally(() => {
+      earlier = null
+    })
+  await earlier
+}
+
+/** The whole main line, loaded. */
+export function ensureFullPath(): Promise<void> {
+  return hasEarlier.value ? loadEarlier(true) : Promise.resolve()
+}
+
+/** The main line's head moved somewhere not loaded (a variant picked in
+ *  another tab): load the end there, as an open does. */
+export async function loadHead(branch: BranchId): Promise<void> {
+  const session = state.sessionId
+  try {
+    merge(session, await rumu.request<BranchWindowResult>('branch.window', { branch, limit: TAIL }))
+  } catch (err) {
+    toast('error', t('errors.loadingBranch'), (err as Error).message)
+  }
 }
 
 /** Fetch the nodes of sub-agent branch `id` the tree left out, once per

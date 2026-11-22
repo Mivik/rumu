@@ -152,6 +152,9 @@ const initial = {
   /** Sub-agent branches whose nodes were fetched (`branch.nodes`):
    *  `session.tree` leaves them out until one is opened. */
   agentNodes: {} as Record<BranchId, 'loading' | 'loaded'>,
+  /** A variant's newest end by its first node, for the variants the tree
+   *  sent only that node of: where its switcher moves the head. */
+  variantEnds: {} as Record<NodeId, NodeId>,
   /** Token totals over every model call of the open session. */
   usage: { calls: 0, input: 0, cached: 0, output: 0 } as SessionUsage,
   /** Each sub-agent's totals over its own model calls. */

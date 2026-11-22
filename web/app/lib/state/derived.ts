@@ -28,13 +28,18 @@ export const currentBranch = computed<Branch | null>(() =>
   state.mainBranch ? (state.branches[state.mainBranch] ?? null) : null,
 )
 
-/** root → head of `b`; with `stop`, only the nodes after that one. */
+/** Bounds a walk up the tree (a cycle would be a bug; a long session's
+ *  path is tens of thousands of nodes). */
+export const WALK_LIMIT = 1_000_000
+
+/** root → head of `b`, as far as it is loaded; with `stop`, only the nodes
+ *  after that one. */
 export function pathOf(b: Branch | null | undefined, stop?: NodeId | null): Node[] {
   if (!b) return []
   const out: Node[] = []
   let cur: NodeId | null | undefined = b.head
   let guard = 0
-  while (cur && cur !== stop && state.nodes[cur] && guard++ < 10_000) {
+  while (cur && cur !== stop && state.nodes[cur] && guard++ < WALK_LIMIT) {
     const n: Node = state.nodes[cur]
     out.push(n)
     cur = n.parent
@@ -42,8 +47,11 @@ export function pathOf(b: Branch | null | undefined, stop?: NodeId | null): Node
   return out.reverse()
 }
 
-/** root → head for the main line. */
+/** root → head for the main line: its loaded end, all of it once loaded. */
 export const pathNodes = computed<Node[]>(() => pathOf(currentBranch.value))
+
+/** The main line goes back further than is loaded (`loadEarlier`). */
+export const hasEarlier = computed(() => !!pathNodes.value[0]?.parent)
 
 /** call_id → ToolCall, from the assistant nodes in `nodes` (for pairing results). */
 export function callsOf(nodes: Node[]): Map<string, { call: ToolCallLike; node: Node }> {
@@ -147,7 +155,7 @@ const offLine = computed<Set<NodeId>>(() => {
     if (b.kind.type === 'main') continue
     let cur: NodeId | null | undefined = b.head
     let guard = 0
-    while (cur && cur !== b.forked_from && state.nodes[cur] && guard++ < 10_000) {
+    while (cur && cur !== b.forked_from && state.nodes[cur] && guard++ < WALK_LIMIT) {
       off.add(cur)
       cur = state.nodes[cur].parent
     }
@@ -173,7 +181,7 @@ const siblingIndex = computed<Map<NodeId, SiblingAlternative[]>>(() => {
     if (children.has(leaf.id) || offLine.value.has(leaf.id)) continue
     let cur: Node | undefined = leaf
     let guard = 0
-    while (cur && guard++ < 10_000) {
+    while (cur && guard++ < WALK_LIMIT) {
       const best = newest.get(cur.id)
       if (best && best.at >= leaf.at) break
       newest.set(cur.id, leaf)
@@ -185,10 +193,16 @@ const siblingIndex = computed<Map<NodeId, SiblingAlternative[]>>(() => {
   let cur: NodeId | null | undefined = currentBranch.value?.head
   let prev: NodeId | null = null
   let guard = 0
-  while (cur && state.nodes[cur] && guard++ < 10_000) {
+  while (cur && state.nodes[cur] && guard++ < WALK_LIMIT) {
     if (prev) shownChildOf.set(cur, prev)
     prev = cur
     cur = state.nodes[cur].parent
+  }
+  // A variant the tree sent only the first node of ends where the server
+  // said; one loaded further (a line the head left here) where it does now.
+  const endOf = (id: NodeId): NodeId => {
+    const local = newest.get(id)?.id
+    return local && local !== id ? local : (state.variantEnds[id] ?? id)
   }
   const index = new Map<NodeId, SiblingAlternative[]>()
   for (const [parentId, kids] of children) {
@@ -198,7 +212,7 @@ const siblingIndex = computed<Map<NodeId, SiblingAlternative[]>>(() => {
       parentId,
       kids
         .sort((a, b) => a.at - b.at || a.id.localeCompare(b.id))
-        .map((n) => ({ node: newest.get(n.id)?.id ?? n.id, current: n.id === shown })),
+        .map((n) => ({ node: endOf(n.id), current: n.id === shown })),
     )
   }
   return index

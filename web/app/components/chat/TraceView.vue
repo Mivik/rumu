@@ -6,7 +6,7 @@
 // and follows new rows while you are there.
 import { computed, nextTick, reactive, ref, watch, watchEffect } from 'vue'
 import { t } from '../../i18n'
-import { ensureAgentNodes, pathNodes, state, trace } from '../../lib/store'
+import { ensureAgentNodes, ensureFullPath, pathNodes, state, trace } from '../../lib/store'
 import type { TraceKind } from '../../lib/store'
 import TraceRows from './TraceRows.vue'
 
@@ -19,6 +19,8 @@ const hidden = reactive(new Set<TraceKind>())
 watchEffect(() => {
   for (const key of open) if (key.startsWith('agent:')) void ensureAgentNodes(key.slice('agent:'.length))
 })
+// The whole main line, not only its loaded end.
+void ensureFullPath()
 
 function toggleKind(k: TraceKind): void {
   if (hidden.has(k)) hidden.delete(k)

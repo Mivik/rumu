@@ -147,7 +147,8 @@
     "emptyPrompt": "（空提问）",
     "images": "{count} 张图片",
     "documents": "{count} 个文档",
-    "attachments": "{count} 个附件"
+    "attachments": "{count} 个附件",
+    "earlier": "正在加载更早的消息…"
   },
   "ask": {
     "title": "{from} 想请 {to} 完成任务",

@@ -33,11 +33,21 @@
 // A long conversation is a virtual list (virtualEntries): assistant turns
 // away from the view are blanks of their measured height, so the column
 // keeps its full height and nothing in view moves as they render back in.
-import { computed, nextTick, onBeforeUnmount, ref, watch, watchEffect } from 'vue'
-import { ensureAgentNodes, state, useBranchView } from '../../lib/store'
+import { computed, nextTick, onBeforeUnmount, onMounted, ref, watch, watchEffect } from 'vue'
+import { t } from '../../i18n'
+import {
+  ensureAgentNodes,
+  ensureFullPath,
+  hasEarlier,
+  loadEarlier,
+  pathNodes,
+  state,
+  useBranchView,
+} from '../../lib/store'
 import { prefersReduced, timelineLive, vEnter } from '../../lib/motion'
 import { onReveal, useVirtualEntries } from '../../lib/virtualEntries'
 import { focusTarget } from '../../lib/state/ui'
+import { pendingPlace, rememberPlace } from '../../lib/state/scrollPlace'
 import type { TimelineEntry } from '../../lib/store'
 import type { Node } from '../../lib/types'
 import UserRow from './UserRow.vue'
@@ -74,6 +84,12 @@ const entries = computed(() => {
 const scrollEl = ref<HTMLElement | null>(null)
 const innerEl = ref<HTMLElement | null>(null)
 const railEl = ref<InstanceType<typeof TimelineRail> | null>(null)
+
+/** Roughly how much an entry renders (nodes). */
+function weightOf(entry: TimelineEntry): number {
+  return entry.kind === 'group' ? entry.items.length + entry.assistants.length : 1
+}
+
 /** Which entries render their content (the rest hold their measured place). */
 const vt = useVirtualEntries({
   scrollEl,
@@ -82,10 +98,30 @@ const vt = useVirtualEntries({
     entries.value.map(({ entry, key }) => ({
       key,
       virtual: entry.kind === 'group',
-      weight: entry.kind === 'group' ? entry.items.length + entry.assistants.length : 1,
+      weight: weightOf(entry),
     })),
   forced: () => liveKeys(),
+  measured: () => loadMore(true),
+  bootAt: () => entries.value[placeIndex()]?.key ?? null,
 })
+
+// ---- the main line's earlier part ----
+// A session opens on the end of its main line. What came before loads in
+// the background up to BACKGROUND_NODES (the backfill has measured what is
+// in first, so each step is one more stretch for it), and past that as a
+// scroll nears the top. Either way it arrives above the view as blanks the
+// backfill measures, so nothing in view moves.
+
+/** Up to this many nodes of the main line load without a scroll asking. */
+const BACKGROUND_NODES = 3000
+/** A scroll this many screens from the top loads more. */
+const EARLIER_SCREENS = 3
+
+function loadMore(background: boolean): void {
+  if (view.sub || !hasEarlier.value) return
+  if (background && pathNodes.value.length >= BACKGROUND_NODES) return
+  void loadEarlier()
+}
 const nearBottom = ref(true)
 /** Where the page ended (scrollHeight) at the last layoutTail. */
 let laidEnd = 0
@@ -114,6 +150,13 @@ function onScroll(): void {
   // is not you scrolling away from the end.
   const end = laidEnd ? Math.min(el.scrollHeight, laidEnd) : el.scrollHeight
   nearBottom.value = end - el.scrollTop - el.clientHeight < 90
+  // nearing the top of what is loaded: load what came before
+  if (el.scrollTop < el.clientHeight * EARLIER_SCREENS) loadMore(false)
+  // Chromium does not anchor a scroller at offset 0: what lands above
+  // would push the view down. A px down it holds still.
+  if (el.scrollTop < 1 && !view.sub && hasEarlier.value) el.scrollTop = 1
+  clearTimeout(placeTimer)
+  placeTimer = setTimeout(savePlace, PLACE_DEBOUNCE)
   if (performance.now() < quietUntil) return
   scrolling.value = true
   clearTimeout(scrollTimer)
@@ -151,6 +194,75 @@ function endTop(el: HTMLElement): number {
 
 onBeforeUnmount(() => clearTimeout(scrollTimer))
 
+// ---- where you are, across a reload ----
+// A view read away from its end keeps its place (the entry at the top and
+// how far its top sat from the view's) per tab; the first open after a
+// reload lands there (`pendingPlace`), the tree reaching back to it.
+
+/** A scroll at rest this long records the place. */
+const PLACE_DEBOUNCE = 300
+let placeTimer: ReturnType<typeof setTimeout> | undefined
+
+function savePlace(): void {
+  clearTimeout(placeTimer)
+  const sc = scrollEl.value
+  const inner = innerEl.value
+  const session = state.sessionId
+  // a place still to land is not overwritten by the scrolls on the way
+  if (view.sub || !session || !sc || !inner || pendingPlace.value) return
+  if (nearBottom.value) return rememberPlace(session, null)
+  // the first entry reaching below the view's top
+  const top = sc.scrollTop - inner.offsetTop
+  const wraps = inner.querySelectorAll<HTMLElement>(':scope > [data-entry]')
+  let lo = 0
+  let hi = wraps.length - 1
+  while (lo < hi) {
+    const mid = (lo + hi) >> 1
+    const w = wraps[mid]!
+    if (w.offsetTop + w.offsetHeight > top) hi = mid
+    else lo = mid + 1
+  }
+  const el = wraps[lo]
+  const node = el?.dataset.nodeId
+  if (!el || !node) return
+  rememberPlace(session, { node, offset: inner.offsetTop + el.offsetTop - sc.scrollTop })
+}
+
+onMounted(() => window.addEventListener('pagehide', savePlace))
+onBeforeUnmount(() => {
+  window.removeEventListener('pagehide', savePlace)
+  clearTimeout(placeTimer)
+})
+
+/** This view opened at a remembered place: it fades in without rising. A
+ *  transform on the column is a change Chromium's scroll anchoring holds
+ *  against everything in it, until the next scroll — and nothing scrolls
+ *  there before the earlier part lands above (it pushed the view down a
+ *  whole stretch). An open at the end is pinned there instead. */
+const openedAtPlace = ref(false)
+
+/** The entry the open in progress lands on instead of the end, -1 for none
+ *  (a linked message wins). */
+function placeIndex(): number {
+  const p = pendingPlace.value
+  if (!p || view.sub || p.session !== state.sessionId || focusTarget.value) return -1
+  return entries.value.findIndex(({ entry }) => dataId(entry) === p.node)
+}
+
+/** Put the remembered place where it was in the view; false when its entry
+ *  is not there. */
+function landPlace(sc: HTMLElement): boolean {
+  const p = pendingPlace.value
+  const i = placeIndex()
+  const inner = innerEl.value
+  const el = i < 0 ? null : inner?.querySelector<HTMLElement>(`[data-entry="${i}"]`)
+  if (!p || !inner || !el) return false
+  quietUntil = performance.now() + 150
+  sc.scrollTop = inner.offsetTop + el.offsetTop - p.offset
+  nearBottom.value = false
+  return true
+}
+
 /** Bumped by every "open at the end" request; only the newest one lands. */
 let endSeq = 0
 /** The request a mounted scroller has taken up: each lands once, however
@@ -165,7 +277,7 @@ let settled = 0
  */
 function requestEndScroll(): void {
   const seq = ++endSeq
-  nearBottom.value = true
+  nearBottom.value = placeIndex() < 0
   void nextTick(() => settleEnd(seq))
 }
 
@@ -181,6 +293,17 @@ function settleEnd(seq: number): void {
     if (seq !== endSeq) return
     const node = scrollEl.value
     if (!node) return
+    // a reload lands where it left off, held a frame on (the first layout
+    // pass may still move it)
+    if (landPlace(node)) {
+      requestAnimationFrame(() => {
+        if (seq === endSeq && scrollEl.value === node) landPlace(node)
+        pendingPlace.value = null
+      })
+      return
+    }
+    // (a sub-agent's panel settling first leaves the chat's place alone)
+    if (!view.sub) pendingPlace.value = null
     quietUntil = performance.now() + 150
     node.scrollTop = endTop(node)
     nearBottom.value = true
@@ -236,7 +359,11 @@ watch(
   ([focus]) => {
     if (view.sub || !focus || !state.sessionId?.startsWith(focus.session)) return
     const i = entryOf(focus.node)
-    if (i < 0) return
+    if (i < 0) {
+      // maybe in the part of the main line not loaded yet
+      if (hasEarlier.value) void ensureFullPath()
+      return
+    }
     focusTarget.value = null
     focusIndex = i
     nearBottom.value = false
@@ -414,6 +541,8 @@ watchEffect(() => {
 watch(
   () => [state.sessionId, view.branch.value],
   () => {
+    clearTimeout(placeTimer)
+    openedAtPlace.value = placeIndex() >= 0
     resetView()
     requestEndScroll()
   },
@@ -479,9 +608,20 @@ function jumpTo(i: number, smooth = true): void {
       <div
         :key="`${state.sessionId ?? ''}:${view.branch.value ?? ''}`"
         ref="innerEl"
-        class="tl-col view-in relative mx-auto flex max-w-[var(--col-max)] flex-col gap-5"
+        class="tl-col relative mx-auto flex max-w-[var(--col-max)] flex-col gap-5"
+        :class="openedAtPlace ? 'enter-fade' : 'view-in'"
       >
         <template v-if="timeline.length">
+          <!-- the main line goes back further: it loads as the view nears
+               here. Never the scroll anchor (what lands below it must not
+               push the view down), and a fixed height, so its leaving moves
+               a whole px. -->
+          <div
+            v-if="!view.sub && hasEarlier"
+            class="h-8 text-center text-meta leading-8 text-ink-3 [overflow-anchor:none]"
+          >
+            {{ t('chat.timeline.earlier') }}
+          </div>
           <div
             v-for="({ entry, key }, i) in entries"
             :key="key"
@@ -524,6 +664,7 @@ function jumpTo(i: number, smooth = true): void {
     :scroll-of="scrollRoot"
     :column-of="columnRoot"
     :composer-of="props.composerOf"
+    :earlier="!view.sub && hasEarlier"
     :reveal="isBusy || scrolling"
     @jump="jumpTo"
   />
