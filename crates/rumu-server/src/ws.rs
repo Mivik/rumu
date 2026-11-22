@@ -1,6 +1,6 @@
 //! WebSocket protocol, blob routes and static serving.
 
-use std::collections::{HashMap, HashSet};
+use std::collections::HashMap;
 use std::sync::Arc;
 use std::time::Duration;
 
@@ -27,6 +27,7 @@ use rumu_kernel::Kernel;
 use rumu_plugins::{Assistant, assistant_of};
 
 use crate::settings::{Settings, SettingsError};
+use crate::window::{self, Span};
 use rust_embed::{EmbeddedFile, RustEmbed};
 use serde::{Deserialize, Serialize};
 use serde_json::{Value, json};
@@ -333,11 +334,14 @@ async fn handle_socket(state: AppState, socket: WebSocket) {
         let due = feed.due.unwrap_or_else(Instant::now);
         tokio::select! {
             push = sub.recv() => match push {
-                Ok(v) => {
+                Ok(mut v) => {
                     if let Some(watched) = &feed.session
                         && push_session(&state.kernel, &v).is_some_and(|s| Some(&s) != watched.as_ref())
                     {
                         continue;
+                    }
+                    if v["method"] == "node.appended" {
+                        window::slim(&mut v["params"]["node"]);
                     }
                     for v in feed.take(v) {
                         if tx.send(Message::Text(v.to_string().into())).await.is_err() {
@@ -397,6 +401,10 @@ const PROGRESS_EVERY: Duration = Duration::from_millis(100);
 /// The web shows only the last 64K chars of live output, which this always
 /// covers, so a flood drops nothing it would show.
 const PROGRESS_TAIL: usize = 256 * 1024;
+
+/// How much of a prompt's text `branch.prompts` sends (chars): a one-line
+/// label shows less, and anchors sit near the start.
+const PROMPT_PREVIEW: usize = 200;
 
 /// One client's push filters, and its live output gathering.
 #[derive(Default)]
@@ -1124,24 +1132,53 @@ which you can read, edit and `show`.",
             Ok(json!({}))
         }
 
-        // `agents: false` leaves out the nodes only sub-agent branches reach
-        // (most of a long session's bytes); `branch.nodes` fetches them.
-        // `usage` totals every model call of the session either way, and
-        // `agent_usage` each sub-agent's own.
+        // The main line's end (`tail`: its last nodes, from a user message
+        // on; all of it without), with the variants and side questions that
+        // hang off it. With `from` (a node on it: where a reader left off),
+        // `tail` nodes from there on instead, and `end`: their last node,
+        // when they stop short of the head; `turns_before` / `turns` as for
+        // `branch.window`. `branch.window` fetches what
+        // comes before or after, and `branch.nodes` a sub-agent's own. `usage` totals every
+        // model call of the session either way, and `agent_usage` each
+        // sub-agent's own.
         "session.tree" => {
             let session: SessionId = str_param(p, "session")?.into();
-            let agents = p.get("agents").and_then(Value::as_bool).unwrap_or(true);
-            let (session, mut nodes, branches) = kernel.session_tree(&session)?;
-            let usage = session_usage(&nodes);
-            let agent_usage = agent_usage(&nodes, &branches);
-            if !agents {
-                let lines = line_nodes(&nodes, &branches);
-                nodes.retain(|n| lines.contains(&n.id));
-            }
+            let tail = p.get("tail").and_then(Value::as_u64).map(|n| n as usize);
+            let from: Option<NodeId> = p.get("from").and_then(Value::as_str).map(Into::into);
+            let (session, line, branches, usage, agent_usage) =
+                kernel.with_tree(&session, |info, nodes, branches| {
+                    let line = branches
+                        .get(&info.main_branch)
+                        .and_then(|b| {
+                            let place = from.as_ref().and_then(|id| {
+                                let span = Span::From(id, tail.unwrap_or(usize::MAX));
+                                window::window(nodes, branches, &b.head, span)
+                            });
+                            place.or_else(|| {
+                                window::window(nodes, branches, &b.head, Span::Tail(tail))
+                            })
+                        })
+                        .map(window::Window::owned)
+                        .unwrap_or_default();
+                    let mut list: Vec<rumu_core::Branch> = branches.values().cloned().collect();
+                    list.sort_by(|a, b| {
+                        a.created_at
+                            .cmp(&b.created_at)
+                            .then_with(|| a.id.cmp(&b.id))
+                    });
+                    let usage = session_usage(nodes.values());
+                    let agent_usage = agent_usage(nodes, branches);
+                    (info.clone(), line, list, usage, agent_usage)
+                })?;
             let live = kernel.live_turns(&session.id)?;
             Ok(json!({
                 "session": session,
-                "nodes": nodes,
+                "nodes": line.wire_nodes(),
+                "variant_ends": line.ends,
+                "end": line.end,
+                "first": line.first,
+                "turns_before": line.turns_before,
+                "turns": line.turns,
                 "branches": branches,
                 "live": live,
                 "usage": usage,
@@ -1149,28 +1186,95 @@ which you can read, edit and `show`.",
             }))
         }
 
-        // The nodes of `branch`'s path that `session.tree` with
-        // `agents: false` leaves out, root → head (none for a main line or a
-        // side question).
+        // A stretch of `branch`'s path the way `session.tree` gives one:
+        // whole turns, with what hangs off them. What came before node
+        // `before` (its last `limit` nodes, all without), what comes after
+        // node `after` (`limit` nodes, on to the head without, and `end`
+        // when it stops short), with `turn` `limit` nodes from that user
+        // message on (1-based), with `start` its first `limit` nodes (the
+        // reader jumped there), or none of these: the end itself — the head
+        // moved somewhere the client has not loaded. `first` is the
+        // stretch's first node, `turns_before` / `turns` count the user
+        // messages before it and on the whole path.
+        "branch.window" => {
+            let branch: BranchId = str_param(p, "branch")?.into();
+            let before: Option<NodeId> = p.get("before").and_then(Value::as_str).map(Into::into);
+            let after: Option<NodeId> = p.get("after").and_then(Value::as_str).map(Into::into);
+            let limit = p.get("limit").and_then(Value::as_u64).map(|n| n as usize);
+            let start = p.get("start").and_then(Value::as_bool).unwrap_or(false);
+            let turn = p.get("turn").and_then(Value::as_u64).map(|n| n as usize);
+            let span = match (&before, &after, turn) {
+                (Some(id), _, _) => Span::Before(id, limit),
+                (None, Some(id), _) => Span::After(id, limit.unwrap_or(usize::MAX)),
+                (None, None, Some(n)) => Span::Turn(n, limit.unwrap_or(usize::MAX)),
+                (None, None, None) if start => Span::Start(limit.unwrap_or(usize::MAX)),
+                (None, None, None) => Span::Tail(limit),
+            };
+            let session = kernel.session_of(&branch)?;
+            let line = kernel
+                .with_tree(&session, |_, nodes, branches| {
+                    let head = &branches.get(&branch)?.head;
+                    window::window(nodes, branches, head, span).map(window::Window::owned)
+                })?
+                .ok_or_else(|| {
+                    ServerError::InvalidParams("that node is not on the branch's path".into())
+                })?;
+            Ok(json!({
+                "nodes": line.wire_nodes(),
+                "variant_ends": line.ends,
+                "end": line.end,
+                "first": line.first,
+                "turns_before": line.turns_before,
+                "turns": line.turns,
+            }))
+        }
+
+        // The prompts on `branch`'s path from turn `from` on (1-based),
+        // `limit` of them (50 without), each a preview — its id, turn number,
+        // opening text and attachments — for listing turns not loaded; with
+        // `turns`, how many the path has.
+        "branch.prompts" => {
+            let branch: BranchId = str_param(p, "branch")?.into();
+            let from = p.get("from").and_then(Value::as_u64).unwrap_or(1) as usize;
+            let limit = p
+                .get("limit")
+                .and_then(Value::as_u64)
+                .unwrap_or(50)
+                .min(500) as usize;
+            let session = kernel.session_of(&branch)?;
+            let (prompts, turns) = kernel
+                .with_tree(&session, |_, nodes, branches| {
+                    let head = &branches.get(&branch)?.head;
+                    let (got, turns) = window::prompts(nodes, head, from, limit);
+                    let got: Vec<Value> = got
+                        .into_iter()
+                        .map(|(turn, n)| {
+                            json!({ "id": n.id, "turn": turn, "content": window::prompt_preview(n, PROMPT_PREVIEW) })
+                        })
+                        .collect();
+                    Some((got, turns))
+                })?
+                .ok_or_else(|| ServerError::InvalidParams("no such branch".into()))?;
+            Ok(json!({ "prompts": prompts, "turns": turns }))
+        }
+
+        // The nodes of `branch`'s path that `session.tree` leaves out,
+        // root → head (none for a main line or a side question).
         "branch.nodes" => {
             let branch: BranchId = str_param(p, "branch")?.into();
             let session = kernel.session_of(&branch)?;
-            let (_, nodes, branches) = kernel.session_tree(&session)?;
-            let lines = line_nodes(&nodes, &branches);
-            let head = branches.iter().find(|b| b.id == branch).map(|b| &b.head);
-            let by_id: HashMap<&NodeId, &rumu_core::Node> =
-                nodes.iter().map(|n| (&n.id, n)).collect();
-            let mut own = Vec::new();
-            let mut cur = head;
-            while let Some(n) = cur.and_then(|id| by_id.get(id)) {
-                if lines.contains(&n.id) {
-                    break;
+            let own = kernel.with_tree(&session, |_, nodes, branches| {
+                let agents = window::agent_nodes(nodes, branches);
+                let mut own = Vec::new();
+                let mut cur = branches.get(&branch).and_then(|b| nodes.get(&b.head));
+                while let Some(n) = cur.filter(|n| agents.contains(&n.id)) {
+                    own.push(n.clone());
+                    cur = n.parent.as_ref().and_then(|p| nodes.get(p));
                 }
-                own.push(*n);
-                cur = n.parent.as_ref();
-            }
-            own.reverse();
-            Ok(json!({ "nodes": own }))
+                own.reverse();
+                own
+            })?;
+            Ok(json!({ "nodes": own.iter().map(window::wire).collect::<Vec<_>>() }))
         }
 
         "session.seen" => {
@@ -1684,31 +1788,6 @@ fn str_param<'a>(p: &'a Value, key: &str) -> Result<&'a str> {
         .ok_or_else(|| ServerError::MissingParam(key.to_owned()))
 }
 
-/// The nodes no sub-agent added: the main line with every variant it left
-/// (the variant switcher walks them all) and the side questions. A
-/// sub-agent's own nodes run from its head up to the node it forked from.
-fn line_nodes(nodes: &[rumu_core::Node], branches: &[rumu_core::Branch]) -> HashSet<NodeId> {
-    let parent: HashMap<&NodeId, Option<&NodeId>> =
-        nodes.iter().map(|n| (&n.id, n.parent.as_ref())).collect();
-    let mut agents = HashSet::new();
-    for b in branches {
-        if !matches!(b.kind, rumu_core::BranchKind::Agent { .. }) {
-            continue;
-        }
-        let mut cur = Some(&b.head);
-        while let Some(id) = cur.filter(|id| Some(*id) != b.forked_from.as_ref()) {
-            agents.insert(id);
-            cur = parent.get(id).copied().flatten();
-        }
-    }
-    nodes
-        .iter()
-        .map(|n| &n.id)
-        .filter(|id| !agents.contains(id))
-        .cloned()
-        .collect()
-}
-
 /// Token totals over some model calls.
 #[derive(Default, Serialize)]
 struct UsageTotals {
@@ -1730,21 +1809,20 @@ impl UsageTotals {
 }
 
 /// Token totals over every model call in `nodes`.
-fn session_usage(nodes: &[rumu_core::Node]) -> UsageTotals {
+fn session_usage<'a>(nodes: impl IntoIterator<Item = &'a rumu_core::Node>) -> UsageTotals {
     let mut t = UsageTotals::default();
-    nodes.iter().for_each(|n| t.add(n));
+    nodes.into_iter().for_each(|n| t.add(n));
     t
 }
 
 /// Each sub-agent's totals over its own nodes (head up to its fork point),
 /// so the stats view lists them without fetching their nodes.
 fn agent_usage(
-    nodes: &[rumu_core::Node],
-    branches: &[rumu_core::Branch],
+    nodes: &HashMap<NodeId, rumu_core::Node>,
+    branches: &HashMap<BranchId, rumu_core::Branch>,
 ) -> HashMap<BranchId, UsageTotals> {
-    let by_id: HashMap<&NodeId, &rumu_core::Node> = nodes.iter().map(|n| (&n.id, n)).collect();
     let mut out = HashMap::new();
-    for b in branches {
+    for b in branches.values() {
         if !matches!(b.kind, rumu_core::BranchKind::Agent { .. }) {
             continue;
         }
@@ -1752,7 +1830,7 @@ fn agent_usage(
         let mut cur = Some(&b.head);
         while let Some(n) = cur
             .filter(|id| Some(*id) != b.forked_from.as_ref())
-            .and_then(|id| by_id.get(id))
+            .and_then(|id| nodes.get(id))
         {
             t.add(n);
             cur = n.parent.as_ref();
@@ -1805,8 +1883,6 @@ fn optional_deck_param(state: &AppState, p: &Value) -> Result<Option<rumu_cards:
 
 #[cfg(test)]
 mod tests {
-    use rumu_core::{Branch, BranchKind, BranchStatus, Content, Node, NodeBody};
-
     use super::*;
 
     fn task_append(id: &str, text: &str, end: u64) -> Value {
@@ -1849,72 +1925,5 @@ mod tests {
         let out = feed.flush();
         let text = out[0]["params"]["append"].as_str().unwrap();
         assert!(text.len() <= PROGRESS_TAIL && text.ends_with("éend"));
-    }
-
-    fn node(id: &str, parent: Option<&str>) -> Node {
-        Node {
-            id: id.into(),
-            parent: parent.map(Into::into),
-            session: "s".into(),
-            at: 0,
-            dur_ms: None,
-            body: NodeBody::User {
-                content: Content::text(id),
-            },
-        }
-    }
-
-    fn branch(id: &str, head: &str, forked_from: Option<&str>, kind: BranchKind) -> Branch {
-        Branch {
-            id: id.into(),
-            session: "s".into(),
-            head: head.into(),
-            forked_from: forked_from.map(Into::into),
-            kind,
-            status: BranchStatus::Active,
-            created_at: 0,
-        }
-    }
-
-    /// The main line (every variant) and side questions stay; what a
-    /// sub-agent added, nested ones included, is left out.
-    #[test]
-    fn line_nodes_leave_out_only_sub_agents() {
-        let nodes = vec![
-            node("r", None),
-            node("a", Some("r")),
-            node("v", Some("r")), // a variant of `a`
-            node("q", Some("a")), // a side question off `a`
-            node("g1", Some("a")),
-            node("g2", Some("g1")),
-            node("n1", Some("g2")), // a sub-agent of the sub-agent
-        ];
-        let agent = |parent: &str| BranchKind::Agent {
-            task: String::new(),
-            parent_branch: parent.into(),
-            call_id: "c".into(),
-            via_plugin: false,
-            inherit: Default::default(),
-        };
-        let branches = vec![
-            branch("main", "a", None, BranchKind::Main),
-            branch(
-                "side",
-                "q",
-                Some("a"),
-                BranchKind::Side {
-                    parent_branch: "main".into(),
-                    quote: None,
-                },
-            ),
-            branch("g", "g2", Some("a"), agent("main")),
-            branch("n", "n1", Some("g2"), agent("g")),
-        ];
-        let mut kept: Vec<_> = line_nodes(&nodes, &branches)
-            .into_iter()
-            .map(|id| id.to_string())
-            .collect();
-        kept.sort();
-        assert_eq!(kept, ["a", "q", "r", "v"]);
     }
 }

@@ -555,6 +555,22 @@ impl Store {
         Ok(Some(path))
     }
 
+    /// Run `f` over a session's info, nodes and branches, borrowed: for reads
+    /// that pick a few nodes out of a long session without cloning the rest.
+    /// `None` when there is no such session.
+    pub fn with_tree<R>(
+        &self,
+        session: &SessionId,
+        f: impl FnOnce(&SessionInfo, &HashMap<NodeId, Node>, &HashMap<BranchId, Branch>) -> R,
+    ) -> Result<Option<R>> {
+        let st = self.state.lock().unwrap();
+        match st.sessions.get(session) {
+            Some(Entry::Loaded(s)) => Ok(Some(f(&s.info, &s.nodes, &s.branches))),
+            Some(Entry::Corrupt(msg)) => Err(unreadable(session, msg)),
+            None => Ok(None),
+        }
+    }
+
     /// All nodes of a session, oldest first.
     pub fn nodes_of_session(&self, session: &SessionId) -> Result<Vec<Node>> {
         let st = self.state.lock().unwrap();

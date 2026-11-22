@@ -5,6 +5,7 @@ mod acp;
 mod auth;
 mod boot;
 mod settings;
+mod window;
 mod ws;
 
 use std::net::{IpAddr, Ipv4Addr, SocketAddr};

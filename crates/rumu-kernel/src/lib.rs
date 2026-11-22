@@ -594,6 +594,18 @@ impl Kernel {
         ))
     }
 
+    /// Run `f` over a session's info, nodes and branches without cloning
+    /// them (see [`rumu_store::Store::with_tree`]).
+    pub fn with_tree<R>(
+        &self,
+        session: &SessionId,
+        f: impl FnOnce(&SessionInfo, &HashMap<NodeId, Node>, &HashMap<BranchId, Branch>) -> R,
+    ) -> Result<R> {
+        self.store
+            .with_tree(session, f)?
+            .ok_or_else(|| Error::SessionNotFound(session.clone()))
+    }
+
     /// Nodes from root to the branch head, plus the derived state.
     pub fn branch_path(&self, branch: &BranchId) -> Result<(Vec<Node>, PathState)> {
         let nodes = self.path_nodes(branch)?;
