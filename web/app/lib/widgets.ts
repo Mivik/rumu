@@ -147,14 +147,33 @@ const BRIDGE = `(() => {
   })
 })()`
 
-/** A model-written page as a frame runs it: the CSP meta and the bridge
- *  first thing after the doctype. The parser opens the head for them, so
- *  they apply before any of the page's own markup (a script ahead of
- *  `<head>` included). */
-export function sandboxedPage(html: string): string {
-  const prelude = `<meta http-equiv="Content-Security-Policy" content="${PAGE_CSP}"><script>${BRIDGE}</script>`
+/** `html` with `prelude` first thing after the doctype. The parser opens
+ *  the head for it, so a CSP meta there applies before any of the page's
+ *  own markup (a script ahead of `<head>` included). */
+export function withPrelude(html: string, prelude: string): string {
   const at = /^\s*<!doctype[^>]*>/i.exec(html)?.[0].length ?? 0
   return html.slice(0, at) + prelude + html.slice(at)
+}
+
+/** A model-written page as a frame runs it: the CSP meta and the bridge first. */
+export function sandboxedPage(html: string): string {
+  return withPrelude(
+    html,
+    `<meta http-equiv="Content-Security-Policy" content="${PAGE_CSP}"><script>${BRIDGE}</script>`,
+  )
+}
+
+/** The branch whose reply `el` is in: a sub-agent's, in its panel. */
+export function branchOf(el: Element): string | null {
+  return el.closest('[data-agent-panel]') ? state.agentView : state.mainBranch
+}
+
+/** Put `text` in the composer, after what is there, for the user to send. */
+export function fillComposer(text: string): void {
+  if (!text.trim()) return
+  const draft = activeDraft.value
+  draft.text = draft.text.trim() ? `${draft.text.trimEnd()}\n\n${text}` : text
+  requestComposerFocus()
 }
 
 /** A widget as a page of its own, in today's colors and the base style
@@ -174,7 +193,7 @@ function standalone(source: string): string {
 /** Save a widget as a file, recorded on the branch whose reply it is in
  *  (a sub-agent's, in its panel), and open it. */
 async function save(source: string, from: Element): Promise<void> {
-  const branch = from.closest('[data-agent-panel]') ? state.agentView : state.mainBranch
+  const branch = branchOf(from)
   if (!branch) return
   try {
     const { artifact } = await api.request<{ artifact: Artifact }>('fs.save_page', {
@@ -228,10 +247,8 @@ function onMessage(e: MessageEvent): void {
   if (m.rumu === 'height' && typeof m.height === 'number' && widget) {
     heights.set(widget.dataset.key ?? '', m.height)
     frame.style.height = `${Math.min(m.height, MAX_HEIGHT)}px`
-  } else if (m.rumu === 'prompt' && typeof m.text === 'string' && m.text.trim()) {
-    const draft = activeDraft.value
-    draft.text = draft.text.trim() ? `${draft.text.trimEnd()}\n\n${m.text}` : m.text
-    requestComposerFocus()
+  } else if (m.rumu === 'prompt' && typeof m.text === 'string') {
+    fillComposer(m.text)
   }
 }
 

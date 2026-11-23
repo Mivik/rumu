@@ -13,6 +13,7 @@ import type { Compaction } from '../generated/Compaction'
 import { CATALOG_TAG, TURN_ERROR_TAG, reasoningText } from '../types'
 import { contentText } from '../util'
 import { artifactOf } from '../artifacts'
+import { appOf } from '../mcpApps'
 import type { callsOnPath } from './derived'
 import { state } from './state'
 
@@ -121,8 +122,13 @@ export interface GroupArtifactItem {
   kind: 'artifact'
   node: Node
 }
+/** An MCP tool result with a view: the view follows its tool row. */
+export interface GroupAppItem {
+  kind: 'app'
+  node: Node
+}
 export type GroupItem =
-  GroupTextItem | GroupActivityItem | GroupContextItem | GroupResetItem | GroupArtifactItem
+  GroupTextItem | GroupActivityItem | GroupContextItem | GroupResetItem | GroupArtifactItem | GroupAppItem
 
 /** Append a step to the group's trailing activity run (opening one if needed). */
 function pushActivity(g: TimelineGroup, step: ActivityStep): void {
@@ -330,6 +336,7 @@ export function buildTimeline(nodes: Node[], calls: CallsOnPath, branch: BranchI
       const step = last?.kind === 'activity' ? last.steps[last.steps.length - 1] : undefined
       if (step?.kind === 'tools') step.rows.push(row)
       else pushActivity(g, { kind: 'tools', rows: [row] })
+      if (appOf(b.content)) g.items.push({ kind: 'app', node: n })
     }
   }
   // Attach the live stream to the group it belongs to (single header per turn).

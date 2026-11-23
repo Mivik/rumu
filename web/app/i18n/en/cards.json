@@ -28,6 +28,7 @@
     "mcpConnecting": "{name} (connecting)",
     "mcpFailed": "{name} (unavailable)",
     "mcpNone": "No MCP servers any more",
+    "appContext": "{tool} view updated the model's context",
     "skills": "Skills: {list}",
     "skillsNone": "No skills any more",
     "watch": "{label}: {count} new line | {label}: {count} new lines",

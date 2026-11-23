@@ -241,6 +241,10 @@
     "save": "Save as a file",
     "saveFailed": "Couldn't save the widget"
   },
+  "mcpApp": {
+    "title": "{tool} view",
+    "failed": "Couldn't open the view: {error}"
+  },
   "agentView": {
     "title": "Sub-agent",
     "back": "Parent sub-agent",

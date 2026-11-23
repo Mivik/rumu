@@ -28,6 +28,7 @@
     "mcpConnecting": "{name}（连接中）",
     "mcpFailed": "{name}（不可用）",
     "mcpNone": "已无 MCP 服务器",
+    "appContext": "{tool} 的界面更新了给模型的上下文",
     "skills": "技能：{list}",
     "skillsNone": "已无技能",
     "watch": "{label}：新输出 {count} 行",

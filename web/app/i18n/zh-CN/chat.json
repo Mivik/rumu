@@ -241,6 +241,10 @@
     "save": "存为文件",
     "saveFailed": "无法保存小组件"
   },
+  "mcpApp": {
+    "title": "{tool} 的界面",
+    "failed": "无法打开界面：{error}"
+  },
   "agentView": {
     "title": "子代理",
     "back": "返回上级子代理",

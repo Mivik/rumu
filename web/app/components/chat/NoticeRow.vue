@@ -22,6 +22,7 @@ export type Notice =
   | { kind: 'update'; key: string; id: string; label: string; text: string }
   | { kind: 'task'; key: string; id: string; label: string; status: TaskStatus; text: string }
   | { kind: 'mcp'; key: string; servers: McpServerLine[]; text: string }
+  | { kind: 'app'; key: string; tool: string; text: string }
   | { kind: 'skills'; key: string; names: string[]; text: string }
   | { kind: 'watch'; key: string; id: string; label: string; count: number; matching: boolean; text: string }
   | { kind: 'silence'; key: string; id: string; label: string; secs: number; matching: boolean }
@@ -37,6 +38,7 @@ const ICON: Record<Notice['kind'], string> = {
   update: 'note',
   task: 'tool',
   mcp: 'mcp',
+  app: 'mcp',
   skills: 'document',
   watch: 'bash',
   silence: 'bash',
@@ -105,6 +107,9 @@ defineProps<{ notice: Notice }>()
           ? t('cards.notes.mcp', { list: joinList(notice.servers.map(serverWord)) })
           : t('cards.notes.mcpNone')
       }}
+    </span>
+    <span v-else-if="notice.kind === 'app'" class="min-w-0 truncate" :title="notice.text">
+      {{ t('cards.notes.appContext', { tool: notice.tool }) }}
     </span>
     <span v-else-if="notice.kind === 'skills'" class="min-w-0 truncate" :title="notice.text">
       {{

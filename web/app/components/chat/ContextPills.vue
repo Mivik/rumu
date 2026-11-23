@@ -13,6 +13,7 @@ import { t } from '../../i18n'
 import type { Content, Node, TaskDone } from '../../lib/types'
 import type { FilesReverted } from '../../lib/generated/FilesReverted'
 import type { McpIntro } from '../../lib/generated/McpIntro'
+import type { McpAppContext } from '../../lib/generated/McpAppContext'
 import type { SkillsIntro } from '../../lib/generated/SkillsIntro'
 import type { WatchEvent } from '../../lib/generated/WatchEvent'
 import type { WatchSilence } from '../../lib/generated/WatchSilence'
@@ -88,6 +89,7 @@ const parsed = computed(() => {
     const wsUse = workspaceUseOf(b.content)
     const revert = revertOf(b.content)
     const mcp = dataOf<McpIntro>(b.content, 'mcp.intro')
+    const appContext = dataOf<McpAppContext>(b.content, 'mcp.app_context')
     const skills = dataOf<SkillsIntro>(b.content, 'skills.intro')
     const watch = dataOf<WatchEvent>(b.content, 'workspace.watch')
     const silence = dataOf<WatchSilence>(b.content, 'workspace.watch_silence')
@@ -119,6 +121,9 @@ const parsed = computed(() => {
         servers,
         text: servers.map((s) => (s.error ? `${s.name}: ${s.error}` : s.name)).join('\n'),
       })
+    } else if (appContext) {
+      const tool = `${appContext.server}/${appContext.tool}`
+      add({ kind: 'app', key: `app:${n.id}`, tool, text: b.content.text })
     } else if (skills) {
       const text = skills.skills.map((s) => (skills.about?.[s] ? `${s}: ${skills.about[s]}` : s)).join('\n')
       add({ kind: 'skills', key: `skills:${n.id}`, names: skills.skills, text })
