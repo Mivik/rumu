@@ -214,7 +214,9 @@ const bare = computed(() => !items.value.length && !props.group.assistants.lengt
       </span>
     </div>
 
-    <template v-for="(item, i) in items" :key="i">
+    <!-- keyed from the window start a turn opened at, if any: the rest of
+         the turn loads above it -->
+    <template v-for="(item, i) in items" :key="i - (group.seamAt ?? 0)">
       <ContextPills v-if="item.kind === 'context'" v-enter="'enter-fade'" :nodes="item.nodes" />
       <ActivityRun
         v-else-if="item.kind === 'activity'"

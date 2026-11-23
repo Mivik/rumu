@@ -80,11 +80,13 @@ const isBusy = computed(() => branchBusy.value && (view.sub || !hasLater.value))
  * and a changing key would remount the group mid-turn — replaying its
  * entrance and dropping its open reasoning / expanded tools. Two groups are
  * never adjacent (a group only ends at a user message), so this is unique.
+ * A turn whose window began mid-turn keeps that start's key instead as the
+ * rest of it loads above (`state.seams`).
  */
 const entries = computed(() => {
   let prev = 'root'
   return timeline.value.map((entry) => {
-    const key = entry.kind === 'group' ? `group:${prev}` : dataId(entry)
+    const key = entry.kind !== 'group' ? dataId(entry) : entry.seam ? `group@${entry.seam}` : `group:${prev}`
     prev = key
     return { entry, key }
   })
@@ -634,7 +636,7 @@ function dataId(e: TimelineEntry): string {
   if (e.kind === 'user') return e.node.id
   if (e.kind === 'context') return e.nodes[0]?.id ?? ''
   if (e.kind === 'compaction') return e.node.id
-  return e.safeNode?.id ?? e.assistants.at(-1)?.id ?? ''
+  return e.first ?? ''
 }
 
 /** While a turn runs, everything from its prompt on keeps rendering. */

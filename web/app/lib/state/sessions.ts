@@ -239,6 +239,7 @@ export function closeSession(): void {
   state.lineEnd = null
   state.turnsBefore = {}
   state.turnsTotal = null
+  state.seams = {}
   state.mainBranch = null
   state.pathState = null
   state.deltas = {}

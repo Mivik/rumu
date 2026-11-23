@@ -169,6 +169,10 @@ const initial = {
    *  how many on all of it at the last load. */
   turnsBefore: {} as Record<NodeId, number>,
   turnsTotal: null as number | null,
+  /** Windows that opened mid-turn (where the model woke on its own), by
+   *  their first node, in the order they loaded: the turn's group keeps the
+   *  oldest one's key as the rest of the turn loads above it. */
+  seams: {} as Record<NodeId, number>,
   /** Token totals over every model call of the open session. */
   usage: { calls: 0, input: 0, cached: 0, output: 0 } as SessionUsage,
   /** Each sub-agent's totals over its own model calls. */

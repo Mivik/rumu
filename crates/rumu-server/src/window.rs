@@ -98,7 +98,9 @@ pub enum Span<'a> {
     Tail(Option<usize>),
     /// The last `limit` nodes before a node (all of them without).
     Before(&'a NodeId, Option<usize>),
-    /// `limit` nodes from a node on: where a reader left off.
+    /// `limit` nodes from a node on, and on to the end of its turn: where a
+    /// reader left off (the top of the entry they were in, which then
+    /// starts where it did: the rest of a long turn is read below it).
     From(&'a NodeId, usize),
     /// `limit` nodes after a node.
     After(&'a NodeId, usize),
@@ -109,10 +111,12 @@ pub enum Span<'a> {
     Turn(usize, usize),
 }
 
-/// A stretch of `head`'s path, whole turns of it: it starts at a user
-/// message and stops before one (or at the head) — a turn split across
-/// stretches would split its entry in the web when the rest arrives.
-/// `None` when the span's node is not on the path.
+/// A stretch of `head`'s path, whole steps of it: it starts where a turn
+/// does (a user message) or where the model woke on its own after one
+/// ended (a note after a reply that called nothing), and stops before the
+/// next such place (or at the head). A turn the model kept waking in runs
+/// on for hours: whole turns would make a tail of it all. `None` when the
+/// span's node is not on the path.
 pub fn window<'a>(
     nodes: &'a HashMap<NodeId, Node>,
     branches: &'a HashMap<BranchId, Branch>,
@@ -129,6 +133,12 @@ pub fn window<'a>(
     let len = path.len();
     let at = |id: &NodeId| path.iter().position(|n| &n.id == id);
     let is_user = |i: usize| matches!(path[i].body, NodeBody::User { .. });
+    let is_step = |i: usize| {
+        is_user(i)
+            || i > 0
+                && matches!(path[i].body, NodeBody::Note { .. })
+                && matches!(&path[i - 1].body, NodeBody::Assistant { tool_calls, .. } if tool_calls.is_empty())
+    };
     let (mut start, mut end) = match span {
         Span::Tail(limit) => (limit.map_or(0, |l| len.saturating_sub(l)), len),
         Span::Before(id, limit) => {
@@ -137,25 +147,24 @@ pub fn window<'a>(
         }
         Span::From(id, limit) => {
             let start = at(id)?;
-            // a place near the end loads the end, as much as the tail would
-            let end = (start + limit).min(len);
-            (start.min(len.saturating_sub(limit)), end)
+            (start, start.saturating_add(limit).min(len))
         }
         Span::After(id, limit) => {
             let start = at(id)? + 1;
-            (start, (start + limit).min(len))
+            (start, start.saturating_add(limit).min(len))
         }
         Span::Start(limit) => (0, limit.min(len)),
         Span::Turn(n, limit) => {
             let users = (0..len).filter(|&i| is_user(i));
             let start = users.take(n.max(1)).last().unwrap_or(0);
-            (start, (start + limit).min(len))
+            (start, start.saturating_add(limit).min(len))
         }
     };
-    while start > 0 && start < len && !is_user(start) {
+    while start > 0 && start < len && !is_step(start) {
         start -= 1;
     }
-    while end < len && !is_user(end) {
+    let turn = matches!(span, Span::From(..));
+    while end < len && !(if turn { is_user(end) } else { is_step(end) }) {
         end += 1;
     }
 
@@ -419,6 +428,66 @@ mod tests {
         assert!(tail.ends.is_empty());
     }
 
+    /// A turn the model woke in on its own splits where it woke: at a note
+    /// after a reply that called nothing, not one after a call's result.
+    #[test]
+    fn long_turn_splits_where_the_model_woke() {
+        let reply = |id: &str, parent: &str, at: i64, calls: bool| Node {
+            body: NodeBody::Assistant {
+                content: Content::text(id),
+                reasoning: Vec::new(),
+                stats: Default::default(),
+                reasoning_reset: false,
+                tool_calls: if calls {
+                    vec![rumu_core::ToolCall::new("t", "bash", Value::Null)]
+                } else {
+                    Vec::new()
+                },
+                model: String::new(),
+                usage: Default::default(),
+            },
+            ..user(id, Some(parent), at)
+        };
+        // u ─ a1 (calls) ─ t ─ a2 ─ w (woke it) ─ a3 (calls) ─ m ─ a4
+        let line = [
+            user("u", None, 0),
+            reply("a1", "u", 1, true),
+            note("t", "a1", 2),
+            reply("a2", "t", 3, false),
+            note("w", "a2", 4),
+            reply("a3", "w", 5, true),
+            note("m", "a3", 6),
+            reply("a4", "m", 7, false),
+        ];
+        let nodes: HashMap<NodeId, Node> = line.into_iter().map(|n| (n.id.clone(), n)).collect();
+        let branches = HashMap::new();
+        let head = NodeId::from("a4");
+        let tail = window(&nodes, &branches, &head, Span::Tail(Some(1))).unwrap();
+        assert_eq!(ids(&tail.nodes), ["w", "a3", "m", "a4"]);
+        assert_eq!((tail.first, tail.turns_before), (Some(&"w".into()), 1));
+        let start = window(&nodes, &branches, &head, Span::Start(2)).unwrap();
+        assert_eq!(ids(&start.nodes), ["u", "a1", "t", "a2"]);
+        assert_eq!(start.end, Some(&"a2".into()));
+        let w = NodeId::from("w");
+        let before = window(&nodes, &branches, &head, Span::Before(&w, Some(1))).unwrap();
+        assert_eq!(ids(&before.nodes), ["u", "a1", "t", "a2"]);
+        // no limit: on to the head
+        let after = window(
+            &nodes,
+            &branches,
+            &head,
+            Span::After(&"a2".into(), usize::MAX),
+        )
+        .unwrap();
+        assert_eq!(ids(&after.nodes), ["w", "a3", "m", "a4"]);
+        assert_eq!(after.end, None);
+        // a reader's place: from where its entry starts, to its turn's end
+        let from = window(&nodes, &branches, &head, Span::From(&w, 1)).unwrap();
+        assert_eq!(ids(&from.nodes), ["w", "a3", "m", "a4"]);
+        let from = window(&nodes, &branches, &head, Span::From(&"a1".into(), 1)).unwrap();
+        assert_eq!(ids(&from.nodes).len(), 8);
+    }
+
     /// What came before a node: its variants and side questions come with
     /// the stretch they hang from.
     #[test]
@@ -433,7 +502,7 @@ mod tests {
     }
 
     /// From a reader's place: whole turns, stopping short of the head (and
-    /// saying where); near the end, the end.
+    /// saying where).
     #[test]
     fn from_a_place_and_after_it() {
         let (nodes, branches) = tree();

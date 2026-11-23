@@ -92,18 +92,28 @@ export function useVirtualEntries(opts: {
   const entering = new Set<string>()
   let booted = false
   let width = 0
-  let known = new Set<string>()
+  /** The entries of the last sync, with their weights. */
+  let known = new Map<string, number>()
 
   /** Keys whose content renders. */
   const shown = shallowRef(new Set<string>())
   /** Keys whose content is rendering as history (no entrance motion). */
   const quiet = shallowRef(new Set<string>())
+  /** Shown entries whose earlier part just loaded in above what is read. */
+  const growing = new Set<string>()
 
   const ro =
     typeof ResizeObserver === 'undefined'
       ? null
       : new ResizeObserver((records) => {
           let released = false
+          // A shown turn that grew at its top (`hushNow`) and the history
+          // above it settling their heights in one go: the browser does not
+          // anchor the scroll across a change to the reader's own entry's
+          // height, so it is done here.
+          const grew = records.map((r) => bodies.get(r.target)).find((k) => k !== undefined && growing.has(k))
+          const anchor = grew === undefined ? null : wraps.get(grew)
+          const y0 = anchor?.getBoundingClientRect().top ?? 0
           for (const r of records) {
             const key = bodies.get(r.target)
             if (key === undefined) continue
@@ -117,6 +127,12 @@ export function useVirtualEntries(opts: {
             }
             stale.delete(key)
             if (batch.delete(key)) released = true
+          }
+          if (anchor && grew !== undefined) {
+            growing.delete(grew)
+            const sc = opts.scrollEl.value
+            const dy = anchor.getBoundingClientRect().top - y0
+            if (sc && Math.abs(dy) >= 0.5) sc.scrollTop += dy
           }
           if (released && !batch.size) {
             update()
@@ -146,6 +162,21 @@ export function useVirtualEntries(opts: {
     )
     for (const w of wraps.values()) io.observe(w)
     return io
+  }
+
+  /** Entries already rendering whose new content is history: quiet for
+   *  the flush it mounts in. */
+  function hushNow(keys: string[]): void {
+    for (const k of keys) growing.add(k)
+    setTimeout(() => {
+      for (const k of keys) growing.delete(k)
+    }, 500)
+    quiet.value = new Set([...quiet.value, ...keys])
+    requestAnimationFrame(() => {
+      const q = new Set(quiet.value)
+      for (const k of keys) q.delete(k)
+      quiet.value = q
+    })
   }
 
   /** Recompute what renders; a change re-renders the column once. */
@@ -195,6 +226,7 @@ export function useVirtualEntries(opts: {
       entering.clear()
       batch.clear()
     }
+    const grown: string[] = []
     if (!booted) {
       booted = true
       const whole = list.reduce((s, e) => s + e.weight, 0) <= WHOLE_WEIGHT
@@ -224,7 +256,16 @@ export function useVirtualEntries(opts: {
       const top = list.findIndex((e) => known.has(e.key))
       const later = opts.quietArrivals?.() ?? false
       list.forEach((e, i) => {
-        if (known.has(e.key)) return
+        const was = known.get(e.key)
+        if (was !== undefined) {
+          // a turn whose earlier part loaded above it is history too: a
+          // blank due a new measurement, or what mounts into it quiet
+          if (was === e.weight || !e.virtual) return
+          if (!shown.value.has(e.key)) {
+            if (heights.has(e.key)) batch.add(e.key)
+          } else if (i === top && top > 0) grown.push(e.key)
+          return
+        }
         if (i < top || later) {
           if (e.virtual) batch.add(e.key)
           return
@@ -233,7 +274,8 @@ export function useVirtualEntries(opts: {
         entering.add(e.key)
       })
     }
-    known = new Set(list.map((e) => e.key))
+    known = new Map(list.map((e) => [e.key, e.weight]))
+    if (grown.length) hushNow(grown)
     update()
     if (batch.size) release(batch)
     if (!filled) void nextTick(fill)
@@ -405,7 +447,7 @@ export function useVirtualEntries(opts: {
     placed.clear()
     batch.clear()
     entering.clear()
-    known = new Set()
+    known = new Map()
     booted = false
     filled = false
     width = 0

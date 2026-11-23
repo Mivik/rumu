@@ -31,10 +31,12 @@ export function replaceTree(tree: SessionTreeResult): void {
   state.lineEnd = tree.end ?? null
   state.turnsBefore = {}
   state.turnsTotal = null
+  state.seams = {}
   countTurns(tree)
   state.usage = tree.usage
   state.agentUsage = tree.agent_usage ?? {}
   for (const n of tree.nodes) state.nodes[n.id] = n
+  markSeam(tree)
   for (const b of tree.branches) state.branches[b.id] = b
   syncLive(tree)
 }
@@ -55,9 +57,20 @@ export function fetchTree(session: SessionId, from?: NodeId): Promise<SessionTre
 /** What a window of the open session's tree brought; what is loaded stays. */
 function merge(session: SessionId | null, res: BranchWindowResult): void {
   if (state.sessionId !== session) return
+  const parent = res.nodes.find((n) => n.id === res.first)?.parent
+  const joined = !parent || !!state.nodes[parent]
   for (const n of res.nodes) state.nodes[n.id] ??= n
   Object.assign(state.variantEnds, res.variant_ends)
   countTurns(res)
+  if (!joined) markSeam(res)
+}
+
+/** A window that begins mid-turn, its start not loaded (one that goes on
+ *  from what is loaded joins a turn, it does not split one). */
+function markSeam(res: TurnCounts): void {
+  const first = res.first ? state.nodes[res.first] : undefined
+  if (!first?.parent || first.body.type === 'user' || state.seams[first.id] !== undefined) return
+  state.seams[first.id] = Object.keys(state.seams).length
 }
 
 /** A window's turn counts: its first node has that many user messages

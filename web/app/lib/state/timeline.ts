@@ -8,7 +8,7 @@
 // ("Worked for 3m 12s · 27 calls"); only answer text and context pills stand
 // on their own.
 
-import type { Branch, BranchId, Node, ToolCall } from '../types'
+import type { Branch, BranchId, Node, NodeId, ToolCall } from '../types'
 import type { Compaction } from '../generated/Compaction'
 import { CATALOG_TAG, TURN_ERROR_TAG, reasoningText } from '../types'
 import { contentText } from '../util'
@@ -158,6 +158,13 @@ export interface TimelineGroup {
   assistants: Node[]
   /** Last assistant node that is a safe fork point, if any. */
   safeNode: Node | null
+  /** The oldest-loaded window start (`state.seams`) inside this turn: the
+   *  group's render key while the rest of the turn loads above it; and how
+   *  many items come before it, what item keys count from. */
+  seam?: NodeId
+  seamAt?: number
+  /** Its first node: where a reload reading it loads from. */
+  first?: NodeId
 }
 export interface TimelineUserEntry {
   kind: 'user'
@@ -220,6 +227,16 @@ export function buildTimeline(nodes: Node[], calls: CallsOnPath, branch: BranchI
   let group: TimelineGroup | null = null
   let ctx: Node[] = []
   let userEntry: TimelineUserEntry | null = null
+  // a window start among the nodes on their way into the next group
+  let seam: NodeId | null = null
+  const markSeam = (g: TimelineGroup): void => {
+    if (seam === null) return
+    if (g.seam === undefined || state.seams[seam]! < state.seams[g.seam]!) {
+      g.seam = seam
+      g.seamAt = g.items.length
+    }
+    seam = null
+  }
 
   const flushCtx = (): void => {
     if (ctx.length) {
@@ -227,11 +244,12 @@ export function buildTimeline(nodes: Node[], calls: CallsOnPath, branch: BranchI
       ctx = []
     }
   }
-  const ensureGroup = (): TimelineGroup => {
+  const ensureGroup = (n: Node): TimelineGroup => {
     if (!group) {
       userEntry = null
-      group = { kind: 'group', items: [], assistants: [], safeNode: null }
+      group = { kind: 'group', items: [], assistants: [], safeNode: null, first: (ctx[0] ?? n).id }
       out.push(group)
+      markSeam(group)
       // Notes collected for this turn (e.g. the card catalog injected at
       // `llm.pre`) sit inside the group, after the mascot head.
       if (ctx.length) {
@@ -244,17 +262,21 @@ export function buildTimeline(nodes: Node[], calls: CallsOnPath, branch: BranchI
 
   for (const n of nodes) {
     const b = n.body
+    if (state.seams[n.id] !== undefined && (seam === null || state.seams[n.id]! < state.seams[seam]!))
+      seam = n.id
     // A compaction is a line of its own, where it happened.
     if (compactionOf(n)) {
       flushCtx()
       group = null
       userEntry = null
+      seam = null
       out.push({ kind: 'compaction', node: n })
       continue
     }
     if (b.type === 'user') {
       flushCtx()
       group = null
+      seam = null
       userEntry = { kind: 'user', node: n, contextNodes: [] }
       out.push(userEntry)
     } else if (b.type === 'note') {
@@ -269,7 +291,8 @@ export function buildTimeline(nodes: Node[], calls: CallsOnPath, branch: BranchI
       else if (userEntry) userEntry.contextNodes.push(n)
       else ctx.push(n)
     } else if (b.type === 'assistant') {
-      const g = ensureGroup()
+      const g = ensureGroup(n)
+      markSeam(g)
       if (ctx.length) {
         moveNotes(g, ctx)
         ctx = []
@@ -286,7 +309,8 @@ export function buildTimeline(nodes: Node[], calls: CallsOnPath, branch: BranchI
       // A plugin invoke's result is trace data, nested under its enclosing
       // call by CodeCalls — never a top-level row.
       if (b.invoke) continue
-      const g = ensureGroup()
+      const g = ensureGroup(n)
+      markSeam(g)
       if (ctx.length) {
         moveNotes(g, ctx)
         ctx = []
@@ -326,6 +350,7 @@ export function buildTimeline(nodes: Node[], calls: CallsOnPath, branch: BranchI
   // a standalone context row.
   if (ctx.length) {
     if (live) {
+      markSeam(live)
       moveNotes(live, ctx)
       ctx = []
     } else {
