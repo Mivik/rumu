@@ -15,6 +15,7 @@ import { connected, state } from '../../lib/store'
 import AppearanceSettings from '../settings/AppearanceSettings.vue'
 import DefaultsSettings from '../settings/DefaultsSettings.vue'
 import McpSettings from '../settings/McpSettings.vue'
+import PluginsSettings from '../settings/PluginsSettings.vue'
 import ProvidersSettings from '../settings/ProvidersSettings.vue'
 import SkillsSettings from '../settings/SkillsSettings.vue'
 import Icon from '../ui/Icon.vue'
@@ -28,6 +29,7 @@ const SECTIONS = [
   { key: 'providers', icon: 'link' },
   { key: 'mcp', icon: 'mcp' },
   { key: 'skills', icon: 'note' },
+  { key: 'plugins', icon: 'plugin' },
 ] as const
 type Section = (typeof SECTIONS)[number]['key']
 
@@ -134,5 +136,6 @@ watch(connected, (up) => up && void refreshSettings(), { immediate: true })
     <ProvidersSettings v-else-if="section === 'providers'" />
     <McpSettings v-else-if="section === 'mcp'" />
     <SkillsSettings v-else-if="section === 'skills'" />
+    <PluginsSettings v-else-if="section === 'plugins'" />
   </PageSheet>
 </template>

@@ -191,3 +191,16 @@ export function searchMatches(query: string, ...fields: (string | null | undefin
   const hay = fields.filter((f): f is string => !!f).map(searchForm)
   return words.every((w) => hay.some((h) => h.includes(w)))
 }
+
+/** Split a command line into arguments: whitespace separates, quotes group. */
+export function splitArgs(line: string): string[] {
+  const args: string[] = []
+  const re = /"((?:\\.|[^"\\])*)"|'([^']*)'|(\S+)/g
+  for (const m of line.matchAll(re)) args.push(m[1]?.replace(/\\(.)/g, '$1') ?? m[2] ?? m[3] ?? '')
+  return args
+}
+
+/** A command line that `splitArgs` reads back as `args`. */
+export function joinArgs(args: string[]): string {
+  return args.map((a) => (/^[\w@%+=:,./-]+$/.test(a) ? a : `"${a.replace(/(["\\])/g, '\\$1')}"`)).join(' ')
+}

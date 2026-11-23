@@ -9,6 +9,7 @@ import { rumu } from '../../lib/api'
 import { layout } from '../../lib/layout'
 import { SWAP } from '../../lib/motion'
 import { editSettings, models } from '../../lib/state/models'
+import { joinArgs, splitArgs } from '../../lib/util'
 import type { McpServerInfo } from '../../lib/generated/McpServerInfo'
 import Icon from '../ui/Icon.vue'
 
@@ -77,18 +78,6 @@ function open(s: McpServerInfo | null): void {
   pendingDelete.value = false
   editing.value = s?.name ?? ''
   fill(s)
-}
-
-/** Split a command line into arguments: whitespace separates, quotes group. */
-function splitArgs(line: string): string[] {
-  const args: string[] = []
-  const re = /"((?:\\.|[^"\\])*)"|'([^']*)'|(\S+)/g
-  for (const m of line.matchAll(re)) args.push(m[1]?.replace(/\\(.)/g, '$1') ?? m[2] ?? m[3] ?? '')
-  return args
-}
-
-function joinArgs(args: string[]): string {
-  return args.map((a) => (/^[\w@%+=:,./-]+$/.test(a) ? a : `"${a.replace(/(["\\])/g, '\\$1')}"`)).join(' ')
 }
 
 const nameValid = computed(() => /^[A-Za-z0-9_-]{1,64}$/.test(form.name.trim()))
