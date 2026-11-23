@@ -1,8 +1,0 @@
-# rumu configuration: external plugins. Workspaces live in workspaces.yaml,
-# managed from the web UI.
-
-plugins:                         # external stdio plugins
-  - name: clock
-    cmd: [python3, plugins/clock.py]
-  - name: compact
-    cmd: [python3, plugins/compact.py]

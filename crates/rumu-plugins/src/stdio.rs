@@ -1,14 +1,21 @@
 //! `StdioPlugin` — host side of the external plugin protocol.
 //!
 //! A child process speaking newline-delimited JSON-RPC 2.0 over stdin/stdout.
-//! Host→plugin requests (`initialize`, `hook`, `tool/call`) are correlated via a
-//! pending-map of oneshot channels. `initialize` and `hook` time out after 30s;
-//! `tool/call` has no transport timeout — the kernel cancels it by dropping the
-//! request future (abort / `task.kill`), so a tool may run as long as it needs.
+//! Host→plugin requests (`initialize`, `hook`, `tool/call`, and `call` from
+//! the plugin's web side) are correlated via a pending-map of oneshot
+//! channels. They time out after 30s, except `tool/call`, which has no
+//! transport timeout — the kernel cancels it by dropping the request future
+//! (abort / `task.kill`), so a tool may run as long as it needs. The
+//! `settings` notification hands over edited settings values.
 //! Plugin→host requests (`host/path`, `host/state`, `host/index`, `host/post`,
-//! `host/progress`) arrive on the same stdout stream *while* a host→plugin
-//! request is in flight, so the reader task dispatches them on spawned tasks of
-//! their own.
+//! `host/progress`, `host/emit`) arrive on the same stdout stream *while* a
+//! host→plugin request is in flight, so the reader task dispatches them on
+//! spawned tasks of their own.
+//!
+//! `initialize` carries rumu's `version` and the plugin's settings values;
+//! besides the [`Manifest`], its result may name the rumu versions the plugin
+//! needs (`rumu`, a semver requirement: unmet, the start fails), its web
+//! entry (`web`) and the JSON Schema of its settings (`settings`).
 //!
 //! Every kernel→plugin request carries a `ctx` token. The plugin echoes that
 //! token in its `host/...` requests; the host serves them from the [`Cx`] kept
@@ -16,10 +23,16 @@
 //! would serve concurrent requests — e.g. parallel sub-agents — against the
 //! wrong branch.) `host/post` needs no token: it targets an explicit branch
 //! and its source is this plugin's name. `host/progress` reports live output
-//! for a running tool call (`{ ctx, append?, data? }`).
+//! for a running tool call (`{ ctx, append?, data? }`). `host/emit`
+//! (`{ event, data?, branch? | ctx? }`) pushes an event to the plugin's web
+//! side, on the clients showing that branch's session (all without one).
+//!
+//! When the process exits, every request in flight fails at once and
+//! [`StdioPlugin::exited`] resolves with how it ended (status and the tail of
+//! its stderr); [`crate::ExternalPlugins`] takes it from there.
 
 use std::{
-    collections::HashMap,
+    collections::{HashMap, VecDeque},
     path::Path,
     process::Stdio,
     sync::{
@@ -37,13 +50,18 @@ use serde_json::{Value, json};
 use tokio::{
     io::{AsyncBufReadExt, AsyncWriteExt, BufReader},
     process::{Child, ChildStdin, Command},
-    sync::{mpsc, oneshot},
+    sync::{mpsc, oneshot, watch},
 };
 use tracing::{info, warn};
 
 use crate::Result;
 
 const REQUEST_TIMEOUT: Duration = Duration::from_secs(30);
+/// The rumu version `initialize` tells plugins, and their `rumu`
+/// requirement is checked against.
+pub const VERSION: &str = env!("CARGO_PKG_VERSION");
+/// Stderr lines kept for the message of a failed start or an exit.
+const STDERR_TAIL: usize = 20;
 
 /// A failure of the external-plugin transport or of its host-service
 /// protocol.
@@ -74,13 +92,19 @@ pub enum StdioError {
     #[error("child {stream} not piped")]
     NotPiped { stream: &'static str },
 
-    /// The `initialize` handshake failed.
-    #[error("initializing stdio plugin `{name}`: {source}")]
+    /// The `initialize` handshake failed; `stderr` is the tail of what the
+    /// process wrote there.
+    #[error("initializing stdio plugin `{name}`: {source}{stderr}")]
     Initialize {
         name: String,
         #[source]
         source: Box<StdioError>,
+        stderr: String,
     },
+
+    /// The plugin needs another rumu version.
+    #[error("plugin `{name}` needs rumu {wants}, this is {VERSION}")]
+    Version { name: String, wants: String },
 
     /// The plugin's manifest was not valid JSON.
     #[error("invalid manifest from stdio plugin `{name}`: {source}")]
@@ -102,8 +126,8 @@ pub enum StdioError {
         timeout: Duration,
     },
 
-    /// The plugin process dropped the response channel.
-    #[error("plugin `{name}` dropped the response channel for `{method}`")]
+    /// The plugin closed its stdout (it exited) before answering.
+    #[error("plugin `{name}` exited before answering `{method}`")]
     Dropped { name: String, method: String },
 
     /// The plugin answered with a JSON-RPC error.
@@ -153,6 +177,10 @@ pub enum StdioError {
     #[error("host/index is missing `tag`")]
     MissingTag,
 
+    /// `host/emit` is missing its event name.
+    #[error("host/emit is missing `event`")]
+    MissingEvent,
+
     /// A host method is not implemented.
     #[error("unknown host method `{method}`")]
     UnknownHostMethod { method: String },
@@ -160,9 +188,21 @@ pub enum StdioError {
 
 type StdioResult<T> = std::result::Result<T, StdioError>;
 
+/// What `initialize` answers besides the [`Manifest`].
+#[derive(Debug, Clone, Default, serde::Deserialize)]
+pub struct Extras {
+    #[serde(default)]
+    pub rumu: Option<String>,
+    #[serde(default)]
+    pub web: Option<String>,
+    #[serde(default)]
+    pub settings: Option<Value>,
+}
+
 struct Inner {
     name: String,
     manifest: RwLock<Manifest>,
+    extras: RwLock<Extras>,
     /// Serialized outbound lines (requests + responses) written by one task.
     writer: mpsc::Sender<String>,
     pending: Mutex<HashMap<String, oneshot::Sender<std::result::Result<Value, String>>>>,
@@ -172,7 +212,12 @@ struct Inner {
     ctxs: Mutex<HashMap<String, Cx>>,
     /// The kernel's out-of-band channel, bound to this plugin's name.
     inbox: Mutex<Option<Arc<dyn Inbox>>>,
-    child: Mutex<Child>,
+    /// The last lines of the process's stderr.
+    stderr: Mutex<VecDeque<String>>,
+    /// Asks the waiter task to kill the process.
+    kill: Mutex<Option<oneshot::Sender<()>>>,
+    /// How the process ended, once it has.
+    exit: watch::Sender<Option<String>>,
 }
 
 /// A spawned external plugin. `initialize` is performed in [`StdioPlugin::spawn`]
@@ -187,8 +232,14 @@ pub struct StdioPlugin {
 
 impl StdioPlugin {
     /// Spawn the child, start the I/O tasks and perform the `initialize`
-    /// handshake. `cwd` is the working directory for the child.
-    pub async fn spawn(name: &str, argv: &[String], cwd: &Path) -> StdioResult<Self> {
+    /// handshake, handing it `settings`. `cwd` is the working directory for
+    /// the child.
+    pub async fn spawn(
+        name: &str,
+        argv: &[String],
+        cwd: &Path,
+        settings: &serde_json::Map<String, Value>,
+    ) -> StdioResult<Self> {
         if argv.is_empty() {
             return Err(StdioError::EmptyArgv {
                 name: name.to_owned(),
@@ -221,42 +272,98 @@ impl StdioPlugin {
             .ok_or(StdioError::NotPiped { stream: "stderr" })?;
 
         let (tx, rx) = mpsc::channel::<String>(64);
+        let (kill, killed) = oneshot::channel();
         let inner = Arc::new(Inner {
             name: name.to_string(),
             manifest: RwLock::new(Manifest::default()),
+            extras: RwLock::default(),
             writer: tx,
             pending: Mutex::new(HashMap::new()),
             next_id: AtomicU64::new(1),
             next_ctx: AtomicU64::new(1),
             ctxs: Mutex::new(HashMap::new()),
             inbox: Mutex::new(None),
-            child: Mutex::new(child),
+            stderr: Mutex::default(),
+            kill: Mutex::new(Some(kill)),
+            exit: watch::channel(None).0,
         });
 
         tokio::spawn(writer_task(stdin, rx));
-        tokio::spawn(stderr_task(name.to_string(), stderr));
+        let stderr = tokio::spawn(stderr_task(inner.clone(), stderr));
         tokio::spawn(reader_task(inner.clone(), stdout));
+        tokio::spawn(waiter_task(inner.clone(), child, killed, stderr));
 
-        let result = request(
+        let initialized = request(
             &inner,
             "initialize",
-            json!({ "host": "rumu", "version": "0.1" }),
+            json!({ "host": "rumu", "version": VERSION, "settings": settings }),
         )
-        .await
-        .map_err(|source| StdioError::Initialize {
+        .await;
+        let result = match initialized {
+            Ok(result) => result,
+            Err(source) => {
+                // A process that died on start says why on stderr: wait
+                // briefly for it to finish writing.
+                let mut exit = inner.exit.subscribe();
+                let _ =
+                    tokio::time::timeout(Duration::from_secs(1), exit.wait_for(Option::is_some))
+                        .await;
+                kill_child(&inner);
+                return Err(StdioError::Initialize {
+                    name: name.to_owned(),
+                    source: Box::new(source),
+                    stderr: stderr_suffix(&inner),
+                });
+            }
+        };
+        let invalid = |source| StdioError::InvalidManifest {
             name: name.to_owned(),
-            source: Box::new(source),
-        })?;
-        let mut manifest: Manifest =
-            serde_json::from_value(result).map_err(|source| StdioError::InvalidManifest {
-                name: name.to_owned(),
-                source,
-            })?;
+            source,
+        };
+        let extras: Extras = serde_json::from_value(result.clone()).map_err(invalid)?;
+        let mut manifest: Manifest = serde_json::from_value(result).map_err(invalid)?;
+        if let Some(wants) = &extras.rumu {
+            let meets = semver::VersionReq::parse(wants)
+                .is_ok_and(|req| req.matches(&semver::Version::parse(VERSION).expect("semver")));
+            if !meets {
+                kill_child(&inner);
+                return Err(StdioError::Version {
+                    name: name.to_owned(),
+                    wants: wants.clone(),
+                });
+            }
+        }
         if manifest.name.trim().is_empty() {
             manifest.name = name.to_string();
         }
         *inner.manifest.write().unwrap() = manifest;
+        *inner.extras.write().unwrap() = extras;
         Ok(Self { inner })
+    }
+
+    /// What `initialize` answered besides the manifest.
+    pub fn extras(&self) -> Extras {
+        self.inner.extras.read().unwrap().clone()
+    }
+
+    /// Ask the plugin's `call` handler (its web side's `ctx.call`), on
+    /// behalf of a client showing `branch`.
+    pub async fn call(
+        &self,
+        method: &str,
+        params: Value,
+        branch: Option<&rumu_core::BranchId>,
+    ) -> StdioResult<Value> {
+        let params = json!({ "method": method, "params": params, "branch": branch });
+        request(&self.inner, "call", params).await
+    }
+
+    /// Hand the plugin its edited settings values.
+    pub fn set_settings(&self, settings: &serde_json::Map<String, Value>) {
+        let msg = json!({ "jsonrpc": "2.0", "method": "settings", "params": settings });
+        if let Ok(line) = serde_json::to_string(&msg) {
+            let _ = self.inner.writer.try_send(line);
+        }
     }
 
     /// Register `cx` for one in-flight request. The returned guard holds the
@@ -288,17 +395,77 @@ impl Drop for CtxGuard<'_> {
     }
 }
 
-impl Drop for StdioPlugin {
-    fn drop(&mut self) {
-        // Best-effort graceful shutdown, then kill.
+impl StdioPlugin {
+    /// Stop the process: a `shutdown` notification, then a kill. Requests
+    /// in flight fail.
+    pub fn shutdown(&self) {
         if let Ok(line) = serde_json::to_string(&json!({ "jsonrpc": "2.0", "method": "shutdown" }))
         {
             let _ = self.inner.writer.try_send(line);
         }
-        if let Ok(mut child) = self.inner.child.lock() {
-            let _ = child.start_kill();
+        kill_child(&self.inner);
+    }
+
+    /// Wait until the process has ended; how it ended, with the tail of its
+    /// stderr.
+    pub async fn exited(&self) -> String {
+        let mut exit = self.inner.exit.subscribe();
+        let ended = exit.wait_for(Option::is_some).await.map(|e| e.clone());
+        match ended {
+            Ok(Some(how)) => format!("{how}{}", stderr_suffix(&self.inner)),
+            _ => "exited".into(),
         }
     }
+}
+
+impl Drop for StdioPlugin {
+    fn drop(&mut self) {
+        self.shutdown();
+    }
+}
+
+fn kill_child(inner: &Inner) {
+    if let Some(kill) = inner.kill.lock().unwrap().take() {
+        let _ = kill.send(());
+    }
+}
+
+/// The stderr tail as a message suffix: empty, or a newline and the lines.
+fn stderr_suffix(inner: &Inner) -> String {
+    let tail = inner.stderr.lock().unwrap();
+    if tail.is_empty() {
+        return String::new();
+    }
+    let lines: Vec<&str> = tail.iter().map(String::as_str).collect();
+    format!("\n{}", lines.join("\n"))
+}
+
+/// Own the child: kill it when asked (or when the plugin is gone), and
+/// record how it ended — after its last stderr lines are in (bounded: a
+/// grandchild may hold the pipe open).
+async fn waiter_task(
+    inner: Arc<Inner>,
+    mut child: Child,
+    killed: oneshot::Receiver<()>,
+    stderr: tokio::task::JoinHandle<()>,
+) {
+    let status = tokio::select! {
+        status = child.wait() => status,
+        _ = killed => {
+            let _ = child.start_kill();
+            child.wait().await
+        }
+    };
+    let how = match status {
+        Ok(s) => match s.code() {
+            Some(code) => format!("exited with status {code}"),
+            None => format!("ended by a signal ({s})"),
+        },
+        Err(e) => format!("could not be waited on: {e}"),
+    };
+    let _ = tokio::time::timeout(Duration::from_millis(500), stderr).await;
+    info!(plugin = %inner.name, "{how}");
+    inner.exit.send_replace(Some(how));
 }
 
 async fn writer_task(mut stdin: ChildStdin, mut rx: mpsc::Receiver<String>) {
@@ -315,10 +482,15 @@ async fn writer_task(mut stdin: ChildStdin, mut rx: mpsc::Receiver<String>) {
     }
 }
 
-async fn stderr_task(name: String, stderr: tokio::process::ChildStderr) {
+async fn stderr_task(inner: Arc<Inner>, stderr: tokio::process::ChildStderr) {
     let mut lines = BufReader::new(stderr).lines();
     while let Ok(Some(line)) = lines.next_line().await {
-        info!(plugin = %name, "{line}");
+        info!(plugin = %inner.name, "{line}");
+        let mut tail = inner.stderr.lock().unwrap();
+        if tail.len() == STDERR_TAIL {
+            tail.pop_front();
+        }
+        tail.push_back(line);
     }
 }
 
@@ -361,6 +533,9 @@ async fn reader_task(inner: Arc<Inner>, stdout: tokio::process::ChildStdout) {
             let _ = tx.send(result);
         }
     }
+    // The process closed stdout: no answer is coming. Failing the requests
+    // in flight now beats leaving a `tool/call` (no timeout) hanging.
+    inner.pending.lock().unwrap().clear();
 }
 
 // ---------------------------------------------------------------------------
@@ -485,6 +660,35 @@ async fn handle_host_method(inner: &Inner, method: &str, params: &Value) -> Resu
         inbox.post(&branch, post)?;
         return Ok(Value::Null);
     }
+    if method == "host/emit" {
+        let event = params
+            .get("event")
+            .and_then(Value::as_str)
+            .ok_or(StdioError::MissingEvent)?;
+        let data = params.get("data").cloned().unwrap_or(Value::Null);
+        let branch = match (
+            params.get("branch").and_then(Value::as_str),
+            params.get("ctx"),
+        ) {
+            (Some(b), _) => Some(rumu_core::BranchId::from(b)),
+            (None, Some(Value::String(token))) => {
+                let cx = inner.ctxs.lock().unwrap().get(token).cloned();
+                let cx = cx.ok_or_else(|| StdioError::UnknownCtx {
+                    token: token.clone(),
+                })?;
+                Some(cx.branch)
+            }
+            _ => None,
+        };
+        let inbox = inner
+            .inbox
+            .lock()
+            .unwrap()
+            .clone()
+            .ok_or(StdioError::NoInbox)?;
+        inbox.emit(event, data, branch.as_ref());
+        return Ok(Value::Null);
+    }
     let token = params
         .get("ctx")
         .and_then(Value::as_str)
@@ -576,6 +780,8 @@ impl Plugin for StdioPlugin {
             "name": name,
             "args": args,
             "ctx": ctx.token,
+            "session": cx.session,
+            "branch": cx.branch,
             "background": cx.call().is_some_and(|c| c.background)
         });
         let result = request(&self.inner, "tool/call", params).await;
@@ -625,9 +831,14 @@ mod tests {
     #[tokio::test]
     async fn clock_plugin_lifecycle() {
         let home = fixture_home();
-        let plugin = StdioPlugin::spawn("clock", &argv(&home, "clock.py"), &home)
-            .await
-            .unwrap();
+        let plugin = StdioPlugin::spawn(
+            "clock",
+            &argv(&home, "clock.py"),
+            &home,
+            &Default::default(),
+        )
+        .await
+        .unwrap();
 
         let manifest = plugin.manifest();
         assert_eq!(manifest.name, "clock");
@@ -666,9 +877,14 @@ mod tests {
     #[tokio::test]
     async fn compact_plugin_rewrites_git_status() {
         let home = fixture_home();
-        let plugin = StdioPlugin::spawn("compact", &argv(&home, "compact.py"), &home)
-            .await
-            .unwrap();
+        let plugin = StdioPlugin::spawn(
+            "compact",
+            &argv(&home, "compact.py"),
+            &home,
+            &Default::default(),
+        )
+        .await
+        .unwrap();
         let manifest = plugin.manifest();
         assert_eq!(manifest.hooks.len(), 1);
         assert_eq!(manifest.hooks[0].id, "rewrite-git-status");
@@ -769,7 +985,7 @@ for line in sys.stdin.buffer:
         .unwrap();
 
         let argv = vec!["python3".into(), script.to_string_lossy().into_owned()];
-        let plugin = StdioPlugin::spawn("hostq", &argv, dir.path())
+        let plugin = StdioPlugin::spawn("hostq", &argv, dir.path(), &Default::default())
             .await
             .unwrap();
 
@@ -833,7 +1049,9 @@ for line in sys.stdin.buffer:
         .unwrap();
 
         let argv = vec!["python3".into(), script.to_string_lossy().into_owned()];
-        let plugin = StdioPlugin::spawn("prog", &argv, dir.path()).await.unwrap();
+        let plugin = StdioPlugin::spawn("prog", &argv, dir.path(), &Default::default())
+            .await
+            .unwrap();
         let host = FakeRuntime::arc();
         let out = plugin
             .call_tool("stream", json!({}), &host.cx())
@@ -890,7 +1108,9 @@ for line in sys.stdin.buffer:
         .unwrap();
 
         let argv = vec!["python3".into(), script.to_string_lossy().into_owned()];
-        let plugin = StdioPlugin::spawn("pic", &argv, dir.path()).await.unwrap();
+        let plugin = StdioPlugin::spawn("pic", &argv, dir.path(), &Default::default())
+            .await
+            .unwrap();
         let host = FakeRuntime::arc();
         let out = plugin
             .call_tool("snap", json!({}), &host.cx())
@@ -946,7 +1166,7 @@ for line in sys.stdin.buffer:
         .unwrap();
 
         let argv = vec!["python3".into(), script.to_string_lossy().into_owned()];
-        let plugin = StdioPlugin::spawn("stall", &argv, dir.path())
+        let plugin = StdioPlugin::spawn("stall", &argv, dir.path(), &Default::default())
             .await
             .unwrap();
         let host = FakeRuntime::arc();
@@ -1014,7 +1234,7 @@ for line in sys.stdin.buffer:
         .unwrap();
 
         let argv = vec!["python3".into(), script.to_string_lossy().into_owned()];
-        let plugin = StdioPlugin::spawn("poster", &argv, dir.path())
+        let plugin = StdioPlugin::spawn("poster", &argv, dir.path(), &Default::default())
             .await
             .unwrap();
         let inbox = FakeInbox::arc();

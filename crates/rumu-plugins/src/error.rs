@@ -50,14 +50,6 @@ pub enum Error {
     /// A workspace preset is invalid.
     #[error("workspace `{name}`: {message}")]
     WorkspaceConfig { name: String, message: String },
-
-    /// An external plugin could not be loaded.
-    #[error("loading external plugin `{name}`: {source}")]
-    ExternalPlugin {
-        name: String,
-        #[source]
-        source: StdioError,
-    },
 }
 
 /// A result with the plugin error.

@@ -9,7 +9,6 @@ use std::sync::Arc;
 use async_trait::async_trait;
 use rumu_core::{BranchId, Node, NodeBody, ToolCall, ToolSpec};
 use rumu_kernel::{Kernel, Llm, LlmResponse, OnDelta};
-use rumu_plugins::load_config;
 use rumu_store::Store;
 use serde_json::{Value, json};
 use tokio::sync::mpsc;
@@ -168,23 +167,19 @@ async fn kernel(home: &std::path::Path) -> Arc<Kernel> {
 }
 
 async fn kernel_on(home: &std::path::Path, llm: Arc<dyn Llm>) -> Arc<Kernel> {
-    let config = load_config(home).unwrap();
     let decks = rumu_cards::Decks::load(home).unwrap();
-    let plugins = rumu_plugins::load_all(
+    let plugins = rumu_plugins::PluginSet::new(
         home,
-        &config,
         decks,
         Default::default(),
         rumu_plugins::McpHub::new(home),
         Arc::new(rumu_plugins::Skills::with_dirs(home, Vec::new(), None)),
         &[],
-    )
-    .await
-    .unwrap();
+    );
     Kernel::new(
         Arc::new(Store::in_memory()),
         llm,
-        plugins,
+        plugins.all(),
         Default::default(),
     )
     .unwrap()

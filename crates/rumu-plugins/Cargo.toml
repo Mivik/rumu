@@ -20,6 +20,7 @@ matchit.workspace = true
 process-wrap.workspace = true
 regex.workspace = true
 schemars.workspace = true
+semver.workspace = true
 serde.workspace = true
 # `code` API stubs list tool args in schema order.
 serde_json = { workspace = true, features = ["preserve_order"] }
