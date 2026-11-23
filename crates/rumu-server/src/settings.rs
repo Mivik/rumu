@@ -28,6 +28,8 @@
 //! mcp:                          # MCP servers (docs/mcp.md)
 //!   github: { command: [github-mcp-server, stdio], env: { GITHUB_TOKEN: … } }
 //!   linear: { url: https://mcp.example/mcp, headers: { Authorization: … } }
+//! plugins:                      # external stdio plugins (docs/plugins.md)
+//!   scratch-path: { command: [python3, plugins/scratch-path.py] }
 //! appearance:                   # how the web looks, on every device
 //!   theme: dark                 # system, light or dark
 //!   work:                       # what of a turn's work starts open:
@@ -43,6 +45,10 @@
 //! `RUMU_HOME/cache/providers/<id>.json`; what is known about models comes
 //! from models.dev, cached at `RUMU_HOME/cache/models.json`. Both are
 //! refreshed daily in the background.
+//!
+//! External plugins used to be registered in `RUMU_HOME/config.yaml`; a
+//! `plugins:` list found there is moved into this file once, at load, and
+//! the old file kept as `config.yaml.migrated`.
 
 use std::collections::BTreeMap;
 use std::path::{Path, PathBuf};
@@ -51,12 +57,12 @@ use std::time::{Duration, SystemTime};
 
 use rumu_core::{
     ALIAS_PROVIDER, Appearance, Effort, IoError, McpServerSettings, ModelAlias, ModelConfig,
-    ModelInfo, PresetInfo, Protocol, ProviderInfo, ProviderSettings, Roles, SettingsInfo, Titles,
-    enabled_models, split_model_ref, valid_mcp_name,
+    ModelInfo, PluginSettings, PresetInfo, Protocol, ProviderInfo, ProviderSettings, Roles,
+    SettingsInfo, Titles, enabled_models, split_model_ref, valid_mcp_name,
 };
 use rumu_kernel::LlmError;
 use rumu_llm::{Catalog, GenaiLlm, endpoints, model_info, presets};
-use rumu_plugins::{McpHub, Skills};
+use rumu_plugins::{ExternalPlugins, McpHub, Skills};
 use serde::{Deserialize, Serialize};
 use tracing::{info, warn};
 
@@ -94,6 +100,8 @@ struct File {
     model: ModelConfig,
     #[serde(skip_serializing_if = "BTreeMap::is_empty")]
     mcp: BTreeMap<String, McpServerSettings>,
+    #[serde(skip_serializing_if = "BTreeMap::is_empty")]
+    plugins: BTreeMap<String, PluginSettings>,
     #[serde(skip_serializing_if = "Appearance::is_default")]
     appearance: Appearance,
 }
@@ -203,6 +211,19 @@ pub struct McpEdit {
     headers: BTreeMap<String, Option<String>>,
 }
 
+/// A `settings.set_plugin` request; `settings` (the values of the form the
+/// plugin's schema draws) replaces the stored ones when sent.
+#[derive(Debug, Deserialize)]
+#[serde(deny_unknown_fields)]
+pub struct PluginEdit {
+    name: String,
+    command: Vec<String>,
+    #[serde(default)]
+    cwd: Option<String>,
+    #[serde(default)]
+    settings: Option<serde_json::Map<String, serde_json::Value>>,
+}
+
 /// The loaded settings, applied to the model adapter they configure.
 pub struct Settings {
     home: PathBuf,
@@ -215,6 +236,8 @@ pub struct Settings {
     llm: Arc<GenaiLlm>,
     mcp: Arc<McpHub>,
     skills: Arc<Skills>,
+    /// The external plugins `plugins:` configures.
+    plugins: Option<Arc<ExternalPlugins>>,
 }
 
 impl Settings {
@@ -223,7 +246,7 @@ impl Settings {
     /// adapter left unconfigured, so it can be fixed from the web.
     pub fn load(home: &Path, llm: Arc<GenaiLlm>, mcp: Arc<McpHub>) -> Result<Self> {
         let path = home.join(SETTINGS_FILE);
-        let file: File = match std::fs::read_to_string(&path) {
+        let mut file: File = match std::fs::read_to_string(&path) {
             Ok(text) => rumu_cards::yaml::from_str::<Option<File>>(&text)
                 .map_err(|e| SettingsError::Yaml {
                     path: path.clone(),
@@ -233,6 +256,7 @@ impl Settings {
             Err(e) if e.kind() == std::io::ErrorKind::NotFound => File::default(),
             Err(e) => return Err(IoError::at("reading", &path)(e).into()),
         };
+        migrate_config(home, &mut file)?;
         let catalog = Arc::new(read_cached_catalog(home).unwrap_or_default());
         if let Err(e) = llm.configure(&file.model, catalog.clone()) {
             warn!(error = %e, "model settings are invalid; fix them in Settings");
@@ -259,6 +283,7 @@ impl Settings {
             llm,
             mcp,
             skills: Arc::new(Skills::with_dirs(home, Vec::new(), None)),
+            plugins: None,
         })
     }
 
@@ -266,6 +291,83 @@ impl Settings {
     pub fn with_skills(mut self, skills: Arc<Skills>) -> Self {
         self.skills = skills;
         self
+    }
+
+    /// Run `plugins:` on `plugins`.
+    pub fn with_plugins(mut self, plugins: Arc<ExternalPlugins>) -> Self {
+        plugins.configure(&self.lock().plugins);
+        self.plugins = Some(plugins);
+        self
+    }
+
+    /// Add plugin `edit.name`, or replace it, and (re)start it; a change of
+    /// settings alone reaches the running plugin without a restart.
+    pub fn set_plugin(&self, edit: PluginEdit) -> Result<SettingsInfo> {
+        let name = edit.name.trim().to_owned();
+        if !valid_mcp_name(&name) {
+            return Err(SettingsError::Invalid(format!(
+                "plugin name `{name}` must be 1–64 letters, digits, `_` or `-`"
+            )));
+        }
+        let command: Vec<String> = edit
+            .command
+            .iter()
+            .map(|a| a.trim().to_owned())
+            .filter(|a| !a.is_empty())
+            .collect();
+        if command.is_empty() {
+            return Err(SettingsError::Invalid("a plugin needs a command".into()));
+        }
+        let cwd = edit
+            .cwd
+            .map(|c| c.trim().to_owned())
+            .filter(|c| !c.is_empty());
+        self.edit_plugins(|plugins| {
+            let old = plugins.remove(&name).unwrap_or_default();
+            plugins.insert(
+                name,
+                PluginSettings {
+                    command,
+                    cwd,
+                    settings: edit.settings.unwrap_or(old.settings),
+                },
+            );
+            Ok(())
+        })
+    }
+
+    /// The external plugins, for the web's calls into them.
+    pub fn plugins(&self) -> Option<&Arc<ExternalPlugins>> {
+        self.plugins.as_ref()
+    }
+
+    pub fn remove_plugin(&self, name: &str) -> Result<SettingsInfo> {
+        self.edit_plugins(|plugins| {
+            plugins.remove(name);
+            Ok(())
+        })
+    }
+
+    fn edit_plugins(
+        &self,
+        f: impl FnOnce(&mut BTreeMap<String, PluginSettings>) -> Result<()>,
+    ) -> Result<SettingsInfo> {
+        {
+            let mut file = self.lock();
+            let mut next = file.clone();
+            f(&mut next.plugins)?;
+            save(&self.home.join(SETTINGS_FILE), &next)?;
+            if let Some(p) = &self.plugins {
+                p.configure(&next.plugins);
+            }
+            *file = next;
+        }
+        Ok(self.info())
+    }
+
+    /// Restart external plugin `name`; false when there is none.
+    pub fn restart_plugin(&self, name: &str) -> bool {
+        self.plugins.as_ref().is_some_and(|p| p.restart(name))
     }
 
     /// Clone a repository of skills from git.
@@ -328,6 +430,7 @@ impl Settings {
             presets: offered(&catalog),
             mcp: self.mcp.info(&file.mcp),
             skills,
+            plugins: self.plugins.as_ref().map(|p| p.info()).unwrap_or_default(),
         }
     }
 
@@ -903,6 +1006,72 @@ async fn fetch_catalog() -> Result<Vec<u8>> {
     Ok(resp.bytes().await.map_err(err)?.to_vec())
 }
 
+/// Where external plugins were registered before `settings.yaml`.
+const OLD_CONFIG: &str = "config.yaml";
+
+/// Move the `plugins:` of an old `config.yaml` into `file` and save it,
+/// then keep the old file as `config.yaml.migrated`. A name `file` already
+/// has keeps its entry. An old file that does not parse is an error, so its
+/// plugins are not lost silently.
+fn migrate_config(home: &Path, file: &mut File) -> Result<()> {
+    #[derive(Deserialize)]
+    #[serde(deny_unknown_fields)]
+    struct Old {
+        #[serde(default)]
+        plugins: Vec<OldPlugin>,
+    }
+    #[derive(Deserialize)]
+    #[serde(deny_unknown_fields)]
+    struct OldPlugin {
+        name: Option<String>,
+        #[serde(default)]
+        cmd: Vec<String>,
+        cwd: Option<String>,
+    }
+    let path = home.join(OLD_CONFIG);
+    let text = match std::fs::read_to_string(&path) {
+        Ok(text) => text,
+        Err(e) if e.kind() == std::io::ErrorKind::NotFound => return Ok(()),
+        Err(e) => return Err(IoError::at("reading", &path)(e).into()),
+    };
+    let old = rumu_cards::yaml::from_str::<Option<Old>>(&text)
+        .map_err(|e| SettingsError::Yaml {
+            path: path.clone(),
+            message: e.to_string(),
+        })?
+        .map_or_else(Vec::new, |o| o.plugins);
+    if !old.is_empty() {
+        for (i, p) in old.into_iter().enumerate() {
+            // Named as before: the entry's name, else its program's.
+            let name = p.name.unwrap_or_else(|| match p.cmd.first() {
+                Some(program) => Path::new(program)
+                    .file_name()
+                    .map(|s| s.to_string_lossy().into_owned())
+                    .unwrap_or_else(|| program.clone()),
+                None => format!("plugin-{}", i + 1),
+            });
+            let name: String = name
+                .chars()
+                .map(|c| match c {
+                    'A'..='Z' | 'a'..='z' | '0'..='9' | '_' | '-' => c,
+                    _ => '-',
+                })
+                .take(64)
+                .collect();
+            file.plugins.entry(name).or_insert(PluginSettings {
+                command: p.cmd,
+                cwd: p.cwd,
+                ..Default::default()
+            });
+        }
+        save(&home.join(SETTINGS_FILE), file)?;
+    }
+    let kept = home.join(format!("{OLD_CONFIG}.migrated"));
+    std::fs::rename(&path, &kept).map_err(IoError::at("renaming", &path))?;
+    info!(to = %kept.display(), "moved config.yaml's plugins into settings.yaml");
+    Ok(())
+}
+
 /// Write the file whole, owner-only, through a temp file.
 fn save(path: &Path, file: &File) -> Result<()> {
     let text = serde_saphyr::to_string(file).map_err(|e| SettingsError::Yaml {
@@ -946,6 +1115,83 @@ mod tests {
             model: model.into(),
             effort: Some(Effort::Low),
         }
+    }
+
+    /// An old `config.yaml`'s plugins move into `settings.yaml` once,
+    /// named as before, next to what it already holds; the old file stays
+    /// as `config.yaml.migrated`.
+    #[test]
+    fn config_yaml_plugins_move_into_settings() {
+        let home = tempfile::tempdir().unwrap();
+        let llm = Arc::new(GenaiLlm::default());
+        std::fs::write(
+            home.path().join("settings.yaml"),
+            "titles: first\nplugins:\n  kept: { command: [kept] }\n",
+        )
+        .unwrap();
+        let old = "# rumu configuration\n\
+                   plugins:\n\
+                   \x20 - name: scratch-path\n\
+                   \x20   cmd: [python3, plugins/scratch-path.py]\n\
+                   \x20 - cmd: [/opt/tools/lint.py]\n\
+                   \x20   cwd: tools\n\
+                   \x20 - name: kept\n\
+                   \x20   cmd: [other]\n";
+        std::fs::write(home.path().join("config.yaml"), old).unwrap();
+
+        let load = || Settings::load(home.path(), llm.clone(), McpHub::new(home.path())).unwrap();
+        let s = load();
+        let plugins = s.lock().plugins.clone();
+        let command = |name: &str| plugins[name].command.join(" ");
+        assert_eq!(
+            plugins.keys().collect::<Vec<_>>(),
+            ["kept", "lint-py", "scratch-path"]
+        );
+        assert_eq!(command("scratch-path"), "python3 plugins/scratch-path.py");
+        assert_eq!(command("kept"), "kept");
+        assert_eq!(plugins["lint-py"].cwd.as_deref(), Some("tools"));
+        assert_eq!(s.lock().model.titles, Titles::First);
+        assert!(!home.path().join("config.yaml").exists());
+        let kept = std::fs::read_to_string(home.path().join("config.yaml.migrated")).unwrap();
+        assert_eq!(kept, old);
+        // Saved: a second start reads them from settings.yaml alone.
+        drop(s);
+        assert_eq!(load().lock().plugins, plugins);
+
+        // A config.yaml that does not parse stops the start, untouched.
+        std::fs::write(home.path().join("config.yaml"), "plugins: [").unwrap();
+        assert!(Settings::load(home.path(), llm.clone(), McpHub::new(home.path())).is_err());
+        assert!(home.path().join("config.yaml").exists());
+    }
+
+    #[test]
+    fn plugin_edits_keep_settings_unless_sent() {
+        let home = tempfile::tempdir().unwrap();
+        let s = Settings::load(
+            home.path(),
+            Arc::new(GenaiLlm::default()),
+            McpHub::new(home.path()),
+        )
+        .unwrap();
+        let edit = |command: &[&str], settings: Option<serde_json::Value>| PluginEdit {
+            name: "dice".into(),
+            command: command.iter().map(|a| a.to_string()).collect(),
+            cwd: Some(" ".into()),
+            settings: settings.map(|v| serde_json::from_value(v).unwrap()),
+        };
+        assert!(s.set_plugin(edit(&[" "], None)).is_err());
+        s.set_plugin(edit(
+            &["node", "dice.js"],
+            Some(serde_json::json!({ "sides": 20 })),
+        ))
+        .unwrap();
+        s.set_plugin(edit(&["node", "dice2.js"], None)).unwrap();
+        let p = s.lock().plugins["dice"].clone();
+        assert_eq!(p.command, ["node", "dice2.js"]);
+        assert_eq!(p.cwd, None);
+        assert_eq!(p.settings["sides"], 20);
+        s.remove_plugin("dice").unwrap();
+        assert!(s.lock().plugins.is_empty());
     }
 
     #[test]

@@ -38,7 +38,7 @@ web UI as an app (PWA): its offline shell needs a secure context.
   See [docs/projects.md](docs/projects.md).
 
 More: [compaction](docs/compaction.md), [MCP](docs/mcp.md), [skills](docs/skills.md),
-[editors and Harbor over ACP](docs/acp.md).
+[plugins](docs/plugins.md), [editors and Harbor over ACP](docs/acp.md).
 
 ## Development
 

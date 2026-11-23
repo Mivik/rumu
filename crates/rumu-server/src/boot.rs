@@ -9,7 +9,6 @@ use std::time::Duration;
 
 use anyhow::{Context, Result, bail};
 use rumu_blob::Blobs;
-use rumu_core::Plugin;
 use rumu_kernel::{Kernel, Llm, LlmResponse, Script, ScriptedLlm};
 use rumu_llm::GenaiLlm;
 use rumu_store::Store;
@@ -72,7 +71,6 @@ pub async fn boot(home: &Path) -> Result<Booted> {
         &home.join("seen.json"),
     )?);
     let blobs = Blobs::in_home(home)?;
-    let config = rumu_plugins::load_config(home)?;
     // A home without a registry starts with the current directory as its
     // one workspace, in a project of its own unless it is $HOME.
     let fresh = !home.join(rumu_plugins::WORKSPACES_FILE).exists();
@@ -85,20 +83,25 @@ pub async fn boot(home: &Path) -> Result<Booted> {
     }
     let mcp = rumu_plugins::McpHub::new(home);
     let skills = Arc::new(rumu_plugins::Skills::new(home));
-    let plugins = load_plugins(
+    let plugins = Arc::new(rumu_plugins::PluginSet::new(
         home,
-        &config,
         decks.clone(),
         workspaces.clone(),
         mcp.clone(),
         skills.clone(),
-    )
-    .await?;
+        &[rumu_kernel::agent_tool()],
+    ));
     let genai = Arc::new(GenaiLlm::default().with_blobs(blobs.clone()));
-    let settings =
-        Arc::new(settings::Settings::load(home, genai.clone(), mcp.clone())?.with_skills(skills));
+    let settings = Arc::new(
+        settings::Settings::load(home, genai.clone(), mcp.clone())?
+            .with_skills(skills)
+            .with_plugins(plugins.external.clone()),
+    );
+    // The first sessions see the plugins' tools.
+    plugins.external.settled().await;
     let llm = load_llm(genai)?;
-    let kernel = Kernel::new(store.clone(), llm, plugins, workspaces.clone())?;
+    let kernel = Kernel::new(store.clone(), llm, plugins.all(), workspaces.clone())?;
+    follow_plugins(&plugins, &kernel, &settings);
     // Every deck configuration change (the web's or a model's) reaches the
     // clients. Weak: the kernel outlives nothing it is handed here.
     let weak = Arc::downgrade(&kernel);
@@ -171,25 +174,35 @@ fn load_llm(genai: Arc<GenaiLlm>) -> Result<Arc<dyn Llm>> {
     ))
 }
 
-async fn load_plugins(
-    home: &Path,
-    config: &rumu_plugins::Config,
-    decks: rumu_cards::Decks,
-    workspaces: rumu_core::Workspaces,
-    mcp: Arc<rumu_plugins::McpHub>,
-    skills: Arc<rumu_plugins::Skills>,
-) -> Result<Vec<Arc<dyn Plugin>>> {
-    let plugins = rumu_plugins::load_all(
-        home,
-        config,
-        decks,
-        workspaces,
-        mcp,
-        skills,
-        &[rumu_kernel::agent_tool()],
-    )
-    .await?;
-    let names: Vec<_> = plugins.iter().map(|p| p.manifest().name).collect();
+/// Keep the kernel on the current plugin set: each time an external plugin
+/// starts, stops or fails, hand the kernel the set again and push the
+/// settings (they show the plugins' status). The plugins' problems reach the
+/// clients as warnings; their rebuilds reload them.
+fn follow_plugins(
+    plugins: &Arc<rumu_plugins::PluginSet>,
+    kernel: &Arc<Kernel>,
+    settings: &Arc<settings::Settings>,
+) {
+    let names: Vec<_> = plugins.all().iter().map(|p| p.manifest().name).collect();
     info!(plugins = %names.join(", "), "plugins loaded");
-    Ok(plugins)
+    let weak = Arc::downgrade(kernel);
+    plugins.external.on_warning(move |message| {
+        if let Some(kernel) = weak.upgrade() {
+            kernel.warn(message);
+        }
+    });
+    plugins.external.watch_builds();
+    let mut changed = plugins.external.subscribe();
+    let (plugins, kernel, settings) = (plugins.clone(), kernel.clone(), settings.clone());
+    tokio::spawn(async move {
+        loop {
+            for r in kernel.set_plugins(plugins.all()) {
+                plugins.external.reject(&r.plugin, &r.error);
+            }
+            kernel.settings_changed(serde_json::json!(settings.info()));
+            if changed.changed().await.is_err() {
+                return;
+            }
+        }
+    });
 }

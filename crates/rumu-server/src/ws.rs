@@ -142,7 +142,8 @@ pub fn router(state: AppState, token: crate::auth::Token) -> Router {
             "/blobs",
             post(blob_upload).layer(DefaultBodyLimit::max(BLOB_BODY_LIMIT)),
         )
-        .route("/blobs/{hash}", get(blob_get));
+        .route("/blobs/{hash}", get(blob_get))
+        .route("/plugins/{name}/{*file}", get(plugin_file));
     crate::auth::protect(routes, token)
         .fallback(static_asset)
         .with_state(state)
@@ -186,6 +187,40 @@ fn serve(file: EmbeddedFile, immutable: bool) -> Response {
 
 fn not_found() -> &'static str {
     "rumu server is running (no web/dist found; run `pnpm build` in web/ and rebuild; connect via /ws)\n"
+}
+
+/// `GET /plugins/{name}/{file}`: a file beside running plugin `name`'s web
+/// entry (the entry itself, its chunks and styles). Its URL carries a
+/// version, so it is revalidated rather than cached.
+async fn plugin_file(
+    State(state): State<AppState>,
+    Path((name, file)): Path<(String, String)>,
+    req: axum::extract::Request,
+) -> Response {
+    let found = state
+        .settings
+        .plugins()
+        .and_then(|p| p.web_dir(&name))
+        .and_then(|dir| {
+            let dir = dir.canonicalize().ok()?;
+            let path = dir.join(&file).canonicalize().ok()?;
+            path.starts_with(&dir).then_some(path)
+        });
+    let Some(path) = found else {
+        return StatusCode::NOT_FOUND.into_response();
+    };
+    match tower_http::services::ServeFile::new(path)
+        .try_call(req)
+        .await
+    {
+        Ok(res) => {
+            let mut res = res.map(axum::body::Body::new);
+            res.headers_mut()
+                .insert(CACHE_CONTROL, HeaderValue::from_static("no-cache"));
+            res
+        }
+        Err(_) => StatusCode::NOT_FOUND.into_response(),
+    }
 }
 
 async fn ws_upgrade(State(state): State<AppState>, ws: WebSocketUpgrade) -> Response {
@@ -1022,6 +1057,37 @@ async fn dispatch(state: &AppState, method: &str, p: &Value) -> Result<Value> {
         }
         "settings.reconnect_mcp" => {
             state.settings.reconnect_mcp(str_param(p, "name")?);
+            Ok(json!({}))
+        }
+        // External plugins (`plugins:`): their status follows as pushes.
+        "settings.set_plugin" => {
+            let edit = parse_params(p)?;
+            settings_edit(state, |s| s.set_plugin(edit))
+        }
+        "settings.remove_plugin" => {
+            let name = str_param(p, "name")?;
+            settings_edit(state, |s| s.remove_plugin(name))
+        }
+        // A plugin's web side asking its process (`ctx.call`), on behalf of
+        // the session the page shows (`branch`).
+        "plugin.call" => {
+            let plugin = str_param(p, "plugin")?;
+            let method = str_param(p, "method")?;
+            let branch = p["branch"].as_str().map(BranchId::from);
+            let plugins = state
+                .settings
+                .plugins()
+                .ok_or_else(|| ServerError::InvalidParams(format!("no plugin `{plugin}`")))?;
+            plugins
+                .call(plugin, method, p["params"].clone(), branch.as_ref())
+                .await
+                .map_err(|e| ServerError::Plugins(e.into()))
+        }
+        "settings.restart_plugin" => {
+            let name = str_param(p, "name")?;
+            if !state.settings.restart_plugin(name) {
+                return Err(ServerError::InvalidParams(format!("no plugin `{name}`")));
+            }
             Ok(json!({}))
         }
 
