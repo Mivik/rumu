@@ -2,7 +2,7 @@
 //! entry, connected in the background, its tools cached until the server
 //! says they changed.
 
-use std::collections::{BTreeMap, VecDeque};
+use std::collections::{BTreeMap, HashMap, VecDeque};
 use std::path::{Path, PathBuf};
 use std::process::Stdio;
 use std::sync::{Arc, Mutex, Weak};
@@ -16,7 +16,7 @@ use rmcp::service::{NotificationContext, RunningService};
 use rmcp::transport::streamable_http_client::StreamableHttpClientTransportConfig;
 use rmcp::transport::{StreamableHttpClientTransport, TokioChildProcess};
 use rmcp::{ClientHandler, RoleClient, ServiceError, serve_client};
-use rumu_core::{McpServerInfo, McpServerSettings, McpStatus, McpToolInfo};
+use rumu_core::{BranchId, Content, McpServerInfo, McpServerSettings, McpStatus, McpToolInfo};
 use serde_json::Value;
 use tokio::io::{AsyncBufReadExt, BufReader};
 use tokio::sync::watch;
@@ -34,6 +34,9 @@ pub struct McpHub {
     home: PathBuf,
     servers: Mutex<BTreeMap<String, Arc<Server>>>,
     changed: Arc<watch::Sender<u64>>,
+    /// The notes MCP App views' latest `ui/update-model-context` became,
+    /// by branch and view, until the branch's next model call takes them.
+    contexts: Mutex<HashMap<BranchId, BTreeMap<String, Content>>>,
 }
 
 impl McpHub {
@@ -42,7 +45,36 @@ impl McpHub {
             home: home.to_owned(),
             servers: Mutex::default(),
             changed: Arc::new(watch::channel(0).0),
+            contexts: Mutex::default(),
         })
+    }
+
+    /// Keep `note` as view `view`'s context on `branch`, replacing what it
+    /// said before; `None` drops it.
+    pub fn set_context(&self, branch: &BranchId, view: &str, note: Option<Content>) {
+        let mut contexts = self.contexts.lock().expect("mcp contexts lock");
+        let views = contexts.entry(branch.clone()).or_default();
+        match note {
+            Some(note) => {
+                views.insert(view.to_owned(), note);
+            }
+            None => {
+                views.remove(view);
+            }
+        }
+        if views.is_empty() {
+            contexts.remove(branch);
+        }
+    }
+
+    /// The views' contexts on `branch` not yet handed to its model.
+    pub fn take_contexts(&self, branch: &BranchId) -> Vec<Content> {
+        let mut contexts = self.contexts.lock().expect("mcp contexts lock");
+        contexts
+            .remove(branch)
+            .unwrap_or_default()
+            .into_values()
+            .collect()
     }
 
     /// Ticks whenever a server's status or tools change.
@@ -428,8 +460,13 @@ impl ClientHandler for Handler {
     }
 
     fn get_info(&self) -> ClientConfig {
+        // MCP Apps: the web renders the views tools name.
+        let mut capabilities = ClientCapabilities::default();
+        let ui = serde_json::json!({ "mimeTypes": [super::APP_MIME] });
+        let ui = ui.as_object().cloned().unwrap_or_default();
+        capabilities.extensions = Some([(super::UI_EXTENSION.to_owned(), ui)].into());
         ClientConfig::new(
-            ClientCapabilities::default(),
+            capabilities,
             Implementation::new("rumu", env!("CARGO_PKG_VERSION")),
         )
     }

@@ -25,6 +25,13 @@ TOOLS = [
             "type": "object",
             "properties": {"repo": {"type": "string"}},
         },
+        "_meta": {"ui": {"resourceUri": "ui://fake/issues"}},
+    },
+    {
+        "name": "poll",
+        "description": "Refresh the issues view.",
+        "inputSchema": {"type": "object"},
+        "_meta": {"ui": {"resourceUri": "ui://fake/issues", "visibility": ["app"]}},
     },
     {
         "name": "fail",
@@ -50,6 +57,16 @@ CONTENTS = {
         # "hi\n" as a blob of a type rumu does not know.
         {"uri": "mem://both/b", "mimeType": "application/x-thing", "blob": "aGkK"},
     ],
+    # A view; one of its origins tries to add a directive.
+    "ui://fake/issues": [{
+        "uri": "ui://fake/issues",
+        "mimeType": "text/html;profile=mcp-app",
+        "text": "<!doctype html><p>issues</p>",
+        "_meta": {"ui": {
+            "csp": {"connectDomains": ["https://api.github.com", "x; script-src *"]},
+            "prefersBorder": False,
+        }},
+    }],
 }
 
 
@@ -89,6 +106,8 @@ for line in sys.stdin:
             os._exit(1)
         elif name == "list_issues":
             reply(id, {"content": [], "structuredContent": {"issues": [1, 2]}})
+        elif name == "poll":
+            reply(id, {"content": [{"type": "text", "text": "polled"}]})
         else:
             reply(id, {"content": [{"type": "text", "text": "boom"}], "isError": True})
     elif method == "resources/list":

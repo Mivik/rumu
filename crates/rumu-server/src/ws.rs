@@ -86,6 +86,10 @@ enum ServerError {
     /// The request names an assistant that is not configured.
     #[error("unknown assistant `{0}`")]
     UnknownAssistant(String),
+
+    /// An MCP App view's request to its server failed.
+    #[error("{0}")]
+    Mcp(String),
 }
 
 impl ServerError {
@@ -124,6 +128,7 @@ pub struct AppState {
     pub workspaces: Workspaces,
     pub blobs: Blobs,
     pub settings: Arc<Settings>,
+    pub mcp: Arc<rumu_plugins::McpHub>,
 }
 
 /// The built frontend. Debug builds read `web/dist` from disk, release builds
@@ -1180,6 +1185,50 @@ which you can read, edit and `show`.",
             );
             kernel.record_artifact(&branch, text, &artifact).await?;
             Ok(json!({ "artifact": artifact }))
+        }
+
+        // MCP Apps: a view of a tool result calls a tool of the same server,
+        // reads one of its resources, or tells the branch's model something
+        // (`ui/update-model-context`), kept for its next call.
+        "mcp.app_call" | "mcp.app_read" => {
+            let branch: BranchId = str_param(p, "branch")?.into();
+            let (_, path_state) = kernel.branch_path(&branch)?;
+            let servers = rumu_plugins::mcp::servers(&state.decks, &path_state);
+            let server = str_param(p, "server")?;
+            let result = if method == "mcp.app_call" {
+                let args = match p.get("arguments") {
+                    None | Some(Value::Null) => Default::default(),
+                    Some(Value::Object(args)) => args.clone(),
+                    Some(_) => {
+                        return Err(ServerError::InvalidParams(
+                            "`arguments` must be an object".into(),
+                        ));
+                    }
+                };
+                let tool = str_param(p, "tool")?;
+                rumu_plugins::mcp::app_call(&state.mcp, &servers, server, tool, args).await
+            } else {
+                let uri = str_param(p, "uri")?;
+                rumu_plugins::mcp::app_read(&state.mcp, &servers, server, uri).await
+            };
+            result.map_err(ServerError::Mcp)
+        }
+
+        "mcp.app_context" => {
+            let branch: BranchId = str_param(p, "branch")?.into();
+            kernel.branch_path(&branch)?;
+            let at = (str_param(p, "server")?, str_param(p, "tool")?);
+            let content = p.get("content").unwrap_or(&Value::Null);
+            let view = str_param(p, "view")?;
+            rumu_plugins::mcp::app_context(
+                &state.mcp,
+                &branch,
+                view,
+                at,
+                content,
+                p.get("structured"),
+            );
+            Ok(json!({}))
         }
 
         // Questions a tool call put to the user (`decision.requested`).

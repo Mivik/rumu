@@ -61,7 +61,8 @@ async fn connects_and_reports_status() {
     };
     let fake = hub.server("fake").unwrap().snapshot();
     assert_eq!(fake.status, McpStatus::Ready);
-    assert_eq!(fake.tools.len(), 3);
+    // `poll` is only for views: the model sees three.
+    assert_eq!(fake.tools.len(), 4);
     assert_eq!(fake.instructions.as_deref(), Some("Echo things."));
     let broken = hub.server("broken").unwrap().snapshot();
     assert_eq!(broken.status, McpStatus::Failed);
@@ -446,4 +447,122 @@ async fn rules_narrow_a_servers_tools() {
         .await
         .unwrap();
     assert!(out.is_error && out.content.text.contains("has no tool `list_issues`"));
+}
+
+/// MCP Apps: a tool with a view has its page read along with the call and
+/// recorded for the web; a tool only for views is out of the model's sight
+/// but views reach it; what a view tells the model waits for its next call.
+#[tokio::test]
+async fn views_are_recorded_and_reach_their_servers_tools() {
+    let home = tempfile::tempdir().unwrap();
+    let Some(hub) = hub(home.path()).await else {
+        return;
+    };
+    let decks = assistant_decks(home.path());
+    set_assistant(&decks, all(&["fake"]), &[]);
+    let plugin = invoker(home.path(), hub.clone(), decks.clone());
+    let fake = FakeRuntime::arc();
+    let cx = fake.cx();
+    let args = json!({ "action": "fake/list_issues", "args": { "repo": "r" } });
+    let out = plugin.call_tool("invoke", args, &cx).await.unwrap();
+    assert!(
+        out.content
+            .text
+            .ends_with("[The user sees this result in an interactive view.]")
+    );
+    let app: McpApp = out.content.data.unwrap().decode().unwrap();
+    assert_eq!(
+        (app.uri.as_str(), app.prefers_border),
+        ("ui://fake/issues", Some(false))
+    );
+    // The origin that would add a directive is dropped.
+    assert_eq!(app.csp.connect, ["https://api.github.com"]);
+    let blobs = rumu_blob::Blobs::in_home(home.path()).unwrap();
+    assert_eq!(
+        blobs.get(&app.html).unwrap(),
+        b"<!doctype html><p>issues</p>"
+    );
+    let call: Value = serde_json::from_slice(&blobs.get(&app.call).unwrap()).unwrap();
+    assert_eq!(call["arguments"], json!({ "repo": "r" }));
+    assert_eq!(
+        call["result"]["structuredContent"],
+        json!({ "issues": [1, 2] })
+    );
+
+    // `poll` is only for views.
+    let st = all(&["fake"]);
+    assert!(!text_of(list_server(&hub, &st, "fake", []).await).contains("poll"));
+    let out = plugin
+        .call_tool("invoke", json!({ "action": "fake/poll" }), &cx)
+        .await
+        .unwrap();
+    assert!(out.is_error && out.content.text.contains("has no tool `poll`"));
+    let polled = app_call(&hub, &st, "fake", "poll", Default::default()).await;
+    assert_eq!(polled.unwrap()["content"][0]["text"], "polled");
+    // Views reach the tools of their server the rules enable, no others.
+    let echoed = app_call(&hub, &st, "fake", "echo", Default::default()).await;
+    assert!(echoed.is_ok());
+    let narrow: rumu_core::McpUse = [("fake".to_owned(), vec!["echo".to_owned()])].into();
+    let refused = app_call(&hub, &narrow, "fake", "poll", Default::default()).await;
+    assert!(refused.unwrap_err().contains("no tool `poll` for apps"));
+    assert!(
+        app_call(&hub, &st, "broken", "x", Default::default())
+            .await
+            .is_err()
+    );
+    let read = app_read(&hub, &st, "fake", "mem://notes").await.unwrap();
+    assert_eq!(read["contents"][0]["text"], "# Notes");
+
+    // Only a view's latest context reaches the next model call, once.
+    let mcp = McpPlugin::new(hub.clone(), decks);
+    let event = rumu_core::Event {
+        kind: "llm.pre".into(),
+        session: Default::default(),
+        branch: cx.branch.clone(),
+        fields: Default::default(),
+        payload: Value::Null,
+    };
+    let hook = || async {
+        let out = mcp.on_hook(INTRO_HOOK, &event, &cx).await.unwrap();
+        fake.apply_hook("mcp", &out);
+        let notes = out.effects.into_iter().map(|e| e.text);
+        notes
+            .filter(|t| t.starts_with("The user's"))
+            .collect::<Vec<_>>()
+    };
+    let say = |text: &str| {
+        let content = json!([{ "type": "text", "text": text }]);
+        app_context(
+            &hub,
+            &cx.branch,
+            "n1",
+            ("fake", "list_issues"),
+            &content,
+            None,
+        );
+    };
+    say("zoom 1");
+    say("zoom 2");
+    let notes = hook().await;
+    assert_eq!(notes.len(), 1);
+    assert!(
+        notes[0].ends_with("replaces what it said before):\nzoom 2"),
+        "{notes:?}"
+    );
+    assert!(hook().await.is_empty());
+    // Saying nothing takes back what was not yet handed over.
+    say("zoom 3");
+    app_context(
+        &hub,
+        &cx.branch,
+        "n1",
+        ("fake", "list_issues"),
+        &Value::Null,
+        None,
+    );
+    assert!(hook().await.is_empty());
+}
+
+fn text_of(out: ToolResult<ToolOutput>) -> String {
+    out.unwrap().content.text
 }

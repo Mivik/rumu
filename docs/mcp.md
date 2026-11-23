@@ -118,3 +118,51 @@ harnesses' own docs.
   needs no approval either, and the tool rules do not narrow it.
 - Servers outside the session's list, and tools its rules leave out, are
   neither listed nor callable; a server's tool count is of the enabled ones.
+
+## MCP Apps
+
+rumu implements the `io.modelcontextprotocol/ui` extension (MCP Apps, the
+2026-01-26 stable spec): it declares
+`{ mimeTypes: ["text/html;profile=mcp-app"] }` under `extensions` when it
+connects, so servers attach views to their tools.
+
+- A tool whose `_meta.ui.resourceUri` (or the deprecated flat
+  `_meta["ui/resourceUri"]`) names a `ui://` resource has that resource read
+  along with the call (`tools/call` and `resources/read` in parallel; no
+  cache). The page and `{arguments, result}` (the raw `CallToolResult`) are
+  stored as blobs, and the tool result carries the `mcp.app` payload: server,
+  tool, URI, both blob hashes, the content item's `_meta.ui.csp` origins
+  (entries that could add a directive are dropped) and `prefersBorder`. The
+  model's text gets a line saying the user sees an interactive view. A page
+  that cannot be read leaves a plain result (and a warning in the log).
+- `_meta.ui.visibility` without `model` keeps a tool out of the model's
+  sight: not listed, read, searched or callable through `invoke`.
+- The web shows the view after the tool row, in an opaque-origin frame
+  (`sandbox="allow-scripts allow-forms"`, no `allow-same-origin`: rumu has no
+  second origin to give it, so `localStorage` throws and requests carry
+  `Origin: null`). The page runs under a CSP meta built from its origins,
+  without `'self'` (a srcdoc's self is rumu's origin). `domain` and
+  `permissions` are ignored.
+- The bridge is JSON-RPC over `postMessage` (`web/app/lib/mcpApps.ts`):
+  - `ui/initialize` answers the host capabilities and a host context (theme,
+    rumu's colors as the standard `--color-*` variables, fixed width and a
+    720 px maximum height, locale, time zone); after `initialized` the view
+    gets `tool-input` and `tool-result` from the blobs. Theme changes are
+    sent as `host-context-changed`; unmounting sends `ui/resource-teardown`
+    without waiting.
+  - `tools/call` and `resources/read` go to the same server through the ws
+    methods `mcp.app_call` / `mcp.app_read`: only tools the session's rules
+    enable and whose visibility includes `app`. No approval (as for the
+    model's calls); each is logged. The model does not see them.
+  - `ui/message` puts its text in the composer, like a widget's
+    `rumu.prompt`: the user sends it.
+  - `ui/update-model-context` goes to `mcp.app_context`; the hub keeps each
+    view's latest per branch and the next model call of that branch gets it
+    as an `mcp.app_context` note (dropped on restart if not yet handed over;
+    an empty update takes it back).
+  - `ui/request-display-mode`: `inline` and `fullscreen` (the Fullscreen API
+    on the view's box, so the frame is not reloaded); no `pip`.
+  - `ui/open-link` opens http(s) links in a new tab.
+- Not done: showing the view while the tool runs (`tool-input-partial`,
+  `tool-cancelled`), keeping a view's state across redraws (it replays the
+  call), app-provided tools, `ui/download-file`.

@@ -65,7 +65,7 @@ use std::path::{Path, PathBuf};
 use std::sync::Mutex;
 
 use rumu_core::{
-    Artifact, Branch, BranchId, BranchKind, BranchStatus, IoError, Node, NodeBody, NodeId,
+    Artifact, Branch, BranchId, BranchKind, BranchStatus, IoError, McpApp, Node, NodeBody, NodeId,
     SessionId, SessionInfo, SessionStatus, TaskId, TaskInfo, Timestamp,
 };
 use serde::{Deserialize, Serialize};
@@ -606,6 +606,8 @@ impl Store {
                         hashes.extend(content.attachments.iter().map(|a| a.hash.clone()));
                         let artifact = content.data.as_ref().and_then(|d| d.decode::<Artifact>());
                         hashes.extend(artifact.map(|a| a.hash));
+                        let app = content.data.as_ref().and_then(|d| d.decode::<McpApp>());
+                        hashes.extend(app.into_iter().flat_map(|a| [a.html, a.call]));
                     }
                 }
                 Entry::Corrupt(msg) => return Err(unreadable(sid, msg)),
@@ -1463,6 +1465,26 @@ mod tests {
                     },
                 ))
                 .unwrap();
+            store
+                .insert_node(&node(
+                    &session.id,
+                    &root.id,
+                    NodeBody::ToolResult {
+                        call_id: "c2".into(),
+                        content: rumu_core::Content::text("app").with_data(&McpApp {
+                            server: "s".into(),
+                            tool: "t".into(),
+                            uri: "ui://s/t".into(),
+                            html: "gg".into(),
+                            call: "hh".into(),
+                            csp: Default::default(),
+                            prefers_border: None,
+                        }),
+                        is_error: false,
+                        invoke: None,
+                    },
+                ))
+                .unwrap();
             // A second session references the same blob plus one of its own.
             let (other, _, other_root) = mk_session(&store);
             store
@@ -1479,7 +1501,7 @@ mod tests {
             let hashes = store.referenced_blobs().unwrap();
             assert_eq!(
                 hashes,
-                ["aa", "bb", "cc", "dd", "ee", "ff"]
+                ["aa", "bb", "cc", "dd", "ee", "ff", "gg", "hh"]
                     .into_iter()
                     .map(str::to_owned)
                     .collect::<HashSet<_>>()
@@ -1489,7 +1511,7 @@ mod tests {
 
         // The same set comes back from a reopened (re-scanned) store.
         let store = Store::open(&dir, &dir.join("seen.json")).unwrap();
-        assert_eq!(store.referenced_blobs().unwrap().len(), 6);
+        assert_eq!(store.referenced_blobs().unwrap().len(), 8);
         assert!(store.get_session(&sid).unwrap().is_some());
         std::fs::remove_dir_all(&dir).ok();
     }

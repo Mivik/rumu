@@ -21,12 +21,13 @@ use rmcp::model::{JsonObject, Tool};
 use rumu_cards::Decks;
 use rumu_cards::recall::{Doc, rank_docs};
 use rumu_core::{
-    Content, Cx, Decision, Event, HookOutput, HookSpec, Manifest, McpStatus, McpUse, PathState,
-    Plugin, RUMU_WORKSPACE, SCRATCH_WORKSPACE, Structured, ToolError, ToolOutput, ToolResult,
-    rules_enable,
+    BranchId, Content, Cx, Decision, Event, HookOutput, HookSpec, Manifest, McpApp, McpAppContext,
+    McpAppCsp, McpStatus, McpUse, PathState, Plugin, RUMU_WORKSPACE, SCRATCH_WORKSPACE, Structured,
+    ToolError, ToolOutput, ToolResult, rules_enable,
 };
 use serde::{Deserialize, Serialize};
 use serde_json::{Value, json};
+use tracing::{info, warn};
 
 use crate::workspace::vfs::{actions_section, signature};
 
@@ -41,6 +42,11 @@ pub const SEARCH_LIMIT: usize = 5;
 /// rest are counted.
 const RESOURCES_SHOWN: usize = 100;
 const INTRO_HOOK: &str = "mcp-intro";
+/// The MCP Apps extension, and the kind of view rumu renders.
+pub const UI_EXTENSION: &str = "io.modelcontextprotocol/ui";
+pub const APP_MIME: &str = "text/html;profile=mcp-app";
+/// What a note keeps of a view's model context, in characters.
+const CONTEXT_LIMIT: usize = 4_000;
 
 /// Payload of the `mcp.intro` note (v1): the server list, again whenever it
 /// changes.
@@ -109,12 +115,24 @@ impl Plugin for McpPlugin {
         if hook_id != INTRO_HOOK {
             return Ok(HookOutput::default());
         }
+        let mut effects: Vec<Content> = self.servers_note(cx).await?.into_iter().collect();
+        effects.extend(self.hub.take_contexts(&cx.branch));
+        Ok(HookOutput {
+            effects,
+            decision: Decision::Pass,
+        })
+    }
+}
+
+impl McpPlugin {
+    /// The server-list note, when the list changed since the last one.
+    async fn servers_note(&self, cx: &Cx) -> rumu_core::Result<Option<Content>> {
         let state = cx.state()?;
         let mcp = servers(&self.decks, &state);
         let servers: Vec<String> = mcp.keys().cloned().collect();
         let last = cx.index()?.all::<McpIntro>().pop().map(|e| e.value.servers);
         if last.as_ref().unwrap_or(&Vec::new()) == &servers {
-            return Ok(HookOutput::default());
+            return Ok(None);
         }
         let (text, status) = match (last, servers.is_empty()) {
             (_, true) => (
@@ -130,16 +148,18 @@ impl Plugin for McpPlugin {
                 )
             }
         };
-        Ok(HookOutput {
-            effects: vec![Content::note_with(text, &McpIntro { servers, status })],
-            decision: Decision::Pass,
-        })
+        Ok(Some(Content::note_with(
+            text,
+            &McpIntro { servers, status },
+        )))
     }
 }
 
 /// `invoke` of `<name>/<tool>`: run the tool of one of the session's
 /// servers (`mcp`) and turn its result into a tool output. A call the server
-/// refuses comes back with the tool's input schema.
+/// refuses comes back with the tool's input schema. A tool with a view
+/// (MCP Apps) has its page read along with the call, and the output
+/// carries both for the web ([`McpApp`]).
 pub async fn call(
     hub: &McpHub,
     mcp: &McpUse,
@@ -156,11 +176,219 @@ pub async fn call(
             names(&snap.tools)
         )));
     };
-    let result = server.call(tool, args).await.map_err(|e| {
+    let ui = ui_resource(spec);
+    let page = async {
+        match ui {
+            Some(uri) => Some(server.read_resource(uri).await),
+            None => None,
+        }
+    };
+    let (result, page) = tokio::join!(server.call(tool, args.clone()), page);
+    let result = result.map_err(|e| {
         let schema = Value::Object((*spec.input_schema).clone());
         ToolError::model(format!("{name}/{tool}: {e}; its arguments: {schema}"))
     })?;
-    output(&result, name, scratch(state), blobs).await
+    let out = output(&result, name, scratch(state), &blobs).await?;
+    let (Some(uri), Some(page)) = (ui, page) else {
+        return Ok(out);
+    };
+    match page.and_then(|page| app_view((name, tool, uri), &page, &args, &result, &blobs)) {
+        Ok(app) => {
+            let mut out = out.with_data(&app);
+            out.content
+                .text
+                .push_str("\n[The user sees this result in an interactive view.]");
+            Ok(out)
+        }
+        Err(e) => {
+            warn!(
+                server = name,
+                tool,
+                uri,
+                error = e,
+                "mcp app view unavailable"
+            );
+            Ok(out)
+        }
+    }
+}
+
+/// The `ui://` resource `tool` shows its results in: `_meta.ui.resourceUri`,
+/// or the deprecated flat `_meta["ui/resourceUri"]`.
+fn ui_resource(tool: &Tool) -> Option<&str> {
+    let meta = tool.meta.as_deref()?;
+    meta.get("ui")
+        .and_then(|ui| ui.get("resourceUri"))
+        .or_else(|| meta.get("ui/resourceUri"))
+        .and_then(Value::as_str)
+        .filter(|uri| uri.starts_with("ui://"))
+}
+
+/// Whether `tool` is for `who` (`model` or `app`): its `_meta.ui.visibility`,
+/// both when it has none.
+fn visible_to(tool: &Tool, who: &str) -> bool {
+    tool.meta
+        .as_deref()
+        .and_then(|m| m.get("ui"))
+        .and_then(|ui| ui.get("visibility"))
+        .and_then(Value::as_array)
+        .is_none_or(|v| v.iter().any(|w| w == who))
+}
+
+/// The view of a call of `(server, tool)` showing `uri`: `page`, what
+/// `resources/read` of it returned, and the call, stored as blobs.
+fn app_view(
+    (server, tool, uri): (&str, &str, &str),
+    page: &rmcp::model::ReadResourceResult,
+    args: &JsonObject,
+    result: &Value,
+    blobs: &impl Fn() -> rumu_blob::Result<rumu_blob::Blobs>,
+) -> Result<McpApp, String> {
+    let contents = serde_json::to_value(&page.contents).map_err(|e| e.to_string())?;
+    let contents = contents.as_array().map(Vec::as_slice).unwrap_or_default();
+    let item = contents
+        .iter()
+        .find(|c| c["uri"] == uri)
+        .or(contents.first())
+        .ok_or("the resource is empty")?;
+    if let Some(mime) = item["mimeType"].as_str()
+        && !mime.starts_with("text/html")
+    {
+        return Err(format!("the resource is {mime}, not HTML"));
+    }
+    let html = match (item["text"].as_str(), item["blob"].as_str()) {
+        (Some(text), _) => text.as_bytes().to_vec(),
+        (None, Some(data)) => base64::engine::general_purpose::STANDARD
+            .decode(data)
+            .map_err(|e| format!("bad base64 data: {e}"))?,
+        _ => return Err("the resource has no content".into()),
+    };
+    let call = json!({ "arguments": args, "result": result });
+    let blobs = blobs().map_err(|e| e.to_string())?;
+    let put = |bytes: &[u8]| blobs.put(bytes).map_err(|e| e.to_string());
+    let ui = &item["_meta"]["ui"];
+    let csp = &ui["csp"];
+    Ok(McpApp {
+        server: server.to_owned(),
+        tool: tool.to_owned(),
+        uri: uri.to_owned(),
+        html: put(&html)?,
+        call: put(call.to_string().as_bytes())?,
+        csp: McpAppCsp {
+            connect: sources(&csp["connectDomains"]),
+            resource: sources(&csp["resourceDomains"]),
+            frame: sources(&csp["frameDomains"]),
+            base_uri: sources(&csp["baseUriDomains"]),
+        },
+        prefers_border: ui["prefersBorder"].as_bool(),
+    })
+}
+
+/// A view's origins as CSP sources: an entry that could end the directive
+/// or name a keyword (`'unsafe-eval'`) is dropped.
+fn sources(origins: &Value) -> Vec<String> {
+    origins
+        .as_array()
+        .into_iter()
+        .flatten()
+        .filter_map(Value::as_str)
+        .filter(|s| {
+            !s.is_empty()
+                && s.bytes()
+                    .all(|b| b.is_ascii_alphanumeric() || b".-:/*_[]".contains(&b))
+        })
+        .map(str::to_owned)
+        .collect()
+}
+
+/// `tools/call` from a view of one of `name`'s results (the web's
+/// `mcp.app_call`): a tool of the same server the session's rules enable
+/// and apps may call. Returns its `CallToolResult`; the model never sees it.
+pub async fn app_call(
+    hub: &McpHub,
+    mcp: &McpUse,
+    name: &str,
+    tool: &str,
+    args: JsonObject,
+) -> Result<Value, String> {
+    let (server, snap) = app_server(hub, mcp, name).await?;
+    if !snap
+        .tools
+        .iter()
+        .any(|t| t.name == tool && visible_to(t, "app"))
+    {
+        return Err(format!("`{name}` has no tool `{tool}` for apps"));
+    }
+    info!(server = name, tool, "mcp app calls a tool");
+    server.call(tool, args).await
+}
+
+/// `resources/read` from a view of one of `name`'s results (the web's
+/// `mcp.app_read`). Returns its `ReadResourceResult`.
+pub async fn app_read(hub: &McpHub, mcp: &McpUse, name: &str, uri: &str) -> Result<Value, String> {
+    let (server, _) = app_server(hub, mcp, name).await?;
+    info!(server = name, uri, "mcp app reads a resource");
+    let result = server.read_resource(uri).await?;
+    serde_json::to_value(result).map_err(|e| e.to_string())
+}
+
+/// Server `name` when the session has it, with the tools its rules enable,
+/// whoever they are for.
+async fn app_server(
+    hub: &McpHub,
+    mcp: &McpUse,
+    name: &str,
+) -> Result<(Arc<Server>, Snapshot), String> {
+    let rules = mcp
+        .get(name)
+        .ok_or_else(|| format!("no MCP server `{name}` in this session"))?;
+    let server = hub
+        .server(name)
+        .ok_or_else(|| format!("MCP server `{name}` is not configured"))?;
+    let mut snap = server.ready().await;
+    snap.tools = snap
+        .tools
+        .iter()
+        .filter(|t| rules_enable(rules, &t.name))
+        .cloned()
+        .collect();
+    Ok((server, snap))
+}
+
+/// `ui/update-model-context` from view `view` (its result node) of a call
+/// of `(server, tool)` on `branch` (the web's `mcp.app_context`): kept,
+/// replacing what the view said before, for the branch's next model call;
+/// nothing said drops it.
+pub fn app_context(
+    hub: &McpHub,
+    branch: &BranchId,
+    view: &str,
+    (server, tool): (&str, &str),
+    content: &Value,
+    structured: Option<&Value>,
+) {
+    let mut parts: Vec<String> = content
+        .as_array()
+        .into_iter()
+        .flatten()
+        .filter_map(|b| b["text"].as_str())
+        .map(str::to_owned)
+        .collect();
+    parts.extend(structured.filter(|s| !s.is_null()).map(Value::to_string));
+    let said = parts.join("\n");
+    let note = (!said.trim().is_empty()).then(|| {
+        let text = format!(
+            "The user's interactive view of a `{server}/{tool}` result updated what it tells \
+             you (this replaces what it said before):\n{}",
+            rumu_core::truncate_middle(said, CONTEXT_LIMIT)
+        );
+        let data = McpAppContext {
+            server: server.to_owned(),
+            tool: tool.to_owned(),
+        };
+        Content::note_with(text, &data)
+    });
+    hub.set_context(branch, view, note);
 }
 
 /// `mcp.read_resource` on `@rumu:/mcp/<name>`: read `uri` from one of the
@@ -411,12 +639,13 @@ fn names(tools: &[Tool]) -> String {
         .join(", ")
 }
 
-/// `snap` with only the tools `rules` enable.
+/// `snap` with only the tools `rules` enable, and of them only the ones for
+/// the model (not those only views call).
 fn enabled(mut snap: Snapshot, rules: &[String]) -> Snapshot {
     snap.tools = snap
         .tools
         .iter()
-        .filter(|t| rules_enable(rules, &t.name))
+        .filter(|t| rules_enable(rules, &t.name) && visible_to(t, "model"))
         .cloned()
         .collect();
     snap

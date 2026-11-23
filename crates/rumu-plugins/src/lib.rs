@@ -26,7 +26,7 @@ mod code;
 mod decks;
 mod error;
 mod external;
-mod mcp;
+pub mod mcp;
 mod memory;
 mod skills;
 mod stdio;

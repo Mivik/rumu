@@ -66,6 +66,66 @@ pub struct McpToolInfo {
     pub description: Option<String>,
 }
 
+/// Payload of an MCP tool result shown as an MCP App view (`mcp.app` v1):
+/// the tool named a `ui://` resource, read along with the call. Both the
+/// page and the call are blobs, so the view replays as it first showed
+/// whatever later happens to the server.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, ts_rs::TS)]
+#[ts(export)]
+pub struct McpApp {
+    pub server: String,
+    pub tool: String,
+    /// The `ui://` resource.
+    pub uri: String,
+    /// Blob of the view's HTML.
+    pub html: String,
+    /// Blob of `{"arguments": …, "result": …}`: the call's arguments and
+    /// its `CallToolResult` as the server sent it.
+    pub call: String,
+    /// The origins the view may reach, from the resource's `_meta.ui.csp`.
+    #[serde(default)]
+    pub csp: McpAppCsp,
+    /// The resource's `_meta.ui.prefersBorder`.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    #[ts(optional)]
+    pub prefers_border: Option<bool>,
+}
+
+impl crate::Structured for McpApp {
+    const TAG: &'static str = "mcp.app";
+    const V: u32 = 1;
+}
+
+/// The origins an MCP App view may reach (`McpUiResourceCsp`), each a CSP
+/// source expression; none is the restrictive default.
+#[derive(Debug, Clone, Default, PartialEq, Eq, Serialize, Deserialize, ts_rs::TS)]
+#[serde(default)]
+#[ts(export)]
+pub struct McpAppCsp {
+    /// `connect-src`.
+    pub connect: Vec<String>,
+    /// `script-src`, `style-src`, `img-src`, `font-src`, `media-src`.
+    pub resource: Vec<String>,
+    /// `frame-src`.
+    pub frame: Vec<String>,
+    /// `base-uri`.
+    pub base_uri: Vec<String>,
+}
+
+/// Payload of the note an MCP App view's `ui/update-model-context` became
+/// (`mcp.app_context` v1): the latest the view said before a model call.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, ts_rs::TS)]
+#[ts(export)]
+pub struct McpAppContext {
+    pub server: String,
+    pub tool: String,
+}
+
+impl crate::Structured for McpAppContext {
+    const TAG: &'static str = "mcp.app_context";
+    const V: u32 = 1;
+}
+
 /// An assistant's MCP servers: each server's name in `settings.yaml`, with
 /// the rules enabling its tools ([`crate::rules_enable`]; `*` is all of
 /// them, new ones included).

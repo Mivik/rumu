@@ -126,6 +126,7 @@ pub async fn boot(home: &Path) -> Result<Booted> {
             workspaces,
             blobs,
             settings,
+            mcp,
         },
         _lock: lock,
     })
