@@ -104,10 +104,12 @@ onBeforeUnmount(() => {
        snapping the chat to half its width. A track's width already eases out
        as its fr grows, hence ease-in-out. The third sheet keeps its own right
        gutter, so the desk drops its padding there, and clips the sheet while
-       it slides past the edge (motion.ts, SIDE_SHEET). -->
+       it slides past the edge (motion.ts, SIDE_SHEET). The row is the
+       desk's height, not its content's: an auto row made every layout
+       anywhere in the chat measure the whole timeline to size it. -->
   <div
     v-else
-    class="desk grid h-full grid-cols-1 transition-[grid-template-columns] duration-350 ease-in-out lg:grid-cols-[280px_minmax(0,1fr)] lg:gap-x-4 lg:pr-4 xl:overflow-x-clip xl:pr-0"
+    class="desk grid h-full grid-cols-1 grid-rows-[minmax(0,1fr)] transition-[grid-template-columns] duration-350 ease-in-out lg:grid-cols-[280px_minmax(0,1fr)] lg:gap-x-4 lg:pr-4 xl:overflow-x-clip xl:pr-0"
     :class="
       artifactOpen || agentOpen || taskOpen
         ? 'xl:grid-cols-[280px_minmax(0,1fr)_minmax(0,1fr)]'
