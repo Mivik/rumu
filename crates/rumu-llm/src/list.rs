@@ -1,6 +1,5 @@
 //! Listing a provider's models from its endpoints' own list APIs.
 
-use std::collections::BTreeMap;
 use std::time::Duration;
 
 use rumu_core::Protocol;
@@ -10,10 +9,7 @@ use crate::api_root;
 
 /// Every model id the endpoints list, merged and sorted. An endpoint that
 /// fails is skipped; only when all fail is it an error (the first one's).
-pub async fn list_models(
-    endpoints: &BTreeMap<Protocol, String>,
-    key: &str,
-) -> Result<Vec<String>, String> {
+pub async fn list_models(endpoints: &crate::Endpoints, key: &str) -> Result<Vec<String>, String> {
     let http = reqwest::Client::builder()
         .timeout(Duration::from_secs(30))
         .build()
@@ -21,7 +17,7 @@ pub async fn list_models(
     let mut ids: Vec<String> = Vec::new();
     let mut error: Option<String> = None;
     let mut seen: Vec<String> = Vec::new();
-    for (&protocol, url) in endpoints {
+    for (&protocol, (_, url)) in endpoints {
         let root = api_root(protocol, url);
         // Chat completions and Responses share their list.
         if seen.contains(&root) {
