@@ -4016,6 +4016,13 @@ async fn invoke_runs_declared_actions_and_explains_the_rest() {
         invoke(json!({ "action": "task.list" })).await.unwrap(),
         "no action `task.list`; to list them, `list @rumu:/tasks`; rumu's actions:",
     );
+    // A tool's name as the action points at the tool.
+    refused(
+        invoke(json!({ "action": "list", "path": "@rumu:/sessions" }))
+            .await
+            .unwrap(),
+        "`list` is a tool, not an action: call `list` itself with `path: \"@rumu:/sessions\"`",
+    );
     // An unknown action lists rumu's.
     refused(
         invoke(json!({ "action": "task.pause", "path": "@rumu:/tasks/t1" }))

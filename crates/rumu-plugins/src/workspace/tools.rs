@@ -1094,6 +1094,22 @@ impl WorkspacePlugin {
             let blobs = || self.blobs();
             return crate::mcp::call(&self.mcp(), &mcp, state, blobs, server, tool, params).await;
         }
+        // `invoke list on @rumu:/sessions`: the verbs are tools of their own.
+        const VERBS: [&str; 8] = [
+            "read", "write", "edit", "delete", "list", "search", "show", "bash",
+        ];
+        if VERBS.contains(&args.action.as_str()) {
+            let action = &args.action;
+            let with = match &args.path {
+                Some(path) if ["read", "list", "delete", "show"].contains(&action.as_str()) => {
+                    format!(" with `path: \"{path}\"`")
+                }
+                _ => String::new(),
+            };
+            return Err(ToolError::model(format!(
+                "`{action}` is a tool, not an action: call `{action}` itself{with}"
+            )));
+        }
         let params = Value::Object(params);
         let Some(path) = args.path else {
             return Err(super::vfs::needs_path(&args.action));
