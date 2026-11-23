@@ -1,4 +1,5 @@
 {
+  "pluginFailed": "插件 {name} 出错",
   "auth": {
     "token": "访问令牌",
     "connect": "连接",

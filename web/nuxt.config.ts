@@ -104,7 +104,7 @@ export default defineNuxtConfig({
   },
 
   nitro: {
-    // Dev: forward the WebSocket and the blob store to the rumu server
+    // Dev: forward the WebSocket, the blob store and plugin files to the rumu server
     // (`pnpm mock` runs it with a scripted LLM). RUMU_WS overrides the
     // target, e.g. another port.
     devProxy: {
@@ -118,6 +118,11 @@ export default defineNuxtConfig({
         target: (process.env.RUMU_WS ?? 'ws://localhost:7878/ws')
           .replace(/^ws/, 'http')
           .replace(/\/ws$/, '/blobs'),
+      },
+      '/plugins': {
+        target: (process.env.RUMU_WS ?? 'ws://localhost:7878/ws')
+          .replace(/^ws/, 'http')
+          .replace(/\/ws$/, '/plugins'),
       },
     },
   },

@@ -1,4 +1,5 @@
 {
+  "pluginFailed": "Plugin {name} failed",
   "auth": {
     "token": "Access token",
     "connect": "Connect",

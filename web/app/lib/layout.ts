@@ -5,6 +5,7 @@
 // routes (router.ts); what is left here is the settings page's hand-offs.
 import { onBeforeUnmount, reactive, watchEffect, type Ref } from 'vue'
 import { t } from '../i18n'
+import { plugins } from './plugins'
 import { openPage, pageUp } from './router'
 import { state } from './state/state'
 
@@ -75,5 +76,6 @@ export function closePanels(): void {
     state.agentView = null
     state.taskDetail = null
     state.panelBack = null
+    plugins.panel = null
   }
 }

@@ -13,6 +13,8 @@ import DropOverlay from './components/DropOverlay.vue'
 import AgentPanel from './components/chat/AgentPanel.vue'
 import ArtifactPanel from './components/chat/ArtifactPanel.vue'
 import TaskOutputPanel from './components/chat/TaskOutputPanel.vue'
+import PluginPanel from './components/plugins/PluginPanel.vue'
+import { openPanelOf } from './lib/plugins'
 import { openArtifact } from './lib/artifacts'
 import Toasts from './components/Toasts.vue'
 import StopConfirm from './components/chat/StopConfirm.vue'
@@ -73,6 +75,16 @@ const taskOpen = computed(
     !!state.taskDetail &&
     !!state.tasks[state.taskDetail],
 )
+/** Or a plugin's panel. */
+const pluginOpen = computed(
+  () =>
+    !sheetPage.value &&
+    !artifactOpen.value &&
+    !agentOpen.value &&
+    !taskOpen.value &&
+    !!state.sessionId &&
+    !!openPanelOf(),
+)
 
 onMounted(() => {
   lg = window.matchMedia(WIDE)
@@ -111,7 +123,7 @@ onBeforeUnmount(() => {
     v-else
     class="desk grid h-full grid-cols-1 grid-rows-[minmax(0,1fr)] transition-[grid-template-columns] duration-350 ease-in-out lg:grid-cols-[280px_minmax(0,1fr)] lg:gap-x-4 lg:pr-4 xl:overflow-x-clip xl:pr-0"
     :class="
-      artifactOpen || agentOpen || taskOpen
+      artifactOpen || agentOpen || taskOpen || pluginOpen
         ? 'xl:grid-cols-[280px_minmax(0,1fr)_minmax(0,1fr)]'
         : 'xl:grid-cols-[280px_minmax(0,1fr)_minmax(0,0fr)]'
     "
@@ -140,6 +152,7 @@ onBeforeUnmount(() => {
       <ArtifactPanel v-if="artifactOpen" key="artifact" :class="SIDE" />
       <AgentPanel v-else-if="agentOpen" key="agent" :class="SIDE" />
       <TaskOutputPanel v-else-if="taskOpen" key="task" :class="SIDE" />
+      <PluginPanel v-else-if="pluginOpen" key="plugin" :class="SIDE" />
     </Transition>
     <!-- settings at lg: a dialog over the desk, which stays as it was -->
     <Modal

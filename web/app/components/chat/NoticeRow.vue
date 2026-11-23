@@ -6,7 +6,7 @@
 // files the user reverted, a plain note in full. The model-facing text
 // stays in the hover title.
 import { t } from '../../i18n'
-import type { BranchId, TaskStatus } from '../../lib/types'
+import type { BranchId, Tagged, TaskStatus } from '../../lib/types'
 import type { McpStatus } from '../../lib/generated/McpStatus'
 
 export interface McpServerLine {
@@ -28,6 +28,7 @@ export type Notice =
   | { kind: 'reply'; key: string; branch: BranchId; label: string; text: string }
   | { kind: 'note'; key: string; source?: string; text: string }
   | { kind: 'revert'; key: string; files: string[]; text: string }
+  | { kind: 'plugin'; key: string; data: Tagged; text: string }
 
 const ICON: Record<Notice['kind'], string> = {
   workspace: 'mount',
@@ -42,6 +43,7 @@ const ICON: Record<Notice['kind'], string> = {
   reply: 'agent',
   note: 'note',
   revert: 'undo',
+  plugin: 'plugin',
 }
 
 /** `telegram (61 tools)`; a server not ready says so. */
@@ -60,6 +62,8 @@ function joinList(xs: string[]): string {
 
 <script setup lang="ts">
 import { openAgentView, openDrawer, openTaskDetail } from '../../lib/store'
+import { rendererOf } from '../../lib/plugins'
+import PluginView from '../plugins/PluginView.vue'
 import { taskStatusWord } from '../../lib/tasks'
 import { workspaceLabel } from '../../lib/util'
 import Icon from '../ui/Icon.vue'
@@ -154,6 +158,14 @@ defineProps<{ notice: Notice }>()
           : t('cards.notes.revertNone')
       }}
     </span>
+    <PluginView
+      v-else-if="notice.kind === 'plugin' && rendererOf(notice.data)"
+      class="min-w-0"
+      :plugin="rendererOf(notice.data)!.plugin"
+      :is="rendererOf(notice.data)!.component"
+      :props="{ data: notice.data.data, v: notice.data.v, text: notice.text }"
+      :title="notice.text"
+    />
     <span v-else-if="notice.kind === 'note'" class="min-w-0 whitespace-pre-wrap"
       ><span v-if="notice.source" class="font-semibold text-ink-2">{{ notice.source }} </span
       >{{ notice.text }}</span

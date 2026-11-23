@@ -65,6 +65,7 @@ import { kindOf, sniffFile, typedText, uploadBlob, withLeadingAnchors } from '..
 import { composerFocus, editTarget as mainEdit, openLightbox, toast } from '../../lib/state/ui'
 import { askSide, openSide, quoteBlock } from '../../lib/state/side'
 import { dragging, setDropSink } from '../../lib/state/drops'
+import { runCommand } from '../../lib/plugins'
 import {
   activeDraft,
   nextAttachmentId,
@@ -332,6 +333,13 @@ async function submit(): Promise<void> {
     draft.value = ''
     openSide(view.aside, null, quote)
     if (question && !(await askSide(view.aside, question))) draft.value = text
+    return
+  }
+  // `/name [arg]` runs a plugin's command, when one registered `name`.
+  const ran = !target && !items.length ? runCommand(text) : null
+  if (ran) {
+    draft.value = ''
+    await ran
     return
   }
   // Quoted passages lead the message, as markdown quotes.

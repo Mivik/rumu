@@ -20,6 +20,7 @@ import {
   bashExtraArgs,
   isRowOpen,
   outputJson,
+  resultRenderer,
   toggleRow,
   toolRowTitle,
   toolRowView,
@@ -40,6 +41,7 @@ import FileView from './FileView.vue'
 import ImageThumb from './ImageThumb.vue'
 import DocumentChip from './DocumentChip.vue'
 import JsonTree from './JsonTree.vue'
+import PluginView from '../plugins/PluginView.vue'
 import { useWorkView } from '../../lib/state/appearance'
 
 const props = defineProps<{ rows: ToolRowInfo[] }>()
@@ -113,6 +115,14 @@ function bashOf(v: ToolRowView): {
   const live = taskOutput(task.id)
   const running = task.status === 'running'
   return { ...own, output: running ? live : (task.result?.text ?? live), failed: task.is_error, running }
+}
+
+/** What a plugin's result renderer gets: the payload, its version and the
+ *  text the model saw. */
+function pluginProps(v: ToolRowView): Record<string, unknown> {
+  const body = v.row.result.body
+  const data = body.type === 'tool_result' ? body.content.data : null
+  return { data: data?.data, v: data?.v, text: v.output }
 }
 
 /** Status color of a row's icon and name: failures danger, else tool. */
@@ -232,7 +242,14 @@ function statusClass(v: ToolRowView): string {
           <div class="mb-1 text-micro font-semibold text-ink-3">{{ t('tools.detail.args') }}</div>
           <div class="code whitespace-normal"><JsonTree :value="v.args" bare /></div>
         </div>
-        <div>
+        <PluginView
+          v-if="resultRenderer(v)"
+          :plugin="resultRenderer(v)!.plugin"
+          :is="resultRenderer(v)!.component"
+          :props="pluginProps(v)"
+          :title="v.output"
+        />
+        <div v-else>
           <div class="mb-1 text-micro font-semibold text-ink-3">
             {{ v.status === 'ok' ? t('tools.detail.output') : t('tools.detail.outputError') }}
           </div>

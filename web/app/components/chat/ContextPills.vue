@@ -24,6 +24,7 @@ import { agentsOf, importOf, mountedId, updateOf, workspaceUseOf } from '../../l
 import { openDrawer, state } from '../../lib/store'
 import { taskLabel } from '../../lib/tasks'
 import { vEnter } from '../../lib/motion'
+import { rendererOf } from '../../lib/plugins'
 import NoticeRow from './NoticeRow.vue'
 import type { Notice } from './NoticeRow.vue'
 
@@ -170,6 +171,8 @@ const parsed = computed(() => {
     } else if (revert) {
       const files = revert.files.map((f) => `${f.ws}:${f.path}`)
       add({ kind: 'revert', key: `revert:${n.id}`, files, text: files.join('\n') })
+    } else if (rendererOf(b.content.data)) {
+      add({ kind: 'plugin', key: `plugin:${n.id}`, data: b.content.data!, text: b.content.text })
     } else if (b.content.text || !b.content.data) {
       // Name the plugin a note comes from; rumu's own (`system`) go unnamed.
       const source = b.source === 'system' ? undefined : b.source

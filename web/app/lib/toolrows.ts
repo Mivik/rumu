@@ -12,6 +12,7 @@ import { findAgentChild, state } from './store'
 import { taskIdOf, taskLabel } from './tasks'
 import { argSummary, preview, workspaceLabel } from './util'
 import { renderedContent } from './attachments'
+import { rendererOf, type ResultRenderer } from './plugins'
 import { diffCounts as foldCounts, diffLines, type DiffCounts, filePatchOf } from './diff'
 import { i18n, t } from '../i18n'
 import type { WorkView } from './generated/WorkView'
@@ -488,7 +489,19 @@ export function isFileEdit(v: ToolRowView): boolean {
  *  view says (`auto`: a failed one). */
 function opensByDefault(v: ToolRowView, work: WorkView): boolean {
   const calls = work.calls
-  return v.status === 'blocked' || calls === 'open' || (calls === 'auto' && v.status === 'error')
+  return (
+    v.status === 'blocked' ||
+    calls === 'open' ||
+    (calls === 'auto' && v.status === 'error') ||
+    !!resultRenderer(v)
+  )
+}
+
+/** The plugin renderer of an ok result whose data carries a tag one
+ *  claimed: it draws the row's output. */
+export function resultRenderer(v: ToolRowView): ResultRenderer | null {
+  const body = v.row.result.body
+  return v.status === 'ok' && body.type === 'tool_result' ? rendererOf(body.content.data) : null
 }
 
 /** Rows the user opened or folded against their default, by result node

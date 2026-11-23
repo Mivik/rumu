@@ -12,6 +12,7 @@ import ConversationView from './ConversationView.vue'
 import SelectionBar from './SelectionBar.vue'
 import SidePop from './SidePop.vue'
 import TasksPanel from './TasksPanel.vue'
+import PluginStatus from '../plugins/PluginStatus.vue'
 import Icon from '../ui/Icon.vue'
 
 const view = useBranchView()
@@ -69,6 +70,8 @@ function composerRoot(): HTMLElement | null {
           </button>
         </div>
       </div>
+      <!-- the plugins' status items, about the session shown -->
+      <PluginStatus v-if="!view.sub" />
       <!-- background tasks of this branch: a tab on the composer's edge -->
       <TasksPanel />
       <Composer ref="composer" />
