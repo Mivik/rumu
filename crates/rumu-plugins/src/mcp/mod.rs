@@ -37,6 +37,9 @@ pub use hub::{McpHub, Server, Snapshot};
 const INSTRUCTIONS_LIMIT: usize = 2_000;
 /// Default `search` hits under `@rumu:/mcp`: each prints its schema.
 pub const SEARCH_LIMIT: usize = 5;
+/// Resources (and resource templates) a server's listing shows by URI; the
+/// rest are counted.
+const RESOURCES_SHOWN: usize = 100;
 const INTRO_HOOK: &str = "mcp-intro";
 
 /// Payload of the `mcp.intro` note (v1): the server list, again whenever it
@@ -157,79 +160,117 @@ pub async fn call(
         let schema = Value::Object((*spec.input_schema).clone());
         ToolError::model(format!("{name}/{tool}: {e}; its arguments: {schema}"))
     })?;
-    let scratch = state
+    output(&result, name, scratch(state), blobs).await
+}
+
+/// `mcp.read_resource` on `@rumu:/mcp/<name>`: read `uri` from one of the
+/// session's servers, its contents turned into a tool output like a tool
+/// result's embedded resources (several each under their URI).
+pub async fn read_resource(
+    hub: &McpHub,
+    mcp: &McpUse,
+    state: &PathState,
+    blobs: impl Fn() -> rumu_blob::Result<rumu_blob::Blobs>,
+    name: &str,
+    uri: &str,
+) -> ToolResult<ToolOutput> {
+    let (server, _) = bound(hub, mcp, name).await?;
+    let result = server
+        .read_resource(uri)
+        .await
+        .map_err(|e| ToolError::model(format!("{name}: reading `{uri}`: {e}")))?;
+    let several = result.contents.len() > 1;
+    let mut content = Vec::new();
+    for c in serde_json::to_value(&result.contents)
+        .unwrap_or_default()
+        .as_array()
+        .into_iter()
+        .flatten()
+    {
+        if several {
+            let uri = c["uri"].as_str().unwrap_or("?");
+            content.push(json!({ "type": "text", "text": format!("[{uri}]") }));
+        }
+        content.push(json!({ "type": "resource", "resource": c }));
+    }
+    if content.is_empty() {
+        return Ok(format!("`{uri}` is empty").into());
+    }
+    output(&json!({ "content": content }), name, scratch(state), blobs).await
+}
+
+/// The session's `@scratch` root.
+fn scratch(state: &PathState) -> Option<PathBuf> {
+    state
         .workspaces
         .iter()
         .find(|w| w.name == SCRATCH_WORKSPACE)
-        .map(|w| PathBuf::from(w.root.as_str()));
-    output(&result, scratch, blobs).await
+        .map(|w| PathBuf::from(w.root.as_str()))
 }
 
-/// A `tools/call` result as a tool output: text blocks joined, images
-/// attached — and copied into `scratch` (the session's `@scratch` root)
-/// like a prompt's, the text naming the file — other media named.
+/// A `tools/call` result of server `server` as a tool output: text blocks
+/// joined, images attached, and every medium (images, audio, binary
+/// resources) copied into `scratch` (the session's `@scratch` root) like a
+/// prompt's, the text naming the file.
 async fn output(
     result: &Value,
+    server: &str,
     scratch: Option<PathBuf>,
     blobs: impl Fn() -> rumu_blob::Result<rumu_blob::Blobs>,
 ) -> ToolResult<ToolOutput> {
     let mut parts: Vec<String> = Vec::new();
     let mut images = Vec::new();
     for block in result["content"].as_array().into_iter().flatten() {
-        match block["type"].as_str().unwrap_or("") {
-            "text" => parts.push(block["text"].as_str().unwrap_or("").to_owned()),
-            "image" => {
-                let data = block["data"].as_str().unwrap_or("");
-                let bytes = base64::engine::general_purpose::STANDARD
-                    .decode(data)
-                    .map_err(|e| ToolError::model(format!("bad image data: {e}")))?;
-                let blobs =
-                    blobs().map_err(|e| ToolError::model(format!("storing an image: {e}")))?;
-                let root = scratch.clone();
-                let (attachment, file) =
-                    tokio::task::spawn_blocking(move || -> rumu_blob::Result<_> {
-                        let a = blobs.ingest_image(&bytes, None)?;
-                        let file = a.scratch_path();
-                        if let Some(root) = root {
-                            blobs.copy_to(&a.hash, &root.join(&file))?;
-                        }
-                        Ok((a, file))
-                    })
-                    .await
-                    .map_err(|e| ToolError::model(e.to_string()))?
-                    .map_err(|e| ToolError::model(format!("an image: {e}")))?;
-                images.push(attachment);
-                if scratch.is_some() {
-                    parts.push(format!(
-                        "[image {} saved as {SCRATCH_WORKSPACE}:{file}]",
-                        images.len()
-                    ));
-                }
+        let kind = block["type"].as_str().unwrap_or("");
+        let (data, mime, what) = match kind {
+            "text" => {
+                parts.push(block["text"].as_str().unwrap_or("").to_owned());
+                continue;
             }
-            "audio" => parts.push(format!(
-                "[audio ({}) omitted]",
-                block["mimeType"].as_str().unwrap_or("?")
-            )),
+            "image" | "audio" => (&block["data"], &block["mimeType"], kind.to_owned()),
             "resource" => {
                 let r = &block["resource"];
-                match r["text"].as_str() {
-                    Some(text) => parts.push(text.to_owned()),
-                    None => parts.push(format!(
-                        "[resource {} ({}) omitted]",
-                        r["uri"].as_str().unwrap_or("?"),
-                        r["mimeType"].as_str().unwrap_or("binary")
-                    )),
+                if let Some(text) = r["text"].as_str() {
+                    parts.push(text.to_owned());
+                    continue;
                 }
+                let what = format!("resource {}", r["uri"].as_str().unwrap_or("?"));
+                (&r["blob"], &r["mimeType"], what)
             }
-            "resource_link" => parts.push(format!(
-                "[resource link: {}{}]",
-                block["uri"].as_str().unwrap_or("?"),
-                block["name"]
-                    .as_str()
-                    .map(|n| format!(" ({n})"))
-                    .unwrap_or_default()
+            "resource_link" => {
+                parts.push(format!(
+                    "[resource link: {}{}; read it with `invoke` `mcp.read_resource` on \
+                     `{RUMU_WORKSPACE}:/mcp/{server}`]",
+                    block["uri"].as_str().unwrap_or("?"),
+                    block["name"]
+                        .as_str()
+                        .map(|n| format!(" ({n})"))
+                        .unwrap_or_default()
+                ));
+                continue;
+            }
+            other => {
+                parts.push(format!("[{other} content omitted]"));
+                continue;
+            }
+        };
+        let mime = mime.as_str().unwrap_or("application/octet-stream");
+        let data = data.as_str().unwrap_or("");
+        let (image, file) = media(data, mime, scratch.clone(), &blobs)
+            .await
+            .map_err(|e| ToolError::model(format!("{what}: {e}")))?;
+        let attached = image.is_some();
+        images.extend(image);
+        match file {
+            Some(file) if kind == "image" && attached => parts.push(format!(
+                "[image {} saved as {SCRATCH_WORKSPACE}:{file}]",
+                images.len()
             )),
-            other => parts.push(format!("[{other} content omitted]")),
+            Some(file) => parts.push(format!(
+                "[{what} ({mime}) saved as {SCRATCH_WORKSPACE}:{file}]"
+            )),
+            None if attached => {}
+            None => parts.push(format!("[{what} ({mime}) omitted]")),
         }
     }
     if parts.is_empty()
@@ -244,6 +285,52 @@ async fn output(
         ToolOutput::ok(text)
     };
     Ok(out.with_attachments(images))
+}
+
+/// Base64 `data` of MIME type `mime`, from a server: an image rumu takes is
+/// normalized and attached; anything else is kept as it is. Either is
+/// copied into `scratch` when there is one. Returns the attachment and the
+/// file under `scratch`.
+async fn media(
+    data: &str,
+    mime: &str,
+    scratch: Option<PathBuf>,
+    blobs: &impl Fn() -> rumu_blob::Result<rumu_blob::Blobs>,
+) -> Result<(Option<rumu_core::Attachment>, Option<String>), String> {
+    let bytes = base64::engine::general_purpose::STANDARD
+        .decode(data)
+        .map_err(|e| format!("bad base64 data: {e}"))?;
+    let blobs = match rumu_blob::is_image(&bytes) {
+        true => Some(blobs().map_err(|e| format!("storing it: {e}"))?),
+        false => None,
+    };
+    let mime = mime.to_owned();
+    tokio::task::spawn_blocking(move || {
+        if let Some(blobs) = blobs
+            && let Ok(a) = blobs.ingest_image(&bytes, None)
+        {
+            let file = a.scratch_path();
+            let Some(root) = scratch else {
+                return Ok((Some(a), None));
+            };
+            blobs
+                .copy_to(&a.hash, &root.join(&file))
+                .map_err(|e| e.to_string())?;
+            return Ok((Some(a), Some(file)));
+        }
+        let Some(root) = scratch else {
+            return Ok((None, None));
+        };
+        let file = rumu_core::scratch_attachment(&rumu_blob::hash_of(&bytes), &mime);
+        let path = root.join(&file);
+        if let Some(dir) = path.parent() {
+            std::fs::create_dir_all(dir).map_err(|e| e.to_string())?;
+        }
+        std::fs::write(&path, &bytes).map_err(|e| e.to_string())?;
+        Ok((None, Some(file)))
+    })
+    .await
+    .map_err(|e| e.to_string())?
 }
 
 /// The servers of the session's assistant and the rules enabling their tools,
@@ -264,7 +351,8 @@ async fn intro(hub: &McpHub, mcp: &McpUse) -> (String, BTreeMap<String, McpIntro
         "MCP servers of this session. Their tools are not in your tool list: they are the actions \
 of `{RUMU_WORKSPACE}:/mcp/<server>` — find them with `search` (scope `{RUMU_WORKSPACE}:/mcp`) or \
 `list {RUMU_WORKSPACE}:/mcp/<server>`, and run one with `invoke` (`action: \"<server>/<tool>\"`, \
-no `path`)."
+no `path`). That `list` also shows a server's resources; read one with `invoke` \
+`mcp.read_resource` on its path."
     );
     for (name, rules) in mcp {
         let _ = write!(text, "\n- `{name}`: ");
@@ -407,28 +495,96 @@ pub async fn list_servers(hub: &McpHub, mcp: &McpUse) -> ToolOutput {
     out.into()
 }
 
-/// `list @rumu:/mcp/<server>`: its status, then its tools as its actions
-/// (`<server>/<tool>(…)` and a line each).
-pub async fn list_server(hub: &McpHub, mcp: &McpUse, name: &str) -> ToolResult<ToolOutput> {
-    let (_, snap) = bound(hub, mcp, name).await?;
+/// `list @rumu:/mcp/<server>`: its status, its resources, then its tools as
+/// its actions (`<server>/<tool>(…)` and a line each) and after them
+/// `actions`, the path's own.
+pub async fn list_server(
+    hub: &McpHub,
+    mcp: &McpUse,
+    name: &str,
+    actions: impl IntoIterator<Item = (String, String)>,
+) -> ToolResult<ToolOutput> {
+    let (server, snap) = bound(hub, mcp, name).await?;
     let lines = snap.tools.iter().map(|tool| {
         let schema = Value::Object((*tool.input_schema).clone());
         let sig = signature(&format!("{name}/{}", tool.name), &schema);
         (sig, first_line(tool).to_owned())
     });
-    Ok(format!(
+    let mut out = format!(
         "MCP server `{name}`: {}; `read` it for its instructions and each tool's input schema. \
-         Run a tool with `invoke` (no `path`).\n\n{}",
+         Run a tool with `invoke` (no `path`).\n\n",
         status_line(&snap),
-        actions_section(lines)
-    )
-    .into())
+    );
+    let resources = resources_section(&server).await;
+    if !resources.is_empty() {
+        let _ = write!(out, "{resources}\n\n");
+    }
+    out.push_str(&actions_section(lines.chain(actions)));
+    Ok(out.into())
+}
+
+/// The `resources:` and `resource templates:` sections of a server's
+/// listing; empty when it lists none.
+async fn resources_section(server: &Arc<Server>) -> String {
+    let listed = match server.resources().await {
+        Ok(listed) => listed,
+        Err(e) => return format!("resources: unavailable ({e})"),
+    };
+    let mut sections = Vec::new();
+    let items = listed.resources.iter().map(|r| {
+        let about = about(&r.name, r.title.as_deref(), r.description.as_deref());
+        (r.uri.as_str(), about, r.mime_type.as_deref())
+    });
+    sections.push(section("resources:", items));
+    let items = listed.templates.iter().map(|t| {
+        let about = about(&t.name, t.title.as_deref(), t.description.as_deref());
+        (t.uri_template.as_str(), about, t.mime_type.as_deref())
+    });
+    sections.push(section(
+        "resource templates (fill in the URI to read):",
+        items,
+    ));
+    sections.retain(|s| !s.is_empty());
+    sections.join("\n\n")
+}
+
+/// A listing section of `uri — about (mime)` lines, the first
+/// [`RESOURCES_SHOWN`] and a count of the rest; empty for no items.
+fn section<'a>(
+    title: &str,
+    items: impl ExactSizeIterator<Item = (&'a str, String, Option<&'a str>)>,
+) -> String {
+    let total = items.len();
+    if total == 0 {
+        return String::new();
+    }
+    let mut out = title.to_owned();
+    for (uri, about, mime) in items.take(RESOURCES_SHOWN) {
+        let _ = write!(out, "\n  {uri} — {about}");
+        if let Some(mime) = mime {
+            let _ = write!(out, " ({mime})");
+        }
+    }
+    if total > RESOURCES_SHOWN {
+        let _ = write!(out, "\n  … {} more", total - RESOURCES_SHOWN);
+    }
+    out
+}
+
+/// A resource's line: its title (or name), and the first line of its
+/// description.
+fn about(name: &str, title: Option<&str>, description: Option<&str>) -> String {
+    let mut about = title.unwrap_or(name).to_owned();
+    if let Some(d) = description.and_then(|d| d.lines().map(str::trim).find(|l| !l.is_empty())) {
+        let _ = write!(about, ": {d}");
+    }
+    about
 }
 
 /// `read @rumu:/mcp/<server>`: its instructions, then each tool with its
-/// description and input schema.
+/// description and input schema, then its resources.
 pub async fn read_server(hub: &McpHub, mcp: &McpUse, name: &str) -> ToolResult<ToolOutput> {
-    let (_, snap) = bound(hub, mcp, name).await?;
+    let (server, snap) = bound(hub, mcp, name).await?;
     let mut out = format!("MCP server `{name}`: {}\n", status_line(&snap));
     if let Some(i) = snap
         .instructions
@@ -441,6 +597,10 @@ pub async fn read_server(hub: &McpHub, mcp: &McpUse, name: &str) -> ToolResult<T
     for tool in snap.tools.iter() {
         out.push('\n');
         render(&mut out, name, tool, true);
+    }
+    let resources = resources_section(&server).await;
+    if !resources.is_empty() {
+        let _ = writeln!(out, "\n{resources}");
     }
     Ok(out.into())
 }

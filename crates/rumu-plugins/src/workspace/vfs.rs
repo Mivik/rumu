@@ -59,7 +59,7 @@ const ROUTES: &[(&str, &dyn Node)] = &[
     ("/tasks/{id}", &Task),
     ("/tasks/{id}/output", &TaskOutput),
     ("/mcp", &Mcp),
-    ("/mcp/{server}", &Mcp),
+    ("/mcp/{server}", &McpServer),
     ("/workspaces", &WorkspacesDir),
     ("/workspaces/{name}", &Entry),
 ];
@@ -536,9 +536,7 @@ impl Node for Root {
     }
 }
 
-/// `/mcp[/<server>]`: the session's MCP servers, or one: its tools are its
-/// actions (`<server>/<tool>`, run by `invoke` without a `path`); `read`
-/// gives its instructions and their input schemas.
+/// `/mcp`: the session's MCP servers.
 struct Mcp;
 
 #[async_trait]
@@ -547,32 +545,57 @@ impl Node for Mcp {
         "this session's MCP servers; a server's tools are its actions"
     }
 
-    fn doc(&self, at: &At<'_>) -> &'static str {
-        if at.opt("server").is_some() {
-            return "";
-        }
+    fn doc(&self, _at: &At<'_>) -> &'static str {
         "This session's MCP servers. A server's tools are its actions: `invoke` one with \
-         `action: \"<server>/<tool>\"` and no `path`. `list @rumu:/mcp/<server>` shows them; \
-         `read` it for its instructions and each tool's input schema. `search` with this scope \
-         (or a server's) finds tools."
+         `action: \"<server>/<tool>\"` and no `path`. `list @rumu:/mcp/<server>` shows them and \
+         the server's resources; `read` it for its instructions and each tool's input schema. \
+         `search` with this scope (or a server's) finds tools."
     }
 
     async fn list(&self, at: &At<'_>) -> Out {
         let (hub, servers) = (at.p.mcp(), at.p.servers(at.cx)?);
-        match at.opt("server") {
-            None => Ok(crate::mcp::list_servers(&hub, &servers).await),
-            Some(server) => crate::mcp::list_server(&hub, &servers, server).await,
-        }
+        Ok(crate::mcp::list_servers(&hub, &servers).await)
+    }
+
+    async fn search(&self, at: &At<'_>, query: &str, limit: Option<usize>) -> Out {
+        McpServer.search(at, query, limit).await
+    }
+}
+
+/// `/mcp/<server>`: one server. Its tools are its actions
+/// (`<server>/<tool>`, run by `invoke` without a `path`); its resources are
+/// read by its own action; `read` gives its instructions and the tools'
+/// input schemas.
+struct McpServer;
+
+/// The arguments of `mcp.read_resource`.
+#[derive(Deserialize, JsonSchema)]
+#[serde(deny_unknown_fields)]
+struct ReadResourceArgs {
+    /// The resource's URI: listed, from a template, or from a tool result.
+    uri: String,
+}
+
+#[async_trait]
+impl Node for McpServer {
+    fn about(&self) -> &'static str {
+        "one MCP server: its tools are its actions"
+    }
+
+    async fn list(&self, at: &At<'_>) -> Out {
+        let (hub, servers) = (at.p.mcp(), at.p.servers(at.cx)?);
+        let actions = self.actions().iter().map(ActionSpec::line);
+        crate::mcp::list_server(&hub, &servers, at.param("server"), actions).await
+    }
+
+    /// Its listing is its own: the actions are among its tools'.
+    async fn listing(&self, at: &At<'_>) -> Out {
+        self.list(at).await
     }
 
     async fn read(&self, at: &At<'_>, offset: Option<u64>, limit: Option<u64>) -> Out {
-        let out = match at.opt("server") {
-            None => self.listing(at).await?,
-            Some(server) => {
-                let (hub, servers) = (at.p.mcp(), at.p.servers(at.cx)?);
-                crate::mcp::read_server(&hub, &servers, server).await?
-            }
-        };
+        let (hub, servers) = (at.p.mcp(), at.p.servers(at.cx)?);
+        let out = crate::mcp::read_server(&hub, &servers, at.param("server")).await?;
         slice_lines(out.content.text, offset, limit)
             .map(ToolOutput::ok)
             .map_err(ToolError::model)
@@ -582,6 +605,22 @@ impl Node for Mcp {
         let limit = limit.unwrap_or(crate::mcp::SEARCH_LIMIT);
         let servers = crate::mcp::servers(at.p.decks(), at.state);
         crate::mcp::search(&at.p.mcp(), &servers, at.opt("server"), query, limit).await
+    }
+
+    fn actions(&self) -> &'static [ActionSpec] {
+        &[ActionSpec {
+            name: "mcp.read_resource",
+            about: "read one of its resources (`resources/read`); media land in `@scratch`",
+            args: rumu_core::tool_schema::<ReadResourceArgs>,
+            approval: Approval::Never,
+        }]
+    }
+
+    async fn invoke(&self, at: &At<'_>, spec: &ActionSpec, args: Value) -> Out {
+        let ReadResourceArgs { uri } = spec.parse(args)?;
+        let (hub, servers) = (at.p.mcp(), at.p.servers(at.cx)?);
+        let blobs = || at.p.blobs();
+        crate::mcp::read_resource(&hub, &servers, at.state, blobs, at.param("server"), &uri).await
     }
 }
 

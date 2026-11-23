@@ -43,8 +43,10 @@ harnesses' own docs.
   the background. Each server is `connecting`, `ready` (with its tools) or
   `failed` (with the error). Settings shows the status and the tools, and
   can reconnect a server.
-- The tool list is refreshed when the server sends `tools/list_changed`. A
-  call to a server whose connection has dropped reconnects once.
+- The tool list is refreshed when the server sends `tools/list_changed`.
+  Resources are not cached: listing a server asks it each time. A request
+  to a server whose connection has dropped reconnects once. Resource
+  subscriptions are not supported yet.
 - OAuth is not supported yet: a server that needs it takes a token in
   `headers`.
 
@@ -84,11 +86,14 @@ harnesses' own docs.
   tools are its actions, named `<server>/<tool>` (a tool is not a path):
   - `list @rumu:/mcp`: what it holds, then each server with its status and
     tool count.
-  - `list @rumu:/mcp/<server>`: its status, then its tools under
-    `actions:`, one line each: the signature (`fake/echo(text: string)`)
-    and the first line of its description.
+  - `list @rumu:/mcp/<server>`: its status; its resources (`uri — title:
+    first line of the description (mime)`) and resource templates, when it
+    declares `resources`, the first 100 of each and a count of the rest;
+    then its tools under `actions:`, one line each: the signature
+    (`fake/echo(text: string)`) and the first line of its description,
+    and last the path's own action `mcp.read_resource`.
   - `read @rumu:/mcp/<server>`: its `instructions`, then each tool's
-    description and input schema.
+    description and input schema, then its resources.
   - `search` with `scope: "@rumu:/mcp[/<server>]"`: BM25 over tool names,
     titles and descriptions. Each hit is an `action` (`action fake/echo`)
     and prints its schema, so the model can run it right away; the default
@@ -100,5 +105,16 @@ harnesses' own docs.
   An unknown name is refused with the server's tool names, a call the server
   refuses with the tool's input schema. It can run in the background, and
   `code` scripts reach it as `rumu.invoke`.
+- Other media in a result (audio, binary embedded resources) are copied to
+  `@scratch:.inbox/attachments/` as they are, with an extension from their
+  MIME type (`bin` when it is not a plain one), the text naming the file;
+  without a `@scratch` they are only named. Embedded text resources come
+  back as their text. A `resource_link` comes back as its URI and how to
+  read it.
+- `invoke { action: "mcp.read_resource", path: "@rumu:/mcp/<server>",
+  args: { uri } }` reads a resource (`resources/read`): a listed one, one
+  from a template, or a link from a tool result. Its contents come back like
+  a tool result's embedded resources, several each under its URI. Reading
+  needs no approval either, and the tool rules do not narrow it.
 - Servers outside the session's list, and tools its rules leave out, are
   neither listed nor callable; a server's tool count is of the enabled ones.

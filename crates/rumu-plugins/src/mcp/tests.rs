@@ -80,9 +80,21 @@ async fn lists_reads_and_searches_the_bound_servers() {
     assert!(root.contains("broken/ — unavailable"), "{root}");
     assert!(root.contains("gone/ — not configured"), "{root}");
 
-    // A server lists its tools as its actions.
-    let tools = list_server(&hub, &st, "fake").await.unwrap().content.text;
+    // A server lists its resources, then its tools as its actions.
+    let tools = list_server(&hub, &st, "fake", [])
+        .await
+        .unwrap()
+        .content
+        .text;
     assert!(tools.starts_with("MCP server `fake`: 3 tools;"), "{tools}");
+    assert!(
+        tools.contains(
+            "\n\nresources:\n  mem://notes — notes: Meeting notes. (text/markdown)\n  \
+             mem://both — both\n\nresource templates (fill in the URI to read):\n  \
+             mem://issue/{n} — issue: One issue.\n\n"
+        ),
+        "{tools}"
+    );
     assert!(
         tools.contains("\n\nactions:\n  fake/echo(text: string) — Echo the given text back.\n"),
         "{tools}"
@@ -90,7 +102,8 @@ async fn lists_reads_and_searches_the_bound_servers() {
     assert!(tools.contains("list_issues"), "{tools}");
     assert!(!tools.contains("Paged by 30"));
 
-    // Reading it gives its instructions and every tool's input schema.
+    // Reading it gives its instructions, every tool's input schema and its
+    // resources.
     let server = read_server(&hub, &st, "fake").await.unwrap().content.text;
     assert!(
         server.starts_with("MCP server `fake`: 3 tools\n\nEcho things.\n"),
@@ -100,6 +113,7 @@ async fn lists_reads_and_searches_the_bound_servers() {
         server.contains("action fake/echo\nEcho the given text back.\nInput schema: {"),
         "{server}"
     );
+    assert!(server.contains("\nresources:\n  mem://notes"), "{server}");
 
     let hits = search(&hub, &st, None, "github issues", 5)
         .await
@@ -196,7 +210,9 @@ async fn an_image_result_lands_in_the_scratch_inbox() {
     ] });
     let scratch = home.path().join("scratch/s1");
 
-    let out = output(&result, Some(scratch.clone()), blobs).await.unwrap();
+    let out = output(&result, "fake", Some(scratch.clone()), blobs)
+        .await
+        .unwrap();
     let [image] = &out.content.attachments[..] else {
         panic!("one attachment: {:?}", out.content.attachments)
     };
@@ -207,9 +223,104 @@ async fn an_image_result_lands_in_the_scratch_inbox() {
     );
     assert!(scratch.join(&file).is_file());
 
-    let out = output(&result, None, blobs).await.unwrap();
+    let out = output(&result, "fake", None, blobs).await.unwrap();
     assert_eq!(out.content.text, "a dot");
     assert_eq!(out.content.attachments.len(), 1);
+}
+
+/// Other media land in `@scratch` as they are, under a short extension; a
+/// resource link says how to read it.
+#[tokio::test]
+async fn other_media_land_in_the_scratch_inbox_and_links_say_how_to_read() {
+    let home = tempfile::tempdir().unwrap();
+    let blobs = || rumu_blob::Blobs::in_home(home.path());
+    let result = json!({ "content": [
+        { "type": "audio", "mimeType": "audio/wav", "data": "UklGRg==" },
+        { "type": "resource", "resource": {
+            "uri": "mem://a.bin", "mimeType": "../../x", "blob": "aGkK" } },
+        { "type": "resource_link", "uri": "mem://notes", "name": "notes" },
+    ] });
+    let scratch = home.path().join("scratch/s1");
+
+    let out = output(&result, "fake", Some(scratch.clone()), blobs)
+        .await
+        .unwrap();
+    let wav = rumu_core::scratch_attachment(&rumu_blob::hash_of(b"RIFF"), "audio/wav");
+    let bin = rumu_core::scratch_attachment(&rumu_blob::hash_of(b"hi\n"), "../../x");
+    assert!(wav.ends_with(".wav") && bin.ends_with(".bin"));
+    assert_eq!(
+        out.content.text,
+        format!(
+            "[audio (audio/wav) saved as @scratch:{wav}]\n\
+             [resource mem://a.bin (../../x) saved as @scratch:{bin}]\n\
+             [resource link: mem://notes (notes); read it with `invoke` `mcp.read_resource` \
+             on `@rumu:/mcp/fake`]"
+        )
+    );
+    assert_eq!(std::fs::read(scratch.join(&bin)).unwrap(), b"hi\n");
+    assert!(out.content.attachments.is_empty());
+
+    let out = output(&result, "fake", None, blobs).await.unwrap();
+    assert!(
+        out.content
+            .text
+            .starts_with("[audio (audio/wav) omitted]\n[resource mem://a.bin (../../x) omitted]"),
+        "{}",
+        out.content.text
+    );
+}
+
+/// `mcp.read_resource` on a server's path reads one of its resources.
+#[tokio::test]
+async fn invoke_reads_a_resource() {
+    let home = tempfile::tempdir().unwrap();
+    let Some(hub) = hub(home.path()).await else {
+        return;
+    };
+    let decks = assistant_decks(home.path());
+    set_assistant(&decks, all(&["fake"]), &[]);
+    let plugin = invoker(home.path(), hub, decks);
+    let fake = FakeRuntime::arc();
+    let cx = fake.cx();
+    let read = |path: &str, uri: &str| {
+        let args = json!({ "action": "mcp.read_resource", "path": path, "args": { "uri": uri } });
+        plugin.call_tool("invoke", args, &cx)
+    };
+
+    let out = read("@rumu:/mcp/fake", "mem://notes").await.unwrap();
+    assert!(!out.is_error);
+    assert_eq!(out.content.text, "# Notes");
+
+    // Several contents come each under its URI; without a scratch root a
+    // blob is only named.
+    let out = read("@rumu:/mcp/fake", "mem://both").await.unwrap();
+    assert_eq!(
+        out.content.text,
+        "[mem://both/a]\nA\n[mem://both/b]\n[resource mem://both/b (application/x-thing) omitted]"
+    );
+
+    let out = read("@rumu:/mcp/fake", "mem://nope").await.unwrap();
+    assert!(
+        out.is_error && out.content.text.contains("fake: reading `mem://nope`: "),
+        "{}",
+        out.content.text
+    );
+
+    let out = read("@rumu:/mcp/broken", "mem://notes").await.unwrap();
+    assert!(out.is_error && out.content.text.contains("no MCP server `broken`"));
+
+    // The action shows in the server's listing, after its tools.
+    let out = plugin
+        .call_tool("list", json!({ "path": "@rumu:/mcp/fake" }), &cx)
+        .await
+        .unwrap();
+    assert!(
+        out.content
+            .text
+            .ends_with("\n  mcp.read_resource(uri: string) — read one of its resources (`resources/read`); media land in `@scratch`"),
+        "{}",
+        out.content.text
+    );
 }
 
 #[tokio::test]
@@ -306,7 +417,7 @@ async fn rules_narrow_a_servers_tools() {
             .text
             .contains("fake/ — 2 tools")
     );
-    let tools = text(list_server(&hub, &st, "fake").await);
+    let tools = text(list_server(&hub, &st, "fake", []).await);
     assert!(
         tools.contains("fake/echo") && !tools.contains("fail"),
         "{tools}"
@@ -319,7 +430,7 @@ async fn rules_narrow_a_servers_tools() {
     // Only the one named.
     let st = rules(&["echo"]);
     assert!(
-        text(list_server(&hub, &st, "fake").await)
+        text(list_server(&hub, &st, "fake", []).await)
             .ends_with("actions:\n  fake/echo(text: string) — Echo the given text back."),
     );
     let decks = assistant_decks(home.path());

@@ -22,6 +22,7 @@ const ICONS: Record<string, string> = {
   'workspace.use': 'switch',
   'deck.mount': 'deck',
   'deck.unmount': 'deck',
+  'mcp.read_resource': 'read',
 }
 
 /** The Icon name for a `name` tool call; an MCP tool (`<server>/<tool>`)

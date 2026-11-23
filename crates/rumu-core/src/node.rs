@@ -176,10 +176,25 @@ impl Attachment {
     /// Where a prompt's attachment is copied inside the session's `@scratch`
     /// so tools can work on it: `.inbox/attachments/<hash prefix>.<ext>`.
     pub fn scratch_path(&self) -> String {
-        let ext = scratch_extension(&self.mime);
-        let stem = self.hash.get(..12).unwrap_or(&self.hash);
-        format!("{SCRATCH_INBOX}/attachments/{stem}.{ext}")
+        scratch_attachment(&self.hash, &self.mime)
     }
+}
+
+/// Where bytes with `hash` and MIME type `mime` land in a session's
+/// `@scratch`: `.inbox/attachments/<hash prefix>.<ext>`. `mime` may come
+/// from anywhere (an MCP server): an extension that is not plain
+/// alphanumerics (with `+` / `-`) becomes `bin`.
+pub fn scratch_attachment(hash: &str, mime: &str) -> String {
+    let mime = mime.split(';').next().unwrap_or("").trim();
+    let ext = Some(scratch_extension(mime))
+        .filter(|e| {
+            !e.is_empty()
+                && e.chars()
+                    .all(|c| c.is_ascii_alphanumeric() || c == '+' || c == '-')
+        })
+        .unwrap_or("bin");
+    let stem = hash.get(..12).unwrap_or(hash);
+    format!("{SCRATCH_INBOX}/attachments/{stem}.{ext}")
 }
 
 /// The file extension a blob of MIME type `mime` gets in the `@scratch`: the
@@ -1303,6 +1318,18 @@ mod tests {
         // An unknown type keeps the subtype as it was.
         a.mime = "image/png".into();
         assert_eq!(a.scratch_path(), ".inbox/attachments/abcdef012345.png");
+        // A type from elsewhere cannot leave the directory.
+        let at = |mime| scratch_attachment("abcdef0123456789", mime);
+        assert_eq!(at("a/../../x"), ".inbox/attachments/abcdef012345.bin");
+        assert_eq!(at("weird"), ".inbox/attachments/abcdef012345.bin");
+        assert_eq!(
+            at("audio/wav; rate=8000"),
+            ".inbox/attachments/abcdef012345.wav"
+        );
+        assert_eq!(
+            at("image/svg+xml"),
+            ".inbox/attachments/abcdef012345.svg+xml"
+        );
     }
 
     #[test]

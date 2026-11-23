@@ -9,7 +9,8 @@ use std::sync::{Arc, Mutex, Weak};
 use std::time::Duration;
 
 use rmcp::model::{
-    CallToolRequestParams, ClientCapabilities, ClientConfig, Implementation, JsonObject, Tool,
+    CallToolRequestParams, ClientCapabilities, ClientConfig, Implementation, JsonObject,
+    ReadResourceRequestParams, ReadResourceResult, Resource, ResourceTemplate, Tool,
 };
 use rmcp::service::{NotificationContext, RunningService};
 use rmcp::transport::streamable_http_client::StreamableHttpClientTransportConfig;
@@ -129,6 +130,13 @@ pub struct Snapshot {
     pub error: Option<String>,
     pub tools: Arc<[Tool]>,
     pub instructions: Option<String>,
+}
+
+/// What a server lists of its resources.
+#[derive(Default)]
+pub struct Resources {
+    pub resources: Vec<Resource>,
+    pub templates: Vec<ResourceTemplate>,
 }
 
 struct State {
@@ -341,20 +349,58 @@ impl Server {
     /// `notifications/cancelled`.
     pub async fn call(self: &Arc<Self>, tool: &str, args: JsonObject) -> Result<Value, String> {
         let params = CallToolRequestParams::new(tool.to_owned()).with_arguments(args);
-        let client = self.client().await?;
-        let result = match client.call_tool(params).await {
-            Err(e @ (ServiceError::TransportClosed | ServiceError::TransportSend(_))) => {
-                warn!(server = self.name, "mcp connection dropped");
-                let mut s = self.state.lock().expect("mcp state lock");
-                if s.client.as_ref().is_some_and(|c| Arc::ptr_eq(c, &client)) {
-                    s.client = None;
-                }
-                Err(e)
-            }
-            r => r,
-        };
-        let result = result.map_err(|e| e.to_string())?;
+        let result = self
+            .request(|c| async move { c.call_tool(params).await })
+            .await?;
         serde_json::to_value(result).map_err(|e| e.to_string())
+    }
+
+    /// `resources/read` of `uri`.
+    pub async fn read_resource(self: &Arc<Self>, uri: &str) -> Result<ReadResourceResult, String> {
+        let params = ReadResourceRequestParams::new(uri);
+        self.request(|c| async move { c.read_resource(params).await })
+            .await
+    }
+
+    /// Its resources and resource templates, every page; none when it does
+    /// not declare `resources` (nor templates when it does not serve them).
+    pub async fn resources(self: &Arc<Self>) -> Result<Resources, String> {
+        self.request(|c| async move {
+            if !c
+                .peer_info()
+                .is_some_and(|i| i.capabilities.resources.is_some())
+            {
+                return Ok(Resources::default());
+            }
+            let resources = c.list_all_resources().await?;
+            let templates = match c.list_all_resource_templates().await {
+                Err(ServiceError::McpError(_)) => Vec::new(),
+                r => r?,
+            };
+            Ok(Resources {
+                resources,
+                templates,
+            })
+        })
+        .await
+    }
+
+    /// Run `f` on the connection, connecting first when it is gone. When
+    /// the connection drops on the way, the next request reconnects.
+    async fn request<T, F>(self: &Arc<Self>, f: impl FnOnce(Arc<Client>) -> F) -> Result<T, String>
+    where
+        F: Future<Output = Result<T, ServiceError>>,
+    {
+        let client = self.client().await?;
+        let result = f(client.clone()).await;
+        if let Err(ServiceError::TransportClosed | ServiceError::TransportSend(_)) = &result {
+            warn!(server = self.name, "mcp connection dropped");
+            let mut s = self.state.lock().expect("mcp state lock");
+            if s.client.as_ref().is_some_and(|c| Arc::ptr_eq(c, &client)) {
+                s.client = None;
+            }
+        }
+        result.map_err(|e| e.to_string())
     }
 
     async fn refresh_tools(self: Arc<Self>) {
