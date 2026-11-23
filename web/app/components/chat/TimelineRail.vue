@@ -188,13 +188,20 @@ function promptLabel(e: TimelineUserEntry): string {
   return labelOf((e.node.body as Extract<RumuNode['body'], { type: 'user' }>).content)
 }
 
+/** Each prompt's text label: measure reads them all on every resize. */
+const textLabels = new WeakMap<Content, string>()
+
 function labelOf(content: Content): string {
-  const text = preview(
-    contentSegments(content)
-      .map((seg) => (seg.type === 'text' ? seg.text : ''))
-      .join(''),
-    80,
-  )
+  let text = textLabels.get(content)
+  if (text === undefined) {
+    text = preview(
+      contentSegments(content)
+        .map((seg) => (seg.type === 'text' ? seg.text : ''))
+        .join(''),
+      80,
+    )
+    textLabels.set(content, text)
+  }
   const attachments = content.attachments ?? []
   if (text || !attachments.length) return text
   const images = attachments.filter((a) => kindOf(a) === 'image').length
@@ -264,6 +271,12 @@ function measure(animate = true): void {
   const off = overflow ? RAIL_INSET : 0
   const virt = (c: number): number => Dt + c * scale
   const base = inner.offsetTop
+  // the entries' wrappers in one pass: looking each prompt's up on its own
+  // walked the column once per prompt, on every resize of a streaming turn
+  const wraps = new Map<number, HTMLElement>()
+  for (const el of inner.querySelectorAll<HTMLElement>(':scope > [data-entry]')) {
+    wraps.set(Number(el.dataset.entry), el)
+  }
 
   // ticks: one per prompt. A forward pass pushes them apart to the gap, a
   // backward pass clamps them back into the conversation's stretch.
@@ -271,7 +284,7 @@ function measure(animate = true): void {
   const natural: number[] = []
   timeline.value.forEach((e, i) => {
     if (e.kind !== 'user') return
-    const el = inner.querySelector<HTMLElement>(`[data-entry="${i}"]`)
+    const el = wraps.get(i)
     if (!el) return
     // the bubble row opens the entry (context pills may follow under it)
     const start = base + el.offsetTop
@@ -290,7 +303,7 @@ function measure(animate = true): void {
 
   // the head: the running turn's node
   const g = lastGroup.value
-  const gEl = g >= 0 ? inner.querySelector<HTMLElement>(`[data-entry="${g}"]`) : null
+  const gEl = wraps.get(g) ?? null
   headV.value =
     isBusy.value && !props.later && gEl
       ? Math.min(hi, Math.max(lo, virt(base + gEl.offsetTop + NODE_Y.group)))

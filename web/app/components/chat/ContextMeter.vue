@@ -42,10 +42,17 @@ let frame = 0
 const soft = (x: number) => 1 - (1 - x) ** 4
 const spring = (x: number) => 1 + 2.2 * (x - 1) ** 3 + 1.2 * (x - 1) ** 2
 
+/** A change smaller than this (of the window) is a fraction of a px on the
+ *  pie: it is drawn at once. A streaming reply changes it on every delta,
+ *  and easing each one kept a frame loop running all through the turn. */
+const NUDGE = 0.005
+
 watch(target, (to) => {
-  cancelAnimationFrame(frame)
+  // an ease under way heads for the latest numbers (`target`, read as it goes)
+  if (frame) return
   const from = { ...shown.value }
-  if (window.matchMedia('(prefers-reduced-motion: reduce)').matches) {
+  const moved = Math.abs(to.measured - from.measured) + Math.abs(to.live - from.live)
+  if (moved < NUDGE || window.matchMedia('(prefers-reduced-motion: reduce)').matches) {
     shown.value = { ...to }
     return
   }
@@ -54,11 +61,12 @@ watch(target, (to) => {
   const start = performance.now()
   const step = (now: number) => {
     const k = ease(Math.min((now - start) / span, 1))
+    const goal = target.value
     shown.value = {
-      measured: Math.max(0, from.measured + (to.measured - from.measured) * k),
-      live: Math.max(0, from.live + (to.live - from.live) * k),
+      measured: Math.max(0, from.measured + (goal.measured - from.measured) * k),
+      live: Math.max(0, from.live + (goal.live - from.live) * k),
     }
-    if (now - start < span) frame = requestAnimationFrame(step)
+    frame = now - start < span ? requestAnimationFrame(step) : 0
   }
   frame = requestAnimationFrame(step)
 })

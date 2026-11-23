@@ -516,7 +516,9 @@ function layoutTail(): void {
   } else if (nearBottom.value && performance.now() >= settlingUntil) {
     scrollToEnd()
   }
-  railEl.value?.measure()
+  // a streaming turn resizes the column every few frames: the ticks follow
+  // at once, else each resize would restart their glide and keep it running
+  railEl.value?.measure(!isBusy.value)
 }
 
 /** The first entry at the last layoutTail. */

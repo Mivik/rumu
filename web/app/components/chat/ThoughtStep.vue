@@ -6,12 +6,12 @@
 // appearance settings keep every thought open, or folded). `flat` shows
 // just the text, for a run (ActivityRun) whose own line is the disclosure.
 // The live stream's box follows its end as the reasoning grows.
-import { computed, ref } from 'vue'
+import { computed, onBeforeUnmount, ref, watch } from 'vue'
 import { t } from '../../i18n'
 import { type Node, reasoningText } from '../../lib/types'
 import { useBranchView } from '../../lib/store'
 import { fmtThought } from '../../lib/util'
-import { vFollow } from '../../lib/motion'
+import { growFollowing } from '../../lib/motion'
 import { useWorkView } from '../../lib/state/appearance'
 import Icon from '../ui/Icon.vue'
 
@@ -22,6 +22,36 @@ const work = useWorkView()
 const reasoning = computed(() => {
   if (!props.node) return activeDelta.value?.reasoning ?? ''
   return props.node.body.type === 'assistant' ? reasoningText(props.node.body.reasoning) : ''
+})
+
+/** The live stream's box: its text grows in place, appended to one text
+ * node at most every 50 ms. Setting the whole thought on each delta laid it
+ * out again from the start, a cost growing with its length. */
+const liveEl = ref<HTMLElement | null>(null)
+let liveText: Text | null = null
+let liveTimer: ReturnType<typeof setTimeout> | null = null
+
+function drawLive(): void {
+  liveTimer = null
+  const el = liveEl.value
+  if (!el) return
+  const text = reasoning.value
+  growFollowing(el, () => {
+    if (liveText?.parentNode === el && text.startsWith(liveText.data)) {
+      liveText.appendData(text.slice(liveText.data.length))
+    } else {
+      liveText = document.createTextNode(text)
+      el.replaceChildren(liveText)
+    }
+  })
+}
+
+watch(reasoning, () => {
+  if (!props.node && liveTimer === null) liveTimer = setTimeout(drawLive, 50)
+})
+watch(liveEl, drawLive, { flush: 'post' })
+onBeforeUnmount(() => {
+  if (liveTimer !== null) clearTimeout(liveTimer)
 })
 
 /** The thinking span: the kernel's timing, or the live one once the answer starts. */
@@ -55,8 +85,12 @@ const label = computed(() => {
 <template>
   <!-- flat: inside a run whose line already names the thinking -->
   <div
-    v-if="flat"
-    v-follow="!node"
+    v-if="flat && !node"
+    ref="liveEl"
+    class="max-h-[300px] overflow-y-auto text-meta leading-[1.625] whitespace-pre-wrap text-ink-2"
+  />
+  <div
+    v-else-if="flat"
     class="max-h-[300px] overflow-y-auto text-meta leading-[1.625] whitespace-pre-wrap text-ink-2"
     v-text="reasoning"
   />
@@ -73,6 +107,9 @@ const label = computed(() => {
       {{ label }}
       <Icon name="chevron" :size="12" class="reason-chevron" :class="{ 'rotate-90': open }" />
     </button>
-    <div v-if="open" v-follow="!node" class="reason-body reveal">{{ reasoning }}</div>
+    <template v-if="open">
+      <div v-if="!node" ref="liveEl" class="reason-body reveal" />
+      <div v-else class="reason-body reveal">{{ reasoning }}</div>
+    </template>
   </div>
 </template>

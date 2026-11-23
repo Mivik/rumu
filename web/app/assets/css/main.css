@@ -1707,9 +1707,24 @@
   }
 
   /* a live dot: a halo breathing out of it. The halo takes the dot's own
-   * color (--dot-live), coral unless the state names another one. */
+   * color (--dot-live), coral unless the state names another one. It is a
+   * copy of the dot scaling out and fading, drawn over it (so a dot's fill
+   * and its --dot-live must agree) — transform and opacity run on the
+   * compositor; an animated box-shadow repainted every frame of a turn.
+   * :where — a dot placed by its own class (the rail's head) stays put. */
+  :where(.dot-live) {
+    position: relative;
+  }
   .dot-live {
     --dot-live: var(--brand);
+  }
+  .dot-live::after {
+    content: '';
+    position: absolute;
+    inset: 0;
+    border-radius: inherit;
+    background: var(--dot-live);
+    pointer-events: none;
     animation: halo 1.6s ease-out infinite;
   }
 
@@ -1974,12 +1989,15 @@
   }
 }
 
+/* a 6px dot's halo reaches 7px past its edge */
 @keyframes halo {
   0% {
-    box-shadow: 0 0 0 0 color-mix(in srgb, var(--dot-live, var(--brand)) 55%, transparent);
+    opacity: 0.55;
+    transform: scale(1);
   }
   100% {
-    box-shadow: 0 0 0 7px color-mix(in srgb, var(--dot-live, var(--brand)) 0%, transparent);
+    opacity: 0;
+    transform: scale(3.3);
   }
 }
 

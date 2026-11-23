@@ -94,6 +94,14 @@ export const vFollow: Directive<HTMLElement, boolean> = {
   },
 }
 
+/** `v-follow` for content grown by hand (`grow`), outside a render: the
+ * box stays at its end if it was there. */
+export function growFollowing(el: HTMLElement, grow: () => void): void {
+  const atEnd = el.scrollHeight - el.scrollTop - el.clientHeight < FOLLOW_SLOP
+  grow()
+  if (atEnd) el.scrollTop = el.scrollHeight
+}
+
 // ---- swaps: one view taking another's place (Vue <Transition> classes) ----
 
 /** A sheet or pane replacing another: it rises in while the one it replaces

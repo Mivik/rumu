@@ -54,23 +54,45 @@ const target = (t: number): CatPose => ({
 
 const shown = shallowRef<CatPose>(target(0))
 
+/** The loops are slow sways: drawn at this pace (ms a frame), not every
+ *  display frame — they run as long as a turn does. Morphs stay smooth. */
+const LOOP_FRAME = 50
+
 let reduced = false
 let raf = 0
+let timer = 0 // the next loop frame, waiting out LOOP_FRAME
 let since = 0 // when the current state began
 let from: CatPose | null = null // the pose the morph started at
 let fromAt = 0
 
 function frame(now: number): void {
+  raf = 0
   const goal = target(now - since)
   const p = from ? Math.min((now - fromAt) / MORPH, 1) : 1
   shown.value = from && p < 1 ? lerpPose(from, goal, easeSoft(p)) : goal
   if (p >= 1) from = null
-  raf = from || isAnimated(props.state) ? requestAnimationFrame(frame) : 0
+  if (from) raf = requestAnimationFrame(frame)
+  else if (isAnimated(props.state)) timer = window.setTimeout(next, LOOP_FRAME)
+}
+
+function next(): void {
+  timer = 0
+  raf = requestAnimationFrame(frame)
+}
+
+/** Draw from the next frame on, unless a frame is already due sooner. */
+function start(): void {
+  if (raf) return
+  clearTimeout(timer)
+  timer = 0
+  raf = requestAnimationFrame(frame)
 }
 
 function stop(): void {
   cancelAnimationFrame(raf)
+  clearTimeout(timer)
   raf = 0
+  timer = 0
   from = null
 }
 
@@ -83,7 +105,7 @@ function morph(restart: boolean): void {
   if (restart) since = now
   from = shown.value
   fromAt = now
-  if (!raf) raf = requestAnimationFrame(frame)
+  start()
 }
 
 watch(
@@ -102,9 +124,9 @@ const sync = (): void => {
   if (reduced) {
     stop()
     shown.value = target(0)
-  } else if (isAnimated(props.state) && !raf) {
+  } else if (isAnimated(props.state) && !raf && !timer) {
     since = performance.now()
-    raf = requestAnimationFrame(frame)
+    start()
   }
 }
 onMounted(() => {

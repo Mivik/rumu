@@ -108,7 +108,10 @@ function tail(text: string): string {
         @click="toggle(r)"
       >
         <span class="flex h-4 flex-none items-center">
-          <span class="dot-live size-1.5 rounded-full" :class="r.stalled ? 'bg-warn' : 'bg-brand'" />
+          <span
+            class="dot-live size-1.5 rounded-full"
+            :class="r.stalled ? 'bg-warn [--dot-live:var(--warn)]' : 'bg-brand'"
+          />
         </span>
         <span class="flex h-4 flex-none items-center">
           <Icon :name="toolIcon(r.call.name)" :size="12" class="text-tool" />
