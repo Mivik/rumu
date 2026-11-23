@@ -167,11 +167,16 @@ const NODE_ABBR = 8
 
 const short = (id: string): string => id.slice(0, NODE_ABBR)
 
+/** The `@rumu` address of a session. */
+export function sessionAddress(id: string): string {
+  return `@rumu:/sessions/${id}`
+}
+
 /** The `@rumu` address of the open session's nodes `from` down to `to`: one
  *  node, or the `<from>..<to>` stretch of its path. */
 export function nodeAddress(from: string, to = from): string {
   const what = from === to ? short(from) : `${short(from)}..${short(to)}`
-  return `@rumu:/sessions/${state.sessionId}/${what}`
+  return `${sessionAddress(state.sessionId!)}/${what}`
 }
 
 export async function copyAddress(address: string): Promise<void> {

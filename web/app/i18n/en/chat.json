@@ -1,5 +1,6 @@
 {
   "sidebar": {
+    "copyAddress": "Copy session address",
     "home": "Home",
     "close": "Close sessions",
     "new": "Start session",

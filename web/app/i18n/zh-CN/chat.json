@@ -1,5 +1,6 @@
 {
   "sidebar": {
+    "copyAddress": "复制会话地址",
     "home": "首页",
     "close": "关闭会话列表",
     "new": "开始会话",

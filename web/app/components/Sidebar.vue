@@ -41,6 +41,7 @@ import { assistantCat } from '../lib/assistantFace'
 import { mountedCardCount } from '../lib/cards'
 import type { Project, SessionInfo } from '../lib/types'
 import { layout } from '../lib/layout'
+import { copyAddress, sessionAddress } from '../lib/links'
 import { openPage, sheetOf, type Page } from '../lib/router'
 import { landingWritten } from '../lib/state/drafts'
 import { models } from '../lib/state/models'
@@ -919,6 +920,15 @@ const otherLocale = computed<Locale>(
                     >
                       <Icon name="regenerate" :size="14" />
                       {{ t('chat.sidebar.retitle') }}
+                    </button>
+                    <button
+                      type="button"
+                      role="menuitem"
+                      class="flex w-full items-center gap-2 rounded-control px-2.5 py-1.5 text-left text-secondary text-ink-2 transition-colors duration-150 hover:bg-surface-2 hover:text-ink focus-visible:bg-surface-2 focus-visible:text-ink"
+                      @click="(close(), copyAddress(sessionAddress(row.s.id)))"
+                    >
+                      <Icon name="link" :size="14" />
+                      {{ t('chat.sidebar.copyAddress') }}
                     </button>
                     <button
                       type="button"
