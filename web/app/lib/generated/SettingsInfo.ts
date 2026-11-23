@@ -3,6 +3,7 @@ import type { Appearance } from "./Appearance";
 import type { CompactSettings } from "./CompactSettings";
 import type { McpServerInfo } from "./McpServerInfo";
 import type { ModelInfo } from "./ModelInfo";
+import type { PluginInfo } from "./PluginInfo";
 import type { PresetInfo } from "./PresetInfo";
 import type { ProviderInfo } from "./ProviderInfo";
 import type { Roles } from "./Roles";
@@ -16,4 +17,8 @@ export type SettingsInfo = { providers: Array<ProviderInfo>,
 /**
  * The built-in provider's models.
  */
-aliases: Array<ModelInfo>, roles: Roles, titles: Titles, compact: CompactSettings, appearance: Appearance, presets: Array<PresetInfo>, mcp: Array<McpServerInfo>, skills: SkillsInfo, };
+aliases: Array<ModelInfo>, roles: Roles, titles: Titles, compact: CompactSettings, appearance: Appearance, presets: Array<PresetInfo>, mcp: Array<McpServerInfo>, skills: SkillsInfo, 
+/**
+ * The external plugins of `settings.yaml`.
+ */
+plugins: Array<PluginInfo>, };

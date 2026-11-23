@@ -525,6 +525,8 @@ pub struct SettingsInfo {
     pub presets: Vec<PresetInfo>,
     pub mcp: Vec<crate::McpServerInfo>,
     pub skills: crate::SkillsInfo,
+    /// The external plugins of `settings.yaml`.
+    pub plugins: Vec<crate::PluginInfo>,
 }
 
 #[cfg(test)]

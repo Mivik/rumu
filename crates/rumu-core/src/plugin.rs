@@ -17,7 +17,9 @@ use serde_json::Value;
 /// they fork at the enclosing `code` call.
 pub const CODE_DENIED_TOOLS: &[&str] = &["code"];
 
-#[derive(Debug, Clone, Default, Serialize, Deserialize)]
+/// What a plugin registers (an external one answers `initialize` with it).
+#[derive(Debug, Clone, Default, Serialize, Deserialize, ts_rs::TS)]
+#[ts(export)]
 pub struct Manifest {
     pub name: String,
     /// Static text appended to the (frozen) system prompt.
@@ -29,7 +31,65 @@ pub struct Manifest {
     pub hooks: Vec<HookSpec>,
 }
 
-#[derive(Debug, Clone, Serialize, Deserialize)]
+/// One external plugin in `settings.yaml`'s `plugins:`, keyed by its name.
+#[derive(Debug, Clone, Default, PartialEq, Serialize, Deserialize)]
+#[serde(default, deny_unknown_fields)]
+pub struct PluginSettings {
+    /// The program and its arguments.
+    pub command: Vec<String>,
+    /// Where it runs, relative to `RUMU_HOME` (default: `RUMU_HOME`).
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub cwd: Option<String>,
+    /// The values of its settings (the plugin's `initialize` gives their
+    /// schema).
+    #[serde(skip_serializing_if = "serde_json::Map::is_empty")]
+    pub settings: serde_json::Map<String, Value>,
+}
+
+/// Where an external plugin (`settings.yaml`'s `plugins:`) is.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, ts_rs::TS)]
+#[serde(rename_all = "snake_case")]
+#[ts(export)]
+pub enum PluginStatus {
+    Starting,
+    Running,
+    /// It failed to start, exited, or was left out; `error` says which.
+    Failed,
+}
+
+/// An external plugin as the web sees it.
+#[derive(Debug, Clone, Serialize, ts_rs::TS)]
+#[ts(export)]
+pub struct PluginInfo {
+    pub name: String,
+    pub command: Vec<String>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    #[ts(optional)]
+    pub cwd: Option<String>,
+    pub status: PluginStatus,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    #[ts(optional)]
+    pub error: Option<String>,
+    /// Tool names, while running.
+    pub tools: Vec<String>,
+    /// Hook ids, while running.
+    pub hooks: Vec<String>,
+    /// The URL of its web entry, while running; it changes when the file
+    /// does.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    #[ts(optional)]
+    pub web: Option<String>,
+    /// The JSON Schema of its settings, while running.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    #[ts(optional, type = "Record<string, unknown>")]
+    pub schema: Option<Value>,
+    /// The values of its settings.
+    #[ts(type = "Record<string, unknown>")]
+    pub settings: serde_json::Map<String, Value>,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize, ts_rs::TS)]
+#[ts(export)]
 pub struct ToolSpec {
     pub name: String,
     pub description: String,
@@ -51,7 +111,8 @@ pub struct ToolSpec {
     pub parallel: bool,
 }
 
-#[derive(Debug, Clone, Serialize, Deserialize)]
+#[derive(Debug, Clone, Serialize, Deserialize, ts_rs::TS)]
+#[ts(export)]
 pub struct HookSpec {
     /// Unique within the plugin; passed back to `on_hook`.
     pub id: String,
@@ -69,7 +130,8 @@ pub struct HookSpec {
 /// fills `NodeBody::Note::source` with the owning plugin's name.
 pub type Effect = Content;
 
-#[derive(Debug, Clone, Default, Serialize, Deserialize)]
+#[derive(Debug, Clone, Default, Serialize, Deserialize, ts_rs::TS)]
+#[ts(export)]
 pub struct ToolOutput {
     pub content: Content,
     #[serde(default)]
@@ -336,7 +398,8 @@ mod tests {
 }
 
 /// What a hook returns: effects to apply and a verdict on the event.
-#[derive(Debug, Clone, Default, Serialize, Deserialize)]
+#[derive(Debug, Clone, Default, Serialize, Deserialize, ts_rs::TS)]
+#[ts(export)]
 pub struct HookOutput {
     #[serde(default)]
     pub effects: Vec<Effect>,
@@ -384,7 +447,8 @@ pub trait History: Send + Sync {
 /// may start a turn when the branch is idle. `paced` marks a poster that
 /// bounds its own rate and lifetime (a `bash` watch): a wake made only of
 /// paced posts does not count toward the kernel's wake-storm guard.
-#[derive(Debug, Clone, Default, Serialize, Deserialize)]
+#[derive(Debug, Clone, Default, Serialize, Deserialize, ts_rs::TS)]
+#[ts(export)]
 pub struct Post {
     #[serde(default)]
     pub effects: Vec<Effect>,
@@ -402,6 +466,10 @@ pub trait Inbox: Send + Sync {
     /// Validate and enqueue a post for `branch`. Returns an error when the
     /// branch does not exist or a note is neither text nor data.
     fn post(&self, branch: &BranchId, post: Post) -> Result<()>;
+
+    /// Push `event` with `data` to the plugin's web side: to the clients
+    /// showing `branch`'s session, or to every client without one.
+    fn emit(&self, _event: &str, _data: Value, _branch: Option<&BranchId>) {}
 }
 
 /// Kernel services behind [`Cx`].

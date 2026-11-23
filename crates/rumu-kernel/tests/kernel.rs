@@ -1002,6 +1002,41 @@ async fn tool_calling_turn() {
     assert!(kernel.system_prompt().contains("You have the calc plugin."));
 }
 
+/// `set_plugins` swaps the tool list; a plugin whose matcher does not
+/// compile is left out whole and reported against its hook, not a failure
+/// of the rest. (The bad shapes themselves are unit-tested in
+/// `predicate::compile_rejects_bad_matchers`.)
+#[tokio::test]
+async fn set_plugins_swaps_tools_and_leaves_out_bad_matchers() {
+    let calc = Arc::new(plugin_with(
+        "calc",
+        &["plus"],
+        vec![],
+        noop_hooks(),
+        plus_tool(),
+    ));
+    let (kernel, _llm, _session, _branch) = setup(vec![calc.clone()], vec![]).await;
+    let bad = Arc::new(guard(
+        &["minus"],
+        vec![hook("bad", json!({"cmd": {"rex": "x"}}))],
+        "no",
+    ));
+    let rejected = kernel.set_plugins(vec![bad, calc]);
+    assert_eq!(rejected.len(), 1);
+    assert_eq!(rejected[0].plugin, "guard");
+    assert!(
+        rejected[0]
+            .error
+            .contains("hook guard/bad: unknown operator"),
+        "{rejected:?}"
+    );
+    let names = |k: &Kernel| k.tools().into_iter().map(|t| t.name).collect::<Vec<_>>();
+    assert_eq!(names(&kernel), ["agent", "plus"]);
+    assert!(kernel.set_plugins(vec![]).is_empty());
+    assert_eq!(names(&kernel), ["agent"]);
+    assert!(!kernel.system_prompt().contains("calc plugin"));
+}
+
 #[tokio::test]
 async fn hook_actions_on_tool_pre() {
     let plugin = Arc::new(guard(
@@ -2916,31 +2951,6 @@ async fn delete_session_removes_the_scratch_directory() {
     let other_scratch = registry.scratch(&other.id).root;
     assert!(!std::path::Path::new(other_scratch.as_str()).exists());
     kernel.delete_session(&other.id).unwrap();
-}
-
-/// Fail-fast: a malformed matcher fails kernel construction instead of
-/// silently never matching. (The three bad shapes themselves are unit-tested
-/// in `predicate::compile_rejects_bad_matchers`; here we only check that the
-/// error is attributed to the owning hook.)
-#[tokio::test]
-async fn invalid_matchers_fail_kernel_construction() {
-    let plugin = Arc::new(plugin_with(
-        "bad",
-        &[],
-        vec![hook("broken", json!({ "toolz": "bash" }))],
-        noop_hooks(),
-        noop_tools(),
-    ));
-    let err = Kernel::new(
-        Arc::new(Store::in_memory()),
-        Arc::new(FakeLlm::new(vec![])),
-        vec![plugin],
-        Workspaces::default(),
-    )
-    .err()
-    .expect("kernel construction must fail on an invalid matcher");
-    let msg = format!("{err:#}");
-    assert!(msg.contains("hook bad/broken"), "{msg}");
 }
 
 /// A guard on the `workspace` field catches path-less calls (`bash`) in the

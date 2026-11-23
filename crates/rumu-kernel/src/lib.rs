@@ -9,6 +9,7 @@ mod fields;
 mod host;
 mod llm;
 mod predicate;
+mod registry;
 mod scripted;
 mod side;
 mod state;
@@ -21,6 +22,7 @@ pub use error::{Error, Result};
 pub use fields::extract_fields;
 pub use llm::{Budget, Delta, Llm, LlmError, LlmResponse, OnDelta};
 pub use predicate::{Pred, PredicateError};
+pub use registry::Rejected;
 pub use scripted::{Script, ScriptTurn, ScriptedLlm};
 pub use state::{derive_state, merge_workspaces, mounts_changed};
 pub use task::CancelSource;
@@ -34,10 +36,10 @@ use crate::title::TITLE_CHARS;
 use crate::waker::{Waker, WakerKind};
 use rumu_core::kind;
 use rumu_core::{
-    Branch, BranchId, BranchKind, BranchStatus, Content, Effect, Event, FilesReverted, HookSpec,
-    Inbox, Node, NodeBody, NodeId, PathState, Plugin, Post, Runtime, SYSTEM_SOURCE, SessionId,
-    SessionInfo, SessionRoot, SessionStatus, TaskId, Titles, ToolCall, ToolSpec, TurnError,
-    WorkspaceUse, Workspaces, now, tool_schema,
+    Branch, BranchId, BranchKind, BranchStatus, Content, Effect, Event, FilesReverted, Inbox, Node,
+    NodeBody, NodeId, PathState, Plugin, Post, Runtime, SYSTEM_SOURCE, SessionId, SessionInfo,
+    SessionRoot, SessionStatus, TaskId, Titles, ToolCall, ToolSpec, TurnError, WorkspaceUse,
+    Workspaces, now, tool_schema,
 };
 use rumu_store::Store;
 use serde_json::{Value, json};
@@ -102,15 +104,6 @@ model alias (`rumu/<name>`). Use for open-ended work whose details don't need to
         output_schema: None,
         parallel: true,
     }
-}
-
-/// A hook registered with the kernel: its spec plus the owning plugin. The
-/// matcher is compiled here; dispatch evaluates the compiled form.
-pub(crate) struct RegisteredHook {
-    pub plugin: usize,
-    pub plugin_name: String,
-    pub spec: HookSpec,
-    pub pred: Pred,
 }
 
 /// A queued tail append, flushed at the next safe point.
@@ -244,18 +237,9 @@ where
 pub struct Kernel {
     pub(crate) store: Arc<Store>,
     pub(crate) llm: Arc<dyn Llm>,
-    pub(crate) plugins: Vec<Arc<dyn Plugin>>,
-    /// Manifest name of each plugin (same order as `plugins`), captured once:
-    /// `manifest()` may rebuild the whole tool list.
-    pub(crate) plugin_names: Vec<String>,
-    /// All hooks, sorted by (priority, registration order) (frozen).
-    pub(crate) hooks: Vec<RegisteredHook>,
-    /// Tool name → owning plugin index.
-    pub(crate) routes: HashMap<String, usize>,
-    /// Frozen system prompt: base + plugin instructions (registration order).
-    pub(crate) system: String,
-    /// All plugin tools, sorted by name (frozen).
-    pub(crate) tools: Vec<ToolSpec>,
+    /// The plugins' tools, hooks and instructions; swapped whole by
+    /// [`Kernel::set_plugins`].
+    pub(crate) registry: std::sync::RwLock<Arc<registry::Registry>>,
     /// The workspace registry; merged into every derived state.
     pub(crate) workspaces: Workspaces,
     pub(crate) tx: broadcast::Sender<Value>,
@@ -282,7 +266,6 @@ impl Kernel {
         plugins: Vec<Arc<dyn Plugin>>,
         workspaces: Workspaces,
     ) -> Result<Arc<Self>> {
-        let registry = workspaces.list();
         // A kernel restart loses every in-flight task, and the agent branches
         // that were running them are never resumed: close them out so the tree
         // does not claim a live sub-agent forever. Their tasks' journals are
@@ -298,88 +281,16 @@ impl Kernel {
             }
         }
 
-        let mut system = BASE_SYSTEM.to_owned();
-        let mut tools = Vec::new();
-        let mut routes = HashMap::new();
-        let mut hooks = Vec::new();
-        let mut plugin_names = Vec::with_capacity(plugins.len());
-
-        for (i, p) in plugins.iter().enumerate() {
-            let m = p.manifest();
-            plugin_names.push(m.name.clone());
-            if let Some(instr) = &m.instructions {
-                system.push_str("\n\n");
-                system.push_str(instr);
-            }
-            for t in m.tools {
-                if routes.contains_key(&t.name) {
-                    tracing::warn!(
-                        tool = %t.name,
-                        "duplicate tool registration (first registration wins)"
-                    );
-                } else {
-                    routes.insert(t.name.clone(), i);
-                }
-                tools.push(t);
-            }
-            for h in m.hooks {
-                // Compile each matcher here: a malformed predicate in any
-                // plugin manifest fails startup.
-                let pred =
-                    Pred::compile_with_workspaces(&h.matcher, &registry).map_err(|source| {
-                        Error::Hook {
-                            plugin: m.name.clone(),
-                            hook: h.id.clone(),
-                            source,
-                        }
-                    })?;
-                hooks.push(RegisteredHook {
-                    plugin: i,
-                    plugin_name: m.name.clone(),
-                    spec: h,
-                    pred,
-                });
-            }
-        }
-        // The kernel owns `agent`; it is not routed to a plugin.
-        // `delegate` is `agent`'s half for another assistant: routed,
-        // never listed.
-        system.push_str("\n\n");
-        system.push_str(TASK_INSTRUCTIONS);
-        tools.retain(|t| t.name != "agent");
-        tools.push(agent_tool());
-        // Advertise `background` only on tools that may run as a task.
-        for t in &mut tools {
-            if t.background
-                && let Some(props) = t
-                    .schema
-                    .get_mut("properties")
-                    .and_then(Value::as_object_mut)
-            {
-                props.insert(
-                    "background".into(),
-                    json!({
-                        "type": "boolean",
-                        "description": "run in the background; you get a task id now and a notification when it finishes"
-                    }),
-                );
-            }
-        }
-        tools.sort_by(|a, b| a.name.cmp(&b.name));
-        tools.dedup_by(|a, b| a.name == b.name);
-        hooks.sort_by_key(|h| h.spec.priority); // stable: registration order kept
+        // Left-out plugins are logged; the server's next `set_plugins`
+        // reports them to their owner.
+        let (registry, _) = registry::Registry::build(plugins, &workspaces.list());
 
         let (tx, _rx) = broadcast::channel(1024);
         let (post_tx, post_rx) = mpsc::unbounded_channel();
         let kernel = Arc::new(Self {
             store,
             llm,
-            plugins,
-            plugin_names,
-            hooks,
-            routes,
-            system,
-            tools,
+            registry: std::sync::RwLock::new(Arc::new(registry)),
             workspaces,
             tx,
             inner: Mutex::new(Inner::default()),
@@ -398,12 +309,7 @@ impl Kernel {
         });
         // Each plugin gets a channel bound to its manifest name. The worker
         // drains posts in arrival order and dispatches/delivers them async.
-        for (i, p) in kernel.plugins.iter().enumerate() {
-            p.attach(Arc::new(KernelInbox {
-                kernel: kernel.clone(),
-                source: kernel.plugin_names[i].clone(),
-            }));
-        }
+        kernel.attach(&kernel.registry());
         // A turn that failed before the restart still shows as failed.
         for session in kernel.store.list_sessions()? {
             kernel.refresh_status(&session.id, false);
@@ -423,7 +329,7 @@ impl Kernel {
 
     /// Surface a non-fatal problem to the log and every connected client's
     /// toast queue.
-    pub(crate) fn warn(&self, message: String) {
+    pub fn warn(&self, message: String) {
         tracing::warn!("{message}");
         self.push("warning", json!({ "message": message }));
     }
@@ -563,12 +469,12 @@ impl Kernel {
         self.inner.lock().unwrap().running.contains_key(branch)
     }
 
-    pub fn system_prompt(&self) -> &str {
-        &self.system
+    pub fn system_prompt(&self) -> String {
+        self.registry().system.clone()
     }
 
-    pub fn tools(&self) -> &[ToolSpec] {
-        &self.tools
+    pub fn tools(&self) -> Vec<ToolSpec> {
+        self.registry().tools.clone()
     }
 
     /// A runtime handle for tests and tooling (the same kernel services
@@ -1963,6 +1869,13 @@ impl Inbox for KernelInbox {
                 ack: None,
             })
             .map_err(|_| rumu_core::Error::from(Error::PostWorkerGone))
+    }
+
+    fn emit(&self, event: &str, data: Value, branch: Option<&BranchId>) {
+        self.kernel.push(
+            "plugin.event",
+            json!({ "plugin": self.source, "event": event, "data": data, "branch": branch }),
+        );
     }
 }
 

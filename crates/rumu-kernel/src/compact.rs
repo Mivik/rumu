@@ -384,9 +384,14 @@ impl Kernel {
         if reason != CompactReason::Overflow && !budget.compact_role {
             let mut nodes = view.clone();
             nodes.push(note(ask.clone()));
-            let call = self
-                .llm
-                .complete(pick(&model), &self.system, &self.tools, &nodes, None);
+            let registry = self.registry();
+            let call = self.llm.complete(
+                pick(&model),
+                &registry.system,
+                &registry.tools,
+                &nodes,
+                None,
+            );
             let resp = tokio::select! {
                 _ = token.cancelled() => return Ok(false),
                 r = call => r,

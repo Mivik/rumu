@@ -287,11 +287,10 @@ impl Kernel {
         args: Value,
         args_summary: String,
     ) -> Result<ToolOutput> {
-        let Some(&plugin_index) = self.routes.get(name) else {
+        let Some(route) = self.registry().routes.get(name).cloned() else {
             return Ok(ToolOutput::err(format!("no plugin provides tool `{name}`")));
         };
-        let plugin = self.plugins[plugin_index].clone();
-        let source = self.plugin_names[plugin_index].clone();
+        let (plugin, source) = (route.plugin, route.name);
         let kind = TaskKind::Tool {
             name: name.to_owned(),
             args_summary: args_summary.clone(),

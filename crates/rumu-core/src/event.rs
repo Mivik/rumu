@@ -24,7 +24,8 @@ pub mod kind {
     pub const BRANCH_MOVE: &str = "branch.move";
 }
 
-#[derive(Debug, Clone, Serialize, Deserialize)]
+#[derive(Debug, Clone, Serialize, Deserialize, ts_rs::TS)]
+#[ts(export)]
 pub struct Event {
     pub kind: String,
     pub session: SessionId,
@@ -36,7 +37,8 @@ pub struct Event {
 }
 
 /// Normalized view of an event.
-#[derive(Debug, Clone, Default, Serialize, Deserialize)]
+#[derive(Debug, Clone, Default, Serialize, Deserialize, ts_rs::TS)]
+#[ts(export)]
 pub struct Fields {
     /// Same as `Event::kind`.
     pub event: String,

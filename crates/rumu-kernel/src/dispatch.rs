@@ -5,7 +5,7 @@ use std::sync::Arc;
 use rumu_core::{BranchId, Cx, Decision, Event, HookOutput, kind};
 use serde_json::Value;
 
-use crate::{Kernel, RegisteredHook, Result, fields, host::KernelRuntime};
+use crate::{Kernel, Result, fields, host::KernelRuntime, registry::RegisteredHook};
 
 impl Kernel {
     /// A hook-facing context for `ev`, bound to the owning plugin's name.
@@ -28,7 +28,7 @@ impl Kernel {
         interceptable: bool,
         hook_timeout: std::time::Duration,
     ) -> HookOutput {
-        let plugin = self.plugins[h.plugin].clone();
+        let plugin = h.plugin.clone();
         let cx = self.cx_for(ev, &h.plugin_name);
         let who = || format!("{}/{}", h.plugin_name, h.spec.id);
         match tokio::time::timeout(hook_timeout, plugin.on_hook(&h.spec.id, ev, &cx)).await {
@@ -55,7 +55,8 @@ impl Kernel {
         ev: &mut Event,
         interceptable: bool,
     ) -> Result<Option<String>> {
-        let hooks = &self.hooks;
+        let registry = self.registry();
+        let hooks = &registry.hooks;
         let state = self.state_of_nodes(&self.pending_path_nodes(&ev.branch)?);
         let hook_timeout = self.inner.lock().unwrap().hook_timeout;
 

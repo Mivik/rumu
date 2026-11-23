@@ -10,7 +10,7 @@ use rumu_core::kind;
 use rumu_core::{
     Branch, BranchId, BranchKind, BranchStatus, CODE_DENIED_TOOLS, Call, CallStats, CompactReason,
     Content, Cx, Effort, FILE_PATCH_TAG, Inherit, InheritContext, InnerCall, Invoke, ModelPick,
-    ModelUse, NodeBody, NodeId, Plugin, RUMU_WORKSPACE, SYSTEM_SOURCE, SessionId, Tagged, ToolCall,
+    ModelUse, NodeBody, NodeId, RUMU_WORKSPACE, SYSTEM_SOURCE, SessionId, Tagged, ToolCall,
     ToolError, ToolOutput, TurnError, WorkspaceSet, WorkspaceTarget, WorkspaceUse, parse_args,
     truncate_output,
 };
@@ -511,6 +511,7 @@ impl Kernel {
             let model = self.model_of(&crate::state::derive_state(&path));
             let pick = crate::compact::pick(&model);
             let nodes = rumu_core::view(&path);
+            let registry = self.registry();
             let streamed = Arc::new(AtomicBool::new(false));
             let on_delta = {
                 let k = self.clone();
@@ -553,7 +554,7 @@ impl Kernel {
                     // Abort wins even if the call is also ready.
                     biased;
                     _ = token.cancelled() => break None,
-                    r = self.llm.complete(pick, &self.system, &self.tools, &nodes, on_delta.clone()) => {
+                    r = self.llm.complete(pick, &registry.system, &registry.tools, &nodes, on_delta.clone()) => {
                         match r {
                             Ok(resp) => break Some(Ok(resp)),
                             // Too long for the window: compact and project
@@ -765,7 +766,11 @@ impl Kernel {
                     .get("background")
                     .and_then(Value::as_bool)
                     .unwrap_or(name == "agent" && matches!(caller, Caller::Model));
-                let background_tool = self.tools.iter().any(|t| t.name == name && t.background);
+                let registry = self.registry();
+                let background_tool = registry
+                    .tools
+                    .iter()
+                    .any(|t| t.name == name && t.background);
                 // A script's call hangs from its enclosing `code` call: that
                 // is the main-line call a task or forked agent anchors to.
                 let (outer_call, inner_call) = match caller {
@@ -847,11 +852,10 @@ impl Kernel {
                             Err(e) => ToolOutput::err(format!("starting task failed: {e}")),
                         }
                     } else {
-                        match self.routes.get(&name) {
+                        match registry.routes.get(&name).cloned() {
                             None => ToolOutput::err(format!("no plugin provides tool `{name}`")),
-                            Some(&pi) => {
-                                let plugin: Arc<dyn Plugin> = self.plugins[pi].clone();
-                                let source = self.plugin_names[pi].clone();
+                            Some(route) => {
+                                let (plugin, source) = (route.plugin, route.name);
                                 // A model's call of a background-capable tool
                                 // moves to the background at its limit; a
                                 // script's stops there, when the tool takes a
@@ -1436,7 +1440,8 @@ pub(crate) enum AgentRun {
 impl Kernel {
     /// Does tool `name` take a `timeout` argument?
     fn takes_timeout(&self, name: &str) -> bool {
-        self.tools
+        self.registry()
+            .tools
             .iter()
             .any(|t| t.name == name && t.schema["properties"].get("timeout").is_some())
     }
