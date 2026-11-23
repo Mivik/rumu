@@ -42,6 +42,9 @@ const attachments = computed(() => content.value.attachments ?? [])
 const images = computed(() => attachments.value.filter((a) => kindOf(a) === 'image'))
 const documents = computed(() => attachments.value.filter((a) => kindOf(a) === 'document'))
 const text = computed(() => typedText(content.value.text, attachments.value))
+/** Parsed once per mount: the row re-renders whenever the timeline is
+ *  rebuilt (its `context` is a new list each time), its text does not change. */
+const html = computed(() => renderMarkdown(text.value))
 const editing = computed(() => editTarget.value?.id === props.node.id)
 
 const FOLD_PX = 320
@@ -143,7 +146,7 @@ const rewinding = ref(false)
             :class="folded && 'overflow-hidden mask-b-from-[calc(100%-4rem)] mask-b-to-100%'"
             :style="folded ? { maxHeight: `${FOLD_PX}px` } : undefined"
           >
-            <div ref="inner" class="md" v-html="renderMarkdown(text)" />
+            <div ref="inner" class="md" v-html="html" />
           </div>
           <button
             v-if="tall"

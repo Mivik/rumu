@@ -20,8 +20,6 @@ import type { TimelineGroup } from '../../lib/store'
 import { forkSession, regenerateFrom, state, useBranchView } from '../../lib/store'
 import { catOf } from '../../lib/assistantFace'
 import type { CatState } from '../../lib/cat'
-import { renderMarkdown } from '../../lib/markdown'
-import { pathImage } from '../../lib/artifacts'
 import { fileEditsOf } from '../../lib/toolrows'
 import { contentText, copyText } from '../../lib/util'
 import { toast } from '../../lib/state/ui'
@@ -33,6 +31,7 @@ import ArtifactCard from './ArtifactCard.vue'
 import BranchSwitcher from './BranchSwitcher.vue'
 import ContextPills from './ContextPills.vue'
 import MessageMenu from './MessageMenu.vue'
+import ReplyText from './ReplyText.vue'
 import StreamText from './StreamText.vue'
 import UsageHud from './UsageHud.vue'
 
@@ -234,14 +233,7 @@ const bare = computed(() => !items.value.length && !props.group.assistants.lengt
         <span>{{ t('chat.assistant.reasoningReset') }}</span>
       </div>
       <StreamText v-else-if="item.streaming" v-enter="'enter-fade'" />
-      <div
-        v-else-if="item.node"
-        :data-path-node="item.node.id"
-        class="md"
-        v-html="
-          renderMarkdown(textOf(item.node), { image: (a) => pathImage(a, item.node!.id), widgets: true })
-        "
-      />
+      <ReplyText v-else-if="item.node" :node="item.node" />
     </template>
 
     <span v-if="idle && !bare" v-enter="'enter-fade'" class="working-line">
