@@ -37,12 +37,48 @@ export function workspaceLabel(name: string): string {
 
 /** Copy text to the clipboard; returns whether the browser allowed it. */
 export async function copyText(text: string): Promise<boolean> {
-  try {
-    await navigator.clipboard.writeText(text)
-    return true
-  } catch {
-    return false
+  // `navigator.clipboard` exists only in secure contexts (HTTPS, localhost);
+  // a server reached over plain http by host name falls back to execCommand.
+  if (navigator.clipboard) {
+    try {
+      await navigator.clipboard.writeText(text)
+      return true
+    } catch {
+      // Denied or unfocused: the fallback may still work.
+    }
   }
+  return copyByCommand(text)
+}
+
+/** Copy through a hidden textarea and the legacy `copy` command, keeping the
+ *  focus and selection the page had. Needs a user gesture to be under way. */
+function copyByCommand(text: string): boolean {
+  const focused = document.activeElement as HTMLElement | null
+  const sel = document.getSelection()
+  const ranges = sel ? Array.from({ length: sel.rangeCount }, (_, i) => sel.getRangeAt(i)) : []
+  // A text field's caret lives on the field, not in the document selection.
+  const field = focused instanceof HTMLInputElement || focused instanceof HTMLTextAreaElement ? focused : null
+  const caret = field ? ([field.selectionStart, field.selectionEnd] as const) : null
+  const area = document.createElement('textarea')
+  area.value = text
+  area.readOnly = true
+  area.style.cssText = 'position:fixed;top:0;left:0;opacity:0;pointer-events:none'
+  document.body.append(area)
+  area.select()
+  let ok = false
+  try {
+    ok = document.execCommand('copy')
+  } catch {
+    ok = false
+  }
+  area.remove()
+  focused?.focus({ preventScroll: true })
+  if (sel) {
+    sel.removeAllRanges()
+    for (const r of ranges) sel.addRange(r)
+  }
+  if (field && caret?.[0] != null) field.setSelectionRange(caret[0], caret[1])
+  return ok
 }
 
 /** First line of a text, truncated — for previews. */
