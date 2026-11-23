@@ -16,7 +16,7 @@ import {
   useIsCurrent,
 } from '../../lib/cards'
 import type { CardUse, CardView } from '../../lib/cards'
-import { beginDrawerClose, closeDrawer, ensureFullPath, state } from '../../lib/store'
+import { beginDrawerClose, cardVersion, closeDrawer, ensureFullPath, state } from '../../lib/store'
 import type { CardWindow } from '../../lib/store'
 import type { Card } from '../../lib/types'
 import { renderMarkdown } from '../../lib/markdown'
@@ -84,9 +84,28 @@ watch(
   { immediate: true },
 )
 
+/** A write's version as its deck commit holds it: the call of an edit
+ *  carries no body to show. */
+const written = ref<{ commit: string; view: string | null } | null>(null)
+watch(
+  () => [selectedUse.value?.commit, card.value ? cardKey(card.value) : null] as const,
+  async ([commit, key]) => {
+    if (!commit || !key || written.value?.commit === commit) return
+    const at = key.indexOf(':')
+    try {
+      const { view } = await cardVersion(key.slice(0, at), key.slice(at + 1), commit)
+      written.value = { commit, view }
+    } catch {
+      // the commit is gone (a rewritten deck): keep the recorded text
+    }
+  },
+  { immediate: true },
+)
 const recorded = computed<CardView | null>(() => {
   const use = selectedUse.value
-  return use ? parseCardView(use.snapshot, use.kind === 'import') : null
+  if (!use) return null
+  const stored = written.value?.commit === use.commit ? written.value?.view : null
+  return parseCardView(stored ?? use.snapshot, use.kind === 'import')
 })
 const snapshot = computed(() => !!card.value && changed.value && tab.value === 'snapshot')
 const EMPTY_VIEW: CardView = { description: null, keywords: [], meta: {}, body: '' }

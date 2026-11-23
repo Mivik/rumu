@@ -266,9 +266,12 @@ export interface CardUse {
   kind: UseKind
   rev: string | null
   node: Node
-  /** The exact text the model saw (note text / tool result / written body). */
+  /** The exact text the model saw (note text / tool result / written body);
+   *  empty for an edit, whose call carries no body. */
   snapshot: string
   callId: string | null
+  /** A write's or edit's deck commit: its version is read from there. */
+  commit: string | null
 }
 
 /** Every recorded use of every card on the current path, in path order. */
@@ -300,6 +303,7 @@ export const cardUsesOnPath = computed(() => {
         node: n,
         snapshot: b.content.text,
         callId: null,
+        commit: null,
       })
       continue
     }
@@ -317,7 +321,15 @@ export const cardUsesOnPath = computed(() => {
       op === 'write'
         ? String((args as { content?: unknown } | undefined)?.content ?? '')
         : (resultText.get(callId ?? '') ?? '')
-    push(`${u.deck}:${u.path}`, { kind: op, rev: u.rev, node: n, snapshot, callId })
+    push(`${u.deck}:${u.path}`, {
+      kind: op,
+      rev: u.rev,
+      node: n,
+      snapshot,
+      callId,
+      // a write's commit is the one it made; a read's is only the HEAD it saw
+      commit: op === 'write' ? (u.commit ?? null) : null,
+    })
   }
   return uses
 })
