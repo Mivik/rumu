@@ -20,8 +20,8 @@ use rumu_blob::Blobs;
 use rumu_cards::cards::default_mount_point;
 use rumu_cards::{Author, Cards, Decks, library};
 use rumu_core::{
-    BranchId, CardMount, CardUnmount, Content, NodeId, SessionId, SessionRoot, TaskId, Workspace,
-    Workspaces,
+    BranchId, BranchKind, CardMount, CardUnmount, Content, NodeId, SessionId, SessionRoot, TaskId,
+    Workspace, Workspaces,
 };
 use rumu_kernel::Kernel;
 use rumu_plugins::{Assistant, assistant_of};
@@ -1272,6 +1272,17 @@ which you can read, edit and `show`.",
                     cur = n.parent.as_ref().and_then(|p| nodes.get(p));
                 }
                 own.reverse();
+                // and the side questions asked off it, whole
+                for b in branches.values() {
+                    if !matches!(&b.kind, BranchKind::Side { parent_branch, .. } if parent_branch == &branch) {
+                        continue;
+                    }
+                    let mut cur = nodes.get(&b.head);
+                    while let Some(n) = cur.filter(|n| Some(&n.id) != b.forked_from.as_ref()) {
+                        own.push(n.clone());
+                        cur = n.parent.as_ref().and_then(|p| nodes.get(p));
+                    }
+                }
                 own
             })?;
             Ok(json!({ "nodes": own.iter().map(window::wire).collect::<Vec<_>>() }))
@@ -1360,12 +1371,18 @@ which you can read, edit and `show`.",
         }
 
         // Stop this branch's reply and nothing else: background tasks it
-        // started keep running (the web's stop button). `abort` is the blunter
-        // one — it cancels them too.
+        // started keep running (the web's stop button), and the user's
+        // steering prompts not written yet come back for the composer, as
+        // `prompt.cancel` gives them. `abort` is the blunter one — it cancels
+        // the tasks too.
         "branch.stop" => {
             let branch: BranchId = str_param(p, "branch")?.into();
-            kernel.stop(&branch)?;
-            Ok(json!({}))
+            let prompts: Vec<Value> = kernel
+                .stop(&branch)?
+                .into_iter()
+                .map(|(node, content)| json!({ "node": node, "content": content }))
+                .collect();
+            Ok(json!({ "prompts": prompts }))
         }
 
         "abort" => {

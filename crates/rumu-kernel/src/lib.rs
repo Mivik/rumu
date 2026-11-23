@@ -119,6 +119,9 @@ pub(crate) struct Queued {
     pub body: NodeBody,
     /// Delivered as a wake item (see [`Kernel::cancel_queued`]).
     pub wake: bool,
+    /// The user's own steering prompt: a stop hands it back instead of
+    /// writing it (see [`Kernel::stop`]).
+    pub prompt: bool,
 }
 
 /// Wake state for one branch: whether a queued wake item has not yet been
@@ -1098,6 +1101,19 @@ impl Kernel {
         body: NodeBody,
         wake: Option<(&str, bool)>,
     ) -> Result<NodeId> {
+        self.deliver_item(branch, id, body, wake, false).await
+    }
+
+    /// [`deliver`](Self::deliver), marking a user's steering prompt
+    /// (`prompt`) as one a stop hands back.
+    pub(crate) async fn deliver_item(
+        self: &Arc<Self>,
+        branch: &BranchId,
+        id: NodeId,
+        body: NodeBody,
+        wake: Option<(&str, bool)>,
+        prompt: bool,
+    ) -> Result<NodeId> {
         {
             let mut inner = self.inner.lock().unwrap();
             if inner.running.contains_key(branch) {
@@ -1105,6 +1121,7 @@ impl Kernel {
                     id: id.clone(),
                     body,
                     wake: wake.is_some(),
+                    prompt,
                 });
                 if let Some((source, user)) = wake {
                     Self::mark_wake_locked(&mut inner, branch, Some(source), user, true);

@@ -118,7 +118,7 @@ impl Kernel {
                 self.refresh_status_of(branch, false);
                 self.spawn_turn(branch.clone(), token, TurnKind::Prompt(content.into()))
             }
-            None => self.steer_prompt(branch, content.into()).await?,
+            None => self.steer_prompt(branch, content.into(), true).await?,
         }
         Ok(())
     }
@@ -132,14 +132,20 @@ impl Kernel {
         self.store
             .get_branch(branch)?
             .ok_or_else(|| Error::BranchNotFound(branch.clone()))?;
-        self.steer_prompt(branch, content).await
+        self.steer_prompt(branch, content, false).await
     }
 
     /// A user prompt while a turn is running: dispatch the (still
     /// interceptable) prompt event, then queue the user node as a wake item so
     /// the running turn sees it at its next safe point — or a new turn starts
-    /// if that turn ends first.
-    async fn steer_prompt(self: &Arc<Self>, branch: &BranchId, content: Content) -> Result<()> {
+    /// if that turn ends first. A stop hands the user's own prompt
+    /// (`from_user`) back; another agent's message is written all the same.
+    async fn steer_prompt(
+        self: &Arc<Self>,
+        branch: &BranchId,
+        content: Content,
+        from_user: bool,
+    ) -> Result<()> {
         let session = self.session_of(branch)?;
         let mut ev = self.make_event(
             kind::PROMPT,
@@ -164,11 +170,12 @@ impl Kernel {
             "prompt.queued",
             json!({ "branch": branch, "node": node, "text": content.text }),
         );
-        self.deliver(
+        self.deliver_item(
             branch,
             node,
             NodeBody::User { content },
             Some((SYSTEM_SOURCE, true)),
+            from_user,
         )
         .await?;
         // If the turn ended between the check and the delivery, the debounced
@@ -294,27 +301,48 @@ impl Kernel {
     }
 
     /// `branch.stop` WS method: stop the reply on `branch` and nothing else.
-    /// Already-queued items are still written but no longer start a turn;
-    /// posts arriving after the stop wake normally. Background tasks the
-    /// branch started keep running — see [`Kernel::abort`] for the blunter
-    /// version.
-    pub fn stop(&self, branch: &BranchId) -> Result<()> {
+    /// The user's steering prompts the turn has not written yet come back,
+    /// oldest first, for the composer (as `prompt.cancel` would); other
+    /// queued items are still written but no longer start a turn, and posts
+    /// arriving after the stop wake normally. Background tasks the branch
+    /// started keep running — see [`Kernel::abort`] for the blunter version.
+    pub fn stop(&self, branch: &BranchId) -> Result<Vec<(NodeId, Content)>> {
         let mut inner = self.inner.lock().unwrap();
+        let mut back = Vec::new();
+        if let Some(queue) = inner.queue.get_mut(branch) {
+            queue.retain_mut(|q| match &mut q.body {
+                NodeBody::User { content } if q.prompt => {
+                    back.push((q.id.clone(), std::mem::take(content)));
+                    false
+                }
+                _ => true,
+            });
+            if queue.is_empty() {
+                inner.queue.remove(branch);
+            }
+        }
+        Self::halt_locked(&mut inner, branch);
+        drop(inner);
+        self.signal_tasks();
+        Ok(back)
+    }
+
+    /// Cancel the loop on `branch` and the wake it was owed.
+    fn halt_locked(inner: &mut crate::Inner, branch: &BranchId) {
         if let Some(t) = inner.running.get(branch) {
             t.cancel();
         }
         inner.wake_pending.remove(branch);
-        drop(inner);
-        self.signal_tasks();
-        Ok(())
     }
 
     /// `abort` WS method: stop the branch and cancel every background task it
     /// (or a sub-agent below it) started. Their completion notes are still
-    /// written, without waking.
+    /// written, without waking, and so is every queued item.
     pub fn abort(&self, branch: &BranchId) -> Result<()> {
         self.abort_tasks(branch, true, CancelSource::User);
-        self.stop(branch)
+        Self::halt_locked(&mut self.inner.lock().unwrap(), branch);
+        self.signal_tasks();
+        Ok(())
     }
 
     /// Register the loop guard for `branch`, returning its cancellation token.
@@ -1331,9 +1359,12 @@ impl Kernel {
         // Safe point at the end of the loop; also releases the loop guard and
         // re-arms a wake that arrived as the loop ended.
         self.end_loop(&child.id).await;
-        // A finished sub-agent waited for its tasks above; a stopped one takes
-        // them down with it, or their notes would wake it back up.
-        if token.is_cancelled() {
+        // A finished sub-agent waited for its tasks above. One stopped by
+        // itself is stopped as the main line is: its tasks run on, and their
+        // notes wake it again, its replies reaching the parent as notes. One
+        // cancelled with its parent (the task killed, the parent's turn
+        // stopped) takes them down with it.
+        if parent_token.is_cancelled() {
             self.abort_tasks(&child.id, true, CancelSource::SubAgent);
         }
 
@@ -1349,6 +1380,11 @@ impl Kernel {
             None
         } else if parent_token.is_cancelled() {
             Some("(sub-agent cancelled before it finished)")
+        } else if self.branch_has_running_tasks(&child.id) {
+            Some(
+                "(sub-agent interrupted by the user before it finished; its background tasks \
+                 keep running, and their results wake it again)",
+            )
         } else {
             Some(INTERRUPTED)
         };

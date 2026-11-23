@@ -4510,6 +4510,63 @@ async fn cancelled_steering_prompt_is_never_written() {
     );
 }
 
+/// A stop hands the user's steering prompts back unwritten, wakes nothing for
+/// them, and still writes another agent's message (without a turn).
+#[tokio::test]
+async fn stop_hands_back_steering_prompts() {
+    let plugin = Arc::new(plugin_with(
+        "calc",
+        &["nap"],
+        vec![],
+        noop_hooks(),
+        noop_tools(),
+    ));
+    let (kernel, llm, _s, branch) = setup(
+        vec![plugin],
+        vec![LlmResponse::calls(vec![ToolCall::new(
+            "c1",
+            "nap",
+            json!({"ms": 250}),
+        )])],
+    )
+    .await;
+    let mut rx = kernel.tap_pushes();
+
+    kernel.prompt(&branch, "first").await.unwrap();
+    wait_push(
+        &mut rx,
+        |v| v["method"] == "node.appended" && v["params"]["node"]["body"]["type"] == "assistant",
+        "assistant node",
+    )
+    .await;
+    kernel.prompt(&branch, "steer").await.unwrap();
+    let queued = wait_push(&mut rx, |v| v["method"] == "prompt.queued", "prompt.queued").await;
+    kernel
+        .send(&branch, Content::text("from an agent"))
+        .await
+        .unwrap();
+    wait_push(&mut rx, |v| v["method"] == "prompt.queued", "prompt.queued").await;
+
+    let back = kernel.stop(&branch).unwrap();
+    assert_eq!(back.len(), 1);
+    assert_eq!(back[0].0.0, queued["params"]["node"].as_str().unwrap());
+    assert_eq!(back[0].1.text, "steer");
+
+    let (done, _) = collect_turn(&mut rx, &branch.0).await;
+    assert_eq!(done["method"], "turn.done");
+    tokio::time::sleep(Duration::from_millis(100)).await;
+    assert_eq!(llm.projections().len(), 1, "no turn after the stop");
+    let (nodes, _) = kernel.branch_path(&branch).unwrap();
+    let users: Vec<&str> = nodes
+        .iter()
+        .filter_map(|n| match &n.body {
+            NodeBody::User { content } => Some(content.text.as_str()),
+            _ => None,
+        })
+        .collect();
+    assert_eq!(users, ["first", "from an agent"]);
+}
+
 /// A gated fake LLM: signals each call and waits for a permit, so a test can
 /// inject a prompt exactly while the final call of a turn is in flight.
 struct GatedLlm {
@@ -5713,6 +5770,82 @@ async fn user_abort_of_agent_branch_reports_cancelled() {
     let (done2, seen2) = collect_turn(&mut rx, &branch.0).await;
     assert_eq!(done2["method"], "turn.done");
     assert_eq!(turn_starts(&seen2, "wake"), 1, "{seen2:?}");
+}
+
+/// Stopping a sub-agent stops it as the main line stops: its background tasks
+/// run on, and when one finishes it wakes the sub-agent, whose reply reaches
+/// the parent as a note.
+#[tokio::test]
+async fn a_stopped_sub_agent_keeps_its_tasks() {
+    let plugin = Arc::new(background_plugin(
+        "bg",
+        &["bgwork"],
+        vec![],
+        noop_hooks(),
+        noop_tools(),
+    ));
+    let (kernel, session, branch) = setup_split(
+        vec![plugin],
+        vec![
+            LlmResponse::calls(vec![ToolCall::new(
+                "a1",
+                "agent",
+                json!({ "background": true, "task": "dig" }),
+            )]),
+            LlmResponse::text("parent done"),
+            LlmResponse::text("parent saw the interruption"),
+            LlmResponse::text("parent read the reply"),
+        ],
+        vec![
+            LlmResponse::calls(vec![ToolCall::new(
+                "c1",
+                "bgwork",
+                json!({ "ms": 400, "background": true }),
+            )]),
+            LlmResponse::text("waiting"),
+            LlmResponse::text("child woke"),
+        ],
+    )
+    .await;
+    kernel.set_wake_debounce(Duration::from_millis(10));
+    let mut rx = kernel.tap_pushes();
+    kernel.prompt(&branch, "go").await.unwrap();
+
+    let waiting = wait_push(
+        &mut rx,
+        |v| {
+            v["method"] == "node.appended"
+                && v["params"]["node"]["body"]["content"]["text"] == "waiting"
+        },
+        "the child waiting on its task",
+    )
+    .await;
+    let child = BranchId::from(waiting["params"]["branch"].as_str().unwrap());
+    kernel.stop(&child).unwrap();
+
+    let note = wait_push(
+        &mut rx,
+        |v| pushed_note_tag(v) == Some("task.done"),
+        "agent task note",
+    )
+    .await;
+    let text = pushed_note_text(&note).unwrap();
+    assert!(text.contains("keep running"), "{text}");
+
+    wait_until(Duration::from_secs(5), || {
+        kernel.branch_path(&branch).unwrap().0.iter().any(|n| {
+            matches!(&n.body, NodeBody::Note { content, .. }
+                if content.text.contains("replied:\nchild woke"))
+        })
+    })
+    .await;
+    let work = kernel
+        .tasks(&session)
+        .unwrap()
+        .into_iter()
+        .find(|t| t.branch == child)
+        .expect("the child's task");
+    assert_eq!(work.status, TaskStatus::Done);
 }
 
 /// A scripted parent whose sub-agents' model calls all fail.

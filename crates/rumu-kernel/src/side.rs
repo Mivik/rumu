@@ -1,7 +1,7 @@
-//! Side questions: the user's asides off a main line. A side branch forks at
-//! the main line's last safe point, so asking never waits on a running turn,
-//! and runs its own turns beside it. It sees the conversation up to the fork;
-//! the main line never sees it. It has no tools — the tool list stays in the
+//! Side questions: the user's asides off a main line or a sub-agent. A side
+//! branch forks at that line's last safe point, so asking never waits on a
+//! running turn, and runs its own turns beside it. It sees the conversation up
+//! to the fork; the line it left never sees it. It has no tools — the tool list stays in the
 //! request (the prefix, and so the prompt cache, is the main line's), but
 //! every call is refused.
 
@@ -17,8 +17,9 @@ use crate::{Error, Kernel, Result};
 pub(crate) const SIDE_NO_TOOLS: &str = "side questions have no tools; answer from the conversation";
 
 impl Kernel {
-    /// `branch.side` WS method: a side question off the main line `from`,
-    /// optionally about `quote`. Follow-ups are plain prompts on the branch.
+    /// `branch.side` WS method: a side question off `from` (the main line or
+    /// a sub-agent), optionally about `quote`. Follow-ups are plain prompts
+    /// on the branch.
     pub async fn side(
         self: &Arc<Self>,
         from: &BranchId,
@@ -29,7 +30,7 @@ impl Kernel {
             .store
             .get_branch(from)?
             .ok_or_else(|| Error::BranchNotFound(from.clone()))?;
-        if !matches!(parent.kind, BranchKind::Main) {
+        if matches!(parent.kind, BranchKind::Side { .. }) {
             return Err(Error::NotMainLine(from.clone()));
         }
         let path = self.path_nodes(from)?;
@@ -81,7 +82,7 @@ fn last_safe_node(path: &[Node]) -> Option<&Node> {
 fn side_note(quote: Option<&Quote>) -> String {
     let mut text = String::from(
         "The user is asking a side question. It branches off the conversation above: \
-         the main line will not see this exchange, and its work goes on without it. \
+         the conversation will not see this exchange, and its work goes on without it. \
          Answer directly from what the conversation already holds. You have no tools \
          here; every call is refused. If the answer needs something you have not seen, \
          say so instead of offering to look.",
