@@ -194,7 +194,14 @@ function renderCode(text: string, info: string | undefined): string {
 marked.setOptions({ gfm: true })
 // `**加粗。**正文`: CommonMark won't close emphasis after CJK punctuation
 // when a CJK letter follows.
-marked.use(markedCjkFriendly())
+const cjkFriendly = markedCjkFriendly()
+const cjkDel = cjkFriendly.tokenizer!.del!
+// Only for `~~`: its looser flanking pairs a lone `~` ("约~3秒") with any
+// later one across the paragraph; marked's own rule matches GitHub there.
+cjkFriendly.tokenizer!.del = function (src, ...rest) {
+  return src.startsWith('~~') ? cjkDel.call(this, src, ...rest) : false
+}
+marked.use(cjkFriendly)
 marked.use({
   renderer: {
     code: ({ text, lang, raw }) =>
