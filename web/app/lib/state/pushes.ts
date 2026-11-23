@@ -243,6 +243,9 @@ function onTurnStarted(p: TurnPush): void {
 
 function onTurnDone(p: TurnPush): void {
   state.busy[p.branch] = false
+  // what the turn left queued was written or taken back (a stop, maybe in
+  // another tab)
+  delete state.queuedPrompts[p.branch]
   delete state.deltas[p.branch]
   delete state.retrying[p.branch]
   delete state.compacting[p.branch]
@@ -250,6 +253,7 @@ function onTurnDone(p: TurnPush): void {
 
 function onTurnError(p: TurnErrorPush): void {
   state.busy[p.branch] = false
+  delete state.queuedPrompts[p.branch]
   delete state.deltas[p.branch]
   delete state.retrying[p.branch]
   delete state.compacting[p.branch]

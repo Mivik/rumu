@@ -3,7 +3,9 @@
 // from a selection in the conversation, SelectionBar, or brought back from a
 // side question), sent as markdown quotes ahead of it.
 import { t } from '../../i18n'
-import { quotes } from '../../lib/state/side'
+import { useBranchView } from '../../lib/state/branchView'
+
+const quotes = useBranchView().aside.quotes
 import Icon from '../ui/Icon.vue'
 </script>
 

@@ -1,19 +1,22 @@
 <script setup lang="ts">
-// The composer's model chip: the model the next prompt runs on and its
-// reasoning effort, picked from the ModelMenu. Its first row follows the
+// The composer's model chip: the model the next prompt on the shown branch
+// runs on and its reasoning effort, picked from the ModelMenu. Its first row follows the
 // assistant's model; the effort bar at the foot sets the effort on the shown
 // model, which pins that model.
 import { computed } from 'vue'
 import { t } from '../../i18n'
 import { openPage } from '../../lib/router'
-import { assistantModel, currentPick, models, pick, resolvePick } from '../../lib/state/models'
+import { assistantModel, models, resolvePick } from '../../lib/state/models'
+import { useBranchView } from '../../lib/state/branchView'
 import type { Effort } from '../../lib/generated/Effort'
 import type { ModelInfo } from '../../lib/generated/ModelInfo'
 import Icon from '../ui/Icon.vue'
 import Popover from '../ui/Popover.vue'
 import ModelMenu from './ModelMenu.vue'
 
-const use = computed(() => currentPick())
+const view = useBranchView()
+const use = computed(() => view.model.value)
+const pick = view.pick
 const resolved = computed(() => resolvePick(use.value))
 const settings = computed(() => models.settings)
 const empty = computed(() => !settings.value?.aliases.length && !settings.value?.providers.length)

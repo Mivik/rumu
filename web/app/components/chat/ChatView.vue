@@ -25,7 +25,6 @@ import ConversationView from './ConversationView.vue'
 import TraceView from './TraceView.vue'
 import StatsView from './StatsView.vue'
 import ViewTabs from './ViewTabs.vue'
-import SidePop from './SidePop.vue'
 import Welcome from './Welcome.vue'
 import SessionPickers from './SessionPickers.vue'
 import SessionProject from './SessionProject.vue'
@@ -160,7 +159,6 @@ const scope = computed(() => {
             <TraceView v-else-if="state.view === 'trace'" />
             <StatsView v-else />
           </Transition>
-          <SidePop v-if="state.view === 'chat'" />
         </template>
       </BranchChat>
     </Transition>

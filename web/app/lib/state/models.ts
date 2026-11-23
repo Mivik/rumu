@@ -13,6 +13,7 @@ import type { ModelInfo } from '../generated/ModelInfo'
 import type { ModelUse } from '../generated/ModelUse'
 import type { Protocol } from '../generated/Protocol'
 import type { SettingsInfo } from '../generated/SettingsInfo'
+import type { BranchId, Node } from '../types'
 import { prefs } from './prefs'
 import { landingAssistant } from './projects'
 import { state } from './state'
@@ -146,6 +147,32 @@ export function pick(use: ModelUse | null): void {
   }
   if (sameUse(state.pathState?.model ?? null, use)) delete models.pending[session]
   else models.pending[session] = use
+}
+
+/** The model `path` runs on: its last `model.use` marker; none, or a
+ *  `model.reset` after it, is the assistant's (`null`). */
+export function modelOfPath(path: Node[]): ModelUse | null {
+  for (let i = path.length - 1; i >= 0; i--) {
+    const b = path[i]!.body
+    const data = b.type === 'note' ? b.content.data : undefined
+    if (data?.tag === 'model.use') return data.data as unknown as ModelUse
+    if (data?.tag === 'model.reset') return null
+  }
+  return null
+}
+
+/** What the next message to sub-agent `branch` (its path `path`) runs on:
+ *  the pick made in its panel, kept by branch until sent, else its model. */
+export function branchPick(branch: BranchId | null, path: Node[]): ModelUse | null {
+  if (branch && branch in models.pending) return models.pending[branch] ?? null
+  return modelOfPath(path)
+}
+
+export function pickFor(branch: BranchId | null, path: Node[], use: ModelUse | null): void {
+  if (!branch) return
+  if (use) prefs.model = use
+  if (sameUse(modelOfPath(path), use)) delete models.pending[branch]
+  else models.pending[branch] = use
 }
 
 export function sameUse(a: ModelUse | null, b: ModelUse | null): boolean {

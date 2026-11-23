@@ -440,7 +440,8 @@ export async function sendPrompt(
     const params: Record<string, unknown> = { branch, text, ...choice }
     if (attachments.length) params.attachments = attachments
     await rumu.request('prompt', params)
-    settlePicks()
+    if (branch === state.mainBranch) settlePicks()
+    else delete models.pending[branch]
     return true
   } catch (err) {
     state.busy[branch] = false
@@ -556,8 +557,7 @@ function putBack(node: Node): void {
 
 /** `branch.compact`: summarize the main line's older context now, the
  *  summary focusing on `focus` when given. */
-export async function compactBranch(focus: string): Promise<boolean> {
-  const branch = state.mainBranch
+export async function compactBranch(focus: string, branch = state.mainBranch): Promise<boolean> {
   if (!branch) return false
   state.busy[branch] = true
   try {
@@ -571,13 +571,25 @@ export async function compactBranch(focus: string): Promise<boolean> {
 }
 
 /** `branch.stop`: stop this branch's reply; background tasks it started keep
- *  running (kill them from the composer's task tab). */
-export async function stopTurn(branch = state.mainBranch): Promise<void> {
-  if (!branch) return
+ *  running (kill them from the composer's task tab). The steering prompts it
+ *  had not written yet come back, oldest first, for the composer. */
+export async function stopTurn(branch = state.mainBranch): Promise<Content[]> {
+  if (!branch) return []
   try {
-    await rumu.request('branch.stop', { branch })
+    const res = await rumu.request<{ prompts?: { node: NodeId; content: Content }[] }>('branch.stop', {
+      branch,
+    })
+    const back = res.prompts ?? []
+    const queued = state.queuedPrompts[branch]
+    if (queued) {
+      const gone = new Set(back.map((p) => p.node))
+      state.queuedPrompts[branch] = queued.filter((q) => !gone.has(q.id))
+      if (!state.queuedPrompts[branch].length) delete state.queuedPrompts[branch]
+    }
+    return back.map((p) => p.content)
   } catch (err) {
     toast('error', t('errors.abort'), (err as Error).message)
+    return []
   }
 }
 

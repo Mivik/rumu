@@ -12,6 +12,7 @@ import { t } from '../../i18n'
 import type { ActivityStep, BranchView, DeltaBuffer, ToolRowInfo } from '../../lib/store'
 import { provideBranchView } from '../../lib/store'
 import { provideWorkView } from '../../lib/state/appearance'
+import { makeAside } from '../../lib/state/side'
 import type { WorkView } from '../../lib/generated/WorkView'
 import type { Node, NodeBody, ToolCall } from '../../lib/types'
 import ActivityRun from '../chat/ActivityRun.vue'
@@ -46,6 +47,13 @@ const view: BranchView = {
   queued: computed(() => []),
   tasks: computed(() => []),
   nestedTasks: computed(() => 0),
+  model: computed(() => null),
+  pick: () => {},
+  context: computed(() => null),
+  aside: makeAside(
+    computed(() => null),
+    computed(() => []),
+  ),
   sub: true,
 }
 provideBranchView(view)

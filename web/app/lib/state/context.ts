@@ -1,14 +1,12 @@
-// The main line's context use, for the composer's meter: how much of the
-// next model's window the conversation fills, and where it compacts. Mirrors
+// A branch's context use, for the composer's meter: how much of the next
+// model's window the conversation fills, and where it compacts. Mirrors
 // the kernel's `estimate` / `threshold` (crates/rumu-kernel/src/compact.rs):
 // the last reply's measured usage, plus a rough count of what came after it.
 
-import { computed } from 'vue'
-import type { Attachment, Content, Node } from '../types'
+import type { Attachment, BranchId, Content, ModelUse, Node } from '../types'
 import { kindOf } from '../attachments'
 import { textTokens } from '../util'
-import { pathNodes } from './derived'
-import { currentPick, models, resolvePick } from './models'
+import { models, resolvePick } from './models'
 import { state } from './state'
 import { compactionOf } from './timeline'
 
@@ -65,14 +63,14 @@ export interface ContextUse {
   threshold: number | null
 }
 
-export const contextUse = computed<ContextUse | null>(() => {
-  const branch = state.mainBranch
+/** The context use of `branch`, whose path is `path`, on the model `use`
+ *  (the composer's pick). */
+export function contextUseOf(branch: BranchId | null, path: Node[], use: ModelUse | null): ContextUse | null {
   const s = models.settings
   if (!branch || !s) return null
-  const model = resolvePick(currentPick())?.model
+  const model = resolvePick(use)?.model
   const window = model?.context ?? UNKNOWN_WINDOW
 
-  const path = pathNodes.value
   let base = 0
   let from = 0
   for (let i = path.length - 1; i >= 0; i--) {
@@ -102,4 +100,4 @@ export const contextUse = computed<ContextUse | null>(() => {
     if (at && at > 0) threshold = Math.min(threshold, Math.floor(at <= 1 ? window * at : at))
   }
   return { used: base + estimated, estimated, window, assumed: model?.context == null, threshold }
-})
+}

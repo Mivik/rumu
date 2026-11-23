@@ -41,12 +41,12 @@
 //
 // A steering prompt still queued (shown above the sheet, BranchChat) comes
 // back into the writing on its key or on ↑ at the writing's start, unsent
-// (store.takeBackPrompt).
+// (store.takeBackPrompt); stopping the turn brings all of them back.
 //
-// It writes to the shown branch (`useBranchView`). Beside the chat, in a
-// sub-agent's panel, it only talks to the sub-agent: its own unsaved draft,
-// no model, edit, quotes, side questions or decisions (those stay with the
-// main composer).
+// It writes to the shown branch (`useBranchView`), with that branch's model,
+// context, quotes and side questions. Beside the chat, in a sub-agent's
+// panel, it only talks to the sub-agent: its own unsaved draft, and no edit
+// or decisions (those stay with the main composer).
 import { computed, nextTick, onBeforeUnmount, onMounted, reactive, ref, shallowRef, watch } from 'vue'
 import { t } from '../../i18n'
 import {
@@ -60,10 +60,10 @@ import {
   useBranchView,
 } from '../../lib/store'
 import type { PromptAttachment } from '../../lib/store'
-import type { Attachment, Content, Quote, Node as TreeNode } from '../../lib/types'
+import type { Attachment, Content, Node as TreeNode } from '../../lib/types'
 import { kindOf, sniffFile, typedText, uploadBlob, withLeadingAnchors } from '../../lib/attachments'
 import { composerFocus, editTarget as mainEdit, openLightbox, toast } from '../../lib/state/ui'
-import { askSide, openSide, quoteBlock, quotes as mainQuotes } from '../../lib/state/side'
+import { askSide, openSide, quoteBlock } from '../../lib/state/side'
 import { dragging, setDropSink } from '../../lib/state/drops'
 import {
   activeDraft,
@@ -84,9 +84,9 @@ const MAX_ATTACHMENTS = 20
 
 const view = useBranchView()
 const { busy: isBusy, queued: queuedPrompts } = view
-/** A sub-agent's composer never edits or quotes: these stay empty there. */
+/** A sub-agent's composer never edits: this stays empty there. */
 const editTarget = view.sub ? shallowRef<TreeNode | null>(null) : mainEdit
-const quotes = view.sub ? ref<Quote[]>([]) : mainQuotes
+const quotes = view.aside.quotes
 /** A sub-agent's composer writes on a draft of its own, kept while it is open. */
 const subDraft: Draft | null = view.sub ? reactive({ text: '', attachments: [] }) : null
 
@@ -115,9 +115,7 @@ const canSend = computed(
       attachments.value.some((a) => a.status === 'done')),
 )
 /** The draft asks on the side (`/btw`), not in the conversation. */
-const btw = computed(
-  () => !view.sub && !!state.sessionId && !editTarget.value && /^\/btw(\s|$)/.test(draft.value),
-)
+const btw = computed(() => !!state.sessionId && !editTarget.value && /^\/btw(\s|$)/.test(draft.value))
 
 async function run(item: PendingAttachment): Promise<void> {
   if (!item.file) return
@@ -318,22 +316,22 @@ async function submit(): Promise<void> {
   const target = editTarget.value
   const origin = current.value
   const landing = !state.sessionId
-  // `/compact [focus]` compacts the open session's branch instead.
+  // `/compact [focus]` compacts the shown branch instead.
   const compact = /^\/compact(?:\s+([\s\S]*))?$/.exec(text)
-  if (compact && !view.sub && !target && !items.length && state.sessionId) {
+  if (compact && !target && !items.length && state.sessionId) {
     draft.value = ''
-    if (!(await compactBranch(compact[1]?.trim() ?? ''))) draft.value = text
+    if (!(await compactBranch(compact[1]?.trim() ?? '', view.branch.value))) draft.value = text
     return
   }
   // `/btw [question]` asks on the side instead, about the first quoted
   // passage if there is one; bare, it opens the side questions.
   const aside = /^\/btw(?:\s+([\s\S]*))?$/.exec(text)
-  if (aside && !view.sub && !target && !items.length && state.sessionId) {
+  if (aside && !target && !items.length && state.sessionId) {
     const question = aside[1]?.trim() ?? ''
     const quote = quotes.value.shift() ?? null
     draft.value = ''
-    openSide(null, quote)
-    if (question && !(await askSide(question))) draft.value = text
+    openSide(view.aside, null, quote)
+    if (question && !(await askSide(view.aside, question))) draft.value = text
     return
   }
   // Quoted passages lead the message, as markdown quotes.
@@ -351,7 +349,7 @@ async function submit(): Promise<void> {
   attachments.value = []
   const ok = target
     ? await editPrompt(target, body, sent)
-    : await sendPrompt(body, sent, view.sub ? {} : undefined, view.branch.value)
+    : await sendPrompt(body, sent, view.sub ? { model: view.model.value } : undefined, view.branch.value)
   if (ok) {
     for (const item of items) releaseAttachment(item)
     if (target && editTarget.value === target) editTarget.value = null
@@ -383,12 +381,26 @@ async function submit(): Promise<void> {
  *  in progress is dropped for it. */
 async function takeBack(id = queuedPrompts.value.at(-1)?.id): Promise<void> {
   if (!id) return
-  const into = subDraft ?? activeDraft.value
   const content = await takeBackPrompt(id, view.branch.value)
-  if (!content) return
+  if (content) restore([content])
+}
+
+/** Stop the turn; the prompts it had queued come back into the writing. */
+async function stop(): Promise<void> {
+  const back = await stopTurn(view.branch.value)
+  if (back.length) restore(back)
+}
+
+/** Put sent `contents` back into the writing, ahead of what is written
+ *  there; an edit in progress is dropped for them. */
+function restore(contents: Content[]): void {
+  const into = subDraft ?? activeDraft.value
   if (editTarget.value) editTarget.value = null
-  const attachments = content.attachments ?? []
-  const text = typedText(content.text, attachments)
+  const attachments = contents.flatMap((c) => c.attachments ?? [])
+  const text = contents
+    .map((c) => typedText(c.text, c.attachments ?? []))
+    .filter((s) => s.trim())
+    .join('\n\n')
   into.text = [text, into.text].filter((s) => s.trim()).join('\n\n')
   into.attachments = [...attachments.map((a) => storedAttachment(a)), ...into.attachments]
   engaged.value = true
@@ -468,6 +480,8 @@ if (!view.sub) {
   )
   watch(composerFocus, () => void nextTick(focusComposer))
 }
+// a quote just went into this composer
+watch(view.aside.focus, () => void nextTick(focusComposer))
 
 /** Whom the message goes to: the sub-agent shown, the session's assistant,
  * or the one picked on the landing page. */
@@ -577,7 +591,7 @@ const sendLabel = computed(() =>
         </button>
       </div>
     </div>
-    <QuoteTray v-if="!view.sub" />
+    <QuoteTray />
     <textarea
       ref="textareaEl"
       v-model="draft"
@@ -605,7 +619,7 @@ const sendLabel = computed(() =>
         :title="t('chat.composer.stop')"
         :aria-label="t('chat.composer.stop')"
         @pointerdown.stop
-        @click="stopTurn(view.branch.value)"
+        @click="stop"
       >
         <Icon name="stop" :size="16" />
       </button>
@@ -619,10 +633,8 @@ const sendLabel = computed(() =>
           class="flex min-w-0 items-center gap-1.5 pt-0.5 pr-2 pb-2 pl-3"
           @click.self="textareaEl?.focus()"
         >
-          <template v-if="!view.sub">
-            <ModelPicker />
-            <ContextMeter />
-          </template>
+          <ModelPicker />
+          <ContextMeter />
           <span class="flex-1" @click.self="textareaEl?.focus()" />
           <input
             ref="fileEl"
@@ -651,7 +663,7 @@ const sendLabel = computed(() =>
               class="composer-stop"
               :title="t('chat.composer.stop')"
               :aria-label="t('chat.composer.stop')"
-              @click="stopTurn(view.branch.value)"
+              @click="stop"
             >
               <Icon name="stop" :size="16" />
             </button>

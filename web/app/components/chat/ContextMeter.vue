@@ -9,16 +9,16 @@ import { computed, onBeforeUnmount, ref, useId, watch } from 'vue'
 import type { CSSProperties, Ref } from 'vue'
 import { autoUpdate, flip, offset, shift, useFloating } from '@floating-ui/vue'
 import { t } from '../../i18n'
-import { contextUse } from '../../lib/state/context'
+import { useBranchView } from '../../lib/state/branchView'
 import { compactBranch, showStats } from '../../lib/state/sessions'
-import { state } from '../../lib/state/state'
 import { fmtTokens } from '../../lib/util'
 import Icon from '../ui/Icon.vue'
 
 const TIP_ID = `context-meter-${useId()}`
 
-const use = computed(() => contextUse.value)
-const busy = computed(() => !!state.mainBranch && !!state.busy[state.mainBranch])
+const view = useBranchView()
+const use = computed(() => view.context.value)
+const busy = view.busy
 /** Amber from a tenth short of where it compacts (of the window, with
  *  auto-compaction off). */
 const warn = computed(() => {
@@ -136,11 +136,11 @@ function togglePin(): void {
 
 function compactNow(): void {
   close()
-  void compactBranch('')
+  void compactBranch('', view.branch.value)
 }
 function openStats(): void {
   close()
-  showStats(null)
+  showStats(null, view.sub ? view.branch.value : null)
 }
 
 function onDocPointer(e: PointerEvent): void {

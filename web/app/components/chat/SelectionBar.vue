@@ -5,14 +5,21 @@
 // just above the composer, clear of the phone's selection toolbar and
 // handles. It floats over the conversation rather than taking room: a page
 // followed to its end would otherwise ride up under the selection.
+//
+// Each conversation shown has one (BranchChat): the main line's answers a
+// selection outside the sub-agent panel, the panel's one inside it.
 import { onBeforeUnmount, onMounted } from 'vue'
 import { t } from '../../i18n'
 import type { Quote } from '../../lib/types'
-import { addQuote, openSide, selection } from '../../lib/state/side'
-import { requestComposerFocus } from '../../lib/state/ui'
+import { useBranchView } from '../../lib/state/branchView'
+import { addQuote, openSide } from '../../lib/state/side'
 import Icon from '../ui/Icon.vue'
 
-/** The selection, when it lies inside one reply of the conversation. */
+const view = useBranchView()
+const aside = view.aside
+const selection = aside.selection
+
+/** The selection, when it lies inside one reply of this conversation. */
 function read(): Quote | null {
   const sel = getSelection()
   if (!sel || sel.isCollapsed || !sel.rangeCount) return null
@@ -24,6 +31,7 @@ function read(): Quote | null {
   const at = reply(r.startContainer)
   const node = at?.getAttribute('data-path-node')
   if (!at || !node || at !== reply(r.endContainer)) return null
+  if (!!at.closest('[data-agent-panel]') !== view.sub) return null
   return { node, text }
 }
 
@@ -68,8 +76,7 @@ function take(use: (q: Quote) => void): void {
 }
 
 function quote(q: Quote): void {
-  addQuote(q)
-  requestComposerFocus()
+  addQuote(aside, q)
 }
 
 onMounted(() => document.addEventListener('selectionchange', onSelectionChange))
@@ -98,7 +105,7 @@ onBeforeUnmount(() => {
         <Icon name="quote" :size="15" />{{ t('chat.side.quote') }}
       </button>
       <span class="h-4 w-px flex-none bg-line" />
-      <button class="quote-key text-agent hover:bg-agent-soft" @click="take((q) => openSide(null, q))">
+      <button class="quote-key text-agent hover:bg-agent-soft" @click="take((q) => openSide(aside, null, q))">
         <Icon name="side" :size="15" />{{ t('chat.side.title') }}
       </button>
     </div>

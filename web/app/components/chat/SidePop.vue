@@ -1,6 +1,6 @@
 <script setup lang="ts">
-// The side questions card, at the top right of the sheet over the
-// conversation. It opens only when asked (`/btw`, or a selected passage's
+// The side questions card, at the top right of a conversation (the main
+// line's, or a sub-agent's in its panel), over it. It opens only when asked (`/btw`, or a selected passage's
 // side key), folds to its title row, and closes to nothing: the passages
 // asked about keep a dotted underline in the conversation, and a click on
 // one opens its question again. A bare `/btw` lists them.
@@ -9,14 +9,23 @@
 // prompts and replies plainly rather than through the timeline's groups.
 import { computed, nextTick, onBeforeUnmount, onMounted, ref, watch } from 'vue'
 import { t } from '../../i18n'
-import { pathOf, state } from '../../lib/store'
+import { pathOf, state, useBranchView } from '../../lib/store'
 import type { BranchId, Node, Quote } from '../../lib/types'
 import { renderMarkdown } from '../../lib/markdown'
-import { pathNodes } from '../../lib/state/derived'
-import { addQuote, askSide, closeSide, openSide, side, sideBranches } from '../../lib/state/side'
-import { requestComposerFocus } from '../../lib/state/ui'
+import { addQuote, askSide, closeSide as close, openSide as open, paintQuotes } from '../../lib/state/side'
 import { revealNode, timelineRendered } from '../../lib/virtualEntries'
 import Icon from '../ui/Icon.vue'
+
+/** The conversation it sits on (BranchChat's root): what it looks for
+ *  quoted passages in. */
+const props = defineProps<{ root: () => HTMLElement | null }>()
+
+const view = useBranchView()
+const aside = view.aside
+const side = aside.card
+const sideBranches = aside.branches
+const openSide = (id: BranchId | null) => open(aside, id)
+const closeSide = () => close(aside)
 
 const quoteOf = (id: BranchId | null): Quote | null => {
   const b = id ? state.branches[id] : null
@@ -59,7 +68,7 @@ async function send(): Promise<void> {
   if (!text || sending.value) return
   sending.value = true
   draft.value = ''
-  if (!(await askSide(text))) draft.value = text
+  if (!(await askSide(aside, text))) draft.value = text
   sending.value = false
 }
 
@@ -73,8 +82,7 @@ function onKeydown(e: KeyboardEvent): void {
 /** Quote a reply into the composer: what a side question turned up joins
  *  the main line only this way. */
 function bringBack(n: Node): void {
-  addQuote({ node: n.id, text: textOf(n) })
-  requestComposerFocus()
+  addQuote(aside, { node: n.id, text: textOf(n) })
 }
 
 // Opening (or switching) puts the caret in the card; the touch keyboard
@@ -98,8 +106,8 @@ watch([turns, streaming], () => {
 
 /** Scroll the conversation to a quoted passage's message. */
 async function locate(q: Quote): Promise<void> {
-  await revealNode(q.node)
-  const el = document.querySelector<HTMLElement>(`.tl-col [data-path-node="${CSS.escape(q.node)}"]`)
+  if (!view.sub) await revealNode(q.node)
+  const el = props.root()?.querySelector<HTMLElement>(`.tl-col [data-path-node="${CSS.escape(q.node)}"]`)
   el?.scrollIntoView({ behavior: 'smooth', block: 'center' })
 }
 
@@ -136,18 +144,19 @@ function findText(root: Element, text: string): Range | null {
 function paint(): void {
   if (!('highlights' in CSS)) return
   marked.clear()
+  const root = props.root()
   for (const b of sideBranches.value) {
     const q = quoteOf(b.id)
-    const el = q && document.querySelector(`.tl-col .md[data-path-node="${CSS.escape(q.node)}"]`)
+    const el = q && root?.querySelector(`.tl-col .md[data-path-node="${CSS.escape(q.node)}"]`)
     const r = el && findText(el, q.text)
     if (r) marked.set(r, b.id)
   }
-  CSS.highlights.set('side-quote', new Highlight(...marked.keys()))
+  paintQuotes(aside, [...marked.keys()])
 }
 
 // (the virtual timeline renders entries in and out: look again when it does)
 watch(
-  [sideBranches, () => pathNodes.value.length, () => state.sessionId, timelineRendered],
+  [sideBranches, () => view.nodes.value.length, () => state.sessionId, timelineRendered],
   () => void nextTick(paint),
   { immediate: true },
 )
@@ -155,7 +164,8 @@ watch(
 /** A click on an underlined passage opens what was asked about it. */
 function onClick(e: MouseEvent): void {
   if (!marked.size || !getSelection()?.isCollapsed) return
-  if (!(e.target as Element | null)?.closest?.('.tl-col')) return
+  const target = e.target as Element | null
+  if (!target?.closest?.('.tl-col') || !props.root()?.contains(target)) return
   const pos = document.caretPositionFromPoint?.(e.clientX, e.clientY)
   if (!pos) return
   for (const [r, id] of marked) {
@@ -170,7 +180,7 @@ function onClick(e: MouseEvent): void {
 onMounted(() => document.addEventListener('click', onClick))
 onBeforeUnmount(() => {
   document.removeEventListener('click', onClick)
-  if ('highlights' in CSS) CSS.highlights.delete('side-quote')
+  paintQuotes(aside, null)
 })
 </script>
 

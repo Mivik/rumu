@@ -2,18 +2,23 @@
 // A branch's conversation with the composer at its foot: the chat's main
 // line (ChatView), or a sub-agent beside it (AgentPanel provides its view).
 // The slot replaces the conversation — the chat puts its other views there —
-// and gets the composer, where the rail stops.
+// and gets the composer, where the rail stops. The side questions card
+// floats over the conversation (not over the chat's other views).
 import { ref } from 'vue'
 import { t } from '../../i18n'
-import { useBranchView } from '../../lib/store'
+import { state, useBranchView } from '../../lib/store'
 import Composer from './Composer.vue'
 import ConversationView from './ConversationView.vue'
 import SelectionBar from './SelectionBar.vue'
+import SidePop from './SidePop.vue'
 import TasksPanel from './TasksPanel.vue'
 import Icon from '../ui/Icon.vue'
 
 const view = useBranchView()
 const queued = view.queued
+
+const rootEl = ref<HTMLElement | null>(null)
+const rootOf = (): HTMLElement | null => rootEl.value
 
 const composerEl = ref<HTMLElement | null>(null)
 /** The composer takes queued prompts back (their keys sit above it). */
@@ -28,17 +33,17 @@ function composerRoot(): HTMLElement | null {
 </script>
 
 <template>
-  <div class="relative flex min-h-0 flex-1 flex-col">
+  <div ref="rootEl" class="relative flex min-h-0 flex-1 flex-col">
     <slot :composer-of="composerRoot">
       <ConversationView :composer-of="composerRoot" />
     </slot>
+    <SidePop v-if="view.sub || state.view === 'chat'" :root="rootOf" />
 
     <!-- min-h-0: a tall decision panel shrinks into the room left above the
          sheet's foot instead of pushing the send row past its edge -->
     <div ref="composerEl" class="relative flex min-h-0 flex-col px-3 pt-1 pb-3 sm:px-6 sm:pb-5">
       <!-- a selection's keys float over the conversation's foot -->
       <div
-        v-if="!view.sub"
         class="pointer-events-none absolute inset-x-3 bottom-full z-10 flex justify-center pb-1 sm:inset-x-6 [&>*]:pointer-events-auto"
       >
         <SelectionBar />
