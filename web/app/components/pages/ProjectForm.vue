@@ -1,14 +1,17 @@
 <script setup lang="ts">
 // A project on the projects page (`/projects/<id>`, `?new` for a new one): its
 // seal and name, its charter, its mounted workspaces (add a registered one or a
-// folder, reorder — the first is the default — remove) and deleting it. A
+// folder, reorder — the first is the default — remove), the MCP servers and
+// skills its sessions use besides their assistant's, and deleting it. A
 // folder added here is registered only when the form is submitted.
 import { computed, reactive, ref, watch } from 'vue'
 import { t } from '../../i18n'
 import { trackItemDirty } from '../../lib/layout'
 import { replacePage } from '../../lib/router'
+import { refreshSettings } from '../../lib/state/models'
 import {
   chooseLandingProject,
+  connected,
   createProject,
   deleteProject,
   folderProjectName,
@@ -22,6 +25,7 @@ import { PROJECT_TONES, projectTone, toneColor } from '../../lib/projectIcon'
 import type { Workspace } from '../../lib/types'
 import FolderPicker from '../FolderPicker.vue'
 import ProjectSeal from '../brand/ProjectSeal.vue'
+import CapabilityFields from '../settings/CapabilityFields.vue'
 import Icon from '../ui/Icon.vue'
 import Popover from '../ui/Popover.vue'
 
@@ -34,6 +38,8 @@ const form = reactive<{
   workspaces: string[]
   folders: Record<string, string>
   private: boolean
+  mcp: Record<string, string[]>
+  skills: string[]
 }>({
   name: '',
   glyph: '',
@@ -41,6 +47,8 @@ const form = reactive<{
   workspaces: [],
   folders: {},
   private: false,
+  mcp: {},
+  skills: [],
 })
 const pristine = ref(JSON.stringify(form))
 const busy = ref(false)
@@ -93,6 +101,8 @@ function reset(): void {
   form.workspaces = [...(p?.workspaces ?? [])]
   form.folders = {}
   form.private = p?.private ?? false
+  form.mcp = Object.fromEntries(Object.entries(p?.mcp ?? {}).map(([k, v]) => [k, [...v]]))
+  form.skills = [...(p?.skills ?? [])]
   pristine.value = JSON.stringify(form)
 }
 
@@ -155,13 +165,15 @@ async function save(): Promise<void> {
       workspaces: form.workspaces,
       icon,
       private: form.private,
+      mcp: form.mcp,
+      skills: form.skills,
     }
     const p = project.value
     if (p) {
       await updateProject(p.id, changes)
       reset()
     } else {
-      const created = await createProject(changes.name, changes.workspaces, icon, form.private)
+      const created = await createProject(changes)
       chooseLandingProject(created.id)
       replacePage(created.id)
     }
@@ -189,6 +201,9 @@ async function remove(): Promise<void> {
 
 // The form follows the open project, once the list names it.
 watch([creating, () => project.value?.id], reset, { immediate: true })
+// The servers and skills to choose from; a page booted from its address
+// mounts before the socket is up.
+watch(connected, (up) => up && void refreshSettings(), { immediate: true })
 </script>
 
 <template>
@@ -389,6 +404,8 @@ watch([creating, () => project.value?.id], reset, { immediate: true })
           </Popover>
         </div>
       </div>
+
+      <CapabilityFields v-model:mcp="form.mcp" v-model:skills="form.skills" />
     </div>
 
     <footer class="flex flex-none flex-col gap-2 border-t border-line-soft px-4 py-3 sm:px-6">

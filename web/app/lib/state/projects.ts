@@ -19,28 +19,26 @@ export async function refreshProjects(): Promise<Project[]> {
   return state.projects
 }
 
-export async function createProject(
-  name: string,
-  workspaces: string[] = [],
-  icon?: DeckIcon,
-  privateDeck = false,
-): Promise<Project> {
-  const res = await rumu.request<{ project: Project }>('project.create', {
-    name,
-    workspaces,
-    icon,
-    private: privateDeck,
-  })
+/** What a project's form sets: its name, seal (an empty one clears it),
+ *  privacy, ordered workspaces, and the MCP servers and skills its sessions
+ *  use besides their assistant's. */
+export type ProjectChanges = {
+  name?: string
+  icon?: DeckIcon
+  workspaces?: string[]
+  private?: boolean
+  mcp?: Record<string, string[]>
+  skills?: string[]
+}
+
+export async function createProject(changes: ProjectChanges & { name: string }): Promise<Project> {
+  const res = await rumu.request<{ project: Project }>('project.create', changes)
   await refreshProjects()
   return res.project
 }
 
-/** Rename a project, set its seal (an empty one clears it) and/or replace
- *  its ordered workspaces. */
-export async function updateProject(
-  id: string,
-  changes: { name?: string; icon?: DeckIcon; workspaces?: string[]; private?: boolean },
-): Promise<Project> {
+/** Change a project: each field given is set. */
+export async function updateProject(id: string, changes: ProjectChanges): Promise<Project> {
   const res = await rumu.request<{ project: Project }>('project.update', { id, ...changes })
   await refreshProjects()
   return res.project
