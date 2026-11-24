@@ -4,7 +4,8 @@
 // isn't 0. A background call passes its task's output and `running` while
 // it goes (the row above already says it's running, so nothing here does).
 // An output that never ran (a tool error, a hook block) reads in
-// danger.
+// danger. The task panel shows a background task with it too, `fill`ing
+// the panel instead of capping the output.
 import { computed } from 'vue'
 import { t } from '../../i18n'
 import { vFollow } from '../../lib/motion'
@@ -21,7 +22,11 @@ const props = defineProps<{
   command?: string
   /** The call's other args (`bashExtraArgs`), as a raw line under it. */
   args?: [string, unknown][]
+  /** Fill a panel that scrolls it: the output is not capped. */
+  fill?: boolean
 }>()
+
+const emit = defineEmits<{ toggle: [expanded: boolean] }>()
 
 /** One arg value on one line, JSON-ish: strings quoted, objects inline. */
 function inline(v: unknown): string {
@@ -49,9 +54,9 @@ const result = computed(() => {
 </script>
 
 <template>
-  <div class="term">
+  <div class="term" :class="{ fill }">
     <div v-if="command" class="term-cmd">
-      <TermCommand :command="command" />
+      <TermCommand :command="command" @toggle="emit('toggle', $event)" />
       <div v-if="args?.length" class="term-args">
         <span v-for="[k, v] in args" :key="k"
           ><span class="text-ink-3">{{ k }}:</span> <span :class="tone(v)">{{ inline(v) }}</span></span
@@ -120,5 +125,24 @@ const result = computed(() => {
 .term-exit {
   color: var(--danger);
   font-weight: 600;
+}
+
+/* In the task panel: under its header, with the panel's margins. */
+.term.fill {
+  border-top: 0;
+}
+
+.fill > .term-cmd {
+  padding: 8px 14px 8px 20px;
+}
+
+.fill > .term-out {
+  max-height: none;
+  overflow: visible;
+  padding: 16px 20px;
+}
+
+.fill > .term-foot {
+  padding: 8px 20px;
 }
 </style>

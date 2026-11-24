@@ -1,6 +1,6 @@
 <script setup lang="ts">
 // A command as a terminal shows it: `$`, bash highlighting, a copy button.
-// With `lines`, a longer command folds and the `$` becomes its toggle.
+// A command past three lines folds, and the `$` becomes its toggle.
 import { computed, nextTick, onBeforeUnmount, onMounted, ref, watch } from 'vue'
 import { t } from '../../i18n'
 import { highlightLine } from '../../lib/markdown'
@@ -8,11 +8,7 @@ import { toast } from '../../lib/state/ui'
 import { copyText } from '../../lib/util'
 import Icon from '../ui/Icon.vue'
 
-const props = defineProps<{
-  command: string
-  /** Fold past this many lines (unset: show it all, up to a scrolling ceiling). */
-  lines?: number
-}>()
+const props = defineProps<{ command: string }>()
 
 const emit = defineEmits<{ toggle: [expanded: boolean] }>()
 
@@ -20,7 +16,9 @@ const pre = ref<HTMLPreElement | null>(null)
 const expanded = ref(false)
 const overflowing = ref(false)
 
-const folded = computed(() => props.lines !== undefined && !expanded.value)
+const LINES = 3
+
+const folded = computed(() => !expanded.value)
 const toggleLabel = computed(() => (expanded.value ? t('common.foldCommand') : t('common.unfoldCommand')))
 
 function measure(): void {
@@ -89,8 +87,8 @@ async function copy(): Promise<void> {
     <pre
       ref="pre"
       class="shell min-w-0 flex-1"
-      :class="{ folded, faded: folded && overflowing, open: expanded }"
-      :style="folded ? { maxHeight: `calc(1.55em * ${lines})` } : undefined"
+      :class="{ folded, faded: folded && overflowing }"
+      :style="folded ? { maxHeight: `calc(1.55em * ${LINES})` } : undefined"
       v-html="highlightLine(command, 'bash')"
     ></pre>
 
@@ -108,8 +106,6 @@ async function copy(): Promise<void> {
 
 <style scoped>
 pre {
-  max-height: 160px;
-  overflow: auto;
   margin: 0;
   font: inherit;
   line-height: 1.55;
@@ -124,12 +120,6 @@ pre.folded {
 
 pre.faded {
   mask-image: linear-gradient(to bottom, #000 62%, transparent);
-}
-
-/* The surrounding box scrolls an unfolded command along with what follows it. */
-pre.open {
-  max-height: none;
-  overflow: visible;
 }
 
 .mark {

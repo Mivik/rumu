@@ -1,29 +1,26 @@
 <script setup lang="ts">
-// A background task's output beside the chat: what it runs, how it is doing,
-// and its buffered output, following the end while it streams.
+// A background task's output beside the chat: how it is doing, then the
+// same terminal body as its opened row (BashView), following the end while
+// it streams.
 import { computed, onBeforeUnmount, onMounted, ref, watch } from 'vue'
 import { t } from '../../i18n'
 import { vFollow } from '../../lib/motion'
-import {
-  clipLive,
-  ensureAgentNodes,
-  killTask,
-  openTaskDetail,
-  state,
-  taskOutput,
-  useTaskWatch,
-} from '../../lib/store'
+import { callById } from '../../lib/state/derived'
+import { ensureAgentNodes, killTask, openTaskDetail, state, taskOutput, useTaskWatch } from '../../lib/store'
 import { taskCommand, taskElapsed, taskState, taskStatusIcon, taskStatusWord } from '../../lib/tasks'
-import { bashExit } from '../../lib/toolrows'
+import { argsOf, bashExtraArgs } from '../../lib/toolrows'
 import { toolIcon } from '../../lib/toolIcon'
 import Icon from '../ui/Icon.vue'
+import BashView from './BashView.vue'
 import PanelBack from './PanelBack.vue'
-import TermCommand from './TermCommand.vue'
 
 const task = computed(() => (state.taskDetail ? (state.tasks[state.taskDetail] ?? null) : null))
 const running = computed(() => task.value?.status === 'running')
 
 const command = computed(() => (task.value ? taskCommand(task.value) : ''))
+const args = computed(() =>
+  command.value && task.value ? bashExtraArgs(argsOf(callById(task.value.call_id))) : [],
+)
 
 const box = ref<HTMLElement | null>(null)
 
@@ -51,13 +48,10 @@ onBeforeUnmount(() => clearInterval(timer))
 
 useTaskWatch(() => (task.value && running.value ? [task.value.id] : []))
 
-/** The live output while it runs, then the final result; only its tail. */
+/** The live output while it runs, then the final result. */
 const output = computed(() => {
   const tk = task.value
-  const text = tk ? (running.value ? taskOutput(tk.id) : (tk.result?.text ?? '')) : ''
-  const { code, body } = bashExit(text)
-  const clip = clipLive(body.replace(/\n+$/, ''))
-  return { code, body: clip.text, clipped: clip.clipped }
+  return tk ? (running.value ? taskOutput(tk.id) : (tk.result?.text ?? '')) : ''
 })
 </script>
 
@@ -118,28 +112,22 @@ const output = computed(() => {
     </header>
 
     <div :key="task.id" ref="box" v-follow="running" class="min-h-0 flex-1 overflow-auto">
-      <div
-        v-if="command"
-        class="border-b border-line-soft bg-surface-2 px-5 py-2 font-mono text-meta leading-[1.55]"
-      >
-        <TermCommand :command="command" :lines="3" @toggle="onCommandToggle" />
-      </div>
-      <p v-if="output.clipped" class="px-5 pt-3 text-micro text-ink-3">{{ t('common.clippedHead') }}</p>
-      <pre
-        v-if="output.body"
-        class="view-in px-5 py-4 font-mono text-micro leading-[1.6] break-words whitespace-pre-wrap"
-        >{{ output.body }}</pre>
-      <p v-else class="px-5 py-4 text-meta text-ink-3">{{ t('common.noOutput') }}</p>
+      <BashView
+        :output="output"
+        :failed="task.is_error"
+        :running="running"
+        :command="command"
+        :args="args"
+        fill
+        @toggle="onCommandToggle"
+      />
     </div>
 
     <footer
-      v-if="output.code || task.truncated"
-      class="flex flex-none items-center gap-3 border-t border-line-soft px-5 py-2 text-micro"
+      v-if="task.truncated"
+      class="flex flex-none items-center border-t border-line-soft px-5 py-2 text-micro text-ink-3"
     >
-      <span v-if="output.code" class="font-mono font-semibold text-danger">
-        {{ t('tools.result.exit', { code: output.code }) }}
-      </span>
-      <span v-if="task.truncated" class="text-ink-3">{{ t('common.truncated') }}</span>
+      {{ t('common.truncated') }}
     </footer>
   </section>
 </template>
