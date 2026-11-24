@@ -84,7 +84,7 @@ impl Skills {
     /// The installed repositories of `rumu_home`, then `~/.agents/skills` and
     /// `~/.claude/skills`.
     pub fn new(rumu_home: &Path) -> Self {
-        let home = std::env::var_os("HOME").map(PathBuf::from);
+        let home = std::env::home_dir();
         let dirs = home
             .iter()
             .flat_map(|h| [h.join(".agents/skills"), h.join(".claude/skills")])

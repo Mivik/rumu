@@ -287,19 +287,76 @@ pub(crate) struct LocalBackend {
     pub root: PathBuf,
 }
 
-/// Does a `bash` binary exist? Probed once per process; `sh` is the fallback.
-fn has_bash() -> bool {
-    static HAS_BASH: OnceLock<bool> = OnceLock::new();
-    *HAS_BASH.get_or_init(|| {
-        std::process::Command::new("bash")
-            .arg("-c")
-            .arg("true")
-            .stdin(Stdio::null())
-            .stdout(Stdio::null())
-            .stderr(Stdio::null())
-            .status()
-            .is_ok_and(|s| s.success())
-    })
+/// The shell the local backend runs commands with, found once per process.
+/// Unix: `bash`, else `sh`. Windows: Git Bash, by absolute path — a bare
+/// `bash` resolves to System32's WSL launcher before `PATH` is searched, and
+/// that runs the command inside a Linux VM instead of on this machine.
+fn local_shell() -> Option<&'static Path> {
+    static SHELL: OnceLock<Option<PathBuf>> = OnceLock::new();
+    SHELL
+        .get_or_init(|| {
+            #[cfg(unix)]
+            {
+                let works = std::process::Command::new("bash")
+                    .arg("-c")
+                    .arg("true")
+                    .stdin(Stdio::null())
+                    .stdout(Stdio::null())
+                    .stderr(Stdio::null())
+                    .status()
+                    .is_ok_and(|s| s.success());
+                Some(PathBuf::from(if works { "bash" } else { "sh" }))
+            }
+            #[cfg(windows)]
+            {
+                git_bash()
+            }
+        })
+        .as_deref()
+}
+
+/// Git for Windows' `bin\bash.exe` (the launcher that puts its Unix tools on
+/// `PATH`): next to the `git.exe` on `PATH`, else in the default install
+/// directories, else any `bash.exe` on `PATH` outside the Windows directory
+/// and WindowsApps (both hold WSL launchers).
+#[cfg(windows)]
+fn git_bash() -> Option<PathBuf> {
+    let path: Vec<PathBuf> = std::env::var_os("PATH")
+        .map(|p| std::env::split_paths(&p).collect())
+        .unwrap_or_default();
+    let from_git = path
+        .iter()
+        .filter(|d| d.join("git.exe").is_file())
+        .map(|d| {
+            // `Git\cmd\git.exe`, `Git\bin\git.exe` and `Git\mingw64\bin\git.exe`.
+            let root = d
+                .ancestors()
+                .find(|a| a.join("bin").join("bash.exe").is_file())
+                .unwrap_or(d);
+            root.join("bin").join("bash.exe")
+        });
+    let installed = ["ProgramFiles", "ProgramW6432", "LOCALAPPDATA"]
+        .into_iter()
+        .filter_map(std::env::var_os)
+        .map(|base| {
+            let base = PathBuf::from(base);
+            if base.ends_with("Local") {
+                base.join(r"Programs\Git\bin\bash.exe")
+            } else {
+                base.join(r"Git\bin\bash.exe")
+            }
+        });
+    let system = std::env::var_os("SystemRoot").map(PathBuf::from);
+    let on_path = path
+        .iter()
+        .filter(|d| {
+            !system.as_ref().is_some_and(|s| d.starts_with(s)) && !d.ends_with("WindowsApps")
+        })
+        .map(|d| d.join("bash.exe"));
+    from_git
+        .chain(installed)
+        .chain(on_path)
+        .find(|p| p.is_file())
 }
 
 #[async_trait]
@@ -348,7 +405,16 @@ impl Backend for LocalBackend {
         on_chunk: &mut (dyn for<'a> FnMut(&'a str) + Send),
     ) -> Result<ExecOutput> {
         let script = format!("{EXEC_PRELUDE}{script}");
-        let shell = if has_bash() { "bash" } else { "sh" };
+        let shell = local_shell().ok_or_else(|| {
+            IoError::new(
+                "finding",
+                "bash",
+                std::io::Error::new(
+                    std::io::ErrorKind::NotFound,
+                    "no Git Bash found (install Git for Windows)",
+                ),
+            )
+        })?;
         let mut command = Command::new(shell);
         command
             .arg("-c")
@@ -360,7 +426,7 @@ impl Backend for LocalBackend {
         let mut tree = ProcessTree::spawn(command).map_err(|source| {
             IoError::new(
                 "spawning",
-                format!("{shell} in {}", self.root.display()),
+                format!("{} in {}", shell.display(), self.root.display()),
                 source,
             )
         })?;

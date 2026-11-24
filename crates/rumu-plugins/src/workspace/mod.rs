@@ -197,7 +197,8 @@ fn current_uid() -> Option<u32> {
 /// Create and validate the ControlPath socket directory. `None` means
 /// multiplexing is skipped: the directory could not be created, or it already
 /// exists and is not private to the current user (owned by someone else, or
-/// group/other accessible — a socket there could be planted).
+/// group/other accessible — a socket there could be planted). Always `None`
+/// off Unix.
 pub(crate) fn usable_ctl_dir(dir: &Path) -> Option<PathBuf> {
     static WARNED: std::sync::OnceLock<()> = std::sync::OnceLock::new();
     let warn_skip = |why: String| -> Option<PathBuf> {
@@ -224,10 +225,12 @@ pub(crate) fn usable_ctl_dir(dir: &Path) -> Option<PathBuf> {
             },
         }
     };
+    // Win32-OpenSSH has no ControlMaster (it needs Unix sockets): asking for
+    // one makes every ssh call fail, so each call connects on its own.
     #[cfg(not(unix))]
-    let usable = match std::fs::create_dir_all(dir) {
-        Ok(()) => Some(dir.to_path_buf()),
-        Err(err) => warn_skip(format!("cannot create ssh control dir: {err}")),
+    let usable = {
+        let _ = (dir, warn_skip);
+        None
     };
     usable
 }
@@ -267,21 +270,18 @@ impl Plugin for WorkspacePlugin {
     }
 }
 
-#[cfg(test)]
+#[cfg(all(test, unix))]
 mod ctl_tests {
     use super::usable_ctl_dir;
 
     #[test]
     fn ctl_dir_is_created_private_and_refuses_loose_dirs() {
+        use std::os::unix::fs::PermissionsExt;
         let dir = std::env::temp_dir().join(format!("rumu-ctl-test-{}", std::process::id()));
         let _ = std::fs::remove_dir_all(&dir);
         assert_eq!(usable_ctl_dir(&dir), Some(dir.clone()));
-        #[cfg(unix)]
-        {
-            use std::os::unix::fs::PermissionsExt;
-            std::fs::set_permissions(&dir, std::fs::Permissions::from_mode(0o755)).unwrap();
-            assert_eq!(usable_ctl_dir(&dir), None, "group/other accessible");
-        }
+        std::fs::set_permissions(&dir, std::fs::Permissions::from_mode(0o755)).unwrap();
+        assert_eq!(usable_ctl_dir(&dir), None, "group/other accessible");
         let _ = std::fs::remove_dir_all(&dir);
     }
 }

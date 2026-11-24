@@ -278,7 +278,7 @@ pub fn seed_project(home: &Path, decks: &Decks, registry: &Workspaces) -> Result
     let Ok([ws]) = <[Workspace; 1]>::try_from(registry.list()) else {
         return Ok(());
     };
-    let user_home = std::env::var_os("HOME").map(std::path::PathBuf::from);
+    let user_home = std::env::home_dir();
     if ws.ssh.is_none() && user_home.is_some_and(|h| h == Path::new(ws.root.as_str())) {
         return Ok(());
     }
@@ -440,14 +440,13 @@ pub fn cwd_workspace_name(root: &str) -> String {
 }
 
 fn expand_tilde(s: &str) -> String {
-    let home = std::env::var("HOME").unwrap_or_default();
-    if s == "~" {
-        return home;
+    let home = std::env::home_dir().unwrap_or_default();
+    match s.strip_prefix('~') {
+        Some(rest) if rest.is_empty() || rest.starts_with(std::path::is_separator) => {
+            format!("{}{rest}", home.display())
+        }
+        _ => s.to_owned(),
     }
-    if let Some(rest) = s.strip_prefix("~/") {
-        return format!("{home}/{rest}");
-    }
-    s.to_owned()
 }
 
 #[cfg(test)]

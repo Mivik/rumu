@@ -25,8 +25,20 @@ const crumbsEl = ref<HTMLElement | null>(null)
 const back = ref<string[]>([])
 const forward = ref<string[]>([])
 
+/** A Windows path (`C:\…`): split on both slashes, joined with `\`. */
+const isWindows = (path: string): boolean => /^[A-Za-z]:/.test(path)
+const sepOf = (path: string): string => (isWindows(path) ? '\\' : '/')
+
 /** Each ancestor of the open folder, root first. */
 function crumbs(path: string): { name: string; path: string }[] {
+  if (isWindows(path)) {
+    const [drive, ...parts] = path.split(/[\\/]/).filter(Boolean)
+    const root = `${drive}\\`
+    return [
+      { name: root, path: root },
+      ...parts.map((name, i) => ({ name, path: root + parts.slice(0, i + 1).join('\\') })),
+    ]
+  }
   const parts = path.split('/').filter(Boolean)
   return [
     { name: '/', path: '/' },
@@ -35,7 +47,8 @@ function crumbs(path: string): { name: string; path: string }[] {
 }
 
 function join(base: string, name: string): string {
-  return base.endsWith('/') ? base + name : `${base}/${name}`
+  const sep = sepOf(base)
+  return base.endsWith(sep) ? base + name : `${base}${sep}${name}`
 }
 
 async function load(path: string): Promise<boolean> {
@@ -90,7 +103,8 @@ const active = ref(-1)
 
 /** The draft split at its last slash: the parent as typed, and the segment. */
 const split = computed(() => {
-  const at = draft.value.lastIndexOf('/')
+  const d = draft.value
+  const at = isWindows(d) ? Math.max(d.lastIndexOf('/'), d.lastIndexOf('\\')) : d.lastIndexOf('/')
   return { base: draft.value.slice(0, at + 1), segment: draft.value.slice(at + 1) }
 })
 
@@ -123,7 +137,7 @@ watch(draft, () => (active.value = -1))
 async function startEdit(): Promise<void> {
   if (!listing.value) return
   const path = listing.value.path
-  const base = path.endsWith('/') ? path : path + '/'
+  const base = join(path, '')
   typed.value = { base, listing: listing.value }
   draft.value = base
   editing.value = true
@@ -153,7 +167,7 @@ function complete(): void {
   }
   // Matching ignores case, so the agreed prefix may be shorter than the typed one.
   if (common.length < split.value.segment.length) return
-  draft.value = split.value.base + common + (names.length === 1 ? '/' : '')
+  draft.value = split.value.base + common + (names.length === 1 ? sepOf(draft.value) : '')
 }
 
 function onKey(e: KeyboardEvent): void {

@@ -154,13 +154,15 @@ fn expand_tilde<'a>(ws: &Workspace, rel: &'a str) -> Result<Cow<'a, str>> {
     let Some(tail) = rel.strip_prefix('~') else {
         return Ok(Cow::Borrowed(rel));
     };
-    if !(tail.is_empty() || tail.starts_with('/')) {
+    let windows = matches!(ws.path_type(), typed_path::PathType::Windows);
+    if !(tail.is_empty() || tail.starts_with('/') || windows && tail.starts_with('\\')) {
         return Ok(Cow::Borrowed(rel));
     }
     if !ws.is_local() {
         return Err(Error::TildeOnSsh);
     }
-    Ok(Cow::Owned(std::env::var("HOME").unwrap_or_default() + tail))
+    let home = std::env::home_dir().unwrap_or_default();
+    Ok(Cow::Owned(format!("{}{tail}", home.display())))
 }
 
 /// Normalize a path in the `@rumu` workspace (its root is `/`, so
@@ -387,7 +389,10 @@ mod tests {
         assert!(normalize_abs(&local, "a\0b").is_err());
 
         // `~` expands on local workspaces.
-        let home = std::env::var("HOME").unwrap_or_default();
+        let home = std::env::home_dir()
+            .unwrap_or_default()
+            .display()
+            .to_string();
         assert_eq!(
             normalize_abs(&local, "~/notes").unwrap().as_str(),
             format!("{home}/notes")

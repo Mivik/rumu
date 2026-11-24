@@ -323,7 +323,7 @@ fn is_word_char(c: char) -> bool {
 }
 
 fn home() -> Option<String> {
-    std::env::var("HOME").ok()
+    std::env::home_dir().map(|h| h.display().to_string())
 }
 
 /// Expand a `<workspace>:<path>` prefix in a `paths` condition to a

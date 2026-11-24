@@ -1130,10 +1130,12 @@ async fn dispatch(state: &AppState, method: &str, p: &Value) -> Result<Value> {
         // are $HOME), for picking a workspace root. Dot directories are
         // included; the picker hides them until asked.
         "fs.dirs" => {
-            let home = std::env::var("HOME").unwrap_or_else(|_| "/".into());
+            let home = std::env::home_dir().unwrap_or_else(|| "/".into());
             let raw = p.get("path").and_then(Value::as_str).unwrap_or("~");
             let path = match raw.strip_prefix('~') {
-                Some(rest) if rest.is_empty() || rest.starts_with('/') => format!("{home}{rest}"),
+                Some(rest) if rest.is_empty() || rest.starts_with(std::path::is_separator) => {
+                    format!("{}{rest}", home.display())
+                }
                 _ => raw.to_owned(),
             };
             // Drops trailing slashes and `.` segments.

@@ -35,12 +35,7 @@ pub struct Booted {
 pub fn home() -> Result<PathBuf> {
     let home: PathBuf = std::env::var("RUMU_HOME")
         .map(PathBuf::from)
-        .unwrap_or_else(|_| {
-            std::env::var_os("HOME")
-                .map(PathBuf::from)
-                .unwrap_or_default()
-                .join(".rumu")
-        });
+        .unwrap_or_else(|_| std::env::home_dir().unwrap_or_default().join(".rumu"));
     std::fs::create_dir_all(&home)
         .with_context(|| format!("creating RUMU_HOME at {}", home.display()))?;
     Ok(home)
