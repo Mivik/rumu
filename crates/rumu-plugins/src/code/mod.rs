@@ -56,11 +56,11 @@ const DESCRIPTION: &str = "Run JavaScript that composes other tools. Submit an a
 body: `await rumu.<tool>(args)` calls a tool (`await rumu.call(name, args)` for any tool). \
 Intermediate results stay inside the script — only its output comes back: `text(value)` and the \
 `return` value (strings as-is, other values as JSON), `attach(img)`, and \
-`console.log/info/warn/error` lines. Use it for loops, filtering/aggregating large outputs, or \
-multi-step work where only the conclusion matters.\n\n\
-DO NOT USE THIS unless it clearly pays off: ordinary calls — reading a file, one search, one \
-command, one edit, or a few independent calls — go directly to the tool, never wrapped in a \
-script.\n\n\
+`console.log/info/warn/error` lines. Use it for work that would otherwise take several replies: \
+loops over files or items, chains of calls where each step feeds the next and only the conclusion \
+matters, filtering or aggregating large outputs.\n\n\
+DO NOT wrap ordinary calls in a script: reading a file, one search, one command, one edit, or a \
+few independent calls go directly to the tools, all together in one reply.\n\n\
 A call resolves to the tool's text output (up to ~1M chars with the middle cut — far more than a \
 direct call shows), to the value its signature names (e.g. `bash` → `{ exit_code, output, \
 truncated }`, also for a non-zero exit), or to `{ text, attachments }` when the tool returned media. \
