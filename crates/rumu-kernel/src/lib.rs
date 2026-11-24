@@ -148,6 +148,12 @@ pub struct Streamed {
     /// How many deltas are folded in; each `llm.delta` push carries its own
     /// number, so a client can merge this snapshot with pushes in flight.
     pub seq: u64,
+    /// Lengths of `text` / `reasoning` in UTF-16 units (a JS string's
+    /// `length`): each push's `at`, where its chunk starts in its stream.
+    #[serde(skip)]
+    pub text_units: usize,
+    #[serde(skip)]
+    pub reasoning_units: usize,
 }
 
 pub(crate) struct Inner {

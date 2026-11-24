@@ -77,6 +77,10 @@ export interface DeltaBuffer {
   reasonMs?: number
   /** The number of the last delta folded in. */
   seq: number
+  /** Full lengths of the two streams (the text above keeps only its tail),
+   *  to drop the part of a merged push already held (its `at`). */
+  textLen: number
+  reasoningLen: number
   /** Rough tokens streamed so far (the text above keeps only its tail). */
   tokens: number
   /** Deltas of a stream joined midway, kept until the `session.tree`

@@ -33,6 +33,8 @@ const delta = computed<DeltaBuffer | null>(() =>
         hasText: false,
         reasonStart: Date.now(),
         seq: 0,
+        textLen: 0,
+        reasoningLen: 0,
         tokens: 0,
       }
     : null,

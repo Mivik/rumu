@@ -525,19 +525,26 @@ impl Kernel {
                     let buf = inner.streaming.entry(dbranch.clone()).or_default();
                     buf.seq += 1;
                     let seq = buf.seq;
+                    // `at`: where the chunk starts in its stream, so a
+                    // client can drop the part a snapshot already holds
+                    // when the ws feed has merged several deltas into one.
                     match d {
                         Delta::Text(t) => {
+                            let at = buf.text_units;
+                            buf.text_units += t.encode_utf16().count();
                             buf.text.push_str(&t);
                             k.push(
                                 "llm.delta",
-                                json!({ "branch": dbranch, "text": t, "seq": seq }),
+                                json!({ "branch": dbranch, "text": t, "seq": seq, "at": at }),
                             )
                         }
                         Delta::Reasoning(r) => {
+                            let at = buf.reasoning_units;
+                            buf.reasoning_units += r.encode_utf16().count();
                             buf.reasoning.push_str(&r);
                             k.push(
                                 "llm.delta",
-                                json!({ "branch": dbranch, "reasoning": r, "seq": seq }),
+                                json!({ "branch": dbranch, "reasoning": r, "seq": seq, "at": at }),
                             )
                         }
                     }

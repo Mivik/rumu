@@ -194,8 +194,13 @@ export interface LlmDeltaPush {
   branch: BranchId
   text?: string
   reasoning?: string
-  /** The delta's number within its model call (1-based). */
+  /** The delta's number within its model call (1-based); of the last one
+   *  when the server merged several. */
   seq: number
+  /** The first merged delta's number, when the server merged several. */
+  from?: number
+  /** Where the chunk starts in its stream (UTF-16 units, as `length`). */
+  at?: number
 }
 
 /** What a running branch's model call has streamed so far. */

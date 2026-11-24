@@ -6,31 +6,52 @@ import type { BranchId, LiveTurn, LlmDeltaPush, SessionTreeResult } from '../typ
 import { textTokens } from '../util'
 import { MAX_DELTA_CHARS, state, type DeltaBuffer } from './state'
 
+/** The part of a chunk starting at `at` that lies past `len`, what is held. */
+function unseen(chunk: string | undefined, at: number | undefined, len: number): string {
+  if (!chunk) return ''
+  const skip = len - (at ?? len)
+  return skip > 0 ? chunk.slice(skip) : chunk
+}
+
 function fold(buf: DeltaBuffer, p: LlmDeltaPush): void {
   buf.seq = p.seq
-  buf.tokens += textTokens(p.reasoning ?? '') + textTokens(p.text ?? '')
-  if (p.reasoning) {
+  const reasoning = unseen(p.reasoning, p.at, buf.reasoningLen)
+  const text = unseen(p.text, p.at, buf.textLen)
+  buf.tokens += textTokens(reasoning) + textTokens(text)
+  if (reasoning) {
     buf.reasonStart ??= Date.now()
-    buf.reasoning = (buf.reasoning + p.reasoning).slice(-MAX_DELTA_CHARS)
+    buf.reasoning = (buf.reasoning + reasoning).slice(-MAX_DELTA_CHARS)
+    buf.reasoningLen += reasoning.length
     buf.hasReasoning = true
   }
-  if (p.text) {
+  if (text) {
     if (buf.reasonStart !== undefined && buf.reasonMs === undefined) {
       buf.reasonMs = Date.now() - buf.reasonStart
     }
-    buf.text = (buf.text + p.text).slice(-MAX_DELTA_CHARS)
+    buf.text = (buf.text + text).slice(-MAX_DELTA_CHARS)
+    buf.textLen += text.length
     buf.hasText = true
   }
 }
 
 /** Fold one delta into its branch's buffer. A delta already covered (by the
- *  snapshot) is skipped; a stream first seen midway keeps its deltas until
- *  the snapshot supplies the start. */
+ *  snapshot) is skipped, and the covered part of a merged one dropped; a
+ *  stream first seen midway keeps its deltas until the snapshot supplies
+ *  the start. */
 export function applyDelta(p: LlmDeltaPush): void {
   let buf = state.deltas[p.branch]
   if (!buf) {
-    buf = { text: '', reasoning: '', hasReasoning: false, hasText: false, seq: 0, tokens: 0 }
-    if (p.seq > 1) buf.early = []
+    buf = {
+      text: '',
+      reasoning: '',
+      hasReasoning: false,
+      hasText: false,
+      seq: 0,
+      textLen: 0,
+      reasoningLen: 0,
+      tokens: 0,
+    }
+    if ((p.from ?? p.seq) > 1) buf.early = []
     state.deltas[p.branch] = buf
   }
   if (p.seq <= buf.seq) return
@@ -45,6 +66,8 @@ function fromSnapshot(live: LiveTurn, early: LlmDeltaPush[]): DeltaBuffer {
     hasReasoning: !!live.reasoning,
     hasText: !!live.text,
     seq: live.seq,
+    textLen: live.text.length,
+    reasoningLen: live.reasoning.length,
     tokens: textTokens(live.reasoning) + textTokens(live.text),
   }
   // The thinking clock restarts at the join; a reply already under way

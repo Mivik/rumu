@@ -437,6 +437,11 @@ async fn handle_socket(state: AppState, socket: WebSocket) {
 /// 4 KiB reads would otherwise send hundreds a second.
 const PROGRESS_EVERY: Duration = Duration::from_millis(100);
 
+/// How long a model call's `llm.delta` pushes gather into one: a stream
+/// sends a few dozen a second, each mostly envelope. The web paints
+/// streaming thinking at this pace anyway.
+const DELTA_EVERY: Duration = Duration::from_millis(50);
+
 /// The most of one gathered append that goes out (its tail, in bytes).
 /// The web shows only the last 64K chars of live output, which this always
 /// covers, so a flood drops nothing it would show.
@@ -456,7 +461,8 @@ struct Feed {
     /// with where the buffer it was handed ended. Until it is called, every
     /// task's.
     tasks: Option<HashMap<String, u64>>,
-    /// Appends waiting to go out, one per tool call or task.
+    /// Appends and model deltas waiting to go out, one per tool call, task,
+    /// or run of one branch's same-kind deltas.
     pending: Vec<Value>,
     /// When `pending` goes out.
     due: Option<Instant>,
@@ -538,9 +544,54 @@ impl Feed {
             self.gather(key, push);
             return Vec::new();
         }
+        if push["method"] == "llm.delta" {
+            self.gather_delta(push);
+            return Vec::new();
+        }
         let mut out = self.flush();
         out.push(push);
         out
+    }
+
+    /// Hold an item until `every` from now, or sooner if something already
+    /// waits.
+    fn hold(&mut self, push: Value, every: Duration) {
+        self.pending.push(push);
+        let at = Instant::now() + every;
+        self.due = Some(self.due.map_or(at, |d| d.min(at)));
+    }
+
+    /// Add a model call's delta to the one waiting for the same branch,
+    /// when that is of the same kind (text / reasoning): one push carries
+    /// the run of deltas, with the last one's `seq`, the first one's `at`
+    /// and `from` (its `seq`). A kind switch starts a new push, so the
+    /// client sees reasoning and text in the order they came.
+    fn gather_delta(&mut self, push: Value) {
+        let kind = |v: &Value| {
+            ["text", "reasoning"]
+                .into_iter()
+                .find(|k| v["params"][k].is_string())
+        };
+        let branch = &push["params"]["branch"];
+        let waiting = self
+            .pending
+            .iter_mut()
+            .rev()
+            .find(|v| v["method"] == "llm.delta" && &v["params"]["branch"] == branch);
+        let (Some(waiting), Some(k)) = (waiting, kind(&push)) else {
+            return self.hold(push, DELTA_EVERY);
+        };
+        if kind(waiting) != Some(k) {
+            return self.hold(push, DELTA_EVERY);
+        }
+        let params = &mut waiting["params"];
+        if params.get("from").is_none() {
+            params["from"] = params["seq"].clone();
+        }
+        let mut text = params[k].as_str().unwrap_or_default().to_owned();
+        text.push_str(push["params"][k].as_str().unwrap_or_default());
+        params[k] = json!(text);
+        params["seq"] = push["params"]["seq"].clone();
     }
 
     /// Add an append to the one waiting for the same call or task.
@@ -550,10 +601,7 @@ impl Feed {
             .iter_mut()
             .find(|v| append_key(v).as_ref() == Some(&key));
         let Some(waiting) = waiting else {
-            self.pending.push(push);
-            self.due
-                .get_or_insert_with(|| Instant::now() + PROGRESS_EVERY);
-            return;
+            return self.hold(push, PROGRESS_EVERY);
         };
         let params = &mut waiting["params"];
         let mut text = params["append"].as_str().unwrap_or_default().to_owned();
@@ -2059,5 +2107,32 @@ mod tests {
         let out = feed.flush();
         let text = out[0]["params"]["append"].as_str().unwrap();
         assert!(text.len() <= PROGRESS_TAIL && text.ends_with("éend"));
+    }
+
+    /// A branch's same-kind deltas go out as one push carrying the first
+    /// `at`, the last `seq` and the first as `from`; a kind switch starts a
+    /// new one, other branches gather apart, and anything else sends them
+    /// first.
+    #[test]
+    fn feed_merges_model_deltas() {
+        let delta = |b: &str, k: &str, s: &str, seq: u64, at: u64| json!({ "method": "llm.delta", "params": { "branch": b, k: s, "seq": seq, "at": at } });
+        let mut feed = Feed::default();
+        assert!(feed.take(delta("a", "reasoning", "th", 1, 0)).is_empty());
+        assert!(feed.take(delta("b", "text", "x", 1, 0)).is_empty());
+        assert!(feed.take(delta("a", "reasoning", "ink", 2, 2)).is_empty());
+        assert!(feed.take(delta("a", "text", "hi", 3, 0)).is_empty());
+        assert!(feed.take(delta("a", "text", "!", 4, 2)).is_empty());
+        assert!(feed.due.is_some());
+        let out = feed.take(json!({ "method": "node.appended", "params": {} }));
+        let params: Vec<_> = out.iter().map(|v| v["params"].clone()).collect();
+        assert_eq!(
+            params,
+            [
+                json!({ "branch": "a", "reasoning": "think", "seq": 2, "at": 0, "from": 1 }),
+                json!({ "branch": "b", "text": "x", "seq": 1, "at": 0 }),
+                json!({ "branch": "a", "text": "hi!", "seq": 4, "at": 0, "from": 3 }),
+                json!({}),
+            ]
+        );
     }
 }
