@@ -372,7 +372,7 @@ impl Kernel {
         }
         self.push(
             "compact.started",
-            json!({ "branch": branch, "reason": reason }),
+            json!({ "branch": branch, "reason": reason, "before": before }),
         );
 
         let tail = at.map(|i| &view[i]);

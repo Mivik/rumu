@@ -337,7 +337,8 @@ export function startApp(): void {
   rumu.onPush('turn.retrying', (p) => onTurnRetrying(p as unknown as TurnRetryingPush))
   rumu.onPush('turn.error', (p) => onTurnError(p as unknown as TurnErrorPush))
   rumu.onPush('compact.started', (p) => {
-    state.compacting[(p as unknown as TurnPush).branch] = true
+    const { branch, before } = p as unknown as TurnPush & { before?: number }
+    state.compacting[branch] = { since: Date.now(), before: before ?? 0 }
   })
   rumu.onPush('compact.done', (p) => {
     delete state.compacting[(p as unknown as TurnPush).branch]
@@ -348,6 +349,8 @@ export function startApp(): void {
     delete state.compacting[branch]
     toast('error', t('errors.compact'), message)
   })
+  // `/compact` on a view with nothing old enough to summarize.
+  rumu.onPush('compact.skipped', () => toast('info', t('chat.compaction.nothing')))
   rumu.onPush('warning', (p) => onWarning(p as unknown as WarningPush))
   rumu.onPush('settings.updated', (p) => onSettingsUpdated(p as unknown as { settings: SettingsInfo }))
   rumu.onPush('decks.updated', onDecksUpdated)

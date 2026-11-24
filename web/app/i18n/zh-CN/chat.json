@@ -131,8 +131,7 @@
     "fork": "分叉为新会话",
     "noSafePoint": "工具调用未完成",
     "copied": "已复制回复",
-    "reasoningReset": "之前的思考已丢弃",
-    "compacting": "正在压缩上下文…"
+    "reasoningReset": "之前的思考已丢弃"
   },
   "error": {
     "interrupted": "回复已中断",
@@ -264,6 +263,9 @@
   },
   "compaction": {
     "line": "上下文已压缩 · {before} → {after} tok",
+    "live": "压缩上下文 · {took}",
+    "liveSized": "压缩上下文 · {before} tok · {took}",
+    "nothing": "暂无可压缩的内容",
     "show": "查看摘要",
     "hide": "收起摘要"
   },

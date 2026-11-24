@@ -138,7 +138,8 @@ async function onCopy(): Promise<void> {
 const retrying = computed(() =>
   props.live && view.branch.value ? (state.retrying[view.branch.value] ?? null) : null,
 )
-/** This live group's branch is compacting its context (`compact.started`). */
+/** This live group's branch is compacting its context (`compact.started`):
+ *  the compaction's own line says so, below the group. */
 const compacting = computed(() =>
   props.live && view.branch.value ? Boolean(state.compacting[view.branch.value]) : false,
 )
@@ -206,9 +207,6 @@ const bare = computed(() => !items.value.length && !props.group.assistants.lengt
             seconds: retryLeft,
           })
         }}
-      </span>
-      <span v-else-if="compacting" v-enter="'enter-fade'" class="working-line">
-        <span class="dot-live size-1.5 rounded-full bg-brand" />{{ t('chat.assistant.compacting') }}
       </span>
       <span v-else-if="idle && bare" v-enter="'enter-fade'" class="working-line">
         <span class="dot-live size-1.5 rounded-full bg-brand" />{{ t('chat.assistant.working') }}

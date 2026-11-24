@@ -408,8 +408,12 @@ impl Kernel {
                     json!({ "branch": branch, "reason": "compact" }),
                 );
                 self.flush_queue(&branch).await?;
-                self.compact_now(&branch, CompactReason::Manual, focus.as_deref(), &token)
+                let done = self
+                    .compact_now(&branch, CompactReason::Manual, focus.as_deref(), &token)
                     .await?;
+                if !done && !token.is_cancelled() {
+                    self.push("compact.skipped", json!({ "branch": branch }));
+                }
                 self.push("turn.done", json!({ "branch": branch }));
                 return Ok(None);
             }

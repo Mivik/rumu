@@ -188,7 +188,14 @@ export interface TimelineCompactionEntry {
   kind: 'compaction'
   node: Node
 }
-export type TimelineEntry = TimelineUserEntry | TimelineContextEntry | TimelineGroup | TimelineCompactionEntry
+/** A compaction still being written, where its line will land. */
+export interface TimelineCompactingEntry {
+  kind: 'compacting'
+  since: number
+  before: number
+}
+export type TimelineEntry =
+  TimelineUserEntry | TimelineContextEntry | TimelineGroup | TimelineCompactionEntry | TimelineCompactingEntry
 
 /** The compaction payload of a note, if it is one. */
 export function compactionOf(n: Node): Compaction | null {
@@ -343,11 +350,14 @@ export function buildTimeline(nodes: Node[], calls: CallsOnPath, branch: BranchI
   // The group exists from the moment the prompt is accepted, before the first
   // token: the mascot shows up immediately and waits.
   const delta = branch ? state.deltas[branch] : undefined
+  const compacting = branch ? state.compacting[branch] : undefined
   let live: TimelineGroup | null = null
   if (branch && state.busy[branch]) {
     const last = out[out.length - 1]
     if (last && last.kind === 'group') live = last
-    else if (last && last.kind === 'user') {
+    // A turn that compacts before its first call: the reply comes after
+    // the compaction's line, once it is written.
+    else if (last && last.kind === 'user' && !compacting) {
       live = { kind: 'group', items: [], assistants: [], safeNode: null }
       out.push(live)
     }
@@ -377,6 +387,7 @@ export function buildTimeline(nodes: Node[], calls: CallsOnPath, branch: BranchI
   }
   if (live && delta?.hasReasoning) pushActivity(live, { kind: 'thought', node: null, streaming: true })
   if (live && delta?.hasText) live.items.push({ kind: 'text', node: null, streaming: true })
+  if (compacting && out.length) out.push({ kind: 'compacting', ...compacting })
   // No user prompt on the path yet (a brand-new session mid-request):
   // nothing to hang the group under, so leave the timeline alone.
   return out

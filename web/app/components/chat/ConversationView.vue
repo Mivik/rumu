@@ -86,7 +86,16 @@ const isBusy = computed(() => branchBusy.value && (view.sub || !hasLater.value))
 const entries = computed(() => {
   let prev = 'root'
   return timeline.value.map((entry) => {
-    const key = entry.kind !== 'group' ? dataId(entry) : entry.seam ? `group@${entry.seam}` : `group:${prev}`
+    // A compaction's line is keyed by where it stands, so the one being
+    // written gives way to the written one in place, without an entrance.
+    const key =
+      entry.kind === 'compaction' || entry.kind === 'compacting'
+        ? `cline:${prev}`
+        : entry.kind !== 'group'
+          ? dataId(entry)
+          : entry.seam
+            ? `group@${entry.seam}`
+            : `group:${prev}`
     prev = key
     return { entry, key }
   })
@@ -366,7 +375,14 @@ let focusIndex = -1
 /** The entry holding the node `prefix` names; -1 when none does. */
 function entryOf(prefix: string): number {
   return timeline.value.findIndex((e) => {
-    const nodes = e.kind === 'group' ? e.assistants : e.kind === 'context' ? e.nodes : [e.node]
+    const nodes =
+      e.kind === 'group'
+        ? e.assistants
+        : e.kind === 'context'
+          ? e.nodes
+          : e.kind === 'compacting'
+            ? []
+            : [e.node]
     return nodes.some((n) => n.id.startsWith(prefix))
   })
 }
@@ -636,6 +652,7 @@ function dataId(e: TimelineEntry): string {
   if (e.kind === 'user') return e.node.id
   if (e.kind === 'context') return e.nodes[0]?.id ?? ''
   if (e.kind === 'compaction') return e.node.id
+  if (e.kind === 'compacting') return 'compacting'
   return e.first ?? ''
 }
 
@@ -751,6 +768,7 @@ function jumpTo(i: number, smooth = true): void {
               />
               <ContextPills v-else-if="entry.kind === 'context'" :nodes="entry.nodes" />
               <CompactionRow v-else-if="entry.kind === 'compaction'" :node="entry.node" />
+              <CompactionRow v-else-if="entry.kind === 'compacting'" :live="entry" />
             </div>
           </div>
         </template>

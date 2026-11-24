@@ -201,8 +201,11 @@ usual tail.
 
 - A compaction renders as a divider line where it happened, for example
   `Context compacted · 182K → 24K tok`. It opens to the summary.
-- `compact.started` / `compact.done` pushes show "compacting context…" on the
-  live turn; `compact.failed` is a toast (the turn carries on uncompacted).
+- While it runs (`compact.started { before }` until `compact.done`), the
+  divider is drawn live where the line will land, with the size before and
+  the time so far; done, the size counts down to the one after.
+  `compact.failed` is a toast (the turn carries on uncompacted), and so is
+  `compact.skipped`: a manual compaction found nothing to summarize.
 - The `compact` role is picked in Settings → Defaults.
 - An undo is a move: the main line moved back to the compaction's parent
   has the full history. The variant switcher already covers it.

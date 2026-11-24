@@ -195,8 +195,9 @@ const initial = {
    * the next turn event or the branch's first delta. */
   retrying: {} as Record<BranchId, RetryState>,
   /** Branches whose context is being compacted (`compact.started` until
-   * `compact.done`/`compact.failed` or the turn's end). */
-  compacting: {} as Record<BranchId, true>,
+   * `compact.done`/`compact.failed` or the turn's end): since when (ms),
+   * and the view's size before, tokens. */
+  compacting: {} as Record<BranchId, { since: number; before: number }>,
 
   /** Live foreground tool output, keyed by `${branch}:${call_id}`; `at` is
    * when the last piece arrived (a call silent too long reads as stalled). */

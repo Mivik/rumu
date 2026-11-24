@@ -131,8 +131,7 @@
     "fork": "Fork into new session",
     "noSafePoint": "Tool calls unfinished",
     "copied": "Copied reply",
-    "reasoningReset": "Earlier reasoning dropped",
-    "compacting": "compacting context…"
+    "reasoningReset": "Earlier reasoning dropped"
   },
   "error": {
     "interrupted": "The reply was interrupted",
@@ -264,6 +263,9 @@
   },
   "compaction": {
     "line": "Context compacted · {before} → {after} tok",
+    "live": "Compacting context · {took}",
+    "liveSized": "Compacting context · {before} tok · {took}",
+    "nothing": "Nothing to compact yet",
     "show": "Show summary",
     "hide": "Hide summary"
   },
