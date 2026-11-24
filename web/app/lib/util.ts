@@ -1,3 +1,5 @@
+import fuzzysort from 'fuzzysort'
+import { onScopeDispose, shallowRef, watch, type Ref } from 'vue'
 import { SCRATCH_WORKSPACE, type Content } from './types'
 import { locale, t } from '../i18n'
 
@@ -190,6 +192,43 @@ export function searchMatches(query: string, ...fields: (string | null | undefin
   if (!words.length) return true
   const hay = fields.filter((f): f is string => !!f).map(searchForm)
   return words.every((w) => hay.some((h) => h.includes(w)))
+}
+
+/** The items a search finds, best first, fuzzily: `glm5` finds
+ *  `GLM-5.3`, `son 4.5` finds `claude-sonnet-4.5`; each word in some
+ *  field. A field's weight discounts a one-word search found only there,
+ *  so a provider's name does not rank its every model with those named so. */
+export function fuzzyFind<T>(
+  query: string,
+  items: readonly T[],
+  fields: ((item: T) => string | null | undefined)[],
+  weights: number[] = [],
+): T[] {
+  const q = query.trim()
+  if (!q) return [...items]
+  const scoreFn =
+    weights.length && !/\s/.test(q)
+      ? (r: readonly { score: number }[]) => Math.max(...r.map((k, i) => k.score * (weights[i] ?? 1)))
+      : undefined
+  return fuzzysort.go(q, items, { keys: fields, limit: 0, scoreFn }).map((r) => r.obj)
+}
+
+/** `source` once it has held still for `ms`, and a flush that lands it
+ *  now (an Enter right after typing); clearing it lands at once. */
+export function debounced<T>(source: () => T, ms = 120): [Readonly<Ref<T>>, () => void] {
+  const value = shallowRef(source())
+  let timer: ReturnType<typeof setTimeout> | undefined
+  const flush = (): void => {
+    clearTimeout(timer)
+    value.value = source()
+  }
+  watch(source, (v) => {
+    clearTimeout(timer)
+    if (v) timer = setTimeout(flush, ms)
+    else value.value = v
+  })
+  onScopeDispose(() => clearTimeout(timer))
+  return [value, flush]
 }
 
 /** Split a command line into arguments: whitespace separates, quotes group. */

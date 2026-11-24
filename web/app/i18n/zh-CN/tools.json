@@ -42,7 +42,7 @@
     "created": "新文件",
     "deleted": "已删除",
     "hunks": "{count} 处",
-    "moreEdits": "其余 {count} 处修改"
+    "moreEdits": "剩余 {count} 处修改"
   },
   "thought": {
     "thinking": "思考中",
@@ -69,9 +69,9 @@
     "liveOutput": "任务输出"
   },
   "diff": {
-    "moreLines": "其余 {count} 行",
-    "moreChars": "… 其余 {count} 字符",
-    "showAll": "展开其余 {count} 行",
+    "moreLines": "剩余 {count} 行",
+    "moreChars": "… 剩余 {count} 字符",
+    "showAll": "展开剩余 {count} 行",
     "otherHunks": "其余改动：",
     "unavailable": "差异不可用 — 文件过大或非文本"
   },

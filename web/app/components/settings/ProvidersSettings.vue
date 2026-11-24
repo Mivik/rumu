@@ -9,7 +9,7 @@ import { t } from '../../i18n'
 import { rumu } from '../../lib/api'
 import { layout } from '../../lib/layout'
 import { SWAP } from '../../lib/motion'
-import { searchMatches } from '../../lib/util'
+import { debounced, searchMatches } from '../../lib/util'
 import {
   ALIAS_PROVIDER,
   PROTOCOL_LABELS,
@@ -46,8 +46,10 @@ interface Form {
 /** A new provider's rules: every listed model, until narrowed. */
 const DEFAULT_RULES = ['*']
 
-/** Listed models shown at once beyond the enabled ones. */
+/** Models shown at first, the enabled ones first, and how many more each
+ *  "show more" adds. */
 const SHOWN = 100
+const STEP = 100
 
 const providers = computed(() => models.settings?.providers ?? [])
 const presets = computed(() => models.settings?.presets ?? [])
@@ -247,7 +249,7 @@ const enabled = computed(() => new Set(enabledIds(listed.value, form.models)))
 const patterns = computed(() => form.models.filter((r) => r.includes('*')))
 const includePatterns = computed(() => patterns.value.filter((r) => !r.startsWith('!')))
 
-const q = computed(() => query.value.trim())
+const [q, flushQuery] = debounced(() => query.value.trim())
 /** The search without a leading `!` (an exclusion searches what it would
  *  exclude). */
 const term = computed(() => q.value.replace(/^!/, ''))
@@ -262,9 +264,11 @@ const matches = (id: string): boolean => {
  *  Ordered when the search or the provider changes, not at each toggle, so
  *  a row stays where it was clicked (and one unchecked stays listed). */
 const order = ref<{ on: string[]; off: string[] }>({ on: [], off: [] })
+const shown = ref(SHOWN)
 watch(
   [q, saved],
   () => {
+    shown.value = SHOWN
     const all = [...listed.value, ...form.models.filter((r) => !r.includes('*') && !listed.value.includes(r))]
     const found = all.filter(matches)
     order.value = {
@@ -275,10 +279,10 @@ watch(
   { immediate: true },
 )
 
-/** The ordered ids; beyond the enabled ones, at most [`SHOWN`]. */
+/** The ordered ids, at most [`shown`]. */
 const rows = computed(() => {
-  const { on, off } = order.value
-  return { ids: [...on, ...off.slice(0, SHOWN)], more: Math.max(0, off.length - SHOWN) }
+  const ids = [...order.value.on, ...order.value.off]
+  return { ids: ids.slice(0, shown.value), more: Math.max(0, ids.length - shown.value) }
 })
 
 type RuleKind = 'prefix' | 'contains' | 'pattern' | 'exclude' | 'exclude_prefix' | 'exclude_contains'
@@ -315,6 +319,7 @@ const searchRules = computed(() => {
 
 /** Enter: the first offer. */
 function addSearched(): void {
+  flushQuery()
   const rule = searchRules.value[0]?.rule ?? customId.value
   if (rule) addRule(rule)
 }
@@ -451,6 +456,7 @@ watch(
     if (!p) return
     open(p)
     query.value = ref.slice(slash + 1)
+    flushQuery()
   },
   { immediate: true },
 )
@@ -800,9 +806,14 @@ async function refreshModels(): Promise<void> {
                     @protocol="setProtocol(id, $event)"
                   />
                 </div>
-                <p v-if="rows.more" class="px-3 py-1.5 text-meta text-ink-3 italic">
-                  {{ t('settings.moreModels', { n: rows.more }) }}
-                </p>
+                <button
+                  v-if="rows.more"
+                  type="button"
+                  class="px-3 py-1.5 text-left text-meta text-ink-3 transition-colors duration-150 hover:text-ink-2"
+                  @click="shown += STEP"
+                >
+                  {{ t('settings.showMoreMatches', { n: Math.min(STEP, rows.more), more: rows.more }) }}
+                </button>
                 <p
                   v-if="listing && !listed.length"
                   class="flex items-center justify-center gap-2 px-3 py-3 text-meta text-ink-3"

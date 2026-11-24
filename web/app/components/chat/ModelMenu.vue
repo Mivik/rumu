@@ -2,12 +2,13 @@
 // The models to pick from, as the composer's chip lists them: a search,
 // the `lead` slot (unless searching), the aliases (unless left out), pinned
 // ones, then each provider's models (folded, but for the selected model's
-// provider). Pins toggle in place.
-import { computed, ref } from 'vue'
+// provider). A search shows its best matches, in the same groups. Pins
+// toggle in place.
+import { computed, ref, watch } from 'vue'
 import { t } from '../../i18n'
 import { editSettings, models } from '../../lib/state/models'
 import type { ModelInfo } from '../../lib/generated/ModelInfo'
-import { searchMatches } from '../../lib/util'
+import { debounced, fuzzyFind } from '../../lib/util'
 import Icon from '../ui/Icon.vue'
 import NoProviders from '../settings/NoProviders.vue'
 
@@ -17,14 +18,17 @@ const emit = defineEmits<{ pick: [model: ModelInfo]; add: [] }>()
 const query = ref('')
 const settings = computed(() => models.settings)
 
-const q = computed(() => query.value.trim())
-/** A model the search finds by its name, id, ref or provider's name. */
-const matches = (m: ModelInfo, provider?: string): boolean =>
-  searchMatches(q.value, m.name, m.ref, m.id, provider)
+const [q] = debounced(() => query.value.trim())
+
+/** Matches shown at first, and how many more each "show more" adds. */
+const SHOWN = 50
+const STEP = 100
+const shown = ref(SHOWN)
+watch(q, () => (shown.value = SHOWN))
 
 const aliases = computed(() =>
   props.aliases
-    ? (settings.value?.aliases ?? []).filter((m) => searchMatches(q.value, m.name, m.target?.model))
+    ? fuzzyFind(q.value, settings.value?.aliases ?? [], [(m) => m.name, (m) => m.target?.model])
     : [],
 )
 
@@ -33,27 +37,49 @@ const empty = computed(
   () => !settings.value?.providers.length && !(props.aliases && settings.value?.aliases.length),
 )
 
-/** Pinned models first, then each provider's unpinned ones. */
+type Group = { key: string; name: string; models: ModelInfo[] }
+
+/** Pinned models first, then each provider's unpinned ones; searched, the
+ *  best [`shown`] matches by name, id, ref or provider's name, the
+ *  providers in the order of their best, and how many more there are. */
 const groups = computed(() => {
-  const providers = settings.value?.providers ?? []
-  const list: { key: string; name: string; models: ModelInfo[] }[] = []
-  const pinned = providers.flatMap((p) => p.models.filter((m) => m.pinned && matches(m, p.name)))
-  if (pinned.length) list.push({ key: 'pinned', name: t('settings.pinned'), models: pinned })
-  for (const p of providers) {
-    const models = p.models.filter((m) => !m.pinned && matches(m, p.name))
-    if (models.length) list.push({ key: p.id, name: p.name, models })
+  let found = (settings.value?.providers ?? []).flatMap((p) => p.models.map((m) => ({ m, p })))
+  let more = 0
+  if (q.value) {
+    found = fuzzyFind(
+      q.value,
+      found,
+      [(x) => x.m.name, (x) => x.m.id, (x) => x.m.ref, (x) => x.p.name],
+      [1, 1, 0.8, 0.8],
+    )
+    more = Math.max(0, found.length - shown.value)
+    found = found.slice(0, shown.value)
   }
-  return list
+  const list: Group[] = []
+  const pinned = found.filter((x) => x.m.pinned).map((x) => x.m)
+  if (pinned.length) list.push({ key: 'pinned', name: t('settings.pinned'), models: pinned })
+  const byProvider = new Map<string, Group>()
+  for (const { m, p } of found) {
+    if (m.pinned) continue
+    let g = byProvider.get(p.id)
+    if (!g) {
+      g = { key: p.id, name: p.name, models: [] }
+      byProvider.set(p.id, g)
+      list.push(g)
+    }
+    g.models.push(m)
+  }
+  return { list, more }
 })
 
 /** Folds the user flipped, by provider id; unflipped, a provider is open
  *  iff it holds the selected model. A search opens every match. */
 const folds = ref<Record<string, boolean>>({})
-function isOpen(g: { key: string; models: ModelInfo[] }): boolean {
+function isOpen(g: Group): boolean {
   if (q.value || g.key === 'pinned') return true
   return folds.value[g.key] ?? g.models.some((m) => m.ref === props.selected)
 }
-function toggleGroup(g: { key: string; models: ModelInfo[] }): void {
+function toggleGroup(g: Group): void {
   folds.value = { ...folds.value, [g.key]: !isOpen(g) }
 }
 
@@ -118,7 +144,7 @@ async function togglePin(m: ModelInfo): Promise<void> {
         </button>
       </template>
 
-      <template v-for="group in groups" :key="group.key">
+      <template v-for="group in groups.list" :key="group.key">
         <div v-if="group.key === 'pinned'" class="panel-head mt-1">{{ group.name }}</div>
         <button
           v-else
@@ -184,6 +210,14 @@ async function togglePin(m: ModelInfo): Promise<void> {
           </button>
         </div>
       </template>
+      <button
+        v-if="groups.more"
+        type="button"
+        class="self-start rounded-control px-2.5 py-1.5 text-meta text-ink-3 transition-colors duration-150 hover:text-ink-2"
+        @click="shown += STEP"
+      >
+        {{ t('settings.showMoreMatches', { n: Math.min(STEP, groups.more), more: groups.more }) }}
+      </button>
 
       <NoProviders v-if="empty" compact @add="emit('add')" />
     </div>

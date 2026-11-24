@@ -55,7 +55,7 @@
   "addModelId": "添加 {id}",
   "enabledBy": "由 {rule} 启用",
   "modelsSummary": "已启用 {n} 个，共 {m} 个",
-  "moreModels": "其余 {n} 个，搜索以缩小范围",
+  "showMoreMatches": "再显示 {n} 个（剩余 {more} 个）",
   "noModels": "没有模型",
   "loadingModels": "正在加载模型…",
   "detectDenied": "API 密钥被拒绝",

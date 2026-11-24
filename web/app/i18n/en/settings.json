@@ -55,7 +55,7 @@
   "addModelId": "Add {id}",
   "enabledBy": "Enabled by {rule}",
   "modelsSummary": "{n} enabled, {m} listed",
-  "moreModels": "{n} more, search to narrow",
+  "showMoreMatches": "Show {n} more ({more} left)",
   "noModels": "No models",
   "loadingModels": "Loading models…",
   "detectDenied": "The key was refused",
