@@ -2,6 +2,7 @@
 //! model metadata is read from. They are offered first; the catalog's other
 //! providers are offered after them, a preset id then naming one of those.
 
+use genai::adapter::AdapterKind;
 use rumu_core::Protocol::{self, *};
 
 pub struct Preset {
@@ -11,16 +12,30 @@ pub struct Preset {
     pub catalog: &'static str,
     /// Serves other vendors' models (`vendor/model` ids).
     pub router: bool,
-    pub endpoints: &'static [(Protocol, &'static str)],
+    /// The adapter each protocol's requests are shaped by, and its address.
+    /// The adapter must speak the protocol: an OpenAI-family one posts
+    /// `chat/completions`, an Anthropic one `messages`.
+    pub endpoints: &'static [(Protocol, AdapterKind, &'static str)],
 }
 
+/// A vendor's own adapter is a refinement of the protocol, not a replacement
+/// for it: in genai they are almost all pass-throughs to the OpenAI one
+/// (which is why an OpenAI row may name Mistral, Aliyun, …), while
+/// `MiniMax` speaks Anthropic, so `Anthropic` rows name
+/// `AdapterKind::Anthropic`. `Zai` is never named: it replaces the endpoint
+/// with api.z.ai, so an address of the provider's own (the coding plan's, say)
+/// would be ignored. The test below checks both.
 pub const PRESETS: &[Preset] = &[
     Preset {
         id: "anthropic",
         name: "Anthropic",
         catalog: "anthropic",
         router: false,
-        endpoints: &[(Anthropic, "https://api.anthropic.com")],
+        endpoints: &[(
+            Anthropic,
+            AdapterKind::Anthropic,
+            "https://api.anthropic.com",
+        )],
     },
     Preset {
         id: "openai",
@@ -28,8 +43,12 @@ pub const PRESETS: &[Preset] = &[
         catalog: "openai",
         router: false,
         endpoints: &[
-            (OpenaiResponses, "https://api.openai.com/v1"),
-            (Openai, "https://api.openai.com/v1"),
+            (
+                OpenaiResponses,
+                AdapterKind::OpenAIResp,
+                "https://api.openai.com/v1",
+            ),
+            (Openai, AdapterKind::OpenAI, "https://api.openai.com/v1"),
         ],
     },
     Preset {
@@ -38,9 +57,14 @@ pub const PRESETS: &[Preset] = &[
         catalog: "google",
         router: false,
         endpoints: &[
-            (Gemini, "https://generativelanguage.googleapis.com/v1beta"),
+            (
+                Gemini,
+                AdapterKind::Gemini,
+                "https://generativelanguage.googleapis.com/v1beta",
+            ),
             (
                 Openai,
+                AdapterKind::OpenAI,
                 "https://generativelanguage.googleapis.com/v1beta/openai",
             ),
         ],
@@ -51,8 +75,16 @@ pub const PRESETS: &[Preset] = &[
         catalog: "openrouter",
         router: true,
         endpoints: &[
-            (Openai, "https://openrouter.ai/api/v1"),
-            (Anthropic, "https://openrouter.ai/api"),
+            (
+                Openai,
+                AdapterKind::OpenRouter,
+                "https://openrouter.ai/api/v1",
+            ),
+            (
+                Anthropic,
+                AdapterKind::Anthropic,
+                "https://openrouter.ai/api",
+            ),
         ],
     },
     Preset {
@@ -61,9 +93,17 @@ pub const PRESETS: &[Preset] = &[
         catalog: "zenmux",
         router: true,
         endpoints: &[
-            (Openai, "https://zenmux.ai/api/v1"),
-            (OpenaiResponses, "https://zenmux.ai/api/v1"),
-            (Anthropic, "https://zenmux.ai/api/anthropic"),
+            (Openai, AdapterKind::OpenAI, "https://zenmux.ai/api/v1"),
+            (
+                OpenaiResponses,
+                AdapterKind::OpenAIResp,
+                "https://zenmux.ai/api/v1",
+            ),
+            (
+                Anthropic,
+                AdapterKind::Anthropic,
+                "https://zenmux.ai/api/anthropic",
+            ),
         ],
     },
     Preset {
@@ -72,8 +112,16 @@ pub const PRESETS: &[Preset] = &[
         catalog: "requesty",
         router: true,
         endpoints: &[
-            (Openai, "https://router.requesty.ai/v1"),
-            (Anthropic, "https://router.requesty.ai"),
+            (
+                Openai,
+                AdapterKind::Requesty,
+                "https://router.requesty.ai/v1",
+            ),
+            (
+                Anthropic,
+                AdapterKind::Anthropic,
+                "https://router.requesty.ai",
+            ),
         ],
     },
     Preset {
@@ -82,8 +130,12 @@ pub const PRESETS: &[Preset] = &[
         catalog: "deepseek",
         router: false,
         endpoints: &[
-            (Openai, "https://api.deepseek.com"),
-            (Anthropic, "https://api.deepseek.com/anthropic"),
+            (Openai, AdapterKind::DeepSeek, "https://api.deepseek.com"),
+            (
+                Anthropic,
+                AdapterKind::Anthropic,
+                "https://api.deepseek.com/anthropic",
+            ),
         ],
     },
     Preset {
@@ -92,8 +144,12 @@ pub const PRESETS: &[Preset] = &[
         catalog: "moonshotai-cn",
         router: false,
         endpoints: &[
-            (Openai, "https://api.moonshot.cn/v1"),
-            (Anthropic, "https://api.moonshot.cn/anthropic"),
+            (Openai, AdapterKind::Moonshot, "https://api.moonshot.cn/v1"),
+            (
+                Anthropic,
+                AdapterKind::Anthropic,
+                "https://api.moonshot.cn/anthropic",
+            ),
         ],
     },
     Preset {
@@ -102,8 +158,12 @@ pub const PRESETS: &[Preset] = &[
         catalog: "moonshotai",
         router: false,
         endpoints: &[
-            (Openai, "https://api.moonshot.ai/v1"),
-            (Anthropic, "https://api.moonshot.ai/anthropic"),
+            (Openai, AdapterKind::Moonshot, "https://api.moonshot.ai/v1"),
+            (
+                Anthropic,
+                AdapterKind::Anthropic,
+                "https://api.moonshot.ai/anthropic",
+            ),
         ],
     },
     Preset {
@@ -112,8 +172,16 @@ pub const PRESETS: &[Preset] = &[
         catalog: "zhipuai",
         router: false,
         endpoints: &[
-            (Openai, "https://open.bigmodel.cn/api/paas/v4"),
-            (Anthropic, "https://open.bigmodel.cn/api/anthropic"),
+            (
+                Openai,
+                AdapterKind::OpenAI,
+                "https://open.bigmodel.cn/api/paas/v4",
+            ),
+            (
+                Anthropic,
+                AdapterKind::Anthropic,
+                "https://open.bigmodel.cn/api/anthropic",
+            ),
         ],
     },
     Preset {
@@ -122,8 +190,12 @@ pub const PRESETS: &[Preset] = &[
         catalog: "zai",
         router: false,
         endpoints: &[
-            (Openai, "https://api.z.ai/api/paas/v4"),
-            (Anthropic, "https://api.z.ai/api/anthropic"),
+            (Openai, AdapterKind::OpenAI, "https://api.z.ai/api/paas/v4"),
+            (
+                Anthropic,
+                AdapterKind::Anthropic,
+                "https://api.z.ai/api/anthropic",
+            ),
         ],
     },
     Preset {
@@ -132,8 +204,16 @@ pub const PRESETS: &[Preset] = &[
         catalog: "alibaba-cn",
         router: false,
         endpoints: &[
-            (Openai, "https://dashscope.aliyuncs.com/compatible-mode/v1"),
-            (Anthropic, "https://dashscope.aliyuncs.com/apps/anthropic"),
+            (
+                Openai,
+                AdapterKind::Aliyun,
+                "https://dashscope.aliyuncs.com/compatible-mode/v1",
+            ),
+            (
+                Anthropic,
+                AdapterKind::Anthropic,
+                "https://dashscope.aliyuncs.com/apps/anthropic",
+            ),
         ],
     },
     Preset {
@@ -144,10 +224,12 @@ pub const PRESETS: &[Preset] = &[
         endpoints: &[
             (
                 Openai,
+                AdapterKind::Aliyun,
                 "https://dashscope-intl.aliyuncs.com/compatible-mode/v1",
             ),
             (
                 Anthropic,
+                AdapterKind::Anthropic,
                 "https://dashscope-intl.aliyuncs.com/apps/anthropic",
             ),
         ],
@@ -158,8 +240,12 @@ pub const PRESETS: &[Preset] = &[
         catalog: "minimax-cn",
         router: false,
         endpoints: &[
-            (Anthropic, "https://api.minimaxi.com/anthropic"),
-            (Openai, "https://api.minimaxi.com/v1"),
+            (
+                Anthropic,
+                AdapterKind::MiniMax,
+                "https://api.minimaxi.com/anthropic",
+            ),
+            (Openai, AdapterKind::OpenAI, "https://api.minimaxi.com/v1"),
         ],
     },
     Preset {
@@ -168,8 +254,12 @@ pub const PRESETS: &[Preset] = &[
         catalog: "minimax",
         router: false,
         endpoints: &[
-            (Anthropic, "https://api.minimax.io/anthropic"),
-            (Openai, "https://api.minimax.io/v1"),
+            (
+                Anthropic,
+                AdapterKind::MiniMax,
+                "https://api.minimax.io/anthropic",
+            ),
+            (Openai, AdapterKind::OpenAI, "https://api.minimax.io/v1"),
         ],
     },
     Preset {
@@ -177,49 +267,57 @@ pub const PRESETS: &[Preset] = &[
         name: "xAI",
         catalog: "xai",
         router: false,
-        endpoints: &[(Openai, "https://api.x.ai/v1")],
+        endpoints: &[(Openai, AdapterKind::Xai, "https://api.x.ai/v1")],
     },
     Preset {
         id: "groq",
         name: "Groq",
         catalog: "groq",
         router: true,
-        endpoints: &[(Openai, "https://api.groq.com/openai/v1")],
+        endpoints: &[(Openai, AdapterKind::Groq, "https://api.groq.com/openai/v1")],
     },
     Preset {
         id: "mistral",
         name: "Mistral",
         catalog: "mistral",
         router: false,
-        endpoints: &[(Openai, "https://api.mistral.ai/v1")],
+        endpoints: &[(Openai, AdapterKind::Mistral, "https://api.mistral.ai/v1")],
     },
     Preset {
         id: "together",
         name: "Together AI",
         catalog: "togetherai",
         router: true,
-        endpoints: &[(Openai, "https://api.together.xyz/v1")],
+        endpoints: &[(Openai, AdapterKind::Together, "https://api.together.xyz/v1")],
     },
     Preset {
         id: "deepinfra",
         name: "Deep Infra",
         catalog: "deepinfra",
         router: true,
-        endpoints: &[(Openai, "https://api.deepinfra.com/v1/openai")],
+        endpoints: &[(
+            Openai,
+            AdapterKind::OpenAI,
+            "https://api.deepinfra.com/v1/openai",
+        )],
     },
     Preset {
         id: "cerebras",
         name: "Cerebras",
         catalog: "cerebras",
         router: true,
-        endpoints: &[(Openai, "https://api.cerebras.ai/v1")],
+        endpoints: &[(Openai, AdapterKind::OpenAI, "https://api.cerebras.ai/v1")],
     },
     Preset {
         id: "vercel",
         name: "Vercel AI Gateway",
         catalog: "vercel",
         router: true,
-        endpoints: &[(Openai, "https://ai-gateway.vercel.sh/v1")],
+        endpoints: &[(
+            Openai,
+            AdapterKind::OpenAI,
+            "https://ai-gateway.vercel.sh/v1",
+        )],
     },
 ];
 
@@ -237,4 +335,47 @@ pub fn home(id: &str) -> &str {
 /// protocol is read from (a router's is not its models').
 pub fn first_party<'a>() -> impl Iterator<Item = &'a str> {
     PRESETS.iter().filter(|p| !p.router).map(|p| p.catalog)
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    /// The wire format `kind` produces. Every OpenAI-compatible adapter
+    /// delegates to the OpenAI one; the rest are named because they do not.
+    fn dialect(kind: AdapterKind) -> Protocol {
+        match kind {
+            AdapterKind::Anthropic | AdapterKind::MiniMax => Protocol::Anthropic,
+            AdapterKind::OpenAIResp => Protocol::OpenaiResponses,
+            AdapterKind::Gemini | AdapterKind::GeminiIx => Protocol::Gemini,
+            AdapterKind::OpenAI
+            | AdapterKind::OpenRouter
+            | AdapterKind::Requesty
+            | AdapterKind::DeepSeek
+            | AdapterKind::Moonshot
+            | AdapterKind::Aliyun
+            | AdapterKind::Xai
+            | AdapterKind::Groq
+            | AdapterKind::Mistral
+            | AdapterKind::Together => Protocol::Openai,
+            AdapterKind::Zai => panic!("the Zai adapter ignores the endpoint: name OpenAI"),
+            other => panic!("classify AdapterKind::{other} here before using it"),
+        }
+    }
+
+    /// A mismatched pair builds the wrong path and body: `/v1/chat/completions`
+    /// against an Anthropic route, say, which only a 404 reports.
+    #[test]
+    fn every_endpoint_speaks_its_protocol() {
+        for p in PRESETS {
+            for &(protocol, kind, url) in p.endpoints {
+                assert_eq!(
+                    dialect(kind),
+                    protocol,
+                    "{}: {kind} cannot speak {protocol:?} at {url}",
+                    p.id
+                );
+            }
+        }
+    }
 }

@@ -89,9 +89,12 @@ struct Resolved {
     catalog: Arc<Catalog>,
 }
 
+/// A provider's endpoints: the adapter and the address `protocol` runs on.
+pub type Endpoints = BTreeMap<Protocol, (AdapterKind, String)>;
+
 struct Provider {
     settings: ProviderSettings,
-    endpoints: BTreeMap<Protocol, String>,
+    endpoints: Endpoints,
     clients: BTreeMap<Protocol, Client>,
 }
 
@@ -135,7 +138,12 @@ impl GenaiLlm {
             }
             let clients = endpoints
                 .iter()
-                .map(|(&protocol, url)| Ok((protocol, client(protocol, url, p.api_key.clone())?)))
+                .map(|(&protocol, (adapter, url))| {
+                    Ok((
+                        protocol,
+                        client(protocol, *adapter, url, p.api_key.clone())?,
+                    ))
+                })
                 .collect::<Result<_, LlmError>>()?;
             let provider = Provider {
                 settings: p.clone(),
@@ -182,15 +190,15 @@ impl GenaiLlm {
 
 /// A provider's endpoints: its preset's, with its own over them (an empty
 /// one turns the preset's off).
-pub fn endpoints(p: &ProviderSettings) -> BTreeMap<Protocol, String> {
-    let mut out: BTreeMap<Protocol, String> = p
+pub fn endpoints(p: &ProviderSettings) -> Endpoints {
+    let mut out: Endpoints = p
         .preset
         .as_deref()
         .and_then(presets::preset)
         .map(|pre| {
             pre.endpoints
                 .iter()
-                .map(|(k, v)| (*k, (*v).to_owned()))
+                .map(|(k, a, v)| (*k, (*a, (*v).to_owned())))
                 .collect()
         })
         .unwrap_or_default();
@@ -199,7 +207,12 @@ pub fn endpoints(p: &ProviderSettings) -> BTreeMap<Protocol, String> {
         if url.is_empty() {
             out.remove(&protocol);
         } else {
-            out.insert(protocol, url.to_owned());
+            // An address of its own keeps the provider's adapter: it is
+            // still this vendor, served elsewhere.
+            let adapter = out
+                .get(&protocol)
+                .map_or_else(|| adapter_kind(protocol), |(a, _)| *a);
+            out.insert(protocol, (adapter, url.to_owned()));
         }
     }
     out
@@ -210,7 +223,7 @@ pub fn endpoints(p: &ProviderSettings) -> BTreeMap<Protocol, String> {
 pub fn protocol_for(
     catalog: &Catalog,
     p: &ProviderSettings,
-    endpoints: &BTreeMap<Protocol, String>,
+    endpoints: &Endpoints,
     id: &str,
 ) -> Option<Protocol> {
     if let Some(held) = p.protocols.get(id) {
@@ -228,7 +241,7 @@ pub fn model_info(
     catalog: &Catalog,
     provider: &str,
     p: &ProviderSettings,
-    endpoints: &BTreeMap<Protocol, String>,
+    endpoints: &Endpoints,
     id: &str,
 ) -> ModelInfo {
     let protocol = protocol_for(catalog, p, endpoints, id);
@@ -271,14 +284,18 @@ pub(crate) fn api_root(protocol: Protocol, url: &str) -> String {
 
 /// A client that sends every request to `url` with `key`, speaking
 /// `protocol`.
-fn client(protocol: Protocol, url: &str, key: String) -> Result<Client, LlmError> {
-    let kind = adapter_kind(protocol);
+fn client(
+    protocol: Protocol,
+    adapter: AdapterKind,
+    url: &str,
+    key: String,
+) -> Result<Client, LlmError> {
     let endpoint = api_root(protocol, url);
     let resolver = move |mut t: ServiceTarget| -> genai::resolver::Result<ServiceTarget> {
         if key.is_empty() {
             return Err("no API key is set".to_owned().into());
         }
-        t.model = ModelIden::new(kind, t.model.model_name.as_str());
+        t.model = ModelIden::new(adapter, t.model.model_name.as_str());
         t.endpoint = Endpoint::from_owned(endpoint.clone());
         t.auth = AuthData::from_single(key.clone());
         Ok(t)
@@ -2438,10 +2455,12 @@ mod tests {
             ..Default::default()
         };
         let mut eps = endpoints(&p);
-        assert_eq!(eps[&Protocol::OpenaiResponses], "https://api.openai.com/v1");
-        let on = |p: &ProviderSettings, eps: &BTreeMap<Protocol, String>, id: &str| {
-            protocol_for(&catalog, p, eps, id)
-        };
+        assert_eq!(
+            eps[&Protocol::OpenaiResponses].1,
+            "https://api.openai.com/v1"
+        );
+        let on =
+            |p: &ProviderSettings, eps: &Endpoints, id: &str| protocol_for(&catalog, p, eps, id);
         assert_eq!(on(&p, &eps, "gpt-9"), Some(Protocol::OpenaiResponses));
         assert_eq!(on(&p, &eps, "someone/else"), Some(Protocol::Openai));
 
@@ -2449,7 +2468,7 @@ mod tests {
         p.endpoints
             .insert(Protocol::Anthropic, " https://gw.example/ ".into());
         eps = endpoints(&p);
-        assert_eq!(eps[&Protocol::Anthropic], "https://gw.example");
+        assert_eq!(eps[&Protocol::Anthropic].1, "https://gw.example");
         assert_eq!(on(&p, &eps, "vendor/claude-9"), Some(Protocol::Anthropic));
         assert_eq!(on(&p, &eps, "gemini-9"), Some(Protocol::Openai));
 
@@ -2465,7 +2484,7 @@ mod tests {
         assert_eq!(on(&p, &eps, "gpt-9"), Some(Protocol::Anthropic));
         assert_eq!(on(&p, &eps, "gemini-9"), None);
         assert_eq!(
-            api_root(Protocol::Anthropic, &eps[&Protocol::Anthropic]),
+            api_root(Protocol::Anthropic, &eps[&Protocol::Anthropic].1),
             "https://gw.example/v1/"
         );
 

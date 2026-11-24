@@ -866,7 +866,10 @@ fn provider_info(
             .unwrap_or_else(|| id.to_owned()),
         custom_name: p.name.clone(),
         preset: p.preset.clone(),
-        endpoints: eps,
+        endpoints: eps
+            .iter()
+            .map(|(&protocol, (_, url))| (protocol, url.clone()))
+            .collect(),
         has_api_key: !p.api_key.is_empty(),
         rules: p.models.clone(),
         protocols: p.protocols.clone(),
@@ -928,7 +931,7 @@ fn offered(catalog: &Catalog) -> Vec<PresetInfo> {
             endpoints: p
                 .endpoints
                 .iter()
-                .map(|(k, v)| (*k, (*v).to_owned()))
+                .map(|(k, _, v)| (*k, (*v).to_owned()))
                 .collect(),
         })
         .chain(more)
@@ -959,10 +962,10 @@ fn overrides(
         .unwrap_or_default();
     let mut out: BTreeMap<Protocol, String> = wanted
         .iter()
-        .filter(|(k, v)| !base.iter().any(|(bk, bv)| bk == *k && bv == v))
+        .filter(|(k, v)| !base.iter().any(|(bk, _, bv)| bk == *k && bv == v))
         .map(|(k, v)| (*k, v.clone()))
         .collect();
-    for (k, _) in base {
+    for (k, _, _) in base {
         if !wanted.contains_key(k) {
             out.insert(*k, String::new());
         }

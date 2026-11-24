@@ -131,11 +131,11 @@ fn candidates(protocol: Protocol, input: &str) -> Vec<String> {
     let mut out: Vec<String> = crate::presets::PRESETS
         .iter()
         .flat_map(|p| p.endpoints.iter())
-        .filter(|(p, url)| {
+        .filter(|(p, _, url)| {
             let on_host = *url == origin || url.starts_with(&format!("{origin}/"));
             *p == protocol && on_host
         })
-        .map(|(_, url)| (*url).to_owned())
+        .map(|(_, _, url)| (*url).to_owned())
         .collect();
     for depth in (0..=segments.len()).rev() {
         let level = segments[..depth]
