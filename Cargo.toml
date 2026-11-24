@@ -40,7 +40,7 @@ reqwest = { version = "0.13", default-features = false, features = ["rustls"] }
 rmcp = { version = "3.10", default-features = false, features = ["client", "transport-child-process", "transport-streamable-http-client-reqwest", "reqwest"] }
 rquickjs = "0.14"
 rust-embed = { version = "8", features = ["mime-guess"] }
-tower-http = { version = "0.7", features = ["fs"] }
+tower-http = { version = "0.7", features = ["fs", "compression-br", "compression-gzip"] }
 schemars = "1"
 serde = { version = "1", features = ["derive"] }
 semver = "1"

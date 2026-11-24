@@ -32,6 +32,7 @@ use serde::{Deserialize, Serialize};
 use serde_json::{Value, json};
 use tokio::sync::broadcast::error::RecvError;
 use tokio::time::Instant;
+use tower_http::compression::CompressionLayer;
 use tracing::warn;
 use yawc::{Frame, HttpWebSocket, IncomingUpgrade, OpCode, Options};
 
@@ -155,6 +156,9 @@ pub fn router(state: AppState, token: crate::auth::Token) -> Router {
     crate::auth::protect(routes, token)
         .fallback(static_asset)
         .with_state(state)
+        // br / gzip by the client's Accept-Encoding; the default predicate
+        // skips tiny bodies (the ws upgrade's empty 101), images and SSE.
+        .layer(CompressionLayer::new())
 }
 
 /// Serve an embedded asset, SPA-style: unknown paths get `index.html` with a
