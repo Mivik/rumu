@@ -20,10 +20,11 @@ pub struct Preset {
 
 /// A vendor's own adapter is a refinement of the protocol, not a replacement
 /// for it: in genai they are almost all pass-throughs to the OpenAI one
-/// (which is why an OpenAI row may name Mistral, Zai, Aliyun, …), while
-/// `MiniMax` speaks Anthropic and `Zai` rewrites the endpoint to api.z.ai —
-/// so `Anthropic` rows name `AdapterKind::Anthropic` and the two traps are
-/// kept to the rows they belong to. There is a test below for both.
+/// (which is why an OpenAI row may name Mistral, Aliyun, …), while
+/// `MiniMax` speaks Anthropic, so `Anthropic` rows name
+/// `AdapterKind::Anthropic`. `Zai` is never named: it replaces the endpoint
+/// with api.z.ai, so an address of the provider's own (the coding plan's, say)
+/// would be ignored. The test below checks both.
 pub const PRESETS: &[Preset] = &[
     Preset {
         id: "anthropic",
@@ -189,8 +190,7 @@ pub const PRESETS: &[Preset] = &[
         catalog: "zai",
         router: false,
         endpoints: &[
-            // The Zai adapter ignores this address and uses api.z.ai.
-            (Openai, AdapterKind::Zai, "https://api.z.ai/api/paas/v4"),
+            (Openai, AdapterKind::OpenAI, "https://api.z.ai/api/paas/v4"),
             (
                 Anthropic,
                 AdapterKind::Anthropic,
@@ -353,12 +353,12 @@ mod tests {
             | AdapterKind::Requesty
             | AdapterKind::DeepSeek
             | AdapterKind::Moonshot
-            | AdapterKind::Zai
             | AdapterKind::Aliyun
             | AdapterKind::Xai
             | AdapterKind::Groq
             | AdapterKind::Mistral
             | AdapterKind::Together => Protocol::Openai,
+            AdapterKind::Zai => panic!("the Zai adapter ignores the endpoint: name OpenAI"),
             other => panic!("classify AdapterKind::{other} here before using it"),
         }
     }
@@ -375,23 +375,6 @@ mod tests {
                     "{}: {kind} cannot speak {protocol:?} at {url}",
                     p.id
                 );
-            }
-        }
-    }
-
-    /// The Zai adapter replaces the endpoint with its own, so a row naming it
-    /// has to be that same address — otherwise the request goes elsewhere.
-    #[test]
-    fn zai_rows_point_at_zai() {
-        for p in PRESETS {
-            for &(_, kind, url) in p.endpoints {
-                if kind == AdapterKind::Zai {
-                    assert!(
-                        url.starts_with("https://api.z.ai/"),
-                        "{}: the Zai adapter sends {url} to api.z.ai anyway",
-                        p.id
-                    );
-                }
             }
         }
     }
