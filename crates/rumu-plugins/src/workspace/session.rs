@@ -2,7 +2,8 @@
 //! past conversations, rendered from `Cx::history`; the actions that start
 //! and wait on sessions are in [`super::start`].
 //!
-//! - `list /sessions` — every session of this assistant, most recently updated first;
+//! - `list /sessions` — the latest visible sessions, most recently updated
+//!   first (`read` with `offset` / `limit` pages them all);
 //! - `list|read /sessions/<s>` — the session overview (its branches, each
 //!   by its `@rumu:/sessions/<s>/branches/<b>` address);
 //! - `list /sessions/<s>/branches` — the overview's branch lines;
@@ -80,13 +81,17 @@ pub(super) fn can_see(state: &PathState, info: &SessionInfo) -> bool {
     state.mounts.iter().any(|m| m.deck == owner(info))
 }
 
+/// Sessions an unpaged `list /sessions` shows; `read` with `offset` /
+/// `limit` pages the rest.
+const LIST_SESSIONS: usize = 25;
+
 /// The directory of per-assistant session listings.
 const BY_ASSISTANT: &str = "by-assistant";
 
 /// `/sessions` (and, through [`AssistantSessions`],
 /// `/sessions/by-assistant/<deck id>`): one line per visible session (or one
-/// assistant's), most recently updated first. The session this call runs in
-/// is marked `(current)`.
+/// assistant's), most recently updated first, the latest [`LIST_SESSIONS`]
+/// unless paged. The session this call runs in is marked `(current)`.
 pub(super) struct Sessions;
 
 #[async_trait]
@@ -97,7 +102,8 @@ impl vfs::Node for Sessions {
 
     fn doc(&self, _at: &At<'_>) -> &'static str {
         "Past conversations you can see (those of the mounted decks: this project's, or your \
-         own outside any project), most recently updated first. `@rumu:/sessions/<session>` is \
+         own outside any project), most recently updated first; `read` with `offset` / `limit` \
+         pages them all. `@rumu:/sessions/<session>` is \
          one's overview with its branches as node ranges; `.../<node>` reads one node in full, \
          `.../<from>..<to>` a stretch of a branch (long bodies clipped). A node is named by \
          its id or an unambiguous prefix of 4+ characters. `search` with this scope (or a \
@@ -105,27 +111,29 @@ impl vfs::Node for Sessions {
     }
 
     async fn list(&self, at: &At<'_>) -> Out {
-        let mut sessions = visible_sessions(at.cx, at.opt("id"))?;
-        sessions.sort_by_key(|s| Reverse(s.updated_at));
-        if sessions.is_empty() {
+        let mut lines = session_lines(at)?;
+        if lines.is_empty() {
             return Ok("no sessions yet".into());
         }
-        let mut lines = Vec::with_capacity(sessions.len());
-        for s in &sessions {
-            let current = if s.id == at.cx.session {
-                "  (current)"
-            } else {
-                ""
-            };
+        let older = lines.len().saturating_sub(LIST_SESSIONS);
+        if older > 0 {
+            lines.truncate(LIST_SESSIONS);
             lines.push(format!(
-                "{WS}:/sessions/{}  {}  \"{}\"{current}{}",
-                s.id,
-                iso_local(s.updated_at),
-                s.title,
-                at.p.session_owner(s, at.cx)?
+                "… {older} older: `read {WS}:{}` with `offset: {}` pages them",
+                at.abs,
+                LIST_SESSIONS + 1
             ));
         }
         Ok(lines.join("\n").into())
+    }
+
+    /// Unpaged, the listing; with `offset` / `limit`, the lines of every
+    /// session.
+    async fn read(&self, at: &At<'_>, offset: Option<u64>, limit: Option<u64>) -> Out {
+        if offset.is_none() && limit.is_none() {
+            return self.listing(at).await;
+        }
+        page_sessions(at, offset, limit)
     }
 
     async fn search(&self, at: &At<'_>, query: &str, limit: Option<usize>) -> Out {
@@ -150,6 +158,37 @@ impl vfs::Node for Sessions {
     }
 }
 
+/// One line per visible session (or `/sessions/by-assistant/<id>`'s
+/// assistant's), most recently updated first.
+fn session_lines(at: &At<'_>) -> ToolResult<Vec<String>> {
+    let mut sessions = visible_sessions(at.cx, at.opt("id"))?;
+    sessions.sort_by_key(|s| Reverse(s.updated_at));
+    let mut lines = Vec::with_capacity(sessions.len());
+    for s in &sessions {
+        let current = if s.id == at.cx.session {
+            "  (current)"
+        } else {
+            ""
+        };
+        lines.push(format!(
+            "{WS}:/sessions/{}  {}  \"{}\"{current}{}",
+            s.id,
+            iso_local(s.updated_at),
+            s.title,
+            at.p.session_owner(s, at.cx)?
+        ));
+    }
+    Ok(lines)
+}
+
+/// `read` of a session listing with `offset` / `limit`: those lines of
+/// [`session_lines`].
+fn page_sessions(at: &At<'_>, offset: Option<u64>, limit: Option<u64>) -> Out {
+    slice_lines(session_lines(at)?.join("\n"), offset, limit)
+        .map(ToolOutput::ok)
+        .map_err(ToolError::model)
+}
+
 /// `/sessions/by-assistant/<deck id>`: one assistant's sessions, listed as
 /// [`Sessions`] lists them (its actions stay on `/sessions`).
 pub(super) struct AssistantSessions;
@@ -162,6 +201,13 @@ impl vfs::Node for AssistantSessions {
 
     async fn list(&self, at: &At<'_>) -> Out {
         Sessions.list(at).await
+    }
+
+    async fn read(&self, at: &At<'_>, offset: Option<u64>, limit: Option<u64>) -> Out {
+        if offset.is_none() && limit.is_none() {
+            return self.listing(at).await;
+        }
+        page_sessions(at, offset, limit)
     }
 
     async fn search(&self, at: &At<'_>, query: &str, limit: Option<usize>) -> Out {
