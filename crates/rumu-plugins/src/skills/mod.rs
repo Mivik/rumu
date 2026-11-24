@@ -1,9 +1,10 @@
 //! Skills: directories with a `SKILL.md` (the agentskills.io format) on the
 //! rumu host — in repositories installed from git under `RUMU_HOME/skills`,
-//! then in `~/.agents/skills` and `~/.claude/skills`. An assistant enables
-//! them by rules; the model sees each enabled one's name and description in
-//! a first-call note, and reads it under `@rumu:/skills` (served by the
-//! workspace plugin through the functions here). See `docs/skills.md`.
+//! then in `~/.agents/skills` and `~/.claude/skills`. An assistant and a
+//! project enable them by rules; the model sees each enabled one's name and
+//! description in a first-call note, and reads it under `@rumu:/skills`
+//! (served by the workspace plugin through the functions here). See
+//! `docs/skills.md`.
 
 mod repo;
 
@@ -20,7 +21,7 @@ use rumu_cards::Decks;
 use rumu_core::{
     Content, Cx, Decision, Event, HookOutput, HookSpec, Manifest, PathState, Plugin,
     RUMU_WORKSPACE, SkillInfo, SkillRepoInfo, SkillsInfo, Structured, ToolError, ToolOutput,
-    ToolResult, Utf8UnixPath, rules_enable,
+    ToolResult, Utf8UnixPath, any_rules_enable,
 };
 use serde::{Deserialize, Serialize};
 use serde_json::json;
@@ -123,14 +124,14 @@ impl Skills {
         found
     }
 
-    /// The usable skills `rules` enable.
-    pub fn enabled(&self, rules: &[String]) -> Vec<Skill> {
-        if rules.is_empty() {
+    /// The usable skills any of the rule lists `rules` enables.
+    pub fn enabled(&self, rules: &[Vec<String>]) -> Vec<Skill> {
+        if rules.iter().all(Vec::is_empty) {
             return Vec::new();
         }
         self.scan()
             .into_iter()
-            .filter(|s| s.usable() && rules_enable(rules, &s.name))
+            .filter(|s| s.usable() && any_rules_enable(rules, &s.name))
             .collect()
     }
 
@@ -380,20 +381,20 @@ one of its scripts, write the script into your workspace first.",
     }
 }
 
-/// The skill rules of the session's assistant, from its deck as it is now: a
-/// change to the assistant reaches its running sessions.
-pub fn rules(decks: &Decks, state: &PathState) -> Vec<String> {
-    decks
-        .get(&state.assistant)
-        .map(|d| d.meta.skills)
-        .unwrap_or_default()
+/// The skill rules of the session's assistant and of its project, from
+/// their decks as they are now.
+pub fn rules(decks: &Decks, state: &PathState) -> Vec<Vec<String>> {
+    crate::decks::binding(decks, state)
+        .into_iter()
+        .map(|meta| meta.skills)
+        .collect()
 }
 
 /// The enabled skill `name` and the path `sub` under it (`abs` names them in
 /// errors).
 fn locate(
     skills: &Skills,
-    rules: &[String],
+    rules: &[Vec<String>],
     abs: &Utf8UnixPath,
     name: &str,
     sub: &str,
@@ -417,7 +418,7 @@ fn locate(
 }
 
 /// `list @rumu:/skills`: the session's skills.
-pub fn list_skills(skills: &Skills, rules: &[String]) -> ToolOutput {
+pub fn list_skills(skills: &Skills, rules: &[Vec<String>]) -> ToolOutput {
     let enabled = skills.enabled(rules);
     if enabled.is_empty() {
         return "This session has no skills.".into();
@@ -432,7 +433,7 @@ pub fn list_skills(skills: &Skills, rules: &[String]) -> ToolOutput {
 /// `list @rumu:/skills/<name>[/<sub>]`: a skill's files.
 pub fn list(
     skills: &Skills,
-    rules: &[String],
+    rules: &[Vec<String>],
     abs: &Utf8UnixPath,
     name: &str,
     sub: &str,
@@ -452,7 +453,7 @@ pub fn list(
 /// and a list of its other files; a directory lists.
 pub fn read(
     skills: &Skills,
-    rules: &[String],
+    rules: &[Vec<String>],
     abs: &Utf8UnixPath,
     name: &str,
     sub: &str,

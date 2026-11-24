@@ -5,8 +5,9 @@
 //!   mounting or writing it asks the user, and its charter's summary;
 //! - `read /decks/<name>`: its configuration, by kind (an assistant's model,
 //!   MCP servers, skills, mounts, `allow_ask` and mascot; a project's seal,
-//!   privacy and workspaces; a plain deck's privacy). Decks are named, never
-//!   given by id. Its persona and charter are its pinned cards, not here;
+//!   privacy, workspaces, MCP servers and skills; a plain deck's privacy).
+//!   Decks are named, never given by id. Its persona and charter are its
+//!   pinned cards, not here;
 //! - `write` changes it after a read (a field left out keeps its value),
 //!   `edit` replaces text in the current one, `write` to a new name creates
 //!   a deck (`kind:` says which), and `write` with `from` renames one.
@@ -31,8 +32,7 @@ use serde::{Deserialize, Deserializer, Serialize};
 use serde_json::{Value, json};
 
 use crate::approve::{allowed, approve, confirm, deck_name};
-use crate::decks::{ProjectChange, save_assistant, update_project};
-use crate::workspaces::create_project;
+use crate::decks::{ProjectChange, create_project, save_assistant, update_project};
 
 use super::WorkspacePlugin;
 use super::tools::replace_occurrences;
@@ -92,7 +92,7 @@ impl Kind {
     fn fields(self) -> &'static [&'static str] {
         match self {
             Self::Assistant => &["model", "mcp", "skills", "mounts", "allow_ask", "cat"],
-            Self::Project => &["icon", "private", "workspaces"],
+            Self::Project => &["icon", "private", "workspaces", "mcp", "skills"],
             Self::Deck => &["private"],
         }
     }
@@ -278,6 +278,8 @@ impl WorkspacePlugin {
                 shown.cat = meta.cat.clone();
             }
             Kind::Project => {
+                shown.mcp = Some(meta.mcp.clone());
+                shown.skills = Some(meta.skills.clone());
                 shown.icon = meta.icon.clone();
                 shown.private = Some(meta.private);
                 shown.workspaces = Some(config.workspaces.clone());
@@ -365,6 +367,8 @@ impl WorkspacePlugin {
                         .then_some(workspaces),
                     icon: Some(next.meta.icon.unwrap_or_default()),
                     private: Some(next.meta.private),
+                    mcp: Some(next.meta.mcp),
+                    skills: Some(next.meta.skills),
                 };
                 update_project(&self.home, self.decks(), &self.workspaces, deck, change)
                     .map_err(err)
@@ -531,10 +535,14 @@ impl WorkspacePlugin {
                 &self.home,
                 self.decks(),
                 &self.workspaces,
-                name,
-                config.workspaces.clone(),
-                config.meta.icon.clone(),
-                config.meta.private,
+                ProjectChange {
+                    name: Some(name.to_owned()),
+                    workspaces: Some(config.workspaces.clone()),
+                    icon: config.meta.icon.clone(),
+                    private: Some(config.meta.private),
+                    mcp: Some(config.meta.mcp.clone()),
+                    skills: Some(config.meta.skills.clone()),
+                },
             )
             .map_err(err)?,
             Kind::Assistant => {
@@ -685,10 +693,12 @@ impl Node for DeckFile {
             }
             Some(Kind::Project) => {
                 "A project's configuration (its charter is its pinned `about` card, not here): \
-                 `icon`, `private` and `workspaces` (registered names, in order, the first its \
-                 default). `edit` changes it in place; `write` needs a read of it as it is now \
-                 and keeps any field left out; `write` with `from` renames it. This session's \
-                 project changes freely, but `private`; another project asks the user."
+                 `icon`, `private`, `workspaces` (registered names, in order, the first its \
+                 default), and `mcp` and `skills` (as an assistant's), which its sessions use \
+                 besides their assistant's. `edit` changes it in place; `write` needs a read of \
+                 it as it is now and keeps any field left out; `write` with `from` renames it. \
+                 This session's project changes freely, but `mcp` and `private`; another \
+                 project asks the user."
             }
             _ => {
                 "A deck's configuration: `private` (hidden from sessions that do not mount it). \

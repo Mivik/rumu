@@ -187,6 +187,12 @@ pub fn rules_enable(rules: &[String], id: &str) -> bool {
     enabled
 }
 
+/// Whether any of `lists` enables `id` ([`rules_enable`]): the rule lists
+/// of several decks (a session's assistant and its project) add up.
+pub fn any_rules_enable(lists: &[Vec<String>], id: &str) -> bool {
+    lists.iter().any(|rules| rules_enable(rules, id))
+}
+
 /// The models `rules` enable ([`rules_enable`]): of `listed`, then the
 /// exact ids not listed, in rule order.
 pub fn enabled_models(rules: &[String], listed: &[String]) -> Vec<String> {

@@ -40,8 +40,8 @@ fn fixture(home: &Path) -> Skills {
     Skills::with_dirs(&home.join("rumu"), vec![host], Some(home.to_owned()))
 }
 
-fn state(rules: &[&str]) -> Vec<String> {
-    rules.iter().map(|r| r.to_string()).collect()
+fn state(rules: &[&str]) -> Vec<Vec<String>> {
+    vec![rules.iter().map(|r| r.to_string()).collect()]
 }
 
 fn path(p: &str) -> &Utf8UnixPath {
@@ -100,12 +100,17 @@ fn scans_in_precedence_order_leniently() {
     assert_eq!(info.repos[0].name, "kit");
 
     let enabled: Vec<String> = skills
-        .enabled(&["*".into(), "!notes".into()])
+        .enabled(&state(&["*", "!notes"]))
         .into_iter()
         .map(|s| s.name)
         .collect();
     assert_eq!(enabled, ["pdf"]);
     assert!(skills.enabled(&[]).is_empty());
+    // The rule lists of two decks add up: one's exclusion does not take
+    // away what the other enables.
+    let both = [state(&["*", "!notes"]), state(&["notes"])].concat();
+    let enabled: Vec<String> = skills.enabled(&both).into_iter().map(|s| s.name).collect();
+    assert_eq!(enabled, ["pdf", "notes"]);
 }
 
 #[test]

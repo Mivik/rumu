@@ -885,23 +885,31 @@ async fn dispatch(state: &AppState, method: &str, p: &Value) -> Result<Value> {
                 icon: Option<rumu_cards::DeckIcon>,
                 #[serde(default)]
                 private: bool,
+                #[serde(default)]
+                mcp: rumu_core::McpUse,
+                #[serde(default)]
+                skills: Vec<String>,
             }
             let req: Create = parse_params(p)?;
             let deck = rumu_plugins::create_project(
                 &state.home,
                 &state.decks,
                 &state.workspaces,
-                &req.name,
-                req.workspaces,
-                req.icon,
-                req.private,
+                rumu_plugins::ProjectChange {
+                    name: Some(req.name),
+                    workspaces: Some(req.workspaces),
+                    icon: req.icon,
+                    private: Some(req.private),
+                    mcp: Some(req.mcp),
+                    skills: Some(req.skills),
+                },
             )?;
             Ok(json!({ "project": rumu_plugins::project_of(&deck, &state.workspaces) }))
         }
 
-        // Rename a project, set its icon (an empty one clears it), and/or
-        // replace the workspaces it mounts (in order; the first is its
-        // default).
+        // Rename a project, set its icon (an empty one clears it), privacy,
+        // MCP servers and skills, and/or replace the workspaces it mounts
+        // (in order; the first is its default).
         "project.update" => {
             #[derive(Deserialize)]
             #[serde(deny_unknown_fields)]
@@ -915,6 +923,10 @@ async fn dispatch(state: &AppState, method: &str, p: &Value) -> Result<Value> {
                 icon: Option<rumu_cards::DeckIcon>,
                 #[serde(default)]
                 private: Option<bool>,
+                #[serde(default)]
+                mcp: Option<rumu_core::McpUse>,
+                #[serde(default)]
+                skills: Option<Vec<String>>,
             }
             let req: Update = parse_params(p)?;
             let deck = project_deck(state, &req.id)?;
@@ -928,6 +940,8 @@ async fn dispatch(state: &AppState, method: &str, p: &Value) -> Result<Value> {
                     workspaces: req.workspaces,
                     icon: req.icon,
                     private: req.private,
+                    mcp: req.mcp,
+                    skills: req.skills,
                 },
             )?;
             Ok(json!({ "project": rumu_plugins::project_of(&deck, &state.workspaces) }))

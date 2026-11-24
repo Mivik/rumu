@@ -6042,7 +6042,7 @@ async fn decks_list_by_name_and_read_by_kind() {
     .await;
     assert_eq!(
         out.content.text,
-        "kind: project\nprivate: false\nworkspaces:\n- app\n- proj\n"
+        "kind: project\nmcp: {}\nskills: []\nprivate: false\nworkspaces:\n- app\n- proj\n"
     );
     assert_eq!(out.effects[0].data.as_ref().unwrap().tag, "config.read");
 
@@ -6136,21 +6136,32 @@ async fn deck_writes_follow_a_read_and_ask_by_field() {
     assert!(!out.is_error, "{}", out.content.text);
     assert_eq!(registry.project(PROJECT_ID), ["proj", "app"]);
     assert!(host.decisions.lock().unwrap().is_empty());
-
-    // Its privacy asks (`configure`); this host cannot answer.
+    // Its skills too, like the assistant's own.
     let out = call(
         &plugin,
         &host,
         "write",
-        write("@rumu:/decks/proj", "private: true\n"),
+        write("@rumu:/decks/proj", "skills: [pdf]\n"),
     )
     .await;
-    assert!(
-        out.is_error && out.content.text.contains("cannot ask"),
-        "{}",
-        out.content.text
-    );
-    let decision = host.decisions.lock().unwrap().pop().unwrap();
+    assert!(!out.is_error, "{}", out.content.text);
+    let deck = plugin.decks().get(PROJECT_ID).unwrap();
+    assert_eq!(deck.meta.skills, ["pdf"]);
+    assert!(host.decisions.lock().unwrap().is_empty());
+
+    // Its MCP servers and its privacy ask (`configure`); this host cannot
+    // answer.
+    for content in ["mcp: { github: ['*'] }\n", "private: true\n"] {
+        let out = call(&plugin, &host, "write", write("@rumu:/decks/proj", content)).await;
+        assert!(
+            out.is_error && out.content.text.contains("cannot ask"),
+            "{content}: {}",
+            out.content.text
+        );
+    }
+    let mut decisions = std::mem::take(&mut *host.decisions.lock().unwrap());
+    assert_eq!(decisions.len(), 2);
+    let decision = decisions.pop().unwrap();
     assert_eq!(decision["kind"], "deck_change");
     assert!(
         decision["after"]

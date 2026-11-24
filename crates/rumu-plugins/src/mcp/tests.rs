@@ -53,6 +53,13 @@ fn all(servers: &[&str]) -> rumu_core::McpUse {
         .collect()
 }
 
+/// `mcp` as a session's servers when one deck binds them.
+fn one_deck(mcp: rumu_core::McpUse) -> Servers {
+    mcp.into_iter()
+        .map(|(name, rules)| (name, vec![rules]))
+        .collect()
+}
+
 #[tokio::test]
 async fn connects_and_reports_status() {
     let home = tempfile::tempdir().unwrap();
@@ -75,7 +82,7 @@ async fn lists_reads_and_searches_the_bound_servers() {
     let Some(hub) = hub(home.path()).await else {
         return;
     };
-    let st = all(&["fake", "broken", "gone"]);
+    let st = one_deck(all(&["fake", "broken", "gone"]));
     let root = list_servers(&hub, &st).await.content.text;
     assert!(root.contains("fake/ — 3 tools"), "{root}");
     assert!(root.contains("broken/ — unavailable"), "{root}");
@@ -128,7 +135,7 @@ async fn lists_reads_and_searches_the_bound_servers() {
     assert!(!hits.contains("fake/echo"));
 
     // A server the session does not have is neither listed nor readable.
-    let other = all(&["broken"]);
+    let other = one_deck(all(&["broken"]));
     let err = read_server(&hub, &other, "fake").await.unwrap_err();
     assert!(
         err.to_string()
@@ -399,6 +406,56 @@ async fn intro_note_follows_the_assistants_servers() {
 }
 
 #[tokio::test]
+async fn a_project_adds_its_servers_and_tools() {
+    let home = tempfile::tempdir().unwrap();
+    let Some(hub) = hub(home.path()).await else {
+        return;
+    };
+    let rules = |r: &[&str]| -> Vec<String> { r.iter().map(|s| s.to_string()).collect() };
+    let decks = assistant_decks(home.path());
+    set_assistant(
+        &decks,
+        [("fake".to_owned(), rules(&["*", "!list_issues"]))].into(),
+        &[],
+    );
+    let change = crate::ProjectChange {
+        name: Some("proj".into()),
+        mcp: Some(
+            [
+                ("fake".to_owned(), rules(&["list_issues"])),
+                ("broken".to_owned(), rules(&["*"])),
+            ]
+            .into(),
+        ),
+        ..Default::default()
+    };
+    let project = crate::create_project(home.path(), &decks, &Default::default(), change).unwrap();
+    let mut state = PathState {
+        assistant: crate::testutil::TEST_ASSISTANT.into(),
+        ..Default::default()
+    };
+    let root = |state: &PathState| {
+        let st = servers(&decks, state);
+        let hub = hub.clone();
+        async move { list_servers(&hub, &st).await.content.text }
+    };
+    assert_eq!(root(&state).await, "fake/ — 2 tools\n");
+
+    // In the project, its servers join the assistant's, and a tool either
+    // enables is in: the assistant's exclusion does not take it away.
+    state
+        .mounts
+        .push(rumu_core::CardMount::new(project.id(), "/cards/proj", true));
+    let text = root(&state).await;
+    assert!(text.contains("fake/ — 3 tools"), "{text}");
+    assert!(text.contains("broken/ — unavailable"), "{text}");
+
+    // A project deck only borrowed adds nothing.
+    state.mounts[0].project = false;
+    assert_eq!(root(&state).await, "fake/ — 2 tools\n");
+}
+
+#[tokio::test]
 async fn rules_narrow_a_servers_tools() {
     let home = tempfile::tempdir().unwrap();
     let Some(hub) = hub(home.path()).await else {
@@ -410,7 +467,7 @@ async fn rules_narrow_a_servers_tools() {
     let text = |out: ToolResult<ToolOutput>| out.unwrap().content.text;
 
     // All but one: new tools would be in too.
-    let st = rules(&["*", "!fail"]);
+    let st = one_deck(rules(&["*", "!fail"]));
     assert!(
         list_servers(&hub, &st)
             .await
@@ -431,7 +488,7 @@ async fn rules_narrow_a_servers_tools() {
     // Only the one named.
     let st = rules(&["echo"]);
     assert!(
-        text(list_server(&hub, &st, "fake", []).await)
+        text(list_server(&hub, &one_deck(st.clone()), "fake", []).await)
             .ends_with("actions:\n  fake/echo(text: string) — Echo the given text back."),
     );
     let decks = assistant_decks(home.path());
@@ -490,7 +547,7 @@ async fn views_are_recorded_and_reach_their_servers_tools() {
     );
 
     // `poll` is only for views.
-    let st = all(&["fake"]);
+    let st = one_deck(all(&["fake"]));
     assert!(!text_of(list_server(&hub, &st, "fake", []).await).contains("poll"));
     let out = plugin
         .call_tool("invoke", json!({ "action": "fake/poll" }), &cx)
@@ -502,7 +559,7 @@ async fn views_are_recorded_and_reach_their_servers_tools() {
     // Views reach the tools of their server the rules enable, no others.
     let echoed = app_call(&hub, &st, "fake", "echo", Default::default()).await;
     assert!(echoed.is_ok());
-    let narrow: rumu_core::McpUse = [("fake".to_owned(), vec!["echo".to_owned()])].into();
+    let narrow = one_deck([("fake".to_owned(), vec!["echo".to_owned()])].into());
     let refused = app_call(&hub, &narrow, "fake", "poll", Default::default()).await;
     assert!(refused.unwrap_err().contains("no tool `poll` for apps"));
     assert!(

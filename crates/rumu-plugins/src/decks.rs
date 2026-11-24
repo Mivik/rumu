@@ -5,10 +5,22 @@
 use std::path::Path;
 
 use rumu_cards::{Deck, DeckCat, DeckIcon, DeckMeta, DeckMount, Decks};
-use rumu_core::{McpUse, ModelUse, Workspaces};
+use rumu_core::{McpUse, ModelUse, PathState, Workspaces};
 
 use crate::Result;
 use crate::workspaces::set_project_workspaces;
+
+/// The decks whose MCP servers and skills a path uses, as they are now: its
+/// assistant's, then its project's. A change to either reaches its running
+/// sessions at their next model call.
+pub(crate) fn binding(decks: &Decks, state: &PathState) -> Vec<DeckMeta> {
+    [Some(state.assistant.as_str()), state.project()]
+        .into_iter()
+        .flatten()
+        .filter_map(|id| decks.get(id))
+        .map(|d| d.meta)
+        .collect()
+}
 
 /// An assistant's `deck.yaml` fields: everything but its id, its privacy
 /// and its seal, which saving keeps.
@@ -69,10 +81,46 @@ pub struct ProjectChange {
     /// Its seal; an empty one clears it.
     pub icon: Option<DeckIcon>,
     pub private: Option<bool>,
+    /// The MCP servers its sessions use besides their assistant's.
+    pub mcp: Option<McpUse>,
+    /// The rules enabling skills for its sessions besides their assistant's.
+    pub skills: Option<Vec<String>>,
 }
 
-/// Rename a project, set its seal and privacy, and/or replace the
-/// workspaces it mounts. `deck.yaml` is written only when it changes.
+/// Create a project deck (blank charter) with `change` applied; it needs a
+/// name.
+pub fn create_project(
+    home: &Path,
+    decks: &Decks,
+    registry: &Workspaces,
+    change: ProjectChange,
+) -> Result<Deck> {
+    let deck = decks.upsert(DeckMeta {
+        id: String::new(),
+        name: change.name.unwrap_or_default(),
+        assistant: false,
+        project: true,
+        private: change.private.unwrap_or_default(),
+        mounts: Vec::new(),
+        allow_ask: Vec::new(),
+        model: None,
+        mcp: change.mcp.unwrap_or_default(),
+        skills: change.skills.unwrap_or_default(),
+        icon: change.icon,
+        cat: None,
+    })?;
+    set_project_workspaces(
+        home,
+        registry,
+        deck.id(),
+        change.workspaces.unwrap_or_default(),
+    )?;
+    Ok(deck)
+}
+
+/// Rename a project, set its seal, privacy, MCP servers and skills, and/or
+/// replace the workspaces it mounts. `deck.yaml` is written only when it
+/// changes.
 pub fn update_project(
     home: &Path,
     decks: &Decks,
@@ -89,6 +137,12 @@ pub fn update_project(
     }
     if let Some(private) = change.private {
         meta.private = private;
+    }
+    if let Some(mcp) = change.mcp {
+        meta.mcp = mcp;
+    }
+    if let Some(skills) = change.skills {
+        meta.skills = skills;
     }
     let deck = if meta == deck.meta {
         deck.clone()

@@ -20,4 +20,12 @@ icon?: DeckIcon,
 /**
  * Hidden from agents unless this session has it mounted.
  */
-private: boolean, };
+private: boolean, 
+/**
+ * The MCP servers its sessions use besides their assistant's.
+ */
+mcp: { [key in string]: Array<string> }, 
+/**
+ * The rules enabling skills for its sessions besides their assistant's.
+ */
+skills: Array<string>, };

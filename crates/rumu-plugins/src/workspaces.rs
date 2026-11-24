@@ -12,8 +12,9 @@ use rumu_core::{
 };
 use serde::{Deserialize, Deserializer, Serialize, de};
 
-use rumu_cards::{Deck, DeckIcon, DeckMeta, Decks};
+use rumu_cards::{Deck, DeckIcon, Decks};
 
+use crate::decks::{ProjectChange, create_project};
 use crate::{Error, Result};
 
 pub const WORKSPACES_FILE: &str = "workspaces.yaml";
@@ -217,6 +218,10 @@ pub struct Project {
     pub icon: Option<DeckIcon>,
     /// Hidden from agents unless this session has it mounted.
     pub private: bool,
+    /// The MCP servers its sessions use besides their assistant's.
+    pub mcp: rumu_core::McpUse,
+    /// The rules enabling skills for its sessions besides their assistant's.
+    pub skills: Vec<String>,
 }
 
 /// Every project deck, by name.
@@ -239,35 +244,9 @@ pub fn project_of(deck: &Deck, registry: &Workspaces) -> Project {
         workspaces: registry.project(deck.id()),
         icon: deck.meta.icon.clone(),
         private: deck.private(),
+        mcp: deck.meta.mcp.clone(),
+        skills: deck.meta.skills.clone(),
     }
-}
-
-/// Create a project deck named `name` (blank charter) mounting `workspaces`.
-pub fn create_project(
-    home: &Path,
-    decks: &Decks,
-    registry: &Workspaces,
-    name: &str,
-    workspaces: Vec<String>,
-    icon: Option<DeckIcon>,
-    private: bool,
-) -> Result<Deck> {
-    let deck = decks.upsert(DeckMeta {
-        id: String::new(),
-        name: name.to_owned(),
-        assistant: false,
-        project: true,
-        private,
-        mounts: Vec::new(),
-        allow_ask: Vec::new(),
-        model: None,
-        mcp: Default::default(),
-        skills: Vec::new(),
-        icon,
-        cat: None,
-    })?;
-    set_project_workspaces(home, registry, deck.id(), workspaces)?;
-    Ok(deck)
 }
 
 /// A fresh home's first project: the current directory's workspace (the only
@@ -286,7 +265,16 @@ pub fn seed_project(home: &Path, decks: &Decks, registry: &Workspaces) -> Result
     if !rumu_cards::deck::valid_deck_name(&name) || decks.name_taken(&name, None) {
         return Ok(());
     }
-    create_project(home, decks, registry, &name, vec![ws.name], None, false)?;
+    create_project(
+        home,
+        decks,
+        registry,
+        ProjectChange {
+            name: Some(name),
+            workspaces: Some(vec![ws.name]),
+            ..Default::default()
+        },
+    )?;
     Ok(())
 }
 

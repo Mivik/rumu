@@ -35,7 +35,7 @@ mod workspaces;
 
 pub use ask::{AskPlugin, Assistant, assistant_of};
 pub use code::CodePlugin;
-pub use decks::{AssistantConfig, ProjectChange, save_assistant, update_project};
+pub use decks::{AssistantConfig, ProjectChange, create_project, save_assistant, update_project};
 pub use error::{Error, Result};
 pub use external::ExternalPlugins;
 pub use mcp::{McpHub, McpPlugin};
@@ -47,9 +47,8 @@ pub use workspace::{
     revert_plan, save_page, snapshot_file,
 };
 pub use workspaces::{
-    PROJECTS_FILE, Project, WORKSPACES_FILE, create_project, cwd_workspace_name, drop_project,
-    load_workspaces, project_of, projects, remove_workspace, seed_project, set_project_workspaces,
-    upsert_workspace,
+    PROJECTS_FILE, Project, WORKSPACES_FILE, cwd_workspace_name, drop_project, load_workspaces,
+    project_of, projects, remove_workspace, seed_project, set_project_workspaces, upsert_workspace,
 };
 
 #[cfg(test)]

@@ -1,9 +1,9 @@
 //! MCP: servers registered in `settings.yaml` (see [`McpHub`]), bound to
-//! assistants by name. Their tools stay out of the model's tool list: each
-//! server is an object under `@rumu:/mcp` whose actions are its tools
-//! (`<server>/<tool>`). The model finds them with `list`, `read` and
-//! `search` there and runs one with `invoke`, all served by the workspace
-//! plugin through the functions here. See `docs/mcp.md`.
+//! assistants and projects by name. Their tools stay out of the model's
+//! tool list: each server is an object under `@rumu:/mcp` whose actions are
+//! its tools (`<server>/<tool>`). The model finds them with `list`, `read`
+//! and `search` there and runs one with `invoke`, all served by the
+//! workspace plugin through the functions here. See `docs/mcp.md`.
 
 mod hub;
 
@@ -22,8 +22,8 @@ use rumu_cards::Decks;
 use rumu_cards::recall::{Doc, rank_docs};
 use rumu_core::{
     BranchId, Content, Cx, Decision, Event, HookOutput, HookSpec, Manifest, McpApp, McpAppContext,
-    McpAppCsp, McpStatus, McpUse, PathState, Plugin, RUMU_WORKSPACE, SCRATCH_WORKSPACE, Structured,
-    ToolError, ToolOutput, ToolResult, rules_enable,
+    McpAppCsp, McpStatus, PathState, Plugin, RUMU_WORKSPACE, SCRATCH_WORKSPACE, Structured,
+    ToolError, ToolOutput, ToolResult, any_rules_enable,
 };
 use serde::{Deserialize, Serialize};
 use serde_json::{Value, json};
@@ -162,7 +162,7 @@ impl McpPlugin {
 /// carries both for the web ([`McpApp`]).
 pub async fn call(
     hub: &McpHub,
-    mcp: &McpUse,
+    mcp: &Servers,
     state: &PathState,
     blobs: impl Fn() -> rumu_blob::Result<rumu_blob::Blobs>,
     name: &str,
@@ -306,7 +306,7 @@ fn sources(origins: &Value) -> Vec<String> {
 /// and apps may call. Returns its `CallToolResult`; the model never sees it.
 pub async fn app_call(
     hub: &McpHub,
-    mcp: &McpUse,
+    mcp: &Servers,
     name: &str,
     tool: &str,
     args: JsonObject,
@@ -325,7 +325,7 @@ pub async fn app_call(
 
 /// `resources/read` from a view of one of `name`'s results (the web's
 /// `mcp.app_read`). Returns its `ReadResourceResult`.
-pub async fn app_read(hub: &McpHub, mcp: &McpUse, name: &str, uri: &str) -> Result<Value, String> {
+pub async fn app_read(hub: &McpHub, mcp: &Servers, name: &str, uri: &str) -> Result<Value, String> {
     let (server, _) = app_server(hub, mcp, name).await?;
     info!(server = name, uri, "mcp app reads a resource");
     let result = server.read_resource(uri).await?;
@@ -336,7 +336,7 @@ pub async fn app_read(hub: &McpHub, mcp: &McpUse, name: &str, uri: &str) -> Resu
 /// whoever they are for.
 async fn app_server(
     hub: &McpHub,
-    mcp: &McpUse,
+    mcp: &Servers,
     name: &str,
 ) -> Result<(Arc<Server>, Snapshot), String> {
     let rules = mcp
@@ -349,7 +349,7 @@ async fn app_server(
     snap.tools = snap
         .tools
         .iter()
-        .filter(|t| rules_enable(rules, &t.name))
+        .filter(|t| any_rules_enable(rules, &t.name))
         .cloned()
         .collect();
     Ok((server, snap))
@@ -396,7 +396,7 @@ pub fn app_context(
 /// result's embedded resources (several each under their URI).
 pub async fn read_resource(
     hub: &McpHub,
-    mcp: &McpUse,
+    mcp: &Servers,
     state: &PathState,
     blobs: impl Fn() -> rumu_blob::Result<rumu_blob::Blobs>,
     name: &str,
@@ -561,19 +561,25 @@ async fn media(
     .map_err(|e| e.to_string())?
 }
 
-/// The servers of the session's assistant and the rules enabling their tools,
-/// from its deck as it is now: a change to the assistant reaches its running
-/// sessions.
-pub fn servers(decks: &Decks, state: &PathState) -> McpUse {
-    decks
-        .get(&state.assistant)
-        .map(|d| d.meta.mcp)
-        .unwrap_or_default()
+/// A session's MCP servers, each with the rules of every deck binding it
+/// (its assistant's, its project's): a tool any of them enables is enabled.
+pub type Servers = BTreeMap<String, Vec<Vec<String>>>;
+
+/// The servers of the session's assistant and of its project, with the
+/// rules enabling their tools, from their decks as they are now.
+pub fn servers(decks: &Decks, state: &PathState) -> Servers {
+    let mut servers = Servers::new();
+    for meta in crate::decks::binding(decks, state) {
+        for (name, rules) in meta.mcp {
+            servers.entry(name).or_default().push(rules);
+        }
+    }
+    servers
 }
 
 /// The server-list note: the session's servers, their status and
 /// instructions; and each configured server's state for the UI.
-async fn intro(hub: &McpHub, mcp: &McpUse) -> (String, BTreeMap<String, McpIntroServer>) {
+async fn intro(hub: &McpHub, mcp: &Servers) -> (String, BTreeMap<String, McpIntroServer>) {
     let mut status = BTreeMap::new();
     let mut text = format!(
         "MCP servers of this session. Their tools are not in your tool list: they are the actions \
@@ -641,18 +647,18 @@ fn names(tools: &[Tool]) -> String {
 
 /// `snap` with only the tools `rules` enable, and of them only the ones for
 /// the model (not those only views call).
-fn enabled(mut snap: Snapshot, rules: &[String]) -> Snapshot {
+fn enabled(mut snap: Snapshot, rules: &[Vec<String>]) -> Snapshot {
     snap.tools = snap
         .tools
         .iter()
-        .filter(|t| rules_enable(rules, &t.name) && visible_to(t, "model"))
+        .filter(|t| any_rules_enable(rules, &t.name) && visible_to(t, "model"))
         .cloned()
         .collect();
     snap
 }
 
 /// Server `name`, when the session has it, with the tools it enables.
-async fn bound(hub: &McpHub, mcp: &McpUse, name: &str) -> ToolResult<(Arc<Server>, Snapshot)> {
+async fn bound(hub: &McpHub, mcp: &Servers, name: &str) -> ToolResult<(Arc<Server>, Snapshot)> {
     let Some(rules) = mcp.get(name) else {
         return Err(ToolError::model(format!(
             "no MCP server `{name}` in this session{}",
@@ -709,7 +715,7 @@ fn render(out: &mut String, server: &str, tool: &Tool, pretty: bool) {
 }
 
 /// `list @rumu:/mcp`: the session's servers.
-pub async fn list_servers(hub: &McpHub, mcp: &McpUse) -> ToolOutput {
+pub async fn list_servers(hub: &McpHub, mcp: &Servers) -> ToolOutput {
     if mcp.is_empty() {
         return "This session has no MCP servers.".into();
     }
@@ -729,7 +735,7 @@ pub async fn list_servers(hub: &McpHub, mcp: &McpUse) -> ToolOutput {
 /// `actions`, the path's own.
 pub async fn list_server(
     hub: &McpHub,
-    mcp: &McpUse,
+    mcp: &Servers,
     name: &str,
     actions: impl IntoIterator<Item = (String, String)>,
 ) -> ToolResult<ToolOutput> {
@@ -812,7 +818,7 @@ fn about(name: &str, title: Option<&str>, description: Option<&str>) -> String {
 
 /// `read @rumu:/mcp/<server>`: its instructions, then each tool with its
 /// description and input schema, then its resources.
-pub async fn read_server(hub: &McpHub, mcp: &McpUse, name: &str) -> ToolResult<ToolOutput> {
+pub async fn read_server(hub: &McpHub, mcp: &Servers, name: &str) -> ToolResult<ToolOutput> {
     let (server, snap) = bound(hub, mcp, name).await?;
     let mut out = format!("MCP server `{name}`: {}\n", status_line(&snap));
     if let Some(i) = snap
@@ -838,7 +844,7 @@ pub async fn read_server(hub: &McpHub, mcp: &McpUse, name: &str) -> ToolResult<T
 /// names, titles and descriptions; each hit prints like `read`.
 pub async fn search(
     hub: &McpHub,
-    mcp: &McpUse,
+    mcp: &Servers,
     server: Option<&str>,
     query: &str,
     limit: usize,
