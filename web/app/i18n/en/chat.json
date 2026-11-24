@@ -261,6 +261,12 @@
     "bringBack": "Quote in chat",
     "failed": "Aside failed to send"
   },
+  "command": {
+    "menu": "Commands",
+    "compact": "Compact the context",
+    "compactArg": "focus (optional)",
+    "btwArg": "question"
+  },
   "compaction": {
     "line": "Context compacted · {before} → {after} tok",
     "live": "Compacting context · {took}",

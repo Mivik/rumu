@@ -35,6 +35,11 @@
 // quote leading the message, or as a side question. `/btw` asks on the side
 // too (SidePop); the sheet's edge turns the side's teal while it would.
 //
+// A draft of `/` and the start of a name lists the slash commands that fit
+// (CommandMenu; a Chinese keyboard's `、` opens it as well), and a draft that
+// opens with a known command has it marked behind the writing — what may
+// follow it ghosted in until something does.
+//
 // Editing a sent message (`editTarget`) loads its text and images here, the
 // draft set aside until the edit is resent or cancelled; sending forks from
 // just before the message (store.editPrompt).
@@ -66,6 +71,7 @@ import { composerFocus, editTarget as mainEdit, openLightbox, toast } from '../.
 import { askSide, openSide, quoteBlock } from '../../lib/state/side'
 import { dragging, setDropSink } from '../../lib/state/drops'
 import { runCommand } from '../../lib/plugins'
+import { useCommands, type Command } from '../../lib/state/commands'
 import {
   activeDraft,
   nextAttachmentId,
@@ -76,6 +82,7 @@ import {
 } from '../../lib/state/drafts'
 import Icon from '../ui/Icon.vue'
 import DecisionPanel from './DecisionPanel.vue'
+import CommandMenu from './CommandMenu.vue'
 import ContextMeter from './ContextMeter.vue'
 import DocumentChip from './DocumentChip.vue'
 import ModelPicker from './ModelPicker.vue'
@@ -115,8 +122,61 @@ const canSend = computed(
       quotes.value.length > 0 ||
       attachments.value.some((a) => a.status === 'done')),
 )
+const { matching, leading } = useCommands(computed(() => !!editTarget.value))
+/** The command the draft opens with, marked behind the writing. */
+const command = computed(() => (attachments.value.length ? null : leading(draft.value)))
+/** What may follow it, until something does. */
+const commandArg = computed(() =>
+  command.value && draft.value === `/${command.value.name} ` ? (command.value.arg ?? '') : '',
+)
 /** The draft asks on the side (`/btw`), not in the conversation. */
-const btw = computed(() => !!state.sessionId && !editTarget.value && /^\/btw(\s|$)/.test(draft.value))
+const btw = computed(() => command.value?.name === 'btw')
+
+/** The name being typed after a leading slash, if that is all the draft is. */
+const commandQuery = computed(() => /^[/／、]([\w-]*)$/.exec(draft.value)?.[1] ?? null)
+const writing = ref(false)
+const menuShut = ref(false)
+const menuAt = ref(0)
+const menu = computed(() =>
+  commandQuery.value === null || menuShut.value || !writing.value || attachments.value.length
+    ? []
+    : matching(commandQuery.value),
+)
+watch(commandQuery, () => {
+  menuShut.value = false
+  menuAt.value = 0
+})
+
+function completeCommand(c: Command): void {
+  draft.value = `/${c.name} `
+  const el = textareaEl.value
+  void nextTick(() => {
+    el?.focus()
+    el?.setSelectionRange(draft.value.length, draft.value.length)
+  })
+}
+
+/** The menu's keys; true when the key was its. */
+function onMenuKey(e: KeyboardEvent): boolean {
+  const items = menu.value
+  if (!items.length || e.isComposing) return false
+  if (e.key === 'ArrowDown' || e.key === 'ArrowUp') {
+    const step = e.key === 'ArrowDown' ? 1 : -1
+    menuAt.value = (menuAt.value + step + items.length) % items.length
+  } else if (e.key === 'Escape') {
+    menuShut.value = true
+  } else if (e.key === 'Tab' || (e.key === 'Enter' && !e.shiftKey && !e.altKey)) {
+    const c = items[menuAt.value]!
+    // Enter on a name typed out in full runs it.
+    if (e.key === 'Enter' && draft.value === `/${c.name}`) return false
+    completeCommand(c)
+  } else return false
+  e.preventDefault()
+  return true
+}
+
+/** How far the writing has scrolled: the mark behind it follows. */
+const scrolled = ref(0)
 
 async function run(item: PendingAttachment): Promise<void> {
   if (!item.file) return
@@ -423,6 +483,7 @@ function restore(contents: Content[]): void {
 defineExpose({ takeBack })
 
 function onKeydown(e: KeyboardEvent): void {
+  if (onMenuKey(e)) return
   if (e.key === 'Escape' && editTarget.value) {
     e.preventDefault()
     editTarget.value = null
@@ -526,6 +587,19 @@ const sendLabel = computed(() =>
     @focusin="engaged = true"
     @click.self="textareaEl?.focus()"
   >
+    <Transition
+      enter-active-class="transition duration-150 ease-soft"
+      enter-from-class="translate-y-1 opacity-0"
+    >
+      <CommandMenu
+        v-if="menu.length"
+        :items="menu"
+        :active="menuAt"
+        :query="commandQuery ?? ''"
+        @hover="menuAt = $event"
+        @pick="completeCommand"
+      />
+    </Transition>
     <DecisionPanel v-if="!view.sub" />
     <div v-if="editTarget" class="flex items-center gap-2 pt-2 pr-2 pl-4 text-meta text-ink-2">
       <Icon name="edit" :size="13" />
@@ -600,20 +674,38 @@ const sendLabel = computed(() =>
       </div>
     </div>
     <QuoteTray />
-    <textarea
-      ref="textareaEl"
-      v-model="draft"
-      class="max-h-[240px] min-h-[calc(2lh+1rem)] resize-none rounded-none border-0 bg-transparent px-4 pb-1 text-message leading-normal transition-[min-height,max-height,padding] duration-300 ease-soft [field-sizing:content] focus:shadow-none"
-      :class="[
-        attachments.length || editTarget ? 'pt-2' : 'pt-3',
-        idle &&
-          'max-sm:max-h-[calc(1lh+1.25rem)] max-sm:min-h-[calc(1lh+1.25rem)] max-sm:overflow-hidden max-sm:py-2.5',
-        idle && isBusy && 'max-sm:pr-12',
-      ]"
-      :placeholder="placeholder"
-      @keydown="onKeydown"
-      @paste="onPaste"
-    />
+    <div class="relative flex min-h-0 flex-col">
+      <!-- the command, marked behind the writing, which stays plain text -->
+      <div
+        v-if="command"
+        aria-hidden="true"
+        class="pointer-events-none absolute inset-0 overflow-hidden px-4 pb-1 text-message leading-normal break-words whitespace-pre-wrap"
+        :class="[attachments.length || editTarget ? 'pt-2' : 'pt-3', idle && 'max-sm:py-2.5']"
+      >
+        <div :style="{ translate: `0 ${-scrolled}px` }">
+          <mark :key="command.name" class="composer-cmd" :class="command.tone && `tone-${command.tone}`"
+            >/{{ command.name }}</mark
+          ><span v-if="commandArg" class="text-ink-3">{{ ' ' + commandArg }}</span>
+        </div>
+      </div>
+      <textarea
+        ref="textareaEl"
+        v-model="draft"
+        class="relative max-h-[240px] min-h-[calc(2lh+1rem)] resize-none rounded-none border-0 bg-transparent px-4 pb-1 text-message leading-normal transition-[min-height,max-height,padding] duration-300 ease-soft [field-sizing:content] focus:shadow-none"
+        :class="[
+          attachments.length || editTarget ? 'pt-2' : 'pt-3',
+          idle &&
+            'max-sm:max-h-[calc(1lh+1.25rem)] max-sm:min-h-[calc(1lh+1.25rem)] max-sm:overflow-hidden max-sm:py-2.5',
+          idle && isBusy && 'max-sm:pr-12',
+        ]"
+        :placeholder="placeholder"
+        @keydown="onKeydown"
+        @paste="onPaste"
+        @focus="writing = true"
+        @blur="writing = false"
+        @scroll="scrolled = ($event.target as HTMLElement).scrollTop"
+      />
+    </div>
     <!-- folded: only stopping stays a single press away -->
     <Transition
       enter-active-class="transition duration-200 ease-soft"

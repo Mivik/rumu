@@ -261,6 +261,12 @@
     "bringBack": "引用到正文",
     "failed": "题外话发送失败"
   },
+  "command": {
+    "menu": "命令",
+    "compact": "压缩上下文",
+    "compactArg": "侧重点（可选）",
+    "btwArg": "问题"
+  },
   "compaction": {
     "line": "上下文已压缩 · {before} → {after} tok",
     "live": "压缩上下文 · {took}",

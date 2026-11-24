@@ -1807,6 +1807,23 @@
     border-color: color-mix(in srgb, var(--agent) 55%, var(--line));
   }
 
+  /* a slash command the draft opens with: a tinted slip behind the writing's
+   * own letters (the textarea draws them, so selection still reads) */
+  .composer-cmd {
+    --tone: var(--ink-2);
+    color: transparent;
+    border-radius: 5px;
+    background: color-mix(in srgb, var(--tone) 14%, transparent);
+    box-shadow: 0 0 0 2px color-mix(in srgb, var(--tone) 14%, transparent);
+    animation: fade 0.2s ease-out both;
+  }
+  .composer-cmd.tone-brand {
+    --tone: var(--brand);
+  }
+  .composer-cmd.tone-agent {
+    --tone: var(--agent);
+  }
+
   .composer.is-btw .composer-send:not(:disabled),
   .composer-send.is-side:not(:disabled) {
     background: var(--agent);
