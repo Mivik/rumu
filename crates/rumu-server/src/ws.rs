@@ -7,7 +7,6 @@ use std::time::Duration;
 use axum::Json;
 use axum::Router;
 use axum::body::Bytes;
-use axum::extract::ws::{Message, WebSocket, WebSocketUpgrade};
 use axum::extract::{DefaultBodyLimit, Path, Query, State};
 use axum::http::header::{
     CACHE_CONTROL, CONTENT_SECURITY_POLICY, CONTENT_TYPE, X_CONTENT_TYPE_OPTIONS,
@@ -34,6 +33,10 @@ use serde_json::{Value, json};
 use tokio::sync::broadcast::error::RecvError;
 use tokio::time::Instant;
 use tracing::warn;
+use yawc::{Frame, HttpWebSocket, IncomingUpgrade, OpCode, Options};
+
+/// The largest message a client may send (axum's own ws default).
+const WS_MESSAGE_LIMIT: usize = 64 << 20;
 
 /// The upload body limit: the largest ingest accepts, plus headroom for
 /// encoding overhead. Anything larger is axum's own 413.
@@ -228,8 +231,23 @@ async fn plugin_file(
     }
 }
 
-async fn ws_upgrade(State(state): State<AppState>, ws: WebSocketUpgrade) -> Response {
-    ws.on_upgrade(move |socket| handle_socket(state, socket))
+/// Accept a ws connection, with permessage-deflate when the client offers
+/// it (every browser does). The compressor keeps its window across
+/// messages, so what pushes repeat (the JSON-RPC envelope, branch ids)
+/// costs a few bytes after the first.
+async fn ws_upgrade(State(state): State<AppState>, ws: IncomingUpgrade) -> Response {
+    let options = Options::default()
+        .with_limits(WS_MESSAGE_LIMIT, WS_MESSAGE_LIMIT)
+        .with_balanced_compression();
+    let Ok((response, upgrade)) = ws.upgrade(options) else {
+        return StatusCode::BAD_REQUEST.into_response();
+    };
+    tokio::spawn(async move {
+        if let Ok(socket) = upgrade.await {
+            handle_socket(state, socket).await;
+        }
+    });
+    response.into_response()
 }
 
 /// `POST /blobs?name=<url-encoded file name>`: the raw request body is the
@@ -355,9 +373,9 @@ fn blob_error(e: &rumu_blob::Error) -> Response {
     (status, Json(json!({ "error": e.to_string() }))).into_response()
 }
 
-async fn handle_socket(state: AppState, socket: WebSocket) {
+async fn handle_socket(state: AppState, socket: HttpWebSocket) {
     let (mut sender, mut receiver) = socket.split();
-    let (tx, mut rx) = tokio::sync::mpsc::channel::<Message>(64);
+    let (tx, mut rx) = tokio::sync::mpsc::channel::<Frame>(64);
 
     // Single writer task owns the sink: pushes and replies share the channel.
     let writer = tokio::spawn(async move {
@@ -384,7 +402,7 @@ async fn handle_socket(state: AppState, socket: WebSocket) {
                         window::slim(&mut v["params"]["node"]);
                     }
                     for v in feed.take(v) {
-                        if tx.send(Message::Text(v.to_string().into())).await.is_err() {
+                        if tx.send(Frame::text(v.to_string())).await.is_err() {
                             break 'conn;
                         }
                     }
@@ -399,19 +417,23 @@ async fn handle_socket(state: AppState, socket: WebSocket) {
             },
             () = tokio::time::sleep_until(due), if feed.due.is_some() => {
                 for v in feed.flush() {
-                    if tx.send(Message::Text(v.to_string().into())).await.is_err() {
+                    if tx.send(Frame::text(v.to_string())).await.is_err() {
                         break 'conn;
                     }
                 }
             },
-            msg = receiver.next() => match msg {
+            // `None`: the connection closed or failed.
+            frame = receiver.next() => match frame.as_ref().map(Frame::opcode) {
                 // Requests run concurrently so a slow one (task.kill waits up
                 // to 5 s) does not block the others; replies share `tx`.
-                Some(Ok(Message::Text(text))) => {
+                Some(OpCode::Text) => {
+                    let Some(Ok(text)) = frame.map(|f| String::from_utf8(f.into_payload().to_vec())) else {
+                        break;
+                    };
                     // Answered in order, not spawned: the pushes after the
                     // reply, and the requests after it, see the new filter.
-                    if let Some(reply) = feed.control(&state.kernel, text.as_str()) {
-                        if tx.send(Message::Text(reply.to_string().into())).await.is_err() {
+                    if let Some(reply) = feed.control(&state.kernel, &text) {
+                        if tx.send(Frame::text(reply.to_string())).await.is_err() {
                             break;
                         }
                         continue;
@@ -419,13 +441,12 @@ async fn handle_socket(state: AppState, socket: WebSocket) {
                     let state = state.clone();
                     let tx = tx.clone();
                     tokio::spawn(async move {
-                        let reply = handle_request(&state, text.as_str()).await;
-                        let _ = tx.send(Message::Text(reply.into())).await;
+                        let reply = handle_request(&state, &text).await;
+                        let _ = tx.send(Frame::text(reply)).await;
                     });
                 }
-                Some(Ok(Message::Close(_))) | None => break,
-                Some(Ok(_)) => {}
-                Some(Err(_)) => break,
+                Some(OpCode::Close) | None => break,
+                Some(_) => {}
             },
         }
     }
