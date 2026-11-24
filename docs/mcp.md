@@ -1,9 +1,10 @@
 # MCP
 
-rumu is an MCP client. The user registers MCP servers in Settings, and an
-assistant uses the servers bound to it. Their tools are not in the model's
-tool list: each server is an object of the `@rumu` workspace whose actions are
-its tools, which the model finds there and runs with `invoke`.
+rumu is an MCP client. The user registers MCP servers in Settings, and a
+session uses the servers bound to its assistant and to its project. Their
+tools are not in the model's tool list: each server is an object of the
+`@rumu` workspace whose actions are its tools, which the model finds there
+and runs with `invoke`.
 
 ## Prior art
 
@@ -12,11 +13,11 @@ harnesses' own docs.
 
 | Question | Common answer | Taken here |
 | --- | --- | --- |
-| Where servers are defined | Globally (Codex, OpenCode, Cline); some also inline per agent (Claude Code, Gemini CLI, Copilot) | Globally, per user; an assistant names the ones it uses |
+| Where servers are defined | Globally (Codex, OpenCode, Cline); some also inline per agent (Claude Code, Gemini CLI, Copilot) | Globally, per user; an assistant and a project name the ones they use |
 | Many tools | Deferred: names first, schemas on demand (Claude Code `ToolSearch`, OpenAI `tool_search`) | Always deferred, through `@rumu:/mcp` |
 | Loading a found tool | Provider-native: the schema is injected into the conversation and the tool called by name | Not portable across providers, so the generic `invoke` |
 | Tool naming | `mcp__<server>__<tool>` (Claude Code), `<server>_<tool>` (OpenCode) | `<server>/<tool>`, the action's full name |
-| Approval | Per tool or per server, varies | None: binding a server to an assistant authorizes it |
+| Approval | Per tool or per server, varies | None: binding a server to an assistant or a project authorizes it |
 | Narrowing a server's tools | Allow and deny lists per server (Codex `enabled_tools`/`disabled_tools`) | Rules per binding, as for models |
 
 ## Servers
@@ -50,7 +51,7 @@ harnesses' own docs.
 - OAuth is not supported yet: a server that needs it takes a token in
   `headers`.
 
-## Assistants
+## Assistants and projects
 
 - An assistant's `deck.yaml` names the servers it uses, each with the rules
   enabling its tools, set on the assistant page:
@@ -68,19 +69,25 @@ harnesses' own docs.
   `!tool`, so tools the server adds later are in; checking from none adds
   the tool's name, so they are out.
 
-- A session uses its assistant's servers as `deck.yaml` has them now, so
-  changing the assistant reaches its running sessions at their next model
-  call. An `ask` session uses the asked assistant's.
+- A project deck's `deck.yaml` has the same `mcp`, set in the project's
+  dialog: the servers the sessions in the project use besides their
+  assistant's. A deck the session only borrows adds none.
+- A session uses the servers of both, as their `deck.yaml` have them now,
+  so changing either reaches its running sessions at their next model call,
+  and so does moving the session into or out of a project. A server both
+  bind has the tools either's rules enable: the rules of one never take
+  away a tool the other enables. An `ask` session uses the asked
+  assistant's.
 - A name that is not (or no longer) in Settings stays in `deck.yaml` and
   shows as unavailable, on the assistant page and to the model.
 - Calls need no approval. Like a `deck.yaml` mount, binding a server is the
-  user's decision that the assistant may use it.
+  user's decision that the session may use it.
 
 ## The model's view
 
 - The first model call of a path whose session has servers gets a note
   listing them: name, status, tool count, and the server's own
-  `instructions` (capped). When the assistant's set of servers changes, the
+  `instructions` (capped). When the session's set of servers changes, the
   next model call gets the list again, or a note that none is left.
 - `@rumu:/mcp` holds the session's servers. A server is an object and its
   tools are its actions, named `<server>/<tool>` (a tool is not a path):

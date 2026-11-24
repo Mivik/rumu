@@ -253,8 +253,9 @@ mounts:
 allow_ask: [scout]         # assistants, by name
 ```
 
-A project has `icon`, `private` and `workspaces` (ordered, the first its
-default); a plain deck has `private`; an assistant also has its mascot,
+A project has `icon`, `private`, `workspaces` (ordered, the first its
+default), and `mcp` and `skills`, which its sessions use besides their
+assistant's; a plain deck has `private`; an assistant also has its mascot,
 `cat`. Pinned cards (persona, charter) are cards, not fields.
 
 - A write must follow a read of the deck as it is now (like a card); a field
@@ -273,14 +274,15 @@ default); a plain deck has `private`; an assistant also has its mascot,
 | `mounts` or `allow_ask` of any deck, its own included       | asked every time, once only |
 | its own assistant's `model`, `skills`, `cat`                | none                        |
 | its own assistant's `mcp`                                   | `configure`                 |
-| the session's project's `workspaces`, `icon`, name          | none                        |
+| the session's project's `workspaces`, `icon`, `skills`, name | none                       |
+| the session's project's `mcp`                               | `configure`                 |
 | `private` of any deck                                       | `configure`                 |
 | anything of another deck                                    | `configure`                 |
 
 - `mounts` and `allow_ask` are themselves grants, so no earlier answer
   covers a change to them and the user is offered only "allow once".
-- `configure` is not implied for the assistant's own deck: its MCP servers
-  are tools it would give itself.
+- `configure` is not implied for the assistant's own deck or the session's
+  project: their MCP servers are tools it would give itself.
 - Creating a deck lets the creating session mount it and write it without
   asking again.
 

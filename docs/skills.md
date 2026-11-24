@@ -4,8 +4,8 @@ A skill is a directory with a `SKILL.md`, in the
 [Agent Skills](https://agentskills.io/specification) format: YAML frontmatter
 with a `name` and a `description` (what it does and when to use it), then
 instructions, and any files beside it (`scripts/`, `references/`, …). rumu
-finds the skills on its host, an assistant enables some of them, and the
-model reads one when a task matches its description.
+finds the skills on its host, a session's assistant and project enable some
+of them, and the model reads one when a task matches its description.
 
 ## Prior art
 
@@ -13,7 +13,8 @@ Read from the Agent Skills specification and its guide for clients.
 
 | Question | Common answer | Taken here |
 | --- | --- | --- |
-| Where skills are found | User-level `~/.<client>/skills`, `~/.agents/skills`; project-level `.agents/skills` | rumu's installed repositories, `~/.agents/skills`, `~/.claude/skills`; not project-level yet |
+| Where skills are found | User-level `~/.<client>/skills`, `~/.agents/skills`; project-level `.agents/skills` | rumu's installed repositories, `~/.agents/skills`, `~/.claude/skills`; not in workspaces yet |
+| Enabling per project | Repository files (`skillOverrides`, `[[skills.config]]`) | A project deck's rules, added to its assistant's |
 | What the model sees first | Each skill's name and description, in the system prompt or an activation tool's description | A first-call note |
 | Loading one | The file-read tool on its `SKILL.md`, or an `activate_skill` tool | `read @rumu:/skills/<name>` |
 | Name collisions | Deterministic precedence, the shadowed one reported | First found wins; Settings marks the others |
@@ -47,7 +48,7 @@ Read from the Agent Skills specification and its guide for clients.
 - The clone is the record: Settings shows its `origin`, pulls it
   (fast-forward only) and deletes it. Nothing is written to `settings.yaml`.
 
-## Assistants
+## Assistants and projects
 
 - An assistant's `deck.yaml` has the rules enabling skills, set on the
   assistant page:
@@ -59,9 +60,15 @@ Read from the Agent Skills specification and its guide for clients.
   The rules work like a provider's model rules ([MCP](mcp.md) tools use
   them too): `*` matches any run of characters, `!` excludes, and a rule
   naming a skill wins over a pattern. None enables nothing.
-- A session uses its assistant's rules as `deck.yaml` has them now, and
-  the skills are read live, so changing either reaches its running sessions
-  at their next model call. An `ask` session uses the asked assistant's.
+- A project deck's `deck.yaml` has the same `skills`, set in the project's
+  dialog: the skills the sessions in the project use besides their
+  assistant's. A deck the session only borrows adds none.
+- A session uses the rules of both as their `deck.yaml` have them now, and
+  the skills are read live, so changing any of them, or moving the session
+  into or out of a project, reaches its running sessions at their next
+  model call. A skill either enables is enabled: the rules of one never
+  take away a skill the other enables. An `ask` session uses the asked
+  assistant's.
 - A rule naming a skill that is no longer found stays in `deck.yaml` and
   shows as unavailable on the assistant page.
 
@@ -84,8 +91,8 @@ Read from the Agent Skills specification and its guide for clients.
 
 ## Not yet
 
-- Project-level skills (`.agents/skills` in a workspace). The model can
-  find and read them itself.
+- Skills in a workspace's `.agents/skills`. The model can find and read
+  them itself.
 - Activating a skill from the composer (`/name`).
 - Keeping a read skill through compaction: after one, the note lists the
   skills again and the model reads one again when it needs it.

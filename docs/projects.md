@@ -24,6 +24,11 @@ An assistant works in any project.
   from the id among the first five. It lives in `deck.yaml` because it travels
   with the deck.
 
+- A project's `deck.yaml` can also bind [MCP servers](mcp.md) (`mcp`) and
+  enable [skills](skills.md) (`skills`), with the same rules as an
+  assistant's. The sessions in the project use them besides their
+  assistant's: what either enables is enabled.
+
 - The user creates a project in the web UI, either from a folder (the project
   is named after it and the folder is mounted) or blank. An assistant creates
   one with the user's approval (see [Agent control](#agent-control)).
@@ -63,11 +68,12 @@ An assistant works in any project.
   taken), and the mount marker says it is the project (`project: true`). A
   path has at most one such mount.
 - Any other deck mounts beside it, another project's deck too: a plain mount
-  (`project: false`) that leaves the session's project, its sidebar group and
-  its default workspace as they are. Its cards are writable as any mounted
-  deck's, with the `write` approval, and the mount lists its workspaces
-  (every registered workspace is addressable anyway). This is how a session
-  works across two projects: it belongs to one and borrows the other.
+  (`project: false`) that leaves the session's project, its sidebar group,
+  its default workspace and its MCP servers and skills as they are. Its cards
+  are writable as any mounted deck's, with the `write` approval, and the
+  mount lists its workspaces (every registered workspace is addressable
+  anyway). This is how a session works across two projects: it belongs to
+  one and borrows the other.
 - A session starts in the project it was created in. Created without one, a
   session of an assistant whose `deck.yaml` mounts a project deck is in that
   project (the first such mount); created in another project, that default
@@ -222,7 +228,9 @@ Which set a workspace is in shows in its path, not in a field:
   project's), and the workspaces: add a folder (registered, named
   after it, when the dialog is submitted) or, secondarily, a registered
   workspace; a new project takes the first one's name; reorder (the first is
-  the default), remove. A new project is where the next new session starts.
+  the default), remove. Last come the MCP servers and skills its sessions use
+  besides their assistant's, chosen as on the assistant page. A new project
+  is where the next new session starts.
 - A new session picks one assistant and one project, by default the project
   in view and the assistant last used in it. Assistants are listed in that
   picker and managed in the library.
