@@ -225,13 +225,14 @@ impl Kernel {
     /// arrives via pushes; the main line is returned immediately.
     pub async fn regenerate(
         self: &Arc<Self>,
+        session: &SessionId,
         node: &NodeId,
         choice: Choice,
         stop: bool,
     ) -> Result<Branch> {
         let n = self
             .store
-            .get_node(node)?
+            .get_node(session, node)?
             .ok_or_else(|| Error::NodeNotFound(node.clone()))?;
         let content = match &n.body {
             NodeBody::User { content } => content.clone(),

@@ -1252,7 +1252,7 @@ async fn regenerate_replays_the_prompt_attachments() {
         }),
         noop_tools(),
     ));
-    let (kernel, _llm, _s, branch) = setup(
+    let (kernel, _llm, s, branch) = setup(
         vec![plugin],
         vec![LlmResponse::text("first"), LlmResponse::text("again")],
     )
@@ -1277,7 +1277,7 @@ async fn regenerate_replays_the_prompt_attachments() {
         .id;
 
     let regenerated = kernel
-        .regenerate(&prompt_node, Default::default(), false)
+        .regenerate(&s, &prompt_node, Default::default(), false)
         .await
         .unwrap();
     let _ = collect_turn(&mut rx, regenerated.id.0.as_str()).await;
@@ -1698,7 +1698,7 @@ async fn retry_does_not_bypass_a_refused_prompt() {
         }),
         noop_tools(),
     ));
-    let (kernel, llm, _s, branch) = setup(vec![plugin], vec![LlmResponse::text("first")]).await;
+    let (kernel, llm, s, branch) = setup(vec![plugin], vec![LlmResponse::text("first")]).await;
 
     let (_, nodes, _) = run_turn(&kernel, &branch, "hello").await;
     let prompt = nodes
@@ -1711,7 +1711,7 @@ async fn retry_does_not_bypass_a_refused_prompt() {
 
     let mut rx = kernel.tap_pushes();
     let regenerated = kernel
-        .regenerate(&prompt, Default::default(), false)
+        .regenerate(&s, &prompt, Default::default(), false)
         .await
         .unwrap();
     let (done, _) = collect_turn(&mut rx, regenerated.id.0.as_str()).await;
@@ -2894,9 +2894,9 @@ async fn session_project_follows_the_main_line() {
     );
 
     // `fork_session` copies the project from the path it copies.
-    let copy = kernel.fork_session(&head).unwrap();
+    let copy = kernel.fork_session(&s.id, &head).unwrap();
     assert_eq!(copy.project.as_deref(), Some("proj-deck"));
-    let copy_none = kernel.fork_session(&root).unwrap();
+    let copy_none = kernel.fork_session(&s.id, &root).unwrap();
     assert_eq!(copy_none.project, None);
 }
 
@@ -3667,7 +3667,7 @@ async fn regenerate_moves_the_main_line() {
 
     let mut rx = kernel.tap_pushes();
     let regenerated = kernel
-        .regenerate(&prompt, Default::default(), false)
+        .regenerate(&session, &prompt, Default::default(), false)
         .await
         .unwrap();
     wait_turn(&mut rx, Some(regenerated.id.0.as_str())).await;
@@ -3984,7 +3984,7 @@ async fn fork_session_copies_the_path_into_a_new_session() {
         })
         .unwrap();
 
-    let forked = kernel.fork_session(&invoke.id).unwrap();
+    let forked = kernel.fork_session(&session.id, &invoke.id).unwrap();
     assert_ne!(forked.id, session.id);
     assert_eq!(forked.title, "hello", "the source session's title");
 
@@ -4043,7 +4043,7 @@ async fn fork_session_copies_the_path_into_a_new_session() {
         .expect("the turn made a tool call")
         .id
         .clone();
-    let err = kernel.fork_session(&with_calls).unwrap_err();
+    let err = kernel.fork_session(&session.id, &with_calls).unwrap_err();
     assert!(
         matches!(err, rumu_kernel::Error::UnsafeBranchPoint),
         "{err:#}"

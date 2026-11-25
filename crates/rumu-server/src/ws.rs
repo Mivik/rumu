@@ -1528,8 +1528,9 @@ which you can read, edit and `show`.",
         }
 
         "session.fork" => {
+            let session: SessionId = str_param(p, "session")?.into();
             let node: NodeId = str_param(p, "node")?.into();
-            let session = kernel.fork_session(&node)?;
+            let session = kernel.fork_session(&session, &node)?;
             Ok(json!({ "session": session }))
         }
 
@@ -1662,9 +1663,10 @@ which you can read, edit and `show`.",
         }
 
         "branch.regenerate" => {
+            let session: SessionId = str_param(p, "session")?.into();
             let node: NodeId = str_param(p, "node")?.into();
             let branch = kernel
-                .regenerate(&node, parse_params(p)?, stop_param(p))
+                .regenerate(&session, &node, parse_params(p)?, stop_param(p))
                 .await?;
             Ok(json!({ "branch": branch }))
         }

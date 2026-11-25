@@ -7,7 +7,7 @@
 use std::collections::{HashMap, HashSet};
 
 use rumu_core::{
-    Branch, BranchId, BranchKind, Node, NodeBody, NodeId, TaskId, TaskKind, Timestamp,
+    Branch, BranchId, BranchKind, Node, NodeBody, NodeId, SessionId, TaskId, TaskKind, Timestamp,
 };
 
 use crate::{Inner, Kernel, Result};
@@ -208,15 +208,21 @@ impl Anchors {
 }
 
 impl Kernel {
-    /// The nodes from the root down to `node`.
-    pub(crate) fn ancestry(&self, node: &NodeId) -> Result<HashSet<NodeId>> {
-        let mut out = HashSet::new();
-        let mut cur = Some(node.clone());
-        while let Some(id) = cur {
-            cur = self.store.get_node(&id)?.and_then(|n| n.parent);
-            out.insert(id);
-        }
-        Ok(out)
+    /// The nodes of `session` from the root down to `node`.
+    pub(crate) fn ancestry(&self, session: &SessionId, node: &NodeId) -> Result<HashSet<NodeId>> {
+        let walk = |nodes: &HashMap<NodeId, Node>| {
+            let mut out = HashSet::new();
+            let mut cur = Some(node);
+            while let Some(id) = cur {
+                cur = nodes.get(id).and_then(|n| n.parent.as_ref());
+                out.insert(id.clone());
+            }
+            out
+        };
+        Ok(self
+            .store
+            .with_tree(session, |_, nodes, _| walk(nodes))?
+            .unwrap_or_else(|| HashSet::from([node.clone()])))
     }
 
     /// Whether the sub-agent `agent`, a child of the main line `main`, came
@@ -227,7 +233,7 @@ impl Kernel {
         let Some(anchor) = anchors.agent(agent) else {
             return Ok(false);
         };
-        Ok(!self.ancestry(&main.head)?.contains(anchor))
+        Ok(!self.ancestry(&main.session, &main.head)?.contains(anchor))
     }
 
     /// The nodes its sub-agents and side questions added to a session: each

@@ -346,7 +346,10 @@ export function startSessionIn(project: string | null, assistant?: string): void
  */
 export async function forkSession(node: NodeId): Promise<void> {
   try {
-    const res = await rumu.request<{ session: SessionInfo }>('session.fork', { node })
+    const res = await rumu.request<{ session: SessionInfo }>('session.fork', {
+      session: state.session?.id,
+      node,
+    })
     await openSession(res.session.id)
   } catch (err) {
     toast('error', t('errors.forkSession'), (err as Error).message)
@@ -469,7 +472,12 @@ export async function regenerateFrom(nodeId: NodeId): Promise<void> {
   try {
     const choice = composerChoice()
     const res = await withStop((stop) =>
-      rumu.request<{ branch: Branch }>('branch.regenerate', { node: nodeId, ...choice, stop }),
+      rumu.request<{ branch: Branch }>('branch.regenerate', {
+        session: state.session?.id,
+        node: nodeId,
+        ...choice,
+        stop,
+      }),
     )
     if (!res) return
     settlePicks()

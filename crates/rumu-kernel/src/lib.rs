@@ -1378,20 +1378,7 @@ impl Kernel {
     /// Did the last turn on `branch` end in an error? Its [`TurnError`]
     /// marker is the last node of the line, but for notes written after it.
     fn ended_in_error(&self, branch: &BranchId) -> bool {
-        let Ok(Some(b)) = self.store.get_branch(branch) else {
-            return false;
-        };
-        let mut id = Some(b.head);
-        while let Some(node) = id.and_then(|id| self.store.get_node(&id).ok().flatten()) {
-            match &node.body {
-                NodeBody::Note { content, .. } if content.decode::<TurnError>().is_some() => {
-                    return true;
-                }
-                NodeBody::Note { .. } => id = node.parent,
-                _ => return false,
-            }
-        }
-        false
+        self.store.line_failed(branch).unwrap_or(false)
     }
 
     /// Shared post-turn cleanup: record a terminal failure, release the loop
@@ -1644,8 +1631,7 @@ impl Kernel {
         }
         let n = self
             .store
-            .get_node(node)?
-            .filter(|n| n.session == b.session)
+            .get_node(&b.session, node)?
             .ok_or_else(|| Error::NodeNotFound(node.clone()))?;
         Self::check_safe_point(&n)?;
         if self.off_line_nodes(&b.session)?.contains(node) {
@@ -1653,7 +1639,7 @@ impl Kernel {
         }
         let subtree = self.branch_subtree(branch)?;
         let anchors = self.anchors(&b)?;
-        let kept = self.ancestry(node)?;
+        let kept = self.ancestry(&b.session, node)?;
         {
             // Checked and moved under one lock: no turn or task starts between.
             let mut inner = self.inner.lock().unwrap();
@@ -1759,10 +1745,10 @@ impl Kernel {
     /// tool call on the path ride along; sub-agent branches do not — their
     /// `agent` call rows simply keep the result they produced. The source
     /// session is untouched.
-    pub fn fork_session(&self, node: &NodeId) -> Result<SessionInfo> {
+    pub fn fork_session(&self, session: &SessionId, node: &NodeId) -> Result<SessionInfo> {
         let n = self
             .store
-            .get_node(node)?
+            .get_node(session, node)?
             .ok_or_else(|| Error::NodeNotFound(node.clone()))?;
         Self::check_safe_point(&n)?;
         let src = self

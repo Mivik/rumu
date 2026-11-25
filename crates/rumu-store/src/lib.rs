@@ -40,14 +40,20 @@
 //! skipped when unset, so the format can grow without migrations; records
 //! with an unknown tag (e.g. a retired record type) are ignored.
 //!
-//! [`Store::open`] scans the directory once and folds every file up front —
-//! the simple robust option at this scale (a session is a few hundred lines).
-//! The cache is authoritative afterwards (single process): reads never touch
-//! the disk again, and each mutation appends exactly one line with a single
-//! `write_all` (the file is reopened in append mode per write; no fsync — a
-//! crash loses at most the tail). Id-only lookups (`get_node`, `get_branch`)
-//! route through node→session / branch→session indexes built during the scan
-//! and maintained on inserts.
+//! [`Store::open`] scans the directory once and folds every file, but keeps
+//! only each session's skeleton: its info, branches and tasks, the blobs its
+//! nodes reference, and whether its main line ended in an error. The nodes
+//! are read from the journal again when something first needs them (outside
+//! the store's lock), and an idle session's nodes are dropped again,
+//! least recently used first, while the journals of the sessions in memory
+//! exceed the store's budget ([`DEFAULT_BUDGET`]). A session that is doing
+//! something ([`SessionStatus`] other than idle or failed) keeps its nodes.
+//! Appending a node loads them first, so the nodes in memory always match the
+//! journal. The state is authoritative otherwise (single process): each
+//! mutation appends exactly one line with a single `write_all` (the file is
+//! reopened in append mode per write; no fsync — a crash loses at most the
+//! tail). A node is looked up within its session; `get_branch` routes through
+//! a branch→session index built during the scan and maintained on inserts.
 //!
 //! A crash mid-append can tear the last line; on load it is dropped with a
 //! warning and truncated so the next append starts on a clean line. Any other
@@ -62,23 +68,29 @@ pub use error::{Error, Result};
 use std::collections::{BTreeMap, HashMap, HashSet};
 use std::io::Write;
 use std::path::{Path, PathBuf};
-use std::sync::Mutex;
+use std::sync::{Mutex, MutexGuard};
 
 use rumu_core::{
     Artifact, Branch, BranchId, BranchKind, BranchStatus, IoError, McpApp, Node, NodeBody, NodeId,
-    SessionId, SessionInfo, SessionStatus, TaskId, TaskInfo, Timestamp,
+    SessionId, SessionInfo, SessionStatus, TaskId, TaskInfo, Timestamp, TurnError,
 };
 use serde::{Deserialize, Serialize};
 use serde_json::Value;
 use tracing::warn;
 
 pub struct Store {
-    /// Directory of `<session-id>.jsonl` files; `None` for in-memory stores.
+    /// Directory of `<session-id>.jsonl` files; `None` for in-memory stores
+    /// (which keep every node).
     root: Option<PathBuf>,
     /// The `seen.json` file; `None` for in-memory stores.
     seen_path: Option<PathBuf>,
+    /// The most journal bytes whose nodes idle sessions keep in memory.
+    budget: u64,
     state: Mutex<StoreState>,
 }
+
+/// The default [`Store::with_budget`]: about 100 MB of nodes in memory.
+pub const DEFAULT_BUDGET: u64 = 64 << 20;
 
 /// Reads a present field as its inner `Option`: an absent field (handled by
 /// `#[serde(default)]`) means "unchanged", an explicit `null` means "clear
@@ -144,10 +156,13 @@ enum Record {
 #[derive(Default)]
 struct StoreState {
     sessions: HashMap<SessionId, Entry>,
-    /// Id-only lookups (`get_node` / `get_branch`) route through these; they
-    /// are built during the open scan and kept current on inserts.
-    node_owner: HashMap<NodeId, SessionId>,
+    /// `get_branch` routes through this; built during the open scan and kept
+    /// current on inserts.
     branch_owner: HashMap<BranchId, SessionId>,
+    /// Journal bytes of the sessions whose nodes are in memory.
+    loaded_bytes: u64,
+    /// Ticks on every use of a session's nodes: the eviction order.
+    clock: u64,
     /// When the user last looked at each session (`seen.json`).
     seen: BTreeMap<SessionId, Timestamp>,
     /// What each session not idle is doing (`SessionInfo::status`); set by
@@ -165,10 +180,22 @@ enum Entry {
 struct SessionState {
     info: SessionInfo,
     branches: HashMap<BranchId, Branch>,
-    nodes: HashMap<NodeId, Node>,
     /// Background tasks by id, oldest first when read (see
     /// [`Store::tasks_of`]); their status is the latest record's.
     tasks: HashMap<TaskId, TaskInfo>,
+    /// Every blob a node references (see [`Store::referenced_blobs`]).
+    blobs: HashSet<String>,
+    /// The nodes; `None` while only the skeleton is in memory.
+    nodes: Option<HashMap<NodeId, Node>>,
+    /// The journal's size: roughly what its nodes cost in memory.
+    bytes: u64,
+    /// Bumped on every node append, so a load that raced one is dropped.
+    node_gen: u64,
+    /// [`StoreState::clock`] when the nodes were last used.
+    used: u64,
+    /// [`Store::line_failed`] of the main line when the nodes were dropped:
+    /// the branch, its head then, and the answer.
+    failed: Option<(BranchId, NodeId, bool)>,
 }
 
 impl Store {
@@ -198,6 +225,7 @@ impl Store {
         Ok(Self {
             root: Some(root.to_path_buf()),
             seen_path: Some(seen.to_path_buf()),
+            budget: DEFAULT_BUDGET,
             state: Mutex::new(state),
         })
     }
@@ -207,15 +235,107 @@ impl Store {
         Self {
             root: None,
             seen_path: None,
+            budget: DEFAULT_BUDGET,
             state: Mutex::new(StoreState::default()),
         }
     }
 
-    /// Append one record as a single line (one buffered `write_all`).
-    /// In-memory stores have no files.
-    fn append(&self, session: &SessionId, rec: &Record) -> Result<()> {
+    /// Keep the nodes of idle sessions in memory only while their journals
+    /// add up to at most `bytes`.
+    pub fn with_budget(mut self, bytes: u64) -> Self {
+        self.budget = bytes;
+        self
+    }
+
+    fn journal(&self, session: &SessionId) -> Option<PathBuf> {
+        Some(self.root.as_ref()?.join(format!("{session}.jsonl")))
+    }
+
+    /// Lock the state with `session`'s nodes in memory, reading them from its
+    /// journal first (outside the lock) when they are not. `Ok(None)`: no
+    /// such session.
+    fn lock_nodes(&self, session: &SessionId) -> Result<Option<MutexGuard<'_, StoreState>>> {
+        loop {
+            let (path, generation) = {
+                let mut st = self.state.lock().unwrap();
+                st.clock += 1;
+                let clock = st.clock;
+                match st.sessions.get_mut(session) {
+                    None => return Ok(None),
+                    Some(Entry::Corrupt(msg)) => return Err(unreadable(session, msg)),
+                    Some(Entry::Loaded(s)) if s.nodes.is_some() => {
+                        s.used = clock;
+                        return Ok(Some(st));
+                    }
+                    Some(Entry::Loaded(s)) => match self.journal(session) {
+                        Some(path) => (path, s.node_gen),
+                        None => {
+                            s.nodes = Some(HashMap::new());
+                            return Ok(Some(st));
+                        }
+                    },
+                }
+            };
+            let nodes = read_nodes(session, &path)?;
+            let mut guard = self.state.lock().unwrap();
+            let st = &mut *guard;
+            match st.sessions.get_mut(session) {
+                None => return Ok(None),
+                Some(Entry::Corrupt(msg)) => return Err(unreadable(session, msg)),
+                Some(Entry::Loaded(s)) if s.nodes.is_some() => return Ok(Some(guard)),
+                // A node landed while the journal was read: read it again.
+                Some(Entry::Loaded(s)) if s.node_gen != generation => continue,
+                Some(Entry::Loaded(s)) => {
+                    s.nodes = Some(nodes);
+                    st.loaded_bytes += s.bytes;
+                    self.evict(st, Some(session));
+                    return Ok(Some(guard));
+                }
+            }
+        }
+    }
+
+    /// Drop the nodes of idle sessions, least recently used first, until
+    /// the ones in memory fit the budget. `keep` and busy sessions stay.
+    fn evict(&self, st: &mut StoreState, keep: Option<&SessionId>) {
+        if self.root.is_none() {
+            return;
+        }
+        while st.loaded_bytes > self.budget {
+            let StoreState {
+                sessions, status, ..
+            } = &*st;
+            let busy = |id: &SessionId| {
+                !matches!(
+                    status.get(id).copied().unwrap_or_default(),
+                    SessionStatus::Idle | SessionStatus::Failed
+                )
+            };
+            let victim = sessions
+                .iter()
+                .filter_map(|(id, e)| match e {
+                    Entry::Loaded(s) if s.nodes.is_some() && Some(id) != keep && !busy(id) => {
+                        Some((s.used, id))
+                    }
+                    _ => None,
+                })
+                .min_by_key(|(used, _)| *used)
+                .map(|(_, id)| id.clone());
+            let Some(id) = victim else {
+                break;
+            };
+            if let Some(Entry::Loaded(s)) = st.sessions.get_mut(&id) {
+                s.unload();
+                st.loaded_bytes -= s.bytes;
+            }
+        }
+    }
+
+    /// Append one record as a single line (one buffered `write_all`),
+    /// returning its length. In-memory stores have no files.
+    fn append(&self, session: &SessionId, rec: &Record) -> Result<u64> {
         let Some(root) = &self.root else {
-            return Ok(());
+            return Ok(0);
         };
         let mut line = serde_json::to_string(rec).map_err(|source| Error::Serialize {
             session: session.clone(),
@@ -230,7 +350,7 @@ impl Store {
             .map_err(IoError::at("opening", &path))?;
         file.write_all(line.as_bytes())
             .map_err(IoError::at("appending to", &path))?;
-        Ok(())
+        Ok(line.len() as u64)
     }
 
     /// Rewrite `seen.json` from `seen` (a temp file renamed over it).
@@ -257,11 +377,14 @@ impl Store {
             status: SessionStatus::Idle,
             ..s.clone()
         };
-        self.append(&s.id, &Record::Session(info.clone()))?;
-        st.sessions.insert(
-            s.id.clone(),
-            Entry::Loaded(Box::new(SessionState::new(info))),
-        );
+        let bytes = self.append(&s.id, &Record::Session(info.clone()))?;
+        let mut state = SessionState::new(info);
+        state.bytes = bytes;
+        st.clock += 1;
+        state.used = st.clock;
+        st.loaded_bytes += bytes;
+        st.sessions
+            .insert(s.id.clone(), Entry::Loaded(Box::new(state)));
         if let Some(at) = s.seen_at {
             st.seen.insert(s.id.clone(), at);
             self.save_seen(&st.seen)?;
@@ -309,8 +432,8 @@ impl Store {
             project: Some(s.project.clone()),
             updated_at: Some(s.updated_at),
         };
-        self.append(&s.id, &rec)?;
-        st.apply(&s.id, rec);
+        let bytes = self.append(&s.id, &rec)?;
+        st.apply(&s.id, rec, bytes);
         Ok(())
     }
 
@@ -348,8 +471,8 @@ impl Store {
             for branch in s.branches.keys() {
                 st.branch_owner.remove(branch);
             }
-            for node in s.nodes.keys() {
-                st.node_owner.remove(node);
+            if s.nodes.is_some() {
+                st.loaded_bytes -= s.bytes;
             }
         }
         st.status.remove(id);
@@ -360,6 +483,7 @@ impl Store {
     }
 
     /// Record what `id` is doing; true when that changed.
+    /// A session that settles may have its nodes dropped now.
     pub fn set_status(&self, id: &SessionId, status: SessionStatus) -> bool {
         let mut st = self.state.lock().unwrap();
         let old = if status.is_idle() || !st.sessions.contains_key(id) {
@@ -367,6 +491,9 @@ impl Store {
         } else {
             st.status.insert(id.clone(), status)
         };
+        if matches!(status, SessionStatus::Idle | SessionStatus::Failed) {
+            self.evict(&mut st, None);
+        }
         old.unwrap_or_default() != status
     }
 
@@ -380,8 +507,8 @@ impl Store {
             return Ok(());
         }
         let rec = Record::Branch(b.clone());
-        self.append(&b.session, &rec)?;
-        st.apply(&b.session, rec);
+        let bytes = self.append(&b.session, &rec)?;
+        st.apply(&b.session, rec, bytes);
         Ok(())
     }
 
@@ -410,8 +537,8 @@ impl Store {
             head: None,
             status: Some(status),
         };
-        self.append(&sid, &rec)?;
-        st.apply(&sid, rec);
+        let bytes = self.append(&sid, &rec)?;
+        st.apply(&sid, rec, bytes);
         Ok(())
     }
 
@@ -430,8 +557,8 @@ impl Store {
             head: Some(head.clone()),
             status: None,
         };
-        self.append(&sid, &rec)?;
-        st.apply(&sid, rec);
+        let bytes = self.append(&sid, &rec)?;
+        st.apply(&sid, rec, bytes);
         Ok(())
     }
 
@@ -448,8 +575,8 @@ impl Store {
             data: None,
             ..task.clone()
         }));
-        self.append(&task.session, &rec)?;
-        st.apply(&task.session, rec);
+        let bytes = self.append(&task.session, &rec)?;
+        st.apply(&task.session, rec, bytes);
         Ok(())
     }
 
@@ -503,30 +630,63 @@ impl Store {
     }
 
     fn put_node(&self, branch: Option<BranchId>, n: &Node) -> Result<()> {
-        let mut st = self.state.lock().unwrap();
-        // See `insert_branch`: a deleted session stays deleted.
-        if st.loaded(&n.session)?.is_none() {
+        // With the nodes in memory, so they keep matching the journal. See
+        // `insert_branch`: a deleted session stays deleted.
+        let Some(mut st) = self.lock_nodes(&n.session)? else {
             return Ok(());
-        }
+        };
         let rec = Record::Node {
             branch,
             node: Box::new(n.clone()),
         };
-        self.append(&n.session, &rec)?;
-        st.apply(&n.session, rec);
+        let bytes = self.append(&n.session, &rec)?;
+        st.apply(&n.session, rec, bytes);
         Ok(())
     }
 
-    pub fn get_node(&self, id: &NodeId) -> Result<Option<Node>> {
-        let st = self.state.lock().unwrap();
-        let Some(sid) = st.node_owner.get(id) else {
+    /// The node `id` of `session`.
+    pub fn get_node(&self, session: &SessionId, id: &NodeId) -> Result<Option<Node>> {
+        let Some(st) = self.lock_nodes(session)? else {
             return Ok(None);
         };
-        Ok(match st.sessions.get(sid) {
-            Some(Entry::Loaded(s)) => s.nodes.get(id).cloned(),
-            Some(Entry::Corrupt(msg)) => return Err(unreadable(sid, msg)),
-            None => None,
-        })
+        Ok(st.nodes_of(session).get(id).cloned())
+    }
+
+    /// Did the last turn on `branch` end in an error? Its [`TurnError`]
+    /// marker is the last node of the line, but for notes written after it.
+    /// An idle session whose main line has not moved since its nodes were
+    /// dropped answers without reading them. `false` for an unknown branch.
+    pub fn line_failed(&self, branch: &BranchId) -> Result<bool> {
+        let session = {
+            let st = self.state.lock().unwrap();
+            let Some(sid) = st.branch_owner.get(branch) else {
+                return Ok(false);
+            };
+            let s = match st.sessions.get(sid) {
+                Some(Entry::Loaded(s)) => s,
+                Some(Entry::Corrupt(msg)) => return Err(unreadable(sid, msg)),
+                None => return Ok(false),
+            };
+            let Some(b) = s.branches.get(branch) else {
+                return Ok(false);
+            };
+            match (&s.nodes, &s.failed) {
+                (Some(nodes), _) => return Ok(line_failed(nodes, &b.head)),
+                (None, Some((id, head, failed))) if id == branch && *head == b.head => {
+                    return Ok(*failed);
+                }
+                _ => sid.clone(),
+            }
+        };
+        let Some(st) = self.lock_nodes(&session)? else {
+            return Ok(false);
+        };
+        let Some(Entry::Loaded(s)) = st.sessions.get(&session) else {
+            return Ok(false);
+        };
+        Ok(s.branches
+            .get(branch)
+            .is_some_and(|b| line_failed(st.nodes_of(&session), &b.head)))
     }
 
     /// The nodes from a session's root down to `head`, root first, or `None`
@@ -536,16 +696,14 @@ impl Store {
     ///
     /// [`nodes_of_session`]: Self::nodes_of_session
     pub fn path_to(&self, session: &SessionId, head: &NodeId) -> Result<Option<Vec<Node>>> {
-        let st = self.state.lock().unwrap();
-        let s = match st.sessions.get(session) {
-            Some(Entry::Loaded(s)) => s,
-            Some(Entry::Corrupt(msg)) => return Err(unreadable(session, msg)),
-            None => return Ok(None),
+        let Some(st) = self.lock_nodes(session)? else {
+            return Ok(None);
         };
+        let nodes = st.nodes_of(session);
         let mut path = vec![];
         let mut cur = Some(head);
         while let Some(id) = cur {
-            let Some(n) = s.nodes.get(id) else {
+            let Some(n) = nodes.get(id) else {
                 return Ok(None);
             };
             path.push(n.clone());
@@ -563,26 +721,23 @@ impl Store {
         session: &SessionId,
         f: impl FnOnce(&SessionInfo, &HashMap<NodeId, Node>, &HashMap<BranchId, Branch>) -> R,
     ) -> Result<Option<R>> {
-        let st = self.state.lock().unwrap();
-        match st.sessions.get(session) {
-            Some(Entry::Loaded(s)) => Ok(Some(f(&s.info, &s.nodes, &s.branches))),
-            Some(Entry::Corrupt(msg)) => Err(unreadable(session, msg)),
-            None => Ok(None),
-        }
+        let Some(st) = self.lock_nodes(session)? else {
+            return Ok(None);
+        };
+        let Some(Entry::Loaded(s)) = st.sessions.get(session) else {
+            return Ok(None);
+        };
+        Ok(Some(f(&s.info, st.nodes_of(session), &s.branches)))
     }
 
     /// All nodes of a session, oldest first.
     pub fn nodes_of_session(&self, session: &SessionId) -> Result<Vec<Node>> {
-        let st = self.state.lock().unwrap();
-        Ok(match st.sessions.get(session) {
-            Some(Entry::Loaded(s)) => {
-                let mut v: Vec<Node> = s.nodes.values().cloned().collect();
-                v.sort_by(|a, b| a.at.cmp(&b.at).then_with(|| a.id.cmp(&b.id)));
-                v
-            }
-            Some(Entry::Corrupt(msg)) => return Err(unreadable(session, msg)),
-            None => vec![],
-        })
+        let Some(st) = self.lock_nodes(session)? else {
+            return Ok(vec![]);
+        };
+        let mut v: Vec<Node> = st.nodes_of(session).values().cloned().collect();
+        v.sort_by(|a, b| a.at.cmp(&b.at).then_with(|| a.id.cmp(&b.id)));
+        Ok(v)
     }
 
     /// Every blob hash referenced by a node of any session — the attachments
@@ -595,26 +750,65 @@ impl Store {
         let mut hashes = HashSet::new();
         for (sid, entry) in &st.sessions {
             match entry {
-                Entry::Loaded(s) => {
-                    for node in s.nodes.values() {
-                        let content = match &node.body {
-                            NodeBody::User { content }
-                            | NodeBody::Assistant { content, .. }
-                            | NodeBody::ToolResult { content, .. }
-                            | NodeBody::Note { content, .. } => content,
-                        };
-                        hashes.extend(content.attachments.iter().map(|a| a.hash.clone()));
-                        let artifact = content.data.as_ref().and_then(|d| d.decode::<Artifact>());
-                        hashes.extend(artifact.map(|a| a.hash));
-                        let app = content.data.as_ref().and_then(|d| d.decode::<McpApp>());
-                        hashes.extend(app.into_iter().flat_map(|a| [a.html, a.call]));
-                    }
-                }
+                Entry::Loaded(s) => hashes.extend(s.blobs.iter().cloned()),
                 Entry::Corrupt(msg) => return Err(unreadable(sid, msg)),
             }
         }
         Ok(hashes)
     }
+}
+
+/// The blobs `node` references: its content's attachments, `show` snapshot
+/// and MCP app.
+fn blobs_of(node: &Node) -> impl Iterator<Item = String> {
+    let content = match &node.body {
+        NodeBody::User { content }
+        | NodeBody::Assistant { content, .. }
+        | NodeBody::ToolResult { content, .. }
+        | NodeBody::Note { content, .. } => content,
+    };
+    let attachments = content.attachments.iter().map(|a| a.hash.clone());
+    let artifact = content.data.as_ref().and_then(|d| d.decode::<Artifact>());
+    let app = content.data.as_ref().and_then(|d| d.decode::<McpApp>());
+    attachments
+        .collect::<Vec<_>>()
+        .into_iter()
+        .chain(artifact.map(|a| a.hash))
+        .chain(app.into_iter().flat_map(|a| [a.html, a.call]))
+}
+
+/// See [`Store::line_failed`].
+fn line_failed(nodes: &HashMap<NodeId, Node>, head: &NodeId) -> bool {
+    let mut id = Some(head);
+    while let Some(node) = id.and_then(|id| nodes.get(id)) {
+        match &node.body {
+            NodeBody::Note { content, .. } if content.decode::<TurnError>().is_some() => {
+                return true;
+            }
+            NodeBody::Note { .. } => id = node.parent.as_ref(),
+            _ => return false,
+        }
+    }
+    false
+}
+
+/// Read the nodes of `session`'s journal at `path`. The scan at open already
+/// vetted it; an unterminated last line is an append still being written,
+/// and never a node (those are appended with the nodes in memory).
+fn read_nodes(session: &SessionId, path: &Path) -> Result<HashMap<NodeId, Node>> {
+    let content = std::fs::read_to_string(path).map_err(IoError::at("reading", path))?;
+    let complete = content.rfind('\n').map_or("", |end| &content[..end]);
+    let mut nodes = HashMap::new();
+    for line in complete.split('\n').filter(|l| !l.trim().is_empty()) {
+        match serde_json::from_str::<Record>(line) {
+            Ok(Record::Node { node, .. }) => {
+                nodes.insert(node.id.clone(), *node);
+            }
+            Ok(_) => {}
+            Err(e) => return Err(unreadable(session, &e.to_string())),
+        }
+    }
+    Ok(nodes)
 }
 
 impl StoreState {
@@ -629,6 +823,14 @@ impl StoreState {
         }
     }
 
+    /// The nodes of `sid`, which [`Store::lock_nodes`] put in memory.
+    fn nodes_of(&self, sid: &SessionId) -> &HashMap<NodeId, Node> {
+        match self.sessions.get(sid) {
+            Some(Entry::Loaded(s)) => s.nodes.as_ref().expect("the nodes are in memory"),
+            _ => unreachable!("lock_nodes found the session"),
+        }
+    }
+
     fn loaded<'a>(&'a mut self, sid: &SessionId) -> Result<Option<&'a mut SessionState>> {
         match self.sessions.get_mut(sid) {
             Some(Entry::Loaded(s)) => Ok(Some(s)),
@@ -637,18 +839,20 @@ impl StoreState {
         }
     }
 
-    /// Fold one record into `sid`'s state, refreshing the id→session indexes.
-    fn apply(&mut self, sid: &SessionId, rec: Record) {
-        match &rec {
-            Record::Branch(b) => {
-                self.branch_owner.insert(b.id.clone(), sid.clone());
-            }
-            Record::Node { node, .. } => {
-                self.node_owner.insert(node.id.clone(), sid.clone());
-            }
-            _ => {}
+    /// Fold one record `bytes` long into `sid`'s state, refreshing the
+    /// branch→session index.
+    fn apply(&mut self, sid: &SessionId, rec: Record, bytes: u64) {
+        if let Record::Branch(b) = &rec {
+            self.branch_owner.insert(b.id.clone(), sid.clone());
         }
         if let Some(Entry::Loaded(s)) = self.sessions.get_mut(sid) {
+            if matches!(rec, Record::Node { .. }) {
+                s.node_gen += 1;
+            }
+            s.bytes += bytes;
+            if s.nodes.is_some() {
+                self.loaded_bytes += bytes;
+            }
             s.apply(rec);
         }
     }
@@ -681,8 +885,7 @@ impl StoreState {
         let mut state: Option<SessionState> = None;
         let mut corrupt: Option<String> = None;
         // Owners are collected even from a file that ends up corrupt, so
-        // id-only lookups still route here — and fail loudly.
-        let mut node_owner: Vec<(NodeId, SessionId)> = vec![];
+        // branch lookups still route here — and fail loudly.
         let mut branch_owner: Vec<(BranchId, SessionId)> = vec![];
         let mut offset = 0; // byte offset of the current line
 
@@ -690,14 +893,8 @@ impl StoreState {
             if !line.trim().is_empty() {
                 match serde_json::from_str::<Record>(line) {
                     Ok(rec) => {
-                        match &rec {
-                            Record::Branch(b) => {
-                                branch_owner.push((b.id.clone(), b.session.clone()));
-                            }
-                            Record::Node { node, .. } => {
-                                node_owner.push((node.id.clone(), node.session.clone()));
-                            }
-                            _ => {}
+                        if let Record::Branch(b) = &rec {
+                            branch_owner.push((b.id.clone(), b.session.clone()));
                         }
                         if let Err(e) = fold_record(&mut sid, &mut state, rec) {
                             corrupt = Some(e.to_string());
@@ -709,7 +906,7 @@ impl StoreState {
                     // torn write always lacks the newline (the tail below).
                     Err(e) => {
                         corrupt = Some(e.to_string());
-                        index_unreadable_line(line, &sid, &mut node_owner, &mut branch_owner);
+                        index_unreadable_line(line, &sid, &mut branch_owner);
                         break;
                     }
                 }
@@ -724,12 +921,8 @@ impl StoreState {
         {
             match serde_json::from_str::<Record>(line) {
                 Ok(rec) => {
-                    match &rec {
-                        Record::Branch(b) => branch_owner.push((b.id.clone(), b.session.clone())),
-                        Record::Node { node, .. } => {
-                            node_owner.push((node.id.clone(), node.session.clone()))
-                        }
-                        _ => {}
+                    if let Record::Branch(b) = &rec {
+                        branch_owner.push((b.id.clone(), b.session.clone()));
                     }
                     if let Err(e) = fold_record(&mut sid, &mut state, rec) {
                         corrupt = Some(e.to_string());
@@ -743,17 +936,19 @@ impl StoreState {
                 }
                 Err(e) => {
                     corrupt = Some(e.to_string());
-                    index_unreadable_line(line, &sid, &mut node_owner, &mut branch_owner);
+                    index_unreadable_line(line, &sid, &mut branch_owner);
                 }
             }
         }
 
-        self.node_owner.extend(node_owner);
         self.branch_owner.extend(branch_owner);
         let key = sid.clone().unwrap_or(SessionId(stem));
         match (state, corrupt) {
             (Some(mut state), None) => {
                 state.merge_main_lines();
+                // Only the skeleton stays: the nodes are read again on use.
+                state.bytes = std::fs::metadata(path).map_or(content.len() as u64, |m| m.len());
+                state.unload();
                 self.sessions.insert(key, Entry::Loaded(Box::new(state)));
             }
             (_, Some(msg)) => {
@@ -778,9 +973,25 @@ impl SessionState {
         Self {
             info,
             branches: HashMap::new(),
-            nodes: HashMap::new(),
             tasks: HashMap::new(),
+            blobs: HashSet::new(),
+            nodes: Some(HashMap::new()),
+            bytes: 0,
+            node_gen: 0,
+            used: 0,
+            failed: None,
         }
+    }
+
+    /// Drop the nodes, remembering whether the main line ended in an error.
+    fn unload(&mut self) {
+        let Some(nodes) = self.nodes.take() else {
+            return;
+        };
+        self.failed = self
+            .branches
+            .get(&self.info.main_branch)
+            .map(|b| (b.id.clone(), b.head.clone(), line_failed(&nodes, &b.head)));
     }
 
     fn apply(&mut self, rec: Record) {
@@ -831,7 +1042,10 @@ impl SessionState {
                     }
                 }
                 self.info.updated_at = self.info.updated_at.max(node.at);
-                self.nodes.insert(node.id.clone(), *node);
+                self.blobs.extend(blobs_of(&node));
+                if let Some(nodes) = &mut self.nodes {
+                    nodes.insert(node.id.clone(), *node);
+                }
             }
             Record::Task(info) => {
                 self.tasks.insert(info.id.clone(), *info);
@@ -902,13 +1116,12 @@ fn is_torn(e: &serde_json::Error) -> bool {
     matches!(e.classify(), Category::Eof | Category::Syntax)
 }
 
-/// A line rumu cannot fold still reveals its ids: route id-only lookups to
-/// its session so `get_node`/`get_branch` fail loudly instead of returning
-/// `None` for a node that is right there on disk.
+/// A line rumu cannot fold still reveals its ids: route branch lookups to
+/// its session so `get_branch` fails loudly instead of returning `None` for
+/// a branch that is right there on disk.
 fn index_unreadable_line(
     line: &str,
     sid: &Option<SessionId>,
-    node_owner: &mut Vec<(NodeId, SessionId)>,
     branch_owner: &mut Vec<(BranchId, SessionId)>,
 ) {
     let Ok(Value::Object(obj)) = serde_json::from_str::<Value>(line) else {
@@ -925,10 +1138,8 @@ fn index_unreadable_line(
     let Some(id) = obj.get("id").and_then(Value::as_str) else {
         return;
     };
-    match obj.get("t").and_then(Value::as_str) {
-        Some("node") => node_owner.push((NodeId(id.to_owned()), owner)),
-        Some("branch") => branch_owner.push((BranchId(id.to_owned()), owner)),
-        _ => {}
+    if obj.get("t").and_then(Value::as_str) == Some("branch") {
+        branch_owner.push((BranchId(id.to_owned()), owner));
     }
 }
 
@@ -1068,6 +1279,97 @@ mod tests {
         dir
     }
 
+    fn in_memory(store: &Store, id: &SessionId) -> bool {
+        match store.state.lock().unwrap().sessions.get(id) {
+            Some(Entry::Loaded(s)) => s.nodes.is_some(),
+            _ => false,
+        }
+    }
+
+    fn note(session: &SessionInfo, parent: &NodeId, content: rumu_core::Content) -> Node {
+        Node {
+            id: NodeId::new(),
+            parent: Some(parent.clone()),
+            session: session.id.clone(),
+            at: now(),
+            dur_ms: None,
+            body: NodeBody::Note {
+                source: "system".into(),
+                content,
+            },
+        }
+    }
+
+    /// A reopened store holds only skeletons; nodes are read on use, and an
+    /// idle session's are dropped again once the budget is spent, unless
+    /// the session is busy. Writes and reads stay correct either way.
+    #[test]
+    fn nodes_load_on_use_and_idle_ones_are_evicted() {
+        let dir = temp_dir("evict");
+        let (a, b, a_main, a_root) = {
+            let store = Store::open(&dir, &dir.join("seen.json")).unwrap();
+            let (a, a_main, a_root) = mk_session(&store);
+            let (b, _, b_root) = mk_session(&store);
+            let failed = rumu_core::Content::marker(&TurnError {
+                message: "boom".into(),
+            });
+            store
+                .append_node(&a_main.id, &note(&a, &a_root.id, failed))
+                .unwrap();
+            store
+                .append_node(
+                    &b.main_branch,
+                    &note(&b, &b_root.id, rumu_core::Content::text("b")),
+                )
+                .unwrap();
+            (a, b, a_main, a_root)
+        };
+
+        let store = Store::open(&dir, &dir.join("seen.json"))
+            .unwrap()
+            .with_budget(0);
+        assert!(!in_memory(&store, &a.id) && !in_memory(&store, &b.id));
+        // Skeleton reads need no nodes.
+        assert_eq!(store.list_sessions().unwrap().len(), 2);
+        assert!(store.get_branch(&a_main.id).unwrap().is_some());
+        assert!(store.line_failed(&a_main.id).unwrap());
+        assert!(!in_memory(&store, &a.id));
+
+        assert_eq!(store.nodes_of_session(&a.id).unwrap().len(), 2);
+        assert!(in_memory(&store, &a.id));
+        // Over budget: reading `b` drops idle `a` ...
+        assert_eq!(store.nodes_of_session(&b.id).unwrap().len(), 2);
+        assert!(in_memory(&store, &b.id) && !in_memory(&store, &a.id));
+        // ... but not a busy one.
+        store.set_status(&b.id, SessionStatus::Running);
+        assert!(store.get_node(&a.id, &a_root.id).unwrap().is_some());
+        assert!(in_memory(&store, &a.id) && in_memory(&store, &b.id));
+        // Settling lets it go.
+        store.set_status(&b.id, SessionStatus::Idle);
+        assert!(!in_memory(&store, &a.id) || !in_memory(&store, &b.id));
+
+        // Appending to a dropped session reads it first, so memory and the
+        // journal agree; the line no longer ends in an error.
+        let reply = note(&a, &a_main.head, rumu_core::Content::text("ok"));
+        let reply = Node {
+            parent: Some(store.get_branch(&a_main.id).unwrap().unwrap().head),
+            body: NodeBody::User {
+                content: rumu_core::Content::text("hi"),
+            },
+            ..reply
+        };
+        store.nodes_of_session(&b.id).unwrap();
+        assert!(!in_memory(&store, &a.id));
+        store.append_node(&a_main.id, &reply).unwrap();
+        assert_eq!(store.nodes_of_session(&a.id).unwrap().len(), 3);
+        assert!(!store.line_failed(&a_main.id).unwrap());
+        drop(store);
+        let store = Store::open(&dir, &dir.join("seen.json")).unwrap();
+        assert!(store.get_node(&a.id, &reply.id).unwrap().is_some());
+        assert!(!store.line_failed(&a_main.id).unwrap());
+        std::fs::remove_dir_all(&dir).ok();
+    }
+
     #[test]
     fn seen_at_survives_a_reload() {
         let dir = temp_dir("seen");
@@ -1170,7 +1472,7 @@ mod tests {
         };
         store.append_node(&branch.id, &child).unwrap();
 
-        let got = store.get_node(&child.id).unwrap().unwrap();
+        let got = store.get_node(&session.id, &child.id).unwrap().unwrap();
         assert_eq!(got.dur_ms, Some(1234));
         assert_eq!(
             serde_json::to_value(&got.body).unwrap(),
@@ -1196,7 +1498,7 @@ mod tests {
             assert!(store.list_sessions().unwrap().is_empty());
             assert!(store.get_session(&session.id).unwrap().is_none());
             assert!(store.get_branch(&branch.id).unwrap().is_none());
-            assert!(store.get_node(&root.id).unwrap().is_none());
+            assert!(store.get_node(&session.id, &root.id).unwrap().is_none());
             assert!(!path.exists());
 
             // Idempotent, and a late write from a cancelled turn is dropped
@@ -1343,7 +1645,7 @@ mod tests {
 
         let store = Store::open(&dir, &dir.join("seen.json")).unwrap();
         let sid = SessionId(sid);
-        let err = store.get_node(&NodeId("ghost".into())).unwrap_err();
+        let err = store.get_node(&sid, &NodeId("ghost".into())).unwrap_err();
         assert!(
             err.to_string().contains("unknown variant"),
             "names the serde problem: {err}"
@@ -1565,7 +1867,7 @@ mod tests {
         drop(store);
         let store = Store::open(&dir, &dir.join("seen.json")).unwrap();
         assert_eq!(store.nodes_of_session(&sid).unwrap().len(), 2);
-        assert!(store.get_node(&child.id).unwrap().is_some());
+        assert!(store.get_node(&sid, &child.id).unwrap().is_some());
         std::fs::remove_dir_all(&dir).ok();
     }
 
@@ -1645,7 +1947,7 @@ mod tests {
         assert_eq!(store.get_session(&sid).unwrap().unwrap().project, None);
 
         // Id-only lookups work off the indexes built during the scan.
-        assert!(store.get_node(&child_id).unwrap().is_some());
+        assert!(store.get_node(&sid, &child_id).unwrap().is_some());
         assert!(store.get_branch(&branch_id).unwrap().is_some());
         assert_eq!(store.nodes_of_session(&sid).unwrap().len(), 2);
         std::fs::remove_dir_all(&dir).ok();
