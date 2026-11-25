@@ -1,0 +1,16 @@
+[package]
+name = "rumu-search"
+edition.workspace = true
+rust-version.workspace = true
+version.workspace = true
+description.workspace = true
+license.workspace = true
+repository.workspace = true
+
+[dependencies]
+rumu-core.workspace = true
+charabia.workspace = true
+serde.workspace = true
+serde_json.workspace = true
+tantivy.workspace = true
+tracing.workspace = true

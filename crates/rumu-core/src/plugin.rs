@@ -443,6 +443,29 @@ pub trait History: Send + Sync {
     fn task(&self, id: &TaskId) -> Result<Option<(TaskInfo, String)>>;
 }
 
+/// One node a [`History::search`] found.
+#[derive(Debug, Clone)]
+pub struct HistoryHit {
+    pub session: SessionId,
+    pub node: String,
+    pub at: crate::Timestamp,
+    /// `user`, `assistant`, `tool_result` or `note`.
+    pub kind: String,
+    /// The text that matched.
+    pub text: String,
+    pub score: f64,
+}
+
+/// What a [`History::search`] found.
+#[derive(Debug, Clone, Default)]
+pub struct HistoryHits {
+    pub hits: Vec<HistoryHit>,
+    /// How many nodes match in all.
+    pub total: usize,
+    /// The query's words as written, lowercased: what a snippet points at.
+    pub terms: Vec<String>,
+}
+
 /// One out-of-band post to a branch: effects to append, and whether the post
 /// may start a turn when the branch is idle. `paced` marks a poster that
 /// bounds its own rate and lifetime (a `bash` watch): a wake made only of

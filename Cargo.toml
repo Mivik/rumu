@@ -18,12 +18,16 @@ rumu-kernel = { path = "crates/rumu-kernel" }
 rumu-store = { path = "crates/rumu-store" }
 rumu-llm = { path = "crates/rumu-llm" }
 rumu-plugins = { path = "crates/rumu-plugins" }
+rumu-search = { path = "crates/rumu-search" }
 # Pins its schema crate exactly: bump both together.
 agent-client-protocol = { version = "5.3.0", features = ["stdio", "unstable_end_turn_token_usage"] }
 anyhow = "1"
 async-trait = "0.1"
 axum = "0.8"
 base64 = "0.23"
+# Only the Chinese segmenter: the default features embed the Japanese and
+# Korean dictionaries.
+charabia = { version = "0.10", default-features = false, features = ["chinese"] }
 futures-util = "0.3"
 flate2 = "1"
 genai = "0.7.5"
@@ -47,6 +51,7 @@ semver = "1"
 serde_json = "1"
 serde-saphyr = "2"
 sha2 = "0.11"
+tantivy = { version = "0.27", default-features = false, features = ["mmap", "lz4-compression"] }
 tempfile = "3"
 thiserror = "2"
 # Gives idle memory back to the OS (glibc keeps a per-thread arena of it).
@@ -69,3 +74,12 @@ png.opt-level = 3
 fdeflate.opt-level = 3
 zune-jpeg.opt-level = 3
 rumu-blob.opt-level = 3
+# The session index re-tokenizes every journal when it is rebuilt.
+tantivy.opt-level = 3
+tantivy-columnar.opt-level = 3
+tantivy-sstable.opt-level = 3
+tantivy-bitpacker.opt-level = 3
+tantivy-stacker.opt-level = 3
+tantivy-common.opt-level = 3
+charabia.opt-level = 3
+jieba-rs.opt-level = 3
