@@ -6,6 +6,7 @@ mod decide;
 mod dispatch;
 mod error;
 mod fields;
+mod graph;
 mod host;
 mod llm;
 mod predicate;
@@ -20,6 +21,7 @@ mod waker;
 
 pub use error::{Error, Result};
 pub use fields::extract_fields;
+pub use graph::{BranchSummary, Graph, Turn};
 pub use llm::{Budget, Delta, Llm, LlmError, LlmResponse, OnDelta};
 pub use predicate::{Pred, PredicateError};
 pub use registry::Rejected;

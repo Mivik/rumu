@@ -63,6 +63,12 @@ impl Anchors {
         }
     }
 
+    /// The main-line node the agent branch `branch` (at any depth below the
+    /// main line) hangs from, through the call of its outermost ancestor.
+    pub fn agent(&self, branch: &BranchId) -> Option<&NodeId> {
+        self.agents.get(branch)?.as_ref()
+    }
+
     /// How `w` reads in an error message.
     pub fn label(&self, w: &Waker) -> String {
         match &w.kind {
@@ -78,7 +84,7 @@ impl Anchors {
     /// The latest main-line node holding `call_id` that is no newer than
     /// `before`: a provider may reuse call ids across variants, and the node
     /// a task or sub-agent came from was written just before it started.
-    fn call(&self, call_id: &str, before: Timestamp) -> Option<&NodeId> {
+    pub fn call(&self, call_id: &str, before: Timestamp) -> Option<&NodeId> {
         let nodes = self.calls.get(call_id)?;
         nodes
             .iter()
@@ -128,8 +134,22 @@ impl Kernel {
         let nodes = self.store.nodes_of_session(&main.session)?;
         let branches = self.store.branches_of_session(&main.session)?;
         let off = Self::off_line_of(&nodes, &branches);
+        Ok(Anchors::build(&main.id, &nodes, &branches, &off))
+    }
+}
+
+impl Anchors {
+    /// Where the sub-agents below the main line `main` hang from it, out of
+    /// its session's nodes and branches; `off` is what `off_line_of` gives
+    /// for them.
+    pub fn build<'a>(
+        main: &BranchId,
+        nodes: impl IntoIterator<Item = &'a Node>,
+        branches: impl IntoIterator<Item = &'a Branch>,
+        off: &HashSet<NodeId>,
+    ) -> Anchors {
         let mut calls: HashMap<String, Vec<(Timestamp, NodeId)>> = HashMap::new();
-        for n in nodes.iter().filter(|n| !off.contains(&n.id)) {
+        for n in nodes.into_iter().filter(|n| !off.contains(&n.id)) {
             if let NodeBody::Assistant { tool_calls, .. } = &n.body {
                 for c in tool_calls {
                     calls
@@ -147,8 +167,9 @@ impl Kernel {
             tasks: HashMap::new(),
             calls,
         };
-        let by_id: HashMap<&BranchId, &Branch> = branches.iter().map(|b| (&b.id, b)).collect();
-        for b in &branches {
+        let branches: Vec<&Branch> = branches.into_iter().collect();
+        let by_id: HashMap<&BranchId, &Branch> = branches.iter().map(|b| (&b.id, *b)).collect();
+        for b in branches.iter().copied() {
             if let BranchKind::Agent { task, .. } = &b.kind {
                 let line = task.lines().next().unwrap_or_default();
                 anchors.tasks.insert(b.id.clone(), format!("agent: {line}"));
@@ -165,7 +186,7 @@ impl Kernel {
                 else {
                     break None;
                 };
-                if parent_branch == &main.id {
+                if parent_branch == main {
                     // A script's call is `"{model_call}.{seq}"`.
                     let call = match call_id.rsplit_once('.') {
                         Some((outer, _)) if *via_plugin => outer,
@@ -182,9 +203,11 @@ impl Kernel {
                 anchors.agents.insert(b.id.clone(), anchor);
             }
         }
-        Ok(anchors)
+        anchors
     }
+}
 
+impl Kernel {
     /// The nodes from the root down to `node`.
     pub(crate) fn ancestry(&self, node: &NodeId) -> Result<HashSet<NodeId>> {
         let mut out = HashSet::new();
@@ -201,7 +224,7 @@ impl Kernel {
     /// replies then stay on its own branch.
     pub(crate) fn detached(&self, agent: &BranchId, main: &Branch) -> Result<bool> {
         let anchors = self.anchors(main)?;
-        let Some(Some(anchor)) = anchors.agents.get(agent) else {
+        let Some(anchor) = anchors.agent(agent) else {
             return Ok(false);
         };
         Ok(!self.ancestry(&main.head)?.contains(anchor))
@@ -209,9 +232,14 @@ impl Kernel {
 
     /// The nodes its sub-agents and side questions added to a session: each
     /// such branch's own, from its head up to the node it forked from.
-    pub(crate) fn off_line_of(nodes: &[Node], branches: &[Branch]) -> HashSet<NodeId> {
-        let parent: HashMap<&NodeId, Option<&NodeId>> =
-            nodes.iter().map(|n| (&n.id, n.parent.as_ref())).collect();
+    pub(crate) fn off_line_of<'a>(
+        nodes: impl IntoIterator<Item = &'a Node>,
+        branches: impl IntoIterator<Item = &'a Branch>,
+    ) -> HashSet<NodeId> {
+        let parent: HashMap<&NodeId, Option<&NodeId>> = nodes
+            .into_iter()
+            .map(|n| (&n.id, n.parent.as_ref()))
+            .collect();
         let mut off = HashSet::new();
         for b in branches {
             if matches!(b.kind, BranchKind::Main) {

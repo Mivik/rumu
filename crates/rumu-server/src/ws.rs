@@ -1392,6 +1392,15 @@ which you can read, edit and `show`.",
             }))
         }
 
+        // The branch view's graph: the main line's turns (a message and one
+        // version of its reply) across every version, where each sub-agent,
+        // side question and main-line task hangs from them, and each
+        // sub-agent's own totals.
+        "session.graph" => {
+            let session: SessionId = str_param(p, "session")?.into();
+            Ok(json!(kernel.graph(&session)?))
+        }
+
         // A stretch of `branch`'s path the way `session.tree` gives one:
         // whole turns, with what hangs off them. What came before node
         // `before` (its last `limit` nodes, all without), what comes after
