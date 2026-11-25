@@ -198,7 +198,7 @@ export interface GraphTurn {
   parent: NodeId | null
   user: NodeId
   at: number
-  /** The message's opening line. */
+  /** The message, trimmed, cut at 1000 chars (an ellipsis marks the cut). */
   text: string
   /** On the main line's path. */
   line: boolean

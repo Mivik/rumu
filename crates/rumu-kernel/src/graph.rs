@@ -11,8 +11,11 @@ use serde::Serialize;
 use crate::waker::Anchors;
 use crate::{Kernel, Result};
 
-/// A turn's text: the opening line of its message, this many chars at most.
+/// A side question's text: the opening line of its question, this many
+/// chars at most.
 const TEXT_CHARS: usize = 120;
+/// A turn's text: its message, this many chars at most (the view folds it).
+const TURN_CHARS: usize = 1000;
 
 #[derive(Debug, Default, Serialize)]
 pub struct Graph {
@@ -193,7 +196,7 @@ pub(crate) fn build(
         let NodeBody::User { content } = &u.body else {
             continue;
         };
-        let text = opening(&content.text);
+        let text = excerpt(&content.text);
         let parent = u.parent.as_ref().and_then(&mut at_turn);
         let mut versions: Vec<(&NodeId, Timestamp)> = Vec::new();
         if bare(u) {
@@ -264,6 +267,15 @@ fn opening(text: &str) -> String {
         .chars()
         .take(TEXT_CHARS)
         .collect()
+}
+
+/// `text` trimmed, `TURN_CHARS` at most, an ellipsis where it was cut.
+fn excerpt(text: &str) -> String {
+    let text = text.trim();
+    match text.char_indices().nth(TURN_CHARS) {
+        Some((i, _)) => format!("{}…", text[..i].trim_end()),
+        None => text.to_owned(),
+    }
 }
 
 /// `b`'s own nodes, its head up to the node it forked from, summed.
@@ -415,7 +427,7 @@ mod tests {
                 ("a2", Some("a1"), "u2", true, false),
             ]
         );
-        assert_eq!(g.turns[0].text, "first line");
+        assert_eq!(g.turns[0].text, "first line\nsecond");
         assert_eq!(g.anchors.get("kid").map(|t| t.0.as_str()), Some("a1"));
         assert!(
             !g.anchors.contains_key("grandkid"),

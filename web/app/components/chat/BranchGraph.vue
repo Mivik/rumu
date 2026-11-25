@@ -6,20 +6,22 @@
 // started further right, joined org-chart style: a trunk out of the parent
 // and a stub into each child. Background tasks sit inside the card of the
 // branch that started them. A card opens its sub-agent beside the chat, a
-// task row its output. Narrow, children go below their parent, indented,
+// task row its output; a message's button shows it in the conversation.
+// Runs of messages that started nothing fold into one line (never the first
+// or the last), and a text cut to two lines unfolds in place. Narrow, children go below their parent, indented,
 // instead of to its right: the same layout with other steps.
 //
 // Cards are DOM, measured once rendered (a ResizeObserver), then placed; the
 // lines are one SVG layer under them.
 import { computed, onBeforeUnmount, onMounted, reactive, ref, watch } from 'vue'
 import { locale, t } from '../../i18n'
-import { graph, graphModel, loadGraph, watchGraph } from '../../lib/state/graph'
-import type { GraphItem, GraphNode, GraphVersion } from '../../lib/state/graph'
+import { graph, graphModel, loadGraph, showMessage, watchGraph } from '../../lib/state/graph'
+import type { GraphItem, GraphNode, GraphQuietItem, GraphVersion } from '../../lib/state/graph'
 import { modelByRef } from '../../lib/state/models'
 import { openSide } from '../../lib/state/side'
 import { openAgentView, openTaskDetail, showView, state, useBranchView } from '../../lib/store'
 import { taskState, taskStatusWord } from '../../lib/tasks'
-import type { BranchId, NodeId, TaskInfo, TaskStatus } from '../../lib/types'
+import type { BranchId, GraphTurn, NodeId, TaskInfo, TaskStatus } from '../../lib/types'
 import { fmtDuration, fmtTokens, preview } from '../../lib/util'
 import Icon from '../ui/Icon.vue'
 
@@ -33,6 +35,8 @@ const GAP = 12
 const TURN_GAP = 20
 /** Task rows a card lists before "N more". */
 const MAX_TASKS = 4
+/** What a sub-agent's card shows of its task, unfolded. */
+const TASK_CHARS = 2000
 
 const main = useBranchView()
 
@@ -51,11 +55,19 @@ onBeforeUnmount(() => {
 const pick = reactive<Record<string, NodeId>>({})
 /** Branches whose subtree is folded. */
 const folded = reactive(new Set<BranchId>())
+/** Quiet runs unfolded, by `GraphQuietItem.id`. */
+const opened = reactive(new Set<string>())
+/** Cards whose text is cut to two lines, and those unfolded, by card key. */
+const clamped = reactive(new Set<string>())
+const expanded = reactive(new Set<string>())
 watch(
   () => state.sessionId,
   () => {
     for (const k of Object.keys(pick)) delete pick[k]
     folded.clear()
+    opened.clear()
+    clamped.clear()
+    expanded.clear()
     revealed = null
     void loadGraph()
   },
@@ -96,12 +108,18 @@ const tree = computed<Card[]>(() => {
     node: n,
     kids: folded.has(n.id) ? [] : n.kids.map(nodeCard),
   })
-  return m.items.map((it) => ({
+  const itemCard = (it: GraphItem): Card => ({
     key: it.id,
     item: it,
     node: null,
     kids: it.kind === 'turn' ? it.kids.map(nodeCard) : [],
-  }))
+  })
+  const out: Card[] = []
+  for (const it of m.items) {
+    out.push(itemCard(it))
+    if (it.kind === 'quiet' && opened.has(it.id)) out.push(...it.turns.map(itemCard))
+  }
+  return out
 })
 const cards = computed(() => {
   const out: Card[] = []
@@ -118,8 +136,15 @@ const cards = computed(() => {
 const heights = reactive<Record<string, number>>({})
 const ro = new ResizeObserver((entries) => {
   for (const e of entries) {
-    const key = (e.target as HTMLElement).dataset.k
-    if (key) heights[key] = Math.ceil((e.target as HTMLElement).offsetHeight)
+    const el = e.target as HTMLElement
+    const key = el.dataset.k
+    if (!key) continue
+    heights[key] = Math.ceil(el.offsetHeight)
+    // unfolded, the text shows whole: whether it was cut stays as it was
+    const ttl = el.querySelector<HTMLElement>('.g-ttl')
+    if (!ttl || expanded.has(key)) continue
+    if (ttl.scrollHeight > ttl.clientHeight + 1) clamped.add(key)
+    else clamped.delete(key)
   }
 })
 const els = new Map<string, HTMLElement>()
@@ -306,9 +331,19 @@ function step(v: GraphVersion, by: number): void {
 function back(v: GraphVersion): void {
   delete pick[v.fork]
 }
-function toggleFold(id: BranchId): void {
-  if (folded.has(id)) folded.delete(id)
-  else folded.add(id)
+function toggle<T>(set: Set<T>, id: T): void {
+  if (set.has(id)) set.delete(id)
+  else set.add(id)
+}
+/** Each main-line message's turn number (1-based), by its node. */
+const turnNumber = computed(() => {
+  const out = new Map<NodeId, number>()
+  for (const tn of graph.data?.turns ?? []) if (tn.line) out.set(tn.user, out.size + 1)
+  return out
+})
+function jump(turn: GraphTurn): void {
+  const n = turnNumber.value.get(turn.user)
+  if (n) void showMessage(turn.user, n)
 }
 function open(n: GraphNode): void {
   const k = n.branch.kind
@@ -341,7 +376,10 @@ function kindLabel(n: GraphNode): string {
 }
 function title(n: GraphNode): string {
   const k = n.branch.kind
-  if (k.type === 'agent') return preview(k.task, 200)
+  if (k.type === 'agent') {
+    const task = k.task.trim()
+    return task.length > TASK_CHARS ? `${task.slice(0, TASK_CHARS)}…` : task
+  }
   return n.sum?.text || (k.type === 'side' && k.quote ? preview(k.quote.text, 200) : t('chat.graph.side'))
 }
 function span(n: GraphNode): string {
@@ -375,9 +413,9 @@ const DOT: Record<TaskStatus, string> = {
   cancelled: 'border-[1.5px] border-ink-3',
   lost: 'bg-warn',
 }
-function quietText(it: Extract<GraphItem, { kind: 'quiet' }>): string {
-  const a = it.turns[0]!.at
-  const b = it.turns[it.turns.length - 1]!.at
+function quietText(it: GraphQuietItem): string {
+  const a = it.turns[0]!.turn.at
+  const b = it.turns[it.turns.length - 1]!.turn.at
   const range = it.turns.length > 1 ? `${clock(a)}–${clock(b)}` : clock(a)
   return `${t('chat.graph.quiet', { count: it.turns.length })} · ${range}`
 }
@@ -478,6 +516,16 @@ function quietText(it: Extract<GraphItem, { kind: 'quiet' }>): string {
               />
             </span>
             <span class="flex-none tabular-nums">{{ clock(c.item.turn.at) }}</span>
+            <button
+              v-if="c.item.turn.line"
+              type="button"
+              class="g-jump"
+              :title="t('chat.graph.jump')"
+              :aria-label="t('chat.graph.jump')"
+              @click="jump(c.item.turn)"
+            >
+              <Icon name="external" :size="13" />
+            </button>
           </div>
           <button
             v-if="c.item.ver && c.item.ver.shown !== c.item.ver.current"
@@ -487,7 +535,12 @@ function quietText(it: Extract<GraphItem, { kind: 'quiet' }>): string {
           >
             {{ t('chat.graph.back') }}
           </button>
-          <div class="g-ttl">{{ c.item.turn.text || t('chat.graph.noText') }}</div>
+          <div class="g-ttl" :class="{ open: expanded.has(c.key) }">
+            {{ c.item.turn.text || t('chat.graph.noText') }}
+          </div>
+          <button v-if="clamped.has(c.key)" type="button" class="g-more" @click="toggle(expanded, c.key)">
+            {{ expanded.has(c.key) ? t('chat.graph.collapse') : t('chat.graph.expand') }}
+          </button>
           <div v-if="c.item.tasks.length" class="g-tasks">
             <button
               v-for="tk in c.item.tasks.slice(0, MAX_TASKS)"
@@ -514,10 +567,11 @@ function quietText(it: Extract<GraphItem, { kind: 'quiet' }>): string {
         </div>
 
         <!-- messages that started nothing -->
-        <div
+        <button
           v-else-if="c.item?.kind === 'quiet'"
           :ref="(el) => bind(c.key, el)"
           :data-k="c.key"
+          type="button"
           class="g-card g-quiet"
           :class="{ off: c.item.off, hidden: heights[c.key] == null }"
           :style="{
@@ -525,9 +579,13 @@ function quietText(it: Extract<GraphItem, { kind: 'quiet' }>): string {
             top: `${layout.box[c.key]?.y ?? 0}px`,
             width: `${layout.box[c.key]?.w ?? TURN_W}px`,
           }"
+          :title="opened.has(c.key) ? t('chat.graph.collapse') : t('chat.graph.expand')"
+          :aria-expanded="opened.has(c.key)"
+          @click="toggle(opened, c.key)"
         >
+          <Icon name="chevron" :size="12" class="g-chev" :class="{ open: opened.has(c.key) }" />
           {{ quietText(c.item) }}
-        </div>
+        </button>
 
         <!-- a sub-agent or side question -->
         <div
@@ -571,7 +629,15 @@ function quietText(it: Extract<GraphItem, { kind: 'quiet' }>): string {
             >
             <span class="flex-none tabular-nums">{{ span(c.node) }}</span>
           </div>
-          <div class="g-ttl strong">{{ title(c.node) }}</div>
+          <div class="g-ttl strong" :class="{ open: expanded.has(c.key) }">{{ title(c.node) }}</div>
+          <button
+            v-if="clamped.has(c.key)"
+            type="button"
+            class="g-more"
+            @click.stop="toggle(expanded, c.key)"
+          >
+            {{ expanded.has(c.key) ? t('chat.graph.collapse') : t('chat.graph.expand') }}
+          </button>
           <div v-if="meta(c.node).length || modelName(c.node)" class="g-meta">
             <span v-for="(m, i) in meta(c.node)" :key="i">{{ m }}</span>
             <span v-if="modelName(c.node)" class="wrap-anywhere">{{ modelName(c.node) }}</span>
@@ -609,7 +675,7 @@ function quietText(it: Extract<GraphItem, { kind: 'quiet' }>): string {
             :aria-label="
               folded.has(c.node.id) ? t('chat.graph.unfold', { count: c.node.total }) : t('chat.graph.fold')
             "
-            @click.stop="toggleFold(c.node.id)"
+            @click.stop="toggle(folded, c.node.id)"
           >
             {{ folded.has(c.node.id) ? `+${c.node.total}` : '–' }}
           </button>
@@ -683,11 +749,26 @@ function quietText(it: Extract<GraphItem, { kind: 'quiet' }>): string {
   border-color: color-mix(in srgb, var(--brand) 55%, var(--line));
 }
 .g-quiet {
-  padding: 4px 10px;
+  display: flex;
+  align-items: center;
+  padding: 4px 10px 4px 6px;
   border-style: dashed;
   background: transparent;
   color: var(--ink-3);
   font-size: var(--text-micro);
+  gap: 4px;
+  text-align: left;
+}
+.g-quiet:hover {
+  border-color: var(--ink-3);
+  color: var(--ink-2);
+}
+.g-chev {
+  flex: none;
+  transition: transform 0.15s;
+}
+.g-chev.open {
+  transform: rotate(90deg);
 }
 
 .g-node {
@@ -752,6 +833,10 @@ function quietText(it: Extract<GraphItem, { kind: 'quiet' }>): string {
   -webkit-line-clamp: 2;
   color: var(--ink-2);
   overflow-wrap: anywhere;
+}
+.g-ttl.open {
+  display: block;
+  white-space: pre-wrap;
 }
 .g-ttl.strong {
   color: var(--ink);
@@ -846,6 +931,29 @@ button.g-task:hover {
 }
 .g-back:hover {
   text-decoration: underline;
+}
+.g-more {
+  margin-top: 1px;
+  color: var(--ink-3);
+  font-size: var(--text-micro);
+}
+.g-more:hover {
+  color: var(--ink);
+}
+.g-jump {
+  display: grid;
+  flex: none;
+  width: 18px;
+  height: 18px;
+  margin: -2px -4px -2px 0;
+  place-items: center;
+  border-radius: 4px;
+  color: var(--ink-3);
+  line-height: 0;
+}
+.g-jump:hover {
+  background: var(--line);
+  color: var(--ink);
 }
 .g-fold {
   position: absolute;

@@ -21,7 +21,11 @@ import type {
   TaskInfoPush,
   TurnPush,
 } from '../types'
+import { pathNodes } from './derived'
+import { showView } from './sessions'
 import { state } from './state'
+import { goToTurn } from './tree'
+import { focusTarget } from './ui'
 
 /** The graph of the open session, once fetched. */
 export const graph = reactive({
@@ -80,6 +84,17 @@ export function watchGraph(): () => void {
   }
 }
 
+/** Show the main line's message `user`, turn `n` of it (1-based), in the
+ *  conversation: its stretch of the line loads first when it is not here. */
+export async function showMessage(user: NodeId, n: number): Promise<void> {
+  const session = state.sessionId
+  if (!session) return
+  if (!pathNodes.value.some((node) => node.id === user)) await goToTurn(n)
+  if (state.sessionId !== session) return
+  focusTarget.value = { session, node: user }
+  showView('chat')
+}
+
 /** A sub-agent or side question, with what it started. */
 export interface GraphNode {
   id: BranchId
@@ -117,18 +132,26 @@ export interface GraphVersion {
   others: number
 }
 
-export type GraphItem =
-  | {
-      kind: 'turn'
-      id: NodeId
-      turn: GraphTurn
-      kids: GraphNode[]
-      tasks: TaskInfo[]
-      ver: GraphVersion | null
-      /** A version other than the current one. */
-      off: boolean
-    }
-  | { kind: 'quiet'; id: string; turns: GraphTurn[]; off: boolean }
+export interface GraphTurnItem {
+  kind: 'turn'
+  id: NodeId
+  turn: GraphTurn
+  kids: GraphNode[]
+  tasks: TaskInfo[]
+  ver: GraphVersion | null
+  /** A version other than the current one. */
+  off: boolean
+}
+
+/** Messages in a row that started nothing, folded into one line. */
+export interface GraphQuietItem {
+  kind: 'quiet'
+  id: string
+  turns: GraphTurnItem[]
+  off: boolean
+}
+
+export type GraphItem = GraphTurnItem | GraphQuietItem
 
 export interface GraphInput {
   graph: SessionGraph
@@ -145,7 +168,7 @@ export interface GraphModel {
   turnOf: Record<BranchId, NodeId>
   /** Each turn's parent turn. */
   parentOf: Record<NodeId, NodeId | null>
-  /** Nothing hangs off the main line. */
+  /** The main line has no message yet. */
   empty: boolean
 }
 
@@ -224,17 +247,11 @@ export function graphModel(input: GraphInput, pick: Record<string, NodeId>): Gra
     turnOf[b.id] = slot.turn.id
     tops.push(n)
   }
-  let mainTasks = 0
   const shownAsCards = new Set(Object.values(agentTask).map((t) => t.id))
   for (const t of tasks) {
     if (shownAsCards.has(t.id)) continue
-    if (t.branch === main) {
-      const slot = anchored(t.id, t.started_at)
-      if (slot) {
-        slot.tasks.push(t)
-        mainTasks++
-      }
-    } else nodes[t.branch]?.tasks.push(t)
+    if (t.branch === main) anchored(t.id, t.started_at)?.tasks.push(t)
+    else nodes[t.branch]?.tasks.push(t)
   }
 
   // what each node adds up to; a node off the current version is detached
@@ -256,7 +273,7 @@ export function graphModel(input: GraphInput, pick: Record<string, NodeId>): Gra
     s.next.reduce((a, x) => a + liveIn(x), 0)
 
   // one column: the current version, or the one picked, at each fork
-  const column: Extract<GraphItem, { kind: 'turn' }>[] = []
+  const column: GraphTurnItem[] = []
   let level = roots
   let fork = ''
   while (level.length) {
@@ -289,16 +306,19 @@ export function graphModel(input: GraphInput, pick: Record<string, NodeId>): Gra
     level = s.next
   }
 
-  // runs of messages that started nothing fold into one quiet line
+  // runs of messages that started nothing fold into one quiet line; the
+  // first and the last message always show
   const items: GraphItem[] = []
-  const quiet = (it: Extract<GraphItem, { kind: 'turn' }>): boolean =>
-    !it.kids.length && !it.tasks.length && !it.ver
+  const quiet = (i: number): boolean => {
+    const it = column[i]!
+    return i > 0 && i < column.length - 1 && !it.kids.length && !it.tasks.length && !it.ver
+  }
   for (let i = 0; i < column.length;) {
     let j = i
-    while (j < column.length && quiet(column[j]!)) j++
+    while (j < column.length && quiet(j)) j++
     if (j - i >= 2) {
       const run = column.slice(i, j)
-      items.push({ kind: 'quiet', id: `q:${run[0]!.id}`, turns: run.map((r) => r.turn), off: run[0]!.off })
+      items.push({ kind: 'quiet', id: `q:${run[0]!.id}`, turns: run, off: run[0]!.off })
       i = j
     } else {
       items.push(column[i]!)
@@ -308,5 +328,5 @@ export function graphModel(input: GraphInput, pick: Record<string, NodeId>): Gra
 
   const parentOf: Record<NodeId, NodeId | null> = {}
   for (const t of graph.turns) parentOf[t.id] = t.parent
-  return { items, nodes, turnOf, parentOf, empty: !tops.length && !mainTasks }
+  return { items, nodes, turnOf, parentOf, empty: !items.length }
 }
