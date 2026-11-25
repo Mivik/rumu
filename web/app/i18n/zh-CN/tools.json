@@ -83,6 +83,7 @@
     "stopAll": "全部停止",
     "stopAllAria": "停止这里的全部后台任务（含子代理的），回复不受影响",
     "stopAllConfirm": "停止 {count} 个？",
+    "inGraph": "在分支图中查看",
     "close": "关闭任务输出"
   },
   "status": {

@@ -5,7 +5,15 @@
 // (TaskOutputPanel) beside the chat.
 import { computed, onBeforeUnmount, onMounted, ref, watch } from 'vue'
 import { t } from '../../i18n'
-import { killTask, openTaskDetail, state, stopAllTasks, taskChild, useBranchView } from '../../lib/store'
+import {
+  killTask,
+  openTaskDetail,
+  showBranches,
+  state,
+  stopAllTasks,
+  taskChild,
+  useBranchView,
+} from '../../lib/store'
 import { taskCommand, taskElapsed, taskLabel } from '../../lib/tasks'
 import { toolIcon } from '../../lib/toolIcon'
 import type { TaskInfo } from '../../lib/types'
@@ -38,6 +46,23 @@ watch(folds, (on) => {
 function confirmStopAll(): void {
   confirming.value = false
   void stopAllTasks(view.branch.value)
+}
+
+/** The branch view, at the sub-agent running the first of the tasks no
+ *  row shows (at this branch without one). */
+function showInGraph(): void {
+  const own = view.branch.value
+  const nested = Object.values(state.tasks)
+    .filter((tk) => tk.status === 'running' && tk.branch !== own && tk.session === state.sessionId)
+    .sort((a, b) => a.started_at - b.started_at)
+    .find((tk) => {
+      for (let b = state.branches[tk.branch], guard = 0; b?.kind.type === 'agent' && guard++ < 1000;) {
+        if (b.kind.parent_branch === own) return true
+        b = state.branches[b.kind.parent_branch]
+      }
+      return false
+    })
+  showBranches(nested?.branch ?? (view.sub ? own : null))
 }
 
 function isOpen(tk: TaskInfo): boolean {
@@ -82,6 +107,16 @@ function isOpen(tk: TaskInfo): boolean {
                       class="text-ink-3 transition-[rotate] duration-300 ease-soft"
                       :class="{ 'rotate-180': showRows }"
                     />
+                  </button>
+                  <button
+                    v-if="!confirming"
+                    type="button"
+                    class="icon-btn size-6 flex-none text-ink-3 hover:text-ink"
+                    :title="t('tools.tasks.inGraph')"
+                    :aria-label="t('tools.tasks.inGraph')"
+                    @click="showInGraph"
+                  >
+                    <Icon name="branches" :size="14" />
                   </button>
                   <!-- background tasks only, the sub-agents' included (no row
                        shows those); the reply goes on -->

@@ -82,6 +82,7 @@
     "killAria": "kill task {id}",
     "stopAll": "stop all",
     "stopAllAria": "stop every background task here, sub-agents' included; the reply keeps going",
+    "inGraph": "Show in the branch graph",
     "stopAllConfirm": "stop {count}?",
     "close": "Close task output"
   },

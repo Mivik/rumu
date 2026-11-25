@@ -3,8 +3,8 @@
 // open session's view. The shell owns the header (who the session runs as,
 // its title, view tabs, and beside them the project it is in) and the
 // composer card at the foot (BranchChat); the view between them is the
-// conversation (ConversationView), the raw trajectory (TraceView) or its usage
-// statistics (StatsView). The
+// conversation (ConversationView), the raw trajectory (TraceView), its usage
+// statistics (StatsView) or its sub-agents as a diagram (BranchGraph). The
 // content column is capped at --col-max (main.css), centered. On phones and
 // in portrait the sheet drops its card edges and becomes the page (main.css).
 //
@@ -24,6 +24,7 @@ import Composer from './Composer.vue'
 import ConversationView from './ConversationView.vue'
 import TraceView from './TraceView.vue'
 import StatsView from './StatsView.vue'
+import BranchGraph from './BranchGraph.vue'
 import ViewTabs from './ViewTabs.vue'
 import Welcome from './Welcome.vue'
 import SessionPickers from './SessionPickers.vue'
@@ -157,7 +158,8 @@ const scope = computed(() => {
           >
             <ConversationView v-if="state.view === 'chat'" :composer-of="composerOf" />
             <TraceView v-else-if="state.view === 'trace'" />
-            <StatsView v-else />
+            <StatsView v-else-if="state.view === 'stats'" />
+            <BranchGraph v-else />
           </Transition>
         </template>
       </BranchChat>

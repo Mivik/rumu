@@ -1,6 +1,6 @@
 <script setup lang="ts">
 // The open session's views as tabs along the header's foot: the conversation,
-// its raw trajectory and its usage statistics. The pick lives in the address (`?view=`), so Back
+// its raw trajectory, its usage statistics and its branch graph. The pick lives in the address (`?view=`), so Back
 // and a refresh keep it.
 import { t } from '../../i18n'
 import type { SessionView } from '../../lib/router'
@@ -11,13 +11,15 @@ const views: { id: SessionView; icon: string }[] = [
   { id: 'chat', icon: 'chat' },
   { id: 'trace', icon: 'trace' },
   { id: 'stats', icon: 'stats' },
+  { id: 'branches', icon: 'branches' },
 ]
 </script>
 
 <template>
   <!-- -mb-px: the selected tab's underline sits on the header's rule; it
-       grows in under the tab chosen as it shrinks away from the last -->
-  <div class="-mb-px flex gap-5" role="tablist" :aria-label="t('chat.view.label')">
+       grows in under the tab chosen as it shrinks away from the last. On a
+       phone the icons go, so the project beside the tabs keeps its room -->
+  <div class="-mb-px flex gap-4 sm:gap-5" role="tablist" :aria-label="t('chat.view.label')">
     <button
       v-for="v in views"
       :key="v.id"
@@ -30,7 +32,7 @@ const views: { id: SessionView; icon: string }[] = [
       :aria-selected="state.view === v.id"
       @click="showView(v.id)"
     >
-      <Icon :name="v.icon" :size="14" />
+      <span class="contents max-sm:hidden"><Icon :name="v.icon" :size="14" /></span>
       {{ t(`chat.view.${v.id}`) }}
     </button>
   </div>
