@@ -14,6 +14,13 @@ use anyhow::{Result, bail};
 use tracing::info;
 use tracing_subscriber::EnvFilter;
 
+/// glibc's malloc keeps what each tokio worker frees in that thread's arena,
+/// so the RSS only ever grows; jemalloc's background thread returns idle
+/// pages to the OS.
+#[cfg(not(target_env = "msvc"))]
+#[global_allocator]
+static GLOBAL: tikv_jemallocator::Jemalloc = tikv_jemallocator::Jemalloc;
+
 /// The package version and the commit it was built from (build.rs).
 pub const VERSION: &str = env!("RUMU_VERSION");
 
