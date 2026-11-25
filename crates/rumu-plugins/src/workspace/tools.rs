@@ -13,7 +13,7 @@ use schemars::JsonSchema;
 use serde::Deserialize;
 use serde_json::Value;
 
-use super::backend::{Backend, BackendError, ExecOutput, is_not_found, probe_uname};
+use super::backend::{Backend, BackendError, ExecOutput, is_not_found, probe_uname, sh_quote};
 use super::patch;
 use super::vfs::bad_scope;
 use super::watch::WatchArgs;
@@ -131,7 +131,8 @@ workspaces refuse writes and bash.\n\n\
 `@scratch` is this session's throwaway workspace on this machine, shared with its branches and \
 sub-agents and deleted with the session. Use it for scripts, downloads, clones and generated \
 files; what should outlive the session belongs in a card or a project workspace. Its \
-`.inbox/` is written by rumu (attachments, events): read it, don't change it.\n\n\
+`.inbox/` is written by rumu (attachments, events): read it, don't change it. In `bash` on this \
+machine, its directory is `$RUMU_SCRATCH_DIR`.\n\n\
 To give the user a page, document, diagram, code, image, audio or video to look at, or any file \
 to download, write it to a file (usually in \
 `@scratch`) and `show` it; `show` it again after a change for a new version. To put an image in \
@@ -1033,6 +1034,7 @@ impl WorkspacePlugin {
         };
         let effects = self.maybe_inject_agents(cx, &ws).await;
         let backend = self.backend_for(&ws);
+        let command = with_scratch_dir(state, &ws, &args.command);
         // Stream every chunk to the UI (tool.progress) / the task buffer
         // (task.progress), and to the watch. The kernel applies `timeout` to a
         // foreground call (moving it to the background); a background one
@@ -1045,13 +1047,13 @@ impl WorkspacePlugin {
             }
         };
         let exec: std::result::Result<ExecOutput, BackendError> = if let Some(watch) = &watch {
-            let exec = backend.exec(&args.command, &mut on_chunk);
+            let exec = backend.exec(&command, &mut on_chunk);
             match watch.run(exec, cx).await {
                 Ok(exec) => exec,
                 Err(ended) => return Ok(ToolOutput::ok(ended).with_effects(effects)),
             }
         } else {
-            backend.exec(&args.command, &mut on_chunk).await
+            backend.exec(&command, &mut on_chunk).await
         };
         match exec {
             Ok(out) => Ok(BashOutcome {
@@ -1201,6 +1203,30 @@ impl WorkspacePlugin {
         ));
         lines.join("\n")
     }
+}
+
+/// The variable a local `bash` finds the `@scratch` directory in.
+const SCRATCH_DIR_ENV: &str = "RUMU_SCRATCH_DIR";
+
+/// `command` with [`SCRATCH_DIR_ENV`] exported when it runs on this
+/// machine, where the scratch directory is: in bash `@scratch` is only a
+/// folder name. A command naming the variable creates the directory, as
+/// using the workspace does.
+fn with_scratch_dir(state: &PathState, ws: &Workspace, command: &str) -> String {
+    let scratch = state
+        .workspaces
+        .iter()
+        .find(|w| w.name == SCRATCH_WORKSPACE);
+    let Some(scratch) = scratch.filter(|_| ws.ssh.is_none()) else {
+        return command.to_owned();
+    };
+    if command.contains(SCRATCH_DIR_ENV) {
+        let _ = std::fs::create_dir_all(scratch.root.as_str());
+    }
+    format!(
+        "export {SCRATCH_DIR_ENV}={}\n{command}",
+        sh_quote(scratch.root.as_str())
+    )
 }
 
 /// The canonical display form of a real-workspace path.

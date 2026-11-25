@@ -43,6 +43,8 @@ An assistant works in any project.
   session. Its branches and sub-agents share it. It is local only, never
   synced or versioned: use it for throwaway files. Like `@rumu`, it is always
   addressable, even when an `agent`'s `workspaces` narrows a sub-agent.
+  `bash` on this machine gets its directory as `$RUMU_SCRATCH_DIR`, whichever
+  workspace it runs in.
 - Every registered workspace is addressable from every session. Attaching
   was never a sandbox (`bash` in a local workspace reaches the whole
   machine), so sessions keep no list of attached workspaces. An `agent`'s

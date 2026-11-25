@@ -1052,6 +1052,51 @@ async fn read_only_and_bash_behaviour() {
 /// which the first use creates, and files it writes are readable through
 /// `@scratch:`.
 #[tokio::test]
+async fn bash_finds_the_scratch_directory_in_rumu_scratch_dir() {
+    let home = tempfile::tempdir().unwrap();
+    let plugin = deck_plugin(home.path());
+    let host = FakeRuntime::arc();
+    let repo = home.path().join("repo");
+    std::fs::create_dir_all(&repo).unwrap();
+    let scratch = home.path().join("scratch/s1");
+    let local = |name: &str, root: &std::path::Path| Workspace {
+        name: name.into(),
+        ssh: None,
+        root: root.to_string_lossy().into_owned().into(),
+        read_only: false,
+    };
+    *host.state.lock().unwrap() = state_with(
+        vec![local("repo", &repo), local(SCRATCH_WORKSPACE, &scratch)],
+        Some("repo"),
+    );
+    let cx = host.cx();
+
+    // From another workspace, writing into it creates the directory.
+    let out = plugin
+        .call_tool(
+            "bash",
+            json!({ "command": "echo hi > \"$RUMU_SCRATCH_DIR/log\"" }),
+            &cx,
+        )
+        .await
+        .unwrap();
+    assert!(!out.is_error, "{}", out.content.text);
+    assert_eq!(
+        std::fs::read_to_string(scratch.join("log")).unwrap(),
+        "hi\n"
+    );
+
+    // A command not naming it leaves nothing behind.
+    std::fs::remove_dir_all(&scratch).unwrap();
+    let out = plugin
+        .call_tool("bash", json!({ "command": "true" }), &cx)
+        .await
+        .unwrap();
+    assert!(!out.is_error, "{}", out.content.text);
+    assert!(!scratch.exists());
+}
+
+#[tokio::test]
 async fn bash_runs_in_the_scratch_workspace_and_creates_it() {
     let home = tempfile::tempdir().unwrap();
     let plugin = deck_plugin(home.path());
