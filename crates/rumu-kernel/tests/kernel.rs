@@ -3174,30 +3174,27 @@ async fn code_inner_block_is_a_trace_node() {
     );
 }
 
-/// The trace keeps a `write`/`edit` file patch so the UI can render the diff
-/// after a reload, but no other structured result.
+/// An inner call's node keeps the tool's payload, as a direct call's does, so
+/// the UI renders it the same after a reload (a `show`'s snapshot, say).
 #[tokio::test]
-async fn code_invoke_keeps_the_file_patch() {
-    let write: ToolFn = Arc::new(|_: &str, _: Value, _: &Cx| {
-        let mut out = ToolOutput::ok("wrote a.rs (1 bytes)");
+async fn code_invoke_keeps_the_payload() {
+    let show: ToolFn = Arc::new(|_: &str, _: Value, _: &Cx| {
+        let mut out = ToolOutput::ok("showed a.md");
         out.content.data = Some(Tagged {
-            tag: rumu_core::FILE_PATCH_TAG.to_owned(),
+            tag: "workspace.artifact".to_owned(),
             v: 1,
-            data: json!({ "kind": "update", "hunks": null }),
+            data: json!({ "path": "a.md" }),
         });
         out
     });
-    let plugin = Arc::new(script_host(&["write"], vec![], noop_hooks(), write));
+    let plugin = Arc::new(script_host(&["show"], vec![], noop_hooks(), show));
     let (kernel, _llm, _session, branch) = setup(
         vec![plugin],
         vec![
             LlmResponse::calls(vec![ToolCall::new(
                 "c1",
                 "script",
-                json!({ "calls": [{
-                    "name": "write",
-                    "args": { "path": "a.rs", "content": "b" },
-                }] }),
+                json!({ "calls": [{ "name": "show", "args": { "path": "a.md" } }] }),
             )]),
             LlmResponse::text("done"),
         ],
@@ -3225,12 +3222,10 @@ async fn code_invoke_keeps_the_file_patch() {
     else {
         unreachable!()
     };
-    assert_eq!(invoke.as_ref().unwrap().name, "write");
-    let patch = content.data.as_ref().expect("the file patch is kept");
-    assert_eq!(patch.tag, rumu_core::FILE_PATCH_TAG);
-    assert_eq!(patch.v, 1);
-    assert_eq!(patch.data["kind"], "update");
-    assert!(content.attachments.is_empty());
+    assert_eq!(invoke.as_ref().unwrap().name, "show");
+    let data = content.data.as_ref().expect("the payload is kept");
+    assert_eq!(data.tag, "workspace.artifact");
+    assert_eq!(data.data["path"], "a.md");
 }
 
 /// A file tool's or `bash`'s result names the workspace the call addressed,

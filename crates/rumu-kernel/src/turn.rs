@@ -9,10 +9,9 @@ use crate::{Error, Result};
 use rumu_core::kind;
 use rumu_core::{
     Branch, BranchId, BranchKind, BranchStatus, CODE_DENIED_TOOLS, Call, CallStats, CompactReason,
-    Content, Cx, Effort, FILE_PATCH_TAG, Inherit, InheritContext, InnerCall, Invoke, ModelPick,
-    ModelUse, NodeBody, NodeId, RUMU_WORKSPACE, SYSTEM_SOURCE, SessionId, Tagged, ToolCall,
-    ToolError, ToolOutput, TurnError, WorkspaceSet, WorkspaceTarget, WorkspaceUse, parse_args,
-    truncate_output,
+    Content, Cx, Effort, Inherit, InheritContext, InnerCall, Invoke, ModelPick, ModelUse, NodeBody,
+    NodeId, RUMU_WORKSPACE, SYSTEM_SOURCE, SessionId, Tagged, ToolCall, ToolError, ToolOutput,
+    TurnError, WorkspaceSet, WorkspaceTarget, WorkspaceUse, parse_args, truncate_output,
 };
 use schemars::JsonSchema;
 use serde::Deserialize;
@@ -1043,21 +1042,18 @@ impl Kernel {
         let mut ev = self.make_event(kind::TOOL_POST, session.clone(), branch.clone(), payload)?;
         self.dispatch(&mut ev, false).await?;
 
-        // The node keeps what the model would have seen for a direct call;
-        // the script already got the full output up to the invoke cap. Only
-        // the file patch (else the workspace addressed) is kept: it lets a
-        // reloaded session render an internal call exactly like a direct one.
+        // The node keeps what the model would have seen for a direct call
+        // (the script already got the full output up to the invoke cap):
+        // its payload and attachments too, so the UI renders an internal
+        // call exactly like a direct one — a patch, a shown file, a view.
         self.append_body_dur(
             branch,
             NodeBody::ToolResult {
                 call_id: call.call_id.clone(),
                 content: Content {
                     text: truncate_output(out.content.text.clone()),
-                    attachments: Vec::new(),
-                    data: with_target(
-                        out.content.data.clone().filter(|d| d.tag == FILE_PATCH_TAG),
-                        workspace,
-                    ),
+                    attachments: out.content.attachments.clone(),
+                    data: with_target(out.content.data.clone(), workspace),
                 },
                 is_error: out.is_error,
                 invoke: Some(Invoke {
