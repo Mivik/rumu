@@ -21,6 +21,13 @@ use tracing_subscriber::EnvFilter;
 #[global_allocator]
 static GLOBAL: tikv_jemallocator::Jemalloc = tikv_jemallocator::Jemalloc;
 
+/// jemalloc's options (`_RJEM_MALLOC_CONF` overrides them). Its default of
+/// four arenas per CPU leaves each holding partly used pages: a fresh server
+/// idled at about 115 MB of anonymous memory with 80 arenas, 35 MB with 8.
+#[cfg(not(target_env = "msvc"))]
+#[unsafe(export_name = "_rjem_malloc_conf")]
+static MALLOC_CONF: &[u8; 10] = b"narenas:8\0";
+
 /// The package version and the commit it was built from (build.rs).
 pub const VERSION: &str = env!("RUMU_VERSION");
 
