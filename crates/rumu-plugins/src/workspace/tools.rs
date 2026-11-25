@@ -137,8 +137,7 @@ To give the user a page, document, diagram, code, image, audio or video to look 
 to download, write it to a file (usually in \
 `@scratch`) and `show` it; `show` it again after a change for a new version. To put an image in \
 your reply itself, \
-write `![alt](<address>)` with the address of one already in the conversation: a `show`n file, \
-or an attachment's `@scratch:.inbox/…` copy; any other address shows as a link. For something \
+write `![alt](<workspace>:<path>)` with the image file's address. For something \
 interactive in the reply itself (a chart, a slider, a small calculator), write a ```widget \
 fence holding an HTML fragment: the web client runs it in place, sandboxed, as wide as the reply \
 and as tall as its content; the user can save it as a file. The user sees the widget, not its \
@@ -518,6 +517,24 @@ pub async fn snapshot_file(
         &abs,
     )
     .await
+}
+
+/// The bytes of the file at `abs` on `ws`'s machine, read as it is now
+/// outside any tool call (an image a reply names, on an ssh workspace: the
+/// server sends a local one straight from disk). Nothing is stored.
+pub async fn read_file(
+    ws: &Workspace,
+    abs: &Utf8TypedPathBuf,
+) -> std::result::Result<Vec<u8>, String> {
+    let backend = super::backend_for(&super::ssh_ctl_dir(), ws);
+    let bytes = backend.read_bytes(abs).await.map_err(|e| e.to_string())?;
+    if bytes.len() > ARTIFACT_MAX_BINARY_BYTES {
+        return Err(format!(
+            "{} bytes is over the {ARTIFACT_MAX_BINARY_BYTES}-byte limit",
+            bytes.len()
+        ));
+    }
+    Ok(bytes)
 }
 
 /// A page the user saved from a reply's widget, written into the branch's

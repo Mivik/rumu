@@ -50,6 +50,24 @@ export default defineNuxtPlugin(() => {
     if (up) void checkUpdate()
   })
 
+  // An image of the text that cannot load (a file gone, or no image): the
+  // link to its address instead, as lib/markdown.ts draws one.
+  document.addEventListener(
+    'error',
+    (e) => {
+      const img = e.target
+      const address = img instanceof HTMLImageElement ? img.dataset.wsSrc : undefined
+      if (!address) return
+      const link = document.createElement('a')
+      link.href = '#'
+      link.dataset.wsRef = address
+      link.title = address
+      link.textContent = (img as HTMLImageElement).alt || address
+      ;(img as HTMLImageElement).replaceWith(link)
+    },
+    true,
+  )
+
   // Clicks inside rendered markdown: copy a fence; follow rumu addresses and
   // card links (lib/links.ts).
   document.addEventListener('click', (e) => {

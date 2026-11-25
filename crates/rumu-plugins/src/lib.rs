@@ -43,8 +43,8 @@ pub use memory::MemoryPlugin;
 pub use skills::{SKILLS_DIR, Skills, SkillsPlugin};
 pub use stdio::{StdioError, StdioPlugin};
 pub use workspace::{
-    BackendError, RevertAction, RevertFile, RevertPlan, WorkspacePlugin, revert_files, revert_note,
-    revert_plan, save_page, snapshot_file,
+    BackendError, RevertAction, RevertFile, RevertPlan, WorkspacePlugin, read_file, revert_files,
+    revert_note, revert_plan, save_page, snapshot_file,
 };
 pub use workspaces::{
     PROJECTS_FILE, Project, WORKSPACES_FILE, cwd_workspace_name, drop_project, load_workspaces,

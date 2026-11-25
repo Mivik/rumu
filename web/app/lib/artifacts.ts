@@ -85,11 +85,10 @@ export function artifactUrl(a: Artifact): string {
   return a.mime ? `${blobUrl(a.hash)}?type=${encodeURIComponent(a.mime)}` : blobUrl(a.hash)
 }
 
-/** Images a reply can put in its text as `![alt](address)`, by address:
- *  attachments under their `@scratch:.inbox/attachments/` copy, and image
- *  snapshots under their path — each with the path index of its node, in
- *  path order. Only bytes some node already holds, so a reply shows the same
- *  image however late it is reread. */
+/** Images on the path a reply's `![alt](address)` shows before reading
+ *  the file: attachments under their `@scratch:.inbox/attachments/` copy, and
+ *  image snapshots under their path — each with the path index of its node,
+ *  in path order. */
 export const imagesOnPath = computed(() => {
   const byAddress = new Map<string, { image: LightboxImage; at: number }[]>()
   const add = (address: string, image: LightboxImage, at: number) => {
@@ -112,15 +111,25 @@ export const imagesOnPath = computed(() => {
   return byAddress
 })
 
+/** The image file at `address` as it is now, for an address the path holds
+ *  no image for (`show` alone snapshots a file): served by
+ *  `/files/<session>`, which needs the session only for `@scratch`. One
+ *  that cannot be read turns into a link (plugins/rumu.client.ts). */
+function liveImage(address: string): LightboxImage | null {
+  const session = state.sessionId
+  if (!session || !/\.(png|jpe?g|gif|webp|avif|bmp|ico|svg)$/i.test(address)) return null
+  const query = new URLSearchParams({ path: address })
+  return { src: `/files/${encodeURIComponent(session)}?${query}`, name: address }
+}
+
 /** The image `![…](address)` in the text of `nodeId` shows: the latest one
  *  at that address before the node (the latest of all for text still
- *  streaming), or null. */
+ *  streaming), else the file as it is now, or null. */
 export function pathImage(address: string, nodeId?: string): LightboxImage | null {
-  const list = imagesOnPath.value.get(address.replace(/:\.\//, ':'))
-  if (!list) return null
+  const list = imagesOnPath.value.get(address.replace(/:\.\//, ':')) ?? []
   const at = nodeId ? pathNodes.value.findIndex((n) => n.id === nodeId) : -1
   const before = at < 0 ? list : list.filter((v) => v.at < at)
-  return before.at(-1)?.image ?? null
+  return before.at(-1)?.image ?? liveImage(address)
 }
 
 /** Blob text by hash: a snapshot never changes, so one fetch serves all. */

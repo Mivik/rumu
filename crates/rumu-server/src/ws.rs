@@ -152,6 +152,7 @@ pub fn router(state: AppState, token: crate::auth::Token) -> Router {
             post(blob_upload).layer(DefaultBodyLimit::max(BLOB_BODY_LIMIT)),
         )
         .route("/blobs/{hash}", get(blob_get))
+        .route("/files/{session}", get(file_image))
         .route("/plugins/{name}/{*file}", get(plugin_file));
     crate::auth::protect(routes, token)
         .fallback(static_asset)
@@ -319,10 +320,66 @@ async fn blob_get(
         .into_response()
 }
 
+/// `GET /files/{session}?path=<workspace>:<path>`: the image file at a
+/// workspace address, read as it is now (an image a reply names). The
+/// address needs only the registry, and the session for `@scratch`.
+/// Nothing is stored, and like every authorized response it is `no-store`:
+/// a new page reads it again, while a page reuses one image per URL, so a
+/// reply redrawn while streaming reads it once.
+async fn file_image(
+    State(state): State<AppState>,
+    Path(session): Path<String>,
+    Query(params): Query<HashMap<String, String>>,
+    req: axum::extract::Request,
+) -> Response {
+    let not_found = |e: String| (StatusCode::NOT_FOUND, e).into_response();
+    let Some(raw) = params.get("path") else {
+        return (StatusCode::BAD_REQUEST, "needs `path`").into_response();
+    };
+    // The session names its scratch directory: never a path of its own.
+    if session.is_empty()
+        || !session
+            .chars()
+            .all(|c| c.is_ascii_alphanumeric() || c == '-')
+    {
+        return (StatusCode::BAD_REQUEST, "not a session id").into_response();
+    }
+    let mut workspaces = state.workspaces.list();
+    workspaces.push(state.workspaces.scratch(&SessionId::from(session.as_str())));
+    let addr = match rumu_core::resolve(raw, &workspaces, None) {
+        Ok(addr) => addr,
+        Err(e) => return not_found(e.to_string()),
+    };
+    let Some(ws) = workspaces.into_iter().find(|w| w.name == addr.ws) else {
+        return not_found(format!("`{raw}` is not a workspace file"));
+    };
+    let Some(mime) = rumu_core::media_type(addr.abs.file_name().unwrap_or(""))
+        .filter(|m| m.starts_with("image/"))
+    else {
+        return not_found(format!("`{raw}` is not an image file"));
+    };
+    if ws.is_local() {
+        serve_media(addr.abs.as_str().into(), mime, req)
+            .await
+            .unwrap_or_else(|e| not_found(e.to_string()))
+    } else {
+        match rumu_plugins::read_file(&ws, &addr.abs).await {
+            Ok(bytes) => (
+                [
+                    (CONTENT_TYPE, mime.to_owned()),
+                    (X_CONTENT_TYPE_OPTIONS, "nosniff".to_owned()),
+                    (CONTENT_SECURITY_POLICY, "sandbox".to_owned()),
+                ],
+                bytes,
+            )
+                .into_response(),
+            Err(e) => not_found(e),
+        }
+    }
+}
+
 /// A blob served as the media type `mime` (one [`rumu_core::is_media_type`]
-/// accepts, none of which runs script on rumu's origin). Sandboxed like any
-/// blob, except a PDF: browsers refuse to open their viewer in a sandbox, and
-/// the viewer keeps a document's own script away from the page.
+/// accepts), by [`serve_media`].
 async fn blob_media(
     blobs: &Blobs,
     hash: &str,
@@ -333,23 +390,33 @@ async fn blob_media(
         Ok(path) => path,
         Err(e) => return blob_error(&e),
     };
-    let mut res = match tower_http::services::ServeFile::new(path)
-        .try_call(req)
-        .await
-    {
-        Ok(res) => res.map(axum::body::Body::new),
-        // tower-http 0.7 hands a missing file back as an error, not a 404.
+    match serve_media(path, mime, req).await {
+        Ok(res) => res,
         Err(e) if e.kind() == std::io::ErrorKind::NotFound => {
-            return blob_error(&rumu_blob::Error::NotFound(hash.to_owned()));
+            blob_error(&rumu_blob::Error::NotFound(hash.to_owned()))
         }
-        Err(e) => {
-            return (
-                StatusCode::INTERNAL_SERVER_ERROR,
-                Json(json!({ "error": format!("reading blob: {e}") })),
-            )
-                .into_response();
-        }
-    };
+        Err(e) => (
+            StatusCode::INTERNAL_SERVER_ERROR,
+            Json(json!({ "error": format!("reading blob: {e}") })),
+        )
+            .into_response(),
+    }
+}
+
+/// The file at `path` served as the media type `mime` (none of which runs
+/// script on rumu's origin), with Last-Modified and range requests so players
+/// can seek. Sandboxed, except a PDF: browsers refuse to open their viewer
+/// in a sandbox, and the viewer keeps a document's own script away from the
+/// page. tower-http 0.7 hands a missing file back as an error, not a 404.
+async fn serve_media(
+    path: std::path::PathBuf,
+    mime: &str,
+    req: axum::extract::Request,
+) -> std::io::Result<Response> {
+    let mut res = tower_http::services::ServeFile::new(path)
+        .try_call(req)
+        .await?
+        .map(axum::body::Body::new);
     let headers = res.headers_mut();
     headers.insert(
         CONTENT_TYPE,
@@ -359,7 +426,7 @@ async fn blob_media(
     if mime != "application/pdf" {
         headers.insert(CONTENT_SECURITY_POLICY, HeaderValue::from_static("sandbox"));
     }
-    res
+    Ok(res)
 }
 
 /// The error response of a blob route: `{"error": message}` with the status

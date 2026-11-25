@@ -446,8 +446,18 @@ export type ImageResolver = (address: string) => LightboxImage | null
 const IMAGE_MAX_W = 480
 const IMAGE_MAX_H = 320
 
+/** The address of an image a reply names by a plain path (`plot.png`,
+ *  `/tmp/a.png`): in the current workspace, the one in use now, as the file
+ *  is read as it is now. Null for a URL or with no workspace to read. */
+function inCurrentWorkspace(src: string): string | null {
+  if (!src || /^[a-z][a-z0-9+.-]*:/i.test(src) || src.startsWith('//') || src.startsWith('#')) return null
+  const ws = state.pathState?.default_workspace
+  return ws && ws !== INTERNAL_WORKSPACE ? `${ws}:${src}` : null
+}
+
 /** A workspace address as an image: what `image` resolves it to (opening
- *  full-size on click), else a link to the address — never a broken image.
+ *  full-size on click), else a link to the address — never a broken image
+ *  (one that fails to load becomes the link too, by its `data-ws-src`).
  *  `alt` and `rawSrc` are as marked escaped them. */
 function addressImage(rawSrc: string, alt: string, rest: string, image?: ImageResolver): string {
   const src = rawSrc.replaceAll('&amp;', '&').replaceAll('&quot;', '"')
@@ -459,7 +469,7 @@ function addressImage(rawSrc: string, alt: string, rest: string, image?: ImageRe
     size = ` width="${Math.max(1, Math.round(found.width * s))}" height="${Math.max(1, Math.round(found.height * s))}"`
   }
   const title = rest.includes(' title=') ? rest : ` title="${rawSrc}"`
-  return `<img src="${escapeHtml(found.src)}" alt="${alt}"${title}${size} data-lightbox loading="lazy">`
+  return `<img src="${escapeHtml(found.src)}" alt="${alt}"${title}${size} data-lightbox data-ws-src="${escapeHtml(src)}" loading="lazy">`
 }
 
 /**
@@ -489,8 +499,12 @@ export function renderMarkdown(
   }
   const html = parsed.replace(
     /<img src="([^"]*)" alt="([^"]*)"([^>]*)>/g,
-    (whole, rawSrc: string, alt: string, rest: string) =>
-      anchorFor(rawSrc.replaceAll('&amp;', '&'), undefined) ? addressImage(rawSrc, alt, rest, image) : whole,
+    (whole, rawSrc: string, alt: string, rest: string) => {
+      const src = rawSrc.replaceAll('&amp;', '&')
+      if (anchorFor(src, undefined)) return addressImage(rawSrc, alt, rest, image)
+      const qualified = image && inCurrentWorkspace(src)
+      return qualified ? addressImage(escapeHtml(qualified), alt, rest, image) : whole
+    },
   )
   const linked = html.replace(/<a href="([^"]*)"([^>]*)>/g, (whole, rawHref: string, rest: string) => {
     const href = rawHref.replaceAll('&amp;', '&').replaceAll('&quot;', '"')
