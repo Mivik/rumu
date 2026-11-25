@@ -29,10 +29,18 @@ import type {
   ActivityThought,
   ToolRowInfo,
 } from '../../lib/store'
-import { useBranchView } from '../../lib/store'
-import type { Node } from '../../lib/types'
+import { scriptAgents, useBranchView } from '../../lib/store'
+import type { Node, ToolCall } from '../../lib/types'
 import type { PhrasePart, ToolRowView } from '../../lib/toolrows'
-import { fileEditsOf, isFileEdit, isRowOpen, toolPhrase, toolRowTitle, toolRowView } from '../../lib/toolrows'
+import {
+  fileEditsOf,
+  isFileEdit,
+  isRowOpen,
+  rowViews,
+  toolPhrase,
+  toolRowTitle,
+  toolRowView,
+} from '../../lib/toolrows'
 import { contentText, fmtThought } from '../../lib/util'
 import { useWorkView } from '../../lib/state/appearance'
 import { vEnter } from '../../lib/motion'
@@ -49,16 +57,17 @@ const props = withDefaults(defineProps<{ steps: ActivityStep[]; live?: boolean; 
   live: false,
   current: false,
 })
-const activeDelta = useBranchView().delta
+const branchView = useBranchView()
+const activeDelta = branchView.delta
 const work = useWorkView()
 
 const thoughts = computed(() => props.steps.filter((s): s is ActivityThought => s.kind === 'thought'))
 const views = computed<ToolRowView[]>(() =>
   props.steps.flatMap((s) => (s.kind === 'tools' ? s.rows.map(toolRowView) : [])),
 )
-const edits = computed(() =>
-  props.steps.flatMap((s) => (s.kind === 'tools' ? s.rows.flatMap(fileEditsOf) : [])),
-)
+/** Every call the run made, its scripts' inner ones included. */
+const ran = computed(() => props.steps.flatMap((s) => (s.kind === 'tools' ? s.rows.flatMap(rowViews) : [])))
+const edits = computed(() => ran.value.filter(isFileEdit))
 /** The edits that stay in view while the run is folded. */
 const outsideEdits = computed(() => (work.value.always_show_edits ? edits.value : []))
 const running = computed(() => props.steps.find((s): s is ActivityRunning => s.kind === 'running') ?? null)
@@ -153,10 +162,24 @@ const summaryParts = computed<PhrasePart[]>(() => {
 })
 const errorCount = computed(() => views.value.filter((v) => v.status === 'error').length)
 const blockedCount = computed(() => views.value.filter((v) => v.status === 'blocked').length)
-/** The run's `agent` calls (a plugin's are its script's business). */
-const agents = computed(() => views.value.filter((v) => v.name === 'agent'))
-/** Its `agent` calls still waiting on their sub-agent: cards, not running rows. */
-const runningAgents = computed(() => running.value?.calls.filter((c) => c.call.name === 'agent') ?? [])
+/** The run's `agent` calls, its scripts' included. */
+const agents = computed(() => ran.value.filter((v) => v.name === 'agent'))
+/** Its `agent` calls still waiting on their sub-agent: cards, not running
+ *  rows. A running script's are the sub-agents it forked whose call has not
+ *  returned yet (an inner call has no node before its result). */
+const runningAgents = computed<ToolCall[]>(() =>
+  (running.value?.calls ?? []).flatMap(({ call, invokes }) => {
+    if (call.name === 'agent') return [call]
+    const branch = branchView.branch.value
+    if (call.name !== 'code' || !branch) return []
+    const done = new Set(invokes.map((r) => r.call?.call_id))
+    return scriptAgents(branch, call.call_id).flatMap((b) =>
+      b.kind.type === 'agent' && !done.has(b.kind.call_id)
+        ? [{ call_id: b.kind.call_id, name: 'agent', args: { task: b.kind.task } }]
+        : [],
+    )
+  }),
+)
 
 /** Each call's full facts, one per line, for the summary's tooltip. */
 const summaryTitle = computed(() => views.value.map(toolRowTitle).join('\n'))
@@ -323,7 +346,7 @@ function foldFromFoot(): void {
     <!-- the sub-agents it started stand outside the fold -->
     <div v-if="agents.length || runningAgents.length" class="mt-2 flex w-full flex-col gap-1.5">
       <AgentCard v-for="v in agents" :key="v.row.result.id" v-enter="'enter-fade'" :view="v" />
-      <AgentCard v-for="c in runningAgents" :key="c.call.call_id" v-enter="'enter-fade'" :call="c.call" />
+      <AgentCard v-for="c in runningAgents" :key="c.call_id" v-enter="'enter-fade'" :call="c" />
     </div>
   </div>
 </template>

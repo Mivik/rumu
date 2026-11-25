@@ -131,6 +131,17 @@ export type GroupItem =
   GroupTextItem | GroupActivityItem | GroupContextItem | GroupResetItem | GroupArtifactItem | GroupAppItem
 
 /** Append a step to the group's trailing activity run (opening one if needed). */
+/** What a script's calls showed stands after its row, as a direct call's
+ *  would: a file it showed, an MCP tool's view. */
+function pushShown(g: TimelineGroup, invokes: ToolRowInfo[]): void {
+  for (const { result: n } of invokes) {
+    const b = n.body
+    if (b.type !== 'tool_result') continue
+    if (!b.is_error && artifactOf(b.content)) g.items.push({ kind: 'artifact', node: n })
+    else if (appOf(b.content)) g.items.push({ kind: 'app', node: n })
+  }
+}
+
 function pushActivity(g: TimelineGroup, step: ActivityStep): void {
   const last = g.items[g.items.length - 1]
   if (last && last.kind === 'activity') last.steps.push(step)
@@ -319,8 +330,8 @@ export function buildTimeline(nodes: Node[], calls: CallsOnPath, branch: BranchI
       const pending = b.tool_calls.some((c) => !answered.has(c.call_id))
       if (!pending) g.safeNode = n
     } else if (b.type === 'tool_result') {
-      // A plugin invoke's result is trace data, nested under its enclosing
-      // call by CodeCalls — never a top-level row.
+      // A plugin invoke's result nests under its enclosing call (CodeCalls),
+      // never a top-level row; what it stands for joins with that row.
       if (b.invoke) continue
       const g = ensureGroup(n)
       markSeam(g)
@@ -344,6 +355,7 @@ export function buildTimeline(nodes: Node[], calls: CallsOnPath, branch: BranchI
       if (step?.kind === 'tools') step.rows.push(row)
       else pushActivity(g, { kind: 'tools', rows: [row] })
       if (appOf(b.content)) g.items.push({ kind: 'app', node: n })
+      pushShown(g, row.invokes)
     }
   }
   // Attach the live stream to the group it belongs to (single header per turn).
@@ -384,6 +396,7 @@ export function buildTimeline(nodes: Node[], calls: CallsOnPath, branch: BranchI
         : [],
     )
     if (running.length) pushActivity(live, { kind: 'running', calls: running })
+    for (const c of running) pushShown(live, c.invokes)
   }
   if (live && delta?.hasReasoning) pushActivity(live, { kind: 'thought', node: null, streaming: true })
   if (live && delta?.hasText) live.items.push({ kind: 'text', node: null, streaming: true })

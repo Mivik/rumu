@@ -302,15 +302,15 @@ export async function moveHead(
 }
 
 /**
- * The sub-agent branch spawned by the direct `agent` tool call `callId`
- * (recorded on the branch as `kind.call_id`). Prefers a child of the main
- * line (the common case); falls back to any match (a call nested in another
- * sub-agent).
+ * The sub-agent branch spawned by the `agent` call `callId` (recorded on
+ * the branch as `kind.call_id`; a script's inner call is `"{code call}.{n}"`).
+ * Prefers a child of the main line (the common case); falls back to any
+ * match (a call nested in another sub-agent).
  */
 export function findAgentChild(callId: string): Branch | null {
   if (!callId) return null
   const matches = Object.values(state.branches).filter(
-    (b): b is Branch => b.kind.type === 'agent' && !b.kind.via_plugin && b.kind.call_id === callId,
+    (b): b is Branch => b.kind.type === 'agent' && b.kind.call_id === callId,
   )
   const isOwn = (b: Branch): boolean => b.kind.type === 'agent' && b.kind.parent_branch === state.mainBranch
   matches.sort((x, y) => Number(isOwn(y)) - Number(isOwn(x)))

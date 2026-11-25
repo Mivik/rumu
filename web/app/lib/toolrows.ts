@@ -525,11 +525,16 @@ export function toggleRow(v: ToolRowView, work: WorkView): void {
   ;(open ? collapsedRows : expandedRows).add(id)
 }
 
-/** The file edits a row stands for: itself, or those its script's calls
- * made (a blocked invoke changed nothing). */
-export function fileEditsOf(row: ToolRowInfo): ToolRowView[] {
+/** A row and the calls its script ran through it (a blocked invoke ran
+ * nothing): what it stands for — edits, sub-agents — is theirs too. */
+export function rowViews(row: ToolRowInfo): ToolRowView[] {
   const ran = row.invokes.filter(
     (r) => r.result.body.type === 'tool_result' && !r.result.body.invoke?.blocked,
   )
-  return [row, ...ran].map(toolRowView).filter(isFileEdit)
+  return [row, ...ran].map(toolRowView)
+}
+
+/** The file edits a row stands for: itself, or those its script's calls made. */
+export function fileEditsOf(row: ToolRowInfo): ToolRowView[] {
+  return rowViews(row).filter(isFileEdit)
 }

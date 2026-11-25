@@ -10,7 +10,7 @@ import { computed, ref } from 'vue'
 import { t } from '../../i18n'
 import type { Branch, FilePatch, Tagged } from '../../lib/types'
 import type { ToolRowInfo } from '../../lib/store'
-import { openAgentView, scriptAgents, state } from '../../lib/store'
+import { findAgentChild, openAgentView, scriptAgents } from '../../lib/store'
 import { argSummary, fmtThought, shortId } from '../../lib/util'
 import { taskIdOf } from '../../lib/tasks'
 import { bashExtraArgs, displayCall } from '../../lib/toolrows'
@@ -42,6 +42,8 @@ interface CodeCallRow {
   dur_ms: number
   /** A `background: true` call's task. */
   task_id: string | null
+  /** The sub-agent an `agent` call forked. */
+  child: Branch | null
 }
 
 const calls = computed<CodeCallRow[]>(() => {
@@ -58,22 +60,11 @@ const calls = computed<CodeCallRow[]>(() => {
       patch: b.content.data ?? null,
       dur_ms: n.dur_ms ?? 0,
       task_id: b.is_error ? null : taskIdOf(b.content.text),
+      child: b.invoke.name === 'agent' ? findAgentChild(b.call_id) : null,
     })
   }
   return out
 })
-
-/** Sub-agent branches forked by an internal call: keyed by its call id. */
-const agentChildren = computed(() => {
-  const map = new Map<string, Branch>()
-  for (const b of Object.values(state.branches)) {
-    if (b.kind.type === 'agent' && b.kind.via_plugin) map.set(b.kind.call_id, b)
-  }
-  return map
-})
-function openAgent(b: Branch): void {
-  openAgentView(b.id)
-}
 
 /** Sub-agents the running script forked whose call has not returned yet. */
 const pending = computed(() => {
@@ -191,14 +182,14 @@ const iconTone: Record<Status, string> = {
           </span>
         </button>
         <Chip
-          v-if="agentChildren.get(c.call_id)"
+          v-if="c.child"
           class="mt-0.5 mb-1.5 ml-[28px] self-start"
           icon="agent"
           icon-after="external"
           tone="agent"
           clickable
-          :title="t('tools.row.subAgentTitle', { id: shortId(agentChildren.get(c.call_id)!.id) })"
-          @click="openAgent(agentChildren.get(c.call_id)!)"
+          :title="t('tools.row.subAgentTitle', { id: shortId(c.child.id) })"
+          @click="openAgentView(c.child.id)"
         >
           {{ t('tools.row.openSubAgent') }}
         </Chip>
@@ -257,7 +248,7 @@ const iconTone: Record<Status, string> = {
           tone="agent"
           clickable
           :title="t('tools.row.subAgentTitle', { id: shortId(p.branch.id) })"
-          @click="openAgent(p.branch)"
+          @click="openAgentView(p.branch.id)"
         >
           {{ t('tools.row.openSubAgent') }}
         </Chip>
