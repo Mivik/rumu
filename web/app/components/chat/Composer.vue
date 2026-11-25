@@ -125,9 +125,14 @@ const canSend = computed(
 const { matching, leading } = useCommands(computed(() => !!editTarget.value))
 /** The command the draft opens with, marked behind the writing. */
 const command = computed(() => (attachments.value.length ? null : leading(draft.value)))
-/** What may follow it, until something does. */
+/** An input method is composing: its text is in the writing but not yet
+ *  in the draft (v-model waits for the composition's end). */
+const composing = ref(false)
+/** What may follow it, until something does (composing text counts). */
 const commandArg = computed(() =>
-  command.value && draft.value === `/${command.value.name} ` ? (command.value.arg ?? '') : '',
+  command.value && !composing.value && draft.value === `/${command.value.name} `
+    ? (command.value.arg ?? '')
+    : '',
 )
 /** The draft asks on the side (`/btw`), not in the conversation. */
 const btw = computed(() => command.value?.name === 'btw')
@@ -703,6 +708,8 @@ const sendLabel = computed(() =>
         @paste="onPaste"
         @focus="writing = true"
         @blur="writing = false"
+        @compositionstart="composing = true"
+        @compositionend="composing = false"
         @scroll="scrolled = ($event.target as HTMLElement).scrollTop"
       />
     </div>
