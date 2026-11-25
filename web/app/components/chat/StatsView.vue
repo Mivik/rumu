@@ -31,7 +31,7 @@ import Icon from '../ui/Icon.vue'
 
 /** The sub-agent shown; null for the main line (also when the id is stale). */
 const agent = computed<Branch | null>(() => {
-  const b = state.statsAgent ? state.branches[state.statsAgent] : undefined
+  const b = state.viewAgent ? state.branches[state.viewAgent] : undefined
   return b?.kind.type === 'agent' ? b : null
 })
 // The tree leaves sub-agents' nodes out, and a replaced tree drops them.
@@ -108,11 +108,11 @@ function pick(i: number, e: MouseEvent): void {
     // Stretch from the end of the range farther from the click.
     const anchor = i < s[0] ? s[1] : s[0]
     const [a, b] = anchor <= i ? [anchor, i] : [i, anchor]
-    showStats({ from: replies.value[a]!.id, to: replies.value[b]!.id }, state.statsAgent)
+    showStats({ from: replies.value[a]!.id, to: replies.value[b]!.id }, state.viewAgent)
   } else if (s && s[0] === i && s[1] === i) {
-    showStats(null, state.statsAgent)
+    showStats(null, state.viewAgent)
   } else {
-    showStats({ from: r.id, to: r.id }, state.statsAgent)
+    showStats({ from: r.id, to: r.id }, state.viewAgent)
   }
 }
 
@@ -248,7 +248,7 @@ const session = computed(() => state.usage)
               v-if="span"
               type="button"
               class="rounded-full bg-surface-2 px-2 py-0.5 text-micro font-semibold text-ink-2 transition-colors hover:text-ink"
-              @click="showStats(null, state.statsAgent)"
+              @click="showStats(null, state.viewAgent)"
             >
               {{ t('usage.showAll') }}
             </button>

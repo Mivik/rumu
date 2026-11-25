@@ -116,6 +116,7 @@ export {
   forgetSession,
   goHome,
   holdDecision,
+  showBranches,
   showStats,
   showView,
   killTask,

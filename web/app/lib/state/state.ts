@@ -145,8 +145,9 @@ const initial = {
   view: 'chat' as SessionView,
   /** The replies the stats view narrows to; null for the whole path. */
   statsRange: null as StatsRange | null,
-  /** The sub-agent the stats view shows; null for the main line. */
-  statsAgent: null as BranchId | null,
+  /** The sub-agent the stats view shows (null: the main line), or the
+   *  branch view points at. */
+  viewAgent: null as BranchId | null,
   /** The management page over the session, if any (mirrored in the
    *  address); the session stays loaded beneath it. */
   page: null as PageRoute | null,

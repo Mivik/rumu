@@ -17,8 +17,9 @@ import { state } from './state/state'
 const SESSION_PATH = /^\/s\/([^/]+)\/?$/
 
 /** The ways to look at an open session: the conversation, the raw
- *  trajectory of its nodes, or its usage statistics. */
-export type SessionView = 'chat' | 'trace' | 'stats'
+ *  trajectory of its nodes, its usage statistics, or its sub-agents drawn
+ *  as a tree off its messages. */
+export type SessionView = 'chat' | 'trace' | 'stats' | 'branches'
 
 /** Replies the stats view narrows to, by their first model call's node id
  *  (`?from=&to=`); `to` may equal `from`. */
@@ -57,7 +58,7 @@ export function sessionIdFromLocation(): string | null {
 /** The view named by the current address (the conversation when none is). */
 export function viewFromLocation(): SessionView {
   const v = new URLSearchParams(window.location.search).get('view')
-  return v === 'trace' || v === 'stats' ? v : 'chat'
+  return v === 'trace' || v === 'stats' || v === 'branches' ? v : 'chat'
 }
 
 /** The stats range named by the current address, if any. */
@@ -67,10 +68,12 @@ export function rangeFromLocation(): StatsRange | null {
   return q.get('view') === 'stats' && from ? { from, to: q.get('to') ?? from } : null
 }
 
-/** The sub-agent the stats view shows (`?agent=`), if any. */
-export function statsAgentFromLocation(): string | null {
+/** The sub-agent the stats view shows, or the branch view points at
+ *  (`?agent=`), if any. */
+export function viewAgentFromLocation(): string | null {
   const q = new URLSearchParams(window.location.search)
-  return q.get('view') === 'stats' ? q.get('agent') : null
+  const v = q.get('view')
+  return v === 'stats' || v === 'branches' ? q.get('agent') : null
 }
 
 /** The page named by the current address, if any. */
@@ -94,7 +97,7 @@ function currentUrl(): string {
   if (state.view === 'chat') return `/s/${encodeURIComponent(id)}`
   const q = new URLSearchParams({ view: state.view })
   const range = state.view === 'stats' ? state.statsRange : null
-  if (state.view === 'stats' && state.statsAgent) q.set('agent', state.statsAgent)
+  if (state.view !== 'trace' && state.viewAgent) q.set('agent', state.viewAgent)
   if (range) {
     q.set('from', range.from)
     if (range.to !== range.from) q.set('to', range.to)

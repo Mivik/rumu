@@ -179,6 +179,42 @@ export interface SessionUsage {
   output: number
 }
 
+/** `session.graph`: what the branch view draws. A turn is a user message
+ *  with one version of its reply; the turns under one parent are that
+ *  message's versions. */
+export interface SessionGraph {
+  /** Oldest first. */
+  turns: GraphTurn[]
+  /** A sub-agent or side question right off the main line (by branch id),
+   *  or a main-line task (by task id) → the turn it hangs from. */
+  anchors: Record<string, NodeId>
+  /** Each sub-agent's and side question's own nodes, summed. */
+  branches: Record<BranchId, GraphBranch>
+}
+
+export interface GraphTurn {
+  /** The reply's first node; the message's own while it has none. */
+  id: NodeId
+  parent: NodeId | null
+  user: NodeId
+  at: number
+  /** The message's opening line. */
+  text: string
+  /** On the main line's path. */
+  line: boolean
+  /** Shares its message with another turn (a regenerate, not an edit). */
+  regen: boolean
+}
+
+export interface GraphBranch {
+  last_at: number
+  calls: number
+  tools: number
+  model: string | null
+  /** A side question's question. */
+  text?: string
+}
+
 export interface BranchPathResult {
   state: PathState
 }

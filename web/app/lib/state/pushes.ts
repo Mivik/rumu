@@ -8,7 +8,7 @@ import {
   pageFromLocation,
   rangeFromLocation,
   sessionIdFromLocation,
-  statsAgentFromLocation,
+  viewAgentFromLocation,
   viewFromLocation,
 } from '../router'
 import type {
@@ -306,7 +306,7 @@ export function startApp(): void {
   state.booting = sessionIdFromLocation() !== null
   state.view = viewFromLocation()
   state.statsRange = rangeFromLocation()
-  state.statsAgent = statsAgentFromLocation()
+  state.viewAgent = viewAgentFromLocation()
   state.page = pageFromLocation()
 
   rumu.onPush('node.appended', (p) => onNodeAppended(p as unknown as NodeAppendedPush))
@@ -369,7 +369,7 @@ export function startApp(): void {
     const id = sessionIdFromLocation()
     state.view = viewFromLocation()
     state.statsRange = rangeFromLocation()
-    state.statsAgent = statsAgentFromLocation()
+    state.viewAgent = viewAgentFromLocation()
     if (id === state.sessionId) return
     if (id) void openSession(id, { history: 'none' })
     else closeSession()

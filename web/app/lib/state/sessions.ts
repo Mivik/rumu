@@ -206,10 +206,18 @@ export function goHome(): void {
 
 /** Show the open session another way; Back returns to the previous view. */
 export function showView(view: SessionView): void {
-  if (state.view === view && !state.statsRange && !state.statsAgent) return
+  if (state.view === view && !state.statsRange && !state.viewAgent) return
   state.view = view
   state.statsRange = null
-  state.statsAgent = null
+  state.viewAgent = null
+  commitRoute('push')
+}
+
+/** The branch view, pointing at the sub-agent `agent` when given. */
+export function showBranches(agent: BranchId | null = null): void {
+  state.view = 'branches'
+  state.statsRange = null
+  state.viewAgent = agent
   commitRoute('push')
 }
 
@@ -218,7 +226,7 @@ export function showView(view: SessionView): void {
 export function showStats(range: StatsRange | null, agent: BranchId | null = null): void {
   state.view = 'stats'
   state.statsRange = range
-  state.statsAgent = agent
+  state.viewAgent = agent
   commitRoute('push')
 }
 
@@ -228,7 +236,7 @@ export function closeSession(): void {
   state.booting = false // and any boot into a session URL still pending
   state.view = 'chat'
   state.statsRange = null
-  state.statsAgent = null
+  state.viewAgent = null
   state.sessionId = null
   watchSession(null)
   state.session = null
