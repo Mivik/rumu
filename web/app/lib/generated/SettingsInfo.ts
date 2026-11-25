@@ -21,4 +21,8 @@ aliases: Array<ModelInfo>, roles: Roles, titles: Titles, compact: CompactSetting
 /**
  * The external plugins of `settings.yaml`.
  */
-plugins: Array<PluginInfo>, };
+plugins: Array<PluginInfo>, 
+/**
+ * The server's version and the commit it was built from.
+ */
+version: string, };

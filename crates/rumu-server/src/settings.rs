@@ -431,6 +431,7 @@ impl Settings {
             mcp: self.mcp.info(&file.mcp),
             skills,
             plugins: self.plugins.as_ref().map(|p| p.info()).unwrap_or_default(),
+            version: crate::VERSION.to_owned(),
         }
     }
 

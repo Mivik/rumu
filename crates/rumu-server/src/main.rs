@@ -14,14 +14,24 @@ use anyhow::{Result, bail};
 use tracing::info;
 use tracing_subscriber::EnvFilter;
 
+/// The package version and the commit it was built from (build.rs).
+pub const VERSION: &str = env!("RUMU_VERSION");
+
 #[tokio::main]
 async fn main() -> Result<()> {
+    let acp = match std::env::args().nth(1).as_deref() {
+        None => false,
+        Some("acp") => true,
+        Some("-V" | "--version") => {
+            println!("rumu {VERSION}");
+            return Ok(());
+        }
+        Some(other) => bail!("unknown command `{other}` (usage: rumu [acp | --version])"),
+    };
     init_tracing();
     let home = boot::home()?;
-    match std::env::args().nth(1).as_deref() {
-        None => {}
-        Some("acp") => return acp::run(&home).await,
-        Some(other) => bail!("unknown command `{other}` (usage: rumu [acp])"),
+    if acp {
+        return acp::run(&home).await;
     }
     let token = auth::Token::load(&home)?;
     let port: u16 = std::env::var("RUMU_PORT")
@@ -40,7 +50,7 @@ async fn main() -> Result<()> {
     let addr = SocketAddr::new(host, port);
     let listener = tokio::net::TcpListener::bind(addr).await?;
     let addr = listener.local_addr()?;
-    info!(home = %home.display(), %addr, "listening on http://{addr}");
+    info!(home = %home.display(), %addr, "rumu {VERSION} listening on http://{addr}");
     let browser_host = if host.is_unspecified() {
         if host.is_ipv6() {
             IpAddr::V6(std::net::Ipv6Addr::LOCALHOST)

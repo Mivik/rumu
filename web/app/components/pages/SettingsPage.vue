@@ -10,7 +10,7 @@ import { computed, onBeforeUnmount, onMounted, ref, watch, watchEffect } from 'v
 import { t } from '../../i18n'
 import { layout } from '../../lib/layout'
 import { closePage, openPage, pageUp, replacePage } from '../../lib/router'
-import { refreshSettings } from '../../lib/state/models'
+import { models, refreshSettings } from '../../lib/state/models'
 import { connected, state } from '../../lib/store'
 import AppearanceSettings from '../settings/AppearanceSettings.vue'
 import DefaultsSettings from '../settings/DefaultsSettings.vue'
@@ -128,6 +128,9 @@ watch(connected, (up) => up && void refreshSettings(), { immediate: true })
           <span class="flex-1">{{ t(`settings.${s.key}`) }}</span>
           <span class="flex flex-none text-ink-3 @2xl:hidden"><Icon name="chevron" :size="14" /></span>
         </button>
+        <p v-if="models.settings?.version" class="mt-auto select-text px-2.5 pt-3 text-xs text-ink-3">
+          rumu {{ models.settings.version }}
+        </p>
       </nav>
     </template>
 

@@ -533,6 +533,8 @@ pub struct SettingsInfo {
     pub skills: crate::SkillsInfo,
     /// The external plugins of `settings.yaml`.
     pub plugins: Vec<crate::PluginInfo>,
+    /// The server's version and the commit it was built from.
+    pub version: String,
 }
 
 #[cfg(test)]
