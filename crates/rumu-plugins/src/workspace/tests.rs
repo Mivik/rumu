@@ -3442,8 +3442,8 @@ async fn search_sessions_and_cards_by_scope() {
 }
 
 /// A spaceless CJK query still prints snippets (snippet terms come
-/// from the ranker's tokenizer, not `split_whitespace`), and a one-char
-/// query hits: explicit search indexes a run's chars.
+/// from the index's segmenter, not `split_whitespace`), and any word of the
+/// text hits. Matching is by word: one char of a word is no hit.
 #[tokio::test]
 async fn search_sessions_snippet_cjk_queries() {
     let host = FakeRuntime::arc();
@@ -3508,13 +3508,26 @@ async fn search_sessions_snippet_cjk_queries() {
     let out = plugin
         .call_tool(
             "search",
-            json!({ "query": "服", "scope": "@rumu:/sessions" }),
+            json!({ "query": "代理", "scope": "@rumu:/sessions" }),
             &cx,
         )
         .await
         .unwrap();
     assert!(
         hit_addrs(&out.content.text).contains(&format!("@rumu:/sessions/{sid}/U1")),
+        "{}",
+        out.content.text
+    );
+    let out = plugin
+        .call_tool(
+            "search",
+            json!({ "query": "服", "scope": "@rumu:/sessions" }),
+            &cx,
+        )
+        .await
+        .unwrap();
+    assert!(
+        hit_addrs(&out.content.text).is_empty(),
         "{}",
         out.content.text
     );

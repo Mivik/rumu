@@ -28,6 +28,10 @@ pub enum Error {
     /// A session file could not be folded and every read of it fails.
     #[error("session {session} is unreadable: {message}")]
     Unreadable { session: SessionId, message: String },
+
+    /// The search index failed.
+    #[error("session search index: {0}")]
+    Index(String),
 }
 
 /// A result with the store error.

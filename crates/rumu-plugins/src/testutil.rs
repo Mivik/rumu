@@ -375,6 +375,42 @@ impl History for FakeRuntime {
             .find(|(t, _)| &t.id == id)
             .cloned())
     }
+
+    /// Over an index built from `session_trees` on each call.
+    fn search(
+        &self,
+        query: &str,
+        sessions: &[SessionId],
+        limit: usize,
+    ) -> Result<rumu_core::HistoryHits> {
+        self.index()
+            .search(query, sessions, limit)
+            .map_err(|e| Error::msg(e.to_string()))
+    }
+
+    fn indexed_nodes(&self, session: &SessionId) -> Result<Vec<String>> {
+        let index = self.index();
+        index.flush();
+        index
+            .node_ids(session)
+            .map_err(|e| Error::msg(e.to_string()))
+    }
+}
+
+impl FakeRuntime {
+    fn index(&self) -> rumu_search::SessionIndex {
+        let index = rumu_search::SessionIndex::in_memory();
+        for (session, _, nodes, _) in self.session_trees.lock().unwrap().iter() {
+            for n in nodes {
+                let n = Node {
+                    session: session.clone(),
+                    ..n.clone()
+                };
+                index.upsert(&n, 0);
+            }
+        }
+        index
+    }
 }
 
 #[async_trait]

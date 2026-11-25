@@ -5,8 +5,8 @@ use std::time::Duration;
 
 use async_trait::async_trait;
 use rumu_core::{
-    Branch, BranchId, History, InnerCall, NewSession, Node, PathState, Progress, ProgressSink,
-    Result, Runtime, SessionId, SessionInfo, TaskId, TaskInfo,
+    Branch, BranchId, History, HistoryHits, InnerCall, NewSession, Node, PathState, Progress,
+    ProgressSink, Result, Runtime, SessionId, SessionInfo, TaskId, TaskInfo,
 };
 use serde_json::{Value, json};
 
@@ -29,6 +29,14 @@ impl History for KernelRuntime {
 
     fn task(&self, id: &TaskId) -> Result<Option<(TaskInfo, String)>> {
         Ok(self.0.task(id)?)
+    }
+
+    fn search(&self, query: &str, sessions: &[SessionId], limit: usize) -> Result<HistoryHits> {
+        Ok(self.0.store.search(query, sessions, limit)?)
+    }
+
+    fn indexed_nodes(&self, session: &SessionId) -> Result<Vec<String>> {
+        Ok(self.0.store.indexed_nodes(session)?)
     }
 }
 

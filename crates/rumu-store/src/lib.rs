@@ -55,6 +55,11 @@
 //! tail). A node is looked up within its session; `get_branch` routes through
 //! a branch→session index built during the scan and maintained on inserts.
 //!
+//! Every node is also in a full-text index ([`rumu_search`]), derived from
+//! the journals: [`Store::open_indexed`] keeps it on disk and re-indexes, on
+//! a background thread, each session whose journal is not what the index
+//! covers; [`Store::open`] and [`Store::in_memory`] build it in memory.
+//!
 //! A crash mid-append can tear the last line; on load it is dropped with a
 //! warning and truncated so the next append starts on a clean line. Any other
 //! malformed line — including a record rumu cannot deserialize, e.g. a node
@@ -68,15 +73,16 @@ pub use error::{Error, Result};
 use std::collections::{BTreeMap, HashMap, HashSet};
 use std::io::Write;
 use std::path::{Path, PathBuf};
-use std::sync::{Mutex, MutexGuard};
+use std::sync::{Arc, Mutex, MutexGuard};
 
 use rumu_core::{
     Artifact, Branch, BranchId, BranchKind, BranchStatus, IoError, McpApp, Node, NodeBody, NodeId,
     SessionId, SessionInfo, SessionStatus, TaskId, TaskInfo, Timestamp, TurnError,
 };
+use rumu_search::{Found, SessionIndex};
 use serde::{Deserialize, Serialize};
 use serde_json::Value;
-use tracing::warn;
+use tracing::{info, warn};
 
 pub struct Store {
     /// Directory of `<session-id>.jsonl` files; `None` for in-memory stores
@@ -86,6 +92,7 @@ pub struct Store {
     seen_path: Option<PathBuf>,
     /// The most journal bytes whose nodes idle sessions keep in memory.
     budget: u64,
+    index: Arc<SessionIndex>,
     state: Mutex<StoreState>,
 }
 
@@ -200,9 +207,67 @@ struct SessionState {
 
 impl Store {
     /// Open (creating if needed) the directory of per-session `.jsonl` files
-    /// and the `seen` map file. Every file is scanned and folded into memory
-    /// once, up front.
+    /// and the `seen` map file. Every file is scanned once, up front; the
+    /// search index is built in memory before this returns.
     pub fn open(root: &Path, seen: &Path) -> Result<Self> {
+        let store = Self::scan(root, seen, Arc::new(SessionIndex::in_memory()))?;
+        let stale = store.stale_sessions(&BTreeMap::new());
+        store.reindex(stale);
+        Ok(store)
+    }
+
+    /// [`open`](Self::open) with the search index kept in `index_dir`: the
+    /// sessions it does not cover are re-indexed on a background thread.
+    pub fn open_indexed(root: &Path, seen: &Path, index_dir: &Path) -> Result<Self> {
+        let (index, covered) = SessionIndex::open(index_dir).map_err(index_error)?;
+        let store = Self::scan(root, seen, Arc::new(index))?;
+        let stale = store.stale_sessions(&covered);
+        for gone in covered.keys().filter(|id| {
+            !store
+                .state
+                .lock()
+                .unwrap()
+                .sessions
+                .contains_key(&SessionId::from(id.as_str()))
+        }) {
+            store.index.delete_session(&SessionId::from(gone.as_str()));
+        }
+        if !stale.is_empty() {
+            let index = store.index.clone();
+            std::thread::Builder::new()
+                .name("session-reindex".into())
+                .spawn(move || reindex(&index, stale))
+                .map_err(IoError::at("spawning the re-index of", index_dir))?;
+        }
+        Ok(store)
+    }
+
+    /// The readable sessions whose journal length is not the one `covered`
+    /// records, with their journals, marked stale in the index.
+    fn stale_sessions(&self, covered: &BTreeMap<String, u64>) -> Vec<(SessionId, PathBuf)> {
+        let st = self.state.lock().unwrap();
+        let mut stale: Vec<(SessionId, PathBuf)> = st
+            .sessions
+            .iter()
+            .filter_map(|(id, e)| match e {
+                Entry::Loaded(s) if covered.get(&id.0) != Some(&s.bytes) => {
+                    Some((id.clone(), self.journal(id)?))
+                }
+                _ => None,
+            })
+            .collect();
+        stale.sort();
+        self.index
+            .stale(stale.iter().map(|(id, _)| id.0.clone()).collect());
+        stale
+    }
+
+    /// Re-index `stale` here and now.
+    fn reindex(&self, stale: Vec<(SessionId, PathBuf)>) {
+        reindex(&self.index, stale);
+    }
+
+    fn scan(root: &Path, seen: &Path, index: Arc<SessionIndex>) -> Result<Self> {
         std::fs::create_dir_all(root).map_err(IoError::at("creating sessions dir", root))?;
         let mut paths: Vec<PathBuf> = std::fs::read_dir(root)
             .map_err(IoError::at("reading sessions dir", root))?
@@ -226,6 +291,7 @@ impl Store {
             root: Some(root.to_path_buf()),
             seen_path: Some(seen.to_path_buf()),
             budget: DEFAULT_BUDGET,
+            index,
             state: Mutex::new(state),
         })
     }
@@ -236,6 +302,7 @@ impl Store {
             root: None,
             seen_path: None,
             budget: DEFAULT_BUDGET,
+            index: Arc::new(SessionIndex::in_memory()),
             state: Mutex::new(StoreState::default()),
         }
     }
@@ -385,6 +452,7 @@ impl Store {
         st.loaded_bytes += bytes;
         st.sessions
             .insert(s.id.clone(), Entry::Loaded(Box::new(state)));
+        self.index.touch(&s.id, bytes);
         if let Some(at) = s.seen_at {
             st.seen.insert(s.id.clone(), at);
             self.save_seen(&st.seen)?;
@@ -433,7 +501,7 @@ impl Store {
             updated_at: Some(s.updated_at),
         };
         let bytes = self.append(&s.id, &rec)?;
-        st.apply(&s.id, rec, bytes);
+        self.applied(&mut st, &s.id, rec, bytes);
         Ok(())
     }
 
@@ -476,6 +544,7 @@ impl Store {
             }
         }
         st.status.remove(id);
+        self.index.delete_session(id);
         if st.seen.remove(id).is_some() {
             self.save_seen(&st.seen)?;
         }
@@ -508,7 +577,7 @@ impl Store {
         }
         let rec = Record::Branch(b.clone());
         let bytes = self.append(&b.session, &rec)?;
-        st.apply(&b.session, rec, bytes);
+        self.applied(&mut st, &b.session, rec, bytes);
         Ok(())
     }
 
@@ -538,7 +607,7 @@ impl Store {
             status: Some(status),
         };
         let bytes = self.append(&sid, &rec)?;
-        st.apply(&sid, rec, bytes);
+        self.applied(&mut st, &sid, rec, bytes);
         Ok(())
     }
 
@@ -558,7 +627,7 @@ impl Store {
             status: None,
         };
         let bytes = self.append(&sid, &rec)?;
-        st.apply(&sid, rec, bytes);
+        self.applied(&mut st, &sid, rec, bytes);
         Ok(())
     }
 
@@ -576,7 +645,7 @@ impl Store {
             ..task.clone()
         }));
         let bytes = self.append(&task.session, &rec)?;
-        st.apply(&task.session, rec, bytes);
+        self.applied(&mut st, &task.session, rec, bytes);
         Ok(())
     }
 
@@ -640,8 +709,37 @@ impl Store {
             node: Box::new(n.clone()),
         };
         let bytes = self.append(&n.session, &rec)?;
-        st.apply(&n.session, rec, bytes);
+        self.applied(&mut st, &n.session, rec, bytes);
         Ok(())
+    }
+
+    /// Fold a record just appended into the state and tell the index.
+    fn applied(&self, st: &mut StoreState, sid: &SessionId, rec: Record, bytes: u64) {
+        let node = match &rec {
+            Record::Node { node, .. } => Some((**node).clone()),
+            _ => None,
+        };
+        st.apply(sid, rec, bytes);
+        let Some(Entry::Loaded(s)) = st.sessions.get(sid) else {
+            return;
+        };
+        match node {
+            Some(node) => self.index.upsert(&node, s.bytes),
+            None => self.index.touch(sid, s.bytes),
+        }
+    }
+
+    /// Full-text search over the nodes of `sessions` (see
+    /// [`SessionIndex::search`]).
+    pub fn search(&self, query: &str, sessions: &[SessionId], limit: usize) -> Result<Found> {
+        self.index
+            .search(query, sessions, limit)
+            .map_err(index_error)
+    }
+
+    /// Every node id of `session` the search index knows.
+    pub fn indexed_nodes(&self, session: &SessionId) -> Result<Vec<String>> {
+        self.index.node_ids(session).map_err(index_error)
     }
 
     /// The node `id` of `session`.
@@ -775,6 +873,35 @@ fn blobs_of(node: &Node) -> impl Iterator<Item = String> {
         .into_iter()
         .chain(artifact.map(|a| a.hash))
         .chain(app.into_iter().flat_map(|a| [a.html, a.call]))
+}
+
+/// Index the nodes of each `stale` session's journal, then record how much
+/// of it that covers.
+fn reindex(index: &SessionIndex, stale: Vec<(SessionId, PathBuf)>) {
+    let (count, started) = (stale.len(), std::time::Instant::now());
+    for (session, path) in stale {
+        let content = match std::fs::read_to_string(&path) {
+            Ok(content) => content,
+            Err(e) => {
+                warn!(path = %path.display(), error = %e, "re-indexing a session failed");
+                continue;
+            }
+        };
+        let complete = content.rfind('\n').map_or("", |end| &content[..=end]);
+        for line in complete.lines() {
+            if let Ok(Record::Node { node, .. }) = serde_json::from_str::<Record>(line) {
+                index.reindex_node(&node);
+            }
+        }
+        index.reindexed(&session, complete.len() as u64);
+    }
+    if count > 0 {
+        info!(sessions = count, elapsed = ?started.elapsed(), "sessions re-indexed");
+    }
+}
+
+fn index_error(e: rumu_search::Error) -> Error {
+    Error::Index(e.to_string())
 }
 
 /// See [`Store::line_failed`].
@@ -1270,6 +1397,65 @@ mod tests {
         assert_eq!(tasks[1].branch, branch);
         assert_eq!(tasks[1].status, rumu_core::TaskStatus::Running);
         assert!(tasks[1].result.is_none(), "only the note carries a result");
+        std::fs::remove_dir_all(&dir).ok();
+    }
+
+    /// The on-disk index covers what was written before a reopen; a session
+    /// whose journal it does not match is re-indexed, and one whose journal
+    /// is gone is dropped from it.
+    #[test]
+    fn the_search_index_follows_the_journals_across_reopens() {
+        let dir = temp_dir("index");
+        let index = dir.join("index");
+        let open = || Store::open_indexed(&dir, &dir.join("seen.json"), &index).unwrap();
+        let hits = |store: &Store, ids: &[SessionId]| {
+            let found = store.search("hello", ids, 10).unwrap();
+            found.hits.into_iter().map(|h| h.node).collect::<Vec<_>>()
+        };
+        let (a, b, hello) = {
+            let store = open();
+            let (a, a_main, a_root) = mk_session(&store);
+            let (b, _, _) = mk_session(&store);
+            let hello = note(&a, &a_root.id, rumu_core::Content::text("hello world"));
+            store.append_node(&a_main.id, &hello).unwrap();
+            assert_eq!(
+                hits(&store, std::slice::from_ref(&a.id)),
+                vec![hello.id.0.clone()]
+            );
+            (a, b, hello)
+        };
+        // Written behind the index's back: only a re-index finds it.
+        let late = note(
+            &b,
+            &b.main_branch.0.as_str().into(),
+            rumu_core::Content::text("hello"),
+        );
+        let line = serde_json::to_string(&Record::Node {
+            branch: None,
+            node: Box::new(late.clone()),
+        })
+        .unwrap();
+        let path = dir.join(format!("{}.jsonl", b.id));
+        let mut file = std::fs::OpenOptions::new()
+            .append(true)
+            .open(&path)
+            .unwrap();
+        file.write_all(format!("{line}\n").as_bytes()).unwrap();
+        drop(file);
+        std::fs::remove_file(dir.join(format!("{}.jsonl", a.id))).unwrap();
+        let store = open();
+        let ids = [a.id.clone(), b.id.clone()];
+        let deadline = std::time::Instant::now() + std::time::Duration::from_secs(20);
+        while hits(&store, &ids) != [late.id.0.clone()] {
+            assert!(
+                std::time::Instant::now() < deadline,
+                "{:?}",
+                hits(&store, &ids)
+            );
+            std::thread::sleep(std::time::Duration::from_millis(50));
+        }
+        assert!(store.indexed_nodes(&a.id).unwrap().is_empty());
+        assert!(!store.indexed_nodes(&b.id).unwrap().contains(&hello.id.0));
         std::fs::remove_dir_all(&dir).ok();
     }
 

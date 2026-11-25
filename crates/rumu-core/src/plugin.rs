@@ -441,6 +441,11 @@ pub trait History: Send + Sync {
     /// One kernel task plus its full buffered output (already annotated when
     /// the buffer dropped earlier text). `None` when no such task exists.
     fn task(&self, id: &TaskId) -> Result<Option<(TaskInfo, String)>>;
+    /// Full-text search over the nodes of `sessions` (any word of `query`):
+    /// the best `limit` hits, best first, and how many match in all.
+    fn search(&self, query: &str, sessions: &[SessionId], limit: usize) -> Result<HistoryHits>;
+    /// Every node id of `session` the search index knows.
+    fn indexed_nodes(&self, session: &SessionId) -> Result<Vec<String>>;
 }
 
 /// One node a [`History::search`] found.

@@ -61,9 +61,10 @@ fn lock(home: &Path) -> Result<File> {
 /// Boot the stack over `home`, after taking its lock.
 pub async fn boot(home: &Path) -> Result<Booted> {
     let lock = lock(home)?;
-    let store = Arc::new(Store::open(
+    let store = Arc::new(Store::open_indexed(
         &home.join("sessions"),
         &home.join("seen.json"),
+        &home.join("cache/session-index"),
     )?);
     let blobs = Blobs::in_home(home)?;
     // A home without a registry starts with the current directory as its

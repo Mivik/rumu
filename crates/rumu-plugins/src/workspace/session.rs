@@ -27,10 +27,9 @@ use std::cmp::Reverse;
 use std::collections::HashSet;
 
 use async_trait::async_trait;
-use rumu_cards::recall::{self, Doc};
 use rumu_core::{
-    Branch, BranchKind, Cx, Node, NodeBody, PathState, QUOTE_CHARS, RUMU_WORKSPACE, SessionId,
-    SessionInfo, ToolCall, ToolError, ToolOutput, ToolResult, quote,
+    Branch, BranchKind, Cx, HistoryHit, Node, NodeBody, PathState, QUOTE_CHARS, RUMU_WORKSPACE,
+    SessionId, SessionInfo, ToolCall, ToolError, ToolOutput, ToolResult, quote,
 };
 use serde_json::Value;
 
@@ -41,10 +40,6 @@ use super::vfs::{self, ActionSpec, Approval, At, NoArgs, Out, bad_scope};
 
 /// The `@rumu` result prefix.
 const WS: &str = RUMU_WORKSPACE;
-
-/// Tool results are long and log-heavy: halve their score so prose nodes with
-/// the same match rank above them.
-const TOOL_RESULT_BOOST: f64 = 0.5;
 
 /// A long body in a *range* read keeps this many chars from each end, with a
 /// `<truncated>` pointer between. Single-node reads are uncapped (only the
@@ -501,10 +496,11 @@ impl WorkspacePlugin {
         Ok(format!("  by {name}"))
     }
 
-    /// The session half of `search`: BM25-ranked nodes over user text,
-    /// assistant text + tool-call args, tool-result text and note text. Any
-    /// query term matches (OR); equal scores are newest first by `at`, and
-    /// tool results are downweighted. Read-only — no `card.use` markers.
+    /// The session half of `search`: the history index's BM25-ranked nodes
+    /// (see `rumu_search`) over user text, assistant text + tool-call args,
+    /// tool-result text and note text. Any query word matches (OR); equal
+    /// scores are newest first, and tool results are downweighted.
+    /// Read-only — no `card.use` markers.
     pub(super) async fn session_search(
         &self,
         query: &str,
@@ -513,95 +509,52 @@ impl WorkspacePlugin {
         limit: usize,
         cx: &Cx,
     ) -> ToolResult<ToolOutput> {
-        // Snippet terms need the ranker's tokenization, not whitespace: a
-        // spaceless CJK query would otherwise never print a snippet.
-        let terms: Vec<String> = recall::tokens(query);
         if query.trim().is_empty() {
             return Err(ToolError::model("search: empty query"));
         }
         let mut sessions = visible_sessions(cx, assistant)?;
-        sessions.sort_by_key(|s| Reverse(s.updated_at));
-
-        struct Candidate {
-            session: usize,
-            node: String,
-            at: rumu_core::Timestamp,
-            kind: &'static str,
-            text: String,
+        if !only.is_empty() {
+            sessions.retain(|s| s.id.0 == only);
         }
-        let mut candidates = Vec::new();
-        for (si, info) in sessions.iter().enumerate() {
-            if !only.is_empty() && info.id.0 != only {
-                continue;
-            }
-            let Ok((_, nodes, _)) = cx.history().session_tree(&info.id) else {
-                continue; // unreadable sessions just have no hits
-            };
-            let view = SessionView::new(&info.id.0, &nodes);
-            for n in &nodes {
-                let Some((kind, text)) = searchable_text(&n.body) else {
-                    continue;
-                };
-                candidates.push(Candidate {
-                    session: si,
-                    node: view.short(&n.id.0),
-                    at: n.at,
-                    kind,
-                    text,
-                });
-            }
-        }
-        // Newest first: a stable score sort keeps this order for equal scores.
-        candidates.sort_by_key(|c| Reverse(c.at));
-        let docs: Vec<Doc> = candidates
-            .iter()
-            .map(|c| {
-                let boost = if c.kind == "tool_result" {
-                    TOOL_RESULT_BOOST
-                } else {
-                    1.0
-                };
-                Doc::new([(c.text.as_str(), 1.0)], boost)
-            })
-            .collect();
-        // Explicit search: every positive score is a hit, and a term common to
-        // every node still finds those nodes.
-        let hits = recall::rank_docs(&docs, query, docs.len(), false);
-
-        if hits.is_empty() {
+        let ids: Vec<SessionId> = sessions.iter().map(|s| s.id.clone()).collect();
+        let found = cx.history().search(query, &ids, limit)?;
+        if found.hits.is_empty() {
             return Ok(format!("no conversation nodes match `{query}`").into());
         }
-        // Group the shown hits by session, sessions ordered by their best hit
-        // and nodes by rank within one; a snippet repeated in the same session
+        // Group the hits by session, sessions ordered by their best hit and
+        // nodes by rank within one; a snippet repeated in the same session
         // points back at its first node.
-        let mut groups: Vec<(usize, Vec<usize>)> = Vec::new();
-        for &(i, _) in hits.iter().take(limit) {
-            let si = candidates[i].session;
-            match groups.iter_mut().find(|(s, _)| *s == si) {
-                Some((_, g)) => g.push(i),
-                None => groups.push((si, vec![i])),
+        let mut groups: Vec<(&SessionInfo, Vec<&HistoryHit>)> = Vec::new();
+        for hit in &found.hits {
+            let Some(info) = sessions.iter().find(|s| s.id == hit.session) else {
+                continue;
+            };
+            match groups.iter_mut().find(|(s, _)| s.id == info.id) {
+                Some((_, g)) => g.push(hit),
+                None => groups.push((info, vec![hit])),
             }
         }
         let mut out = Vec::new();
-        for (si, group) in groups {
-            let info = &sessions[si];
+        for (info, group) in groups {
             out.push(format!(
                 "session {WS}:/sessions/{}  {}{}",
                 info.id,
                 quote(&info.title, TITLE_CHARS),
                 self.session_owner(info, cx)?
             ));
-            let mut seen: Vec<(String, &str)> = Vec::new();
-            for i in group {
-                let c = &candidates[i];
-                let mut line = format!("  {}  {:<11}  {}", c.node, c.kind, iso_local(c.at));
-                if let Some(s) = rumu_cards::body_snippet(&c.text, &terms) {
+            let ids = cx.history().indexed_nodes(&info.id)?;
+            let abbr = abbreviation_len(ids.iter().map(String::as_str));
+            let mut seen: Vec<(String, String)> = Vec::new();
+            for hit in group {
+                let node = abbreviate(&hit.node, abbr);
+                let mut line = format!("  {node}  {:<11}  {}", hit.kind, iso_local(hit.at));
+                if let Some(s) = rumu_cards::body_snippet(&hit.text, &found.terms) {
                     match seen.iter().find(|(prev, _)| *prev == s) {
                         Some((_, first)) => line.push_str(&format!("  (same as {first})")),
                         None => {
                             line.push_str("  ");
                             line.push_str(&quote(&s, usize::MAX));
-                            seen.push((s, &c.node));
+                            seen.push((s, node));
                         }
                     }
                 }
@@ -609,8 +562,11 @@ impl WorkspacePlugin {
             }
         }
         let mut text = out.join("\n");
-        if hits.len() > limit {
-            text.push_str(&format!("\n(+{} more hits)", hits.len() - limit));
+        if found.total > found.hits.len() {
+            text.push_str(&format!(
+                "\n(+{} more hits)",
+                found.total - found.hits.len()
+            ));
         }
         Ok(text.into())
     }
@@ -618,44 +574,6 @@ impl WorkspacePlugin {
 
 /// Title chars shown in a session-search group header.
 const TITLE_CHARS: usize = 48;
-
-/// Tools whose call args are not indexed: they only look things up, so their
-/// args just echo earlier queries and paths back as noise hits.
-const LOOKUP_TOOLS: [&str; 3] = ["read", "list", "search"];
-
-/// The text a session-search term matches against, with the node kind label:
-/// user text, assistant text + tool-call args (bar [`LOOKUP_TOOLS`]),
-/// tool-result text, note text —
-/// images as their `[image: …]` placeholder. Markers carry nothing
-/// searchable.
-fn searchable_text(body: &NodeBody) -> Option<(&'static str, String)> {
-    match body {
-        NodeBody::User { content } => Some(("user", content.rendered())),
-        NodeBody::Assistant {
-            content,
-            tool_calls,
-            ..
-        } => {
-            let mut text = content.rendered();
-            for call in tool_calls {
-                if LOOKUP_TOOLS.contains(&call.name.as_str()) {
-                    continue;
-                }
-                text.push('\n');
-                text.push_str(&call.name);
-                text.push(' ');
-                text.push_str(&serde_json::to_string(&call.args).unwrap_or_default());
-            }
-            Some(("assistant", text))
-        }
-        NodeBody::ToolResult { content, .. } => Some(("tool_result", content.rendered())),
-        // An empty-text note is a marker: nothing searchable.
-        NodeBody::Note { content, .. } if !content.text.is_empty() => {
-            Some(("note", content.rendered()))
-        }
-        NodeBody::Note { .. } => None,
-    }
-}
 
 fn no_node_err(sid: &str, node: &str) -> ToolError {
     ToolError::model(format!("no node `{node}` on session `{sid}`"))
@@ -703,7 +621,7 @@ impl<'a> SessionView<'a> {
         Self {
             sid,
             nodes,
-            abbr: abbreviation_len(nodes),
+            abbr: abbreviation_len(nodes.iter().map(|n| n.id.0.as_str())),
         }
     }
 
@@ -963,11 +881,11 @@ fn escape_attr(s: &str) -> String {
 
 /// Per session, the smallest id prefix length (at least [`MIN_ABBR`]) that
 /// keeps every node's abbreviation distinct.
-fn abbreviation_len(nodes: &[Node]) -> usize {
+fn abbreviation_len<'a>(ids: impl Iterator<Item = &'a str> + Clone) -> usize {
     let mut len = MIN_ABBR;
     loop {
         let mut seen = HashSet::new();
-        if nodes.iter().all(|n| seen.insert(abbreviate(&n.id.0, len))) {
+        if ids.clone().all(|id| seen.insert(abbreviate(id, len))) {
             return len;
         }
         len += 1;
