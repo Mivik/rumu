@@ -4058,7 +4058,10 @@ async fn builtin_workspace_entries_are_only_used() {
     let home = tempfile::tempdir().unwrap();
     let plugin = deck_plugin(home.path());
     let host = FakeRuntime::arc();
-    let scratch = ws(rumu_core::SCRATCH_WORKSPACE, "/scratch/s1");
+    // A real directory: using `@scratch` creates its root.
+    let root = home.path().join("scratch").join("s1");
+    let root = root.to_str().unwrap();
+    let scratch = ws(rumu_core::SCRATCH_WORKSPACE, root);
     *host.state.lock().unwrap() = state_with(vec![scratch], Some("@rumu"));
     let cx = host.cx();
     let out = plugin
@@ -4066,7 +4069,7 @@ async fn builtin_workspace_entries_are_only_used() {
         .await
         .unwrap();
     assert!(
-        out.content.text.contains("root: /scratch/s1"),
+        out.content.text.contains(&format!("root: {root}")),
         "{}",
         out.content.text
     );
