@@ -1139,6 +1139,9 @@ impl WorkspacePlugin {
             )));
         };
         let (node, at) = self.route(&abs, state, cx)?;
+        if let Some(out) = super::vfs::invoke_mounted(&at, &args.action, params.clone()).await {
+            return out;
+        }
         let Some(spec) = node.actions().iter().find(|a| a.name == args.action) else {
             return Err(super::vfs::not_here(&args.action, &abs, node));
         };

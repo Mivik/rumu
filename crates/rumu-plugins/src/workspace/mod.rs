@@ -82,6 +82,8 @@ pub struct WorkspacePlugin {
     mcp: Option<std::sync::Arc<crate::McpHub>>,
     /// The skills behind `@rumu:/skills`.
     skills: Option<std::sync::Arc<crate::Skills>>,
+    /// The external plugins, whose mounts are top-level `@rumu` directories.
+    external: Option<std::sync::Arc<crate::ExternalPlugins>>,
     /// The kernel's channel for `bash` watch events (set by `attach`).
     inbox: std::sync::OnceLock<std::sync::Arc<dyn Inbox>>,
     /// When a watch posts its pending output.
@@ -103,6 +105,7 @@ impl WorkspacePlugin {
             agents_missing: Mutex::new(std::collections::HashSet::new()),
             mcp: None,
             skills: None,
+            external: None,
             inbox: std::sync::OnceLock::new(),
             watch_timing: Default::default(),
             started: Mutex::new(std::collections::HashSet::new()),
@@ -119,6 +122,20 @@ impl WorkspacePlugin {
     pub fn with_skills(mut self, skills: std::sync::Arc<crate::Skills>) -> Self {
         self.skills = Some(skills);
         self
+    }
+
+    /// Serve the mounts of `external`'s plugins under `@rumu`.
+    pub fn with_external(mut self, external: std::sync::Arc<crate::ExternalPlugins>) -> Self {
+        self.external = Some(external);
+        self
+    }
+
+    /// The running plugins' mounts, in name order.
+    fn mounts(&self) -> Vec<(rumu_core::PluginMount, std::sync::Arc<crate::StdioPlugin>)> {
+        self.external
+            .as_ref()
+            .map(|e| e.mounts())
+            .unwrap_or_default()
     }
 
     /// The skills, or none found anywhere.

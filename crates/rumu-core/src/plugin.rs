@@ -88,6 +88,63 @@ pub struct PluginInfo {
     pub settings: serde_json::Map<String, Value>,
 }
 
+/// A top-level directory of `@rumu` an external plugin serves
+/// (`@rumu:/<root>`): the file tools and `invoke` on paths under it become
+/// its `vfs/*` requests, with the path below the root.
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize, ts_rs::TS)]
+#[ts(export)]
+pub struct PluginMount {
+    /// Its name: one segment of letters, digits, `-` and `_`.
+    pub root: String,
+    /// One line on what it holds, shown in `list @rumu:/`.
+    pub about: String,
+}
+
+/// What a plugin answers `vfs/list` with: rumu lays it out the way every
+/// `@rumu` listing is (its doc, its entries, its actions).
+#[derive(Debug, Clone, Default, Serialize, Deserialize, ts_rs::TS)]
+#[ts(export)]
+pub struct MountListing {
+    /// What the path holds, what may be written, what its entries are.
+    #[serde(default)]
+    #[ts(optional)]
+    pub doc: Option<String>,
+    #[serde(default)]
+    pub entries: Vec<MountEntry>,
+    /// What `invoke` can do to the object at this path.
+    #[serde(default)]
+    pub actions: Vec<MountAction>,
+}
+
+/// An entry of a [`MountListing`].
+#[derive(Debug, Clone, Default, Serialize, Deserialize, ts_rs::TS)]
+#[ts(export)]
+pub struct MountEntry {
+    pub name: String,
+    /// Shown with a trailing `/`.
+    #[serde(default)]
+    #[ts(optional)]
+    pub dir: Option<bool>,
+    /// Shown after the name.
+    #[serde(default)]
+    #[ts(optional)]
+    pub about: Option<String>,
+}
+
+/// An action of a [`MountListing`]: run by `invoke` with its full name
+/// (`<type>.<action>`) and the path.
+#[derive(Debug, Clone, Default, Serialize, Deserialize, ts_rs::TS)]
+#[ts(export)]
+pub struct MountAction {
+    pub name: String,
+    #[serde(default)]
+    pub about: String,
+    /// JSON Schema of its arguments object.
+    #[serde(default)]
+    #[ts(optional, type = "Record<string, unknown>")]
+    pub args: Option<Value>,
+}
+
 #[derive(Debug, Clone, Serialize, Deserialize, ts_rs::TS)]
 #[ts(export)]
 pub struct ToolSpec {

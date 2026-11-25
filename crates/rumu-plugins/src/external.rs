@@ -7,6 +7,11 @@
 //! [`ExternalPlugins::subscribe`] and hands [`ExternalPlugins::plugins`] to
 //! it.
 //!
+//! A plugin may serve a top-level directory of `@rumu` (its `mount`):
+//! [`ExternalPlugins::mounts`] hands the workspace plugin the running ones.
+//! A root that is not one plain segment, that rumu uses itself, or that a
+//! plugin before it in name order serves, is left out with a warning.
+//!
 //! A plugin restarts by itself when a file its command names changes (its
 //! built backend, a script), and its web entry gets a new URL when that file
 //! changes: `vite build --watch` reloads a plugin under development.
@@ -17,7 +22,7 @@ use std::sync::atomic::{AtomicU64, Ordering};
 use std::sync::{Arc, Mutex, OnceLock, Weak};
 use std::time::{Duration, SystemTime, UNIX_EPOCH};
 
-use rumu_core::{BranchId, Plugin, PluginInfo, PluginSettings, PluginStatus};
+use rumu_core::{BranchId, Plugin, PluginInfo, PluginMount, PluginSettings, PluginStatus};
 use serde_json::{Map, Value};
 use tokio::sync::watch;
 use tracing::{info, warn};
@@ -269,7 +274,18 @@ impl ExternalPlugins {
                     }
                     e.watched = watched;
                     e.state = State::Running(p.clone());
+                    let refused = p.extras().mount.and_then(|m| {
+                        let why = refused_mount(&entries, &spec.name, &m)?;
+                        Some(format!(
+                            "plugin `{}` does not mount `@rumu:/{}`: {why}",
+                            spec.name, m.root
+                        ))
+                    });
                     tokio::spawn(watch_exit(Arc::downgrade(&self), p));
+                    if let Some(message) = refused {
+                        drop(entries);
+                        self.warn(message);
+                    }
                 }
                 Err(err) => {
                     e.watched = watched;
@@ -288,6 +304,24 @@ impl ExternalPlugins {
             .iter()
             .filter_map(|e| match &e.state {
                 State::Running(p) => Some(p.clone() as Arc<dyn Plugin>),
+                _ => None,
+            })
+            .collect()
+    }
+
+    /// The `@rumu` directories the running plugins serve, in name order,
+    /// each with its plugin; refused ones are left out.
+    pub fn mounts(&self) -> Vec<(PluginMount, Arc<StdioPlugin>)> {
+        let entries = self.lock();
+        entries
+            .iter()
+            .filter_map(|e| match &e.state {
+                State::Running(p) => {
+                    let m = p.extras().mount?;
+                    refused_mount(&entries, &e.spec.name, &m)
+                        .is_none()
+                        .then(|| (m, p.clone()))
+                }
                 _ => None,
             })
             .collect()
@@ -402,6 +436,28 @@ impl ExternalPlugins {
             }
         });
     }
+}
+
+/// Why plugin `name` may not serve `mount`, if it may not: its root is not
+/// one plain segment, rumu has a directory by that name, or a running plugin
+/// before it in name order serves it.
+fn refused_mount(entries: &[Entry], name: &str, mount: &PluginMount) -> Option<String> {
+    let root = mount.root.as_str();
+    let plain = |c: char| c.is_ascii_alphanumeric() || c == '-' || c == '_';
+    if root.is_empty() || !root.chars().all(plain) {
+        return Some("a root is one segment of letters, digits, `-` and `_`".into());
+    }
+    if crate::workspace::vfs::builtin_roots().contains(&root) {
+        return Some("rumu has a directory by that name".into());
+    }
+    entries
+        .iter()
+        .take_while(|e| e.spec.name != name)
+        .find(|e| match &e.state {
+            State::Running(p) => p.extras().mount.is_some_and(|m| m.root == root),
+            _ => false,
+        })
+        .map(|e| format!("plugin `{}` serves it", e.spec.name))
 }
 
 /// Mark `p` failed when its process ends on its own (a stop the host asked

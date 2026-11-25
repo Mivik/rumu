@@ -75,12 +75,14 @@ impl PluginSet {
         skills: Arc<Skills>,
         builtin_tools: &[rumu_core::ToolSpec],
     ) -> Self {
+        let external = ExternalPlugins::new(home);
         let builtins: Vec<Arc<dyn Plugin>> = vec![
             Arc::new(MemoryPlugin::new(decks.clone())),
             Arc::new(
                 WorkspacePlugin::new(home, decks.clone(), workspaces)
                     .with_mcp(mcp.clone())
-                    .with_skills(skills.clone()),
+                    .with_skills(skills.clone())
+                    .with_external(external.clone()),
             ),
             Arc::new(AskPlugin::new(decks.clone())),
             Arc::new(McpPlugin::new(mcp, decks.clone())),
@@ -89,7 +91,7 @@ impl PluginSet {
         Self {
             builtins,
             builtin_tools: builtin_tools.to_vec(),
-            external: ExternalPlugins::new(home),
+            external,
         }
     }
 

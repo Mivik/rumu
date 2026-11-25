@@ -6454,3 +6454,152 @@ async fn decks_are_created_and_renamed_by_writing() {
         out.content.text
     );
 }
+
+/// A plugin mounting `@rumu:/notes`: a dict of notes, an action on each,
+/// and a search. A second plugin trying to mount `cards` is refused.
+const NOTES_PLUGIN: &str = r#"
+import json, sys
+
+notes = {"a": "alpha\nbeta\n"}
+
+def send(m):
+    sys.stdout.buffer.write((json.dumps(m) + "\n").encode("utf-8"))
+    sys.stdout.buffer.flush()
+
+def out(text):
+    return {"content": {"text": text}, "is_error": False, "effects": []}
+
+def answer(m, p):
+    path = p["path"]
+    name = path.strip("/")
+    if m == "vfs/list":
+        if path == "/":
+            return {"doc": "Notes.", "entries": [{"name": n, "about": "a note"} for n in sorted(notes)]}
+        return {"entries": [], "actions": [{"name": "note.upper", "about": "upper-case it",
+            "args": {"type": "object", "properties": {"times": {"type": "integer"}}}}]}
+    if m == "vfs/read":
+        return None if path == "/" else out(notes[name])
+    if m == "vfs/write":
+        if p.get("from"):
+            notes[name] = notes.pop(p["from"].strip("/"))
+        else:
+            notes[name] = p["content"]
+        return f"wrote {name} for {p['branch'] is not None}"
+    if m == "vfs/delete":
+        del notes[name]
+        return "deleted"
+    if m == "vfs/search":
+        return "\n".join(n for n in notes if p["query"] in notes[n])
+    if m == "vfs/invoke":
+        if p["action"] != "note.upper":
+            raise KeyError(f"no action `{p['action']}` here")
+        notes[name] = notes[name].upper()
+        return "done"
+
+for line in sys.stdin.buffer:
+    req = json.loads(line)
+    m = req.get("method"); rid = req.get("id")
+    if rid is None:
+        continue
+    p = req.get("params") or {}
+    if m == "initialize":
+        root = sys.argv[1]
+        send({"jsonrpc": "2.0", "id": rid, "result": {"name": "", "mount": {"root": root, "about": "notes"}}})
+        continue
+    try:
+        send({"jsonrpc": "2.0", "id": rid, "result": answer(m, p)})
+    except KeyError as e:
+        send({"jsonrpc": "2.0", "id": rid, "error": {"code": -32000, "message": e.args[0]}})
+"#;
+
+#[tokio::test]
+async fn plugin_mounts_serve_their_paths() {
+    let home = card_home();
+    std::fs::write(home.path().join("notes.py"), NOTES_PLUGIN).unwrap();
+    let external = crate::ExternalPlugins::new(home.path());
+    let command = |root: &str| rumu_core::PluginSettings {
+        command: vec!["python3".into(), "notes.py".into(), root.into()],
+        ..Default::default()
+    };
+    external.configure(&std::collections::BTreeMap::from([
+        ("notes".to_string(), command("notes")),
+        ("thief".to_string(), command("cards")),
+    ]));
+    external.settled().await;
+    let plugin = deck_plugin(home.path()).with_external(external.clone());
+    let host = FakeRuntime::arc();
+    *host.state.lock().unwrap() = state_with(vec![], Some(RUMU_WORKSPACE));
+    let cx = host.cx();
+    let call = |tool: &'static str, args: Value| {
+        let (plugin, cx) = (&plugin, &cx);
+        async move { plugin.call_tool(tool, args, cx).await.unwrap() }
+    };
+
+    // The root lists the mount after rumu's own; `cards` stays rumu's.
+    let out = call("list", json!({ "path": "@rumu:/" })).await;
+    assert!(
+        out.content.text.ends_with("\nworkspaces/ — the workspaces: the registry, then `@scratch` and `@rumu`\nnotes/ — notes (plugin `notes`)"),
+        "{}",
+        out.content.text
+    );
+    assert_eq!(external.mounts().len(), 1);
+
+    let out = call("list", json!({ "path": "@rumu:/notes" })).await;
+    assert_eq!(out.content.text, "Notes.\n\na — a note");
+    // A read the plugin answers with null is the listing.
+    let out = call("read", json!({ "path": "@rumu:/notes" })).await;
+    assert_eq!(out.content.text, "Notes.\n\na — a note");
+    let out = call("read", json!({ "path": "@rumu:/notes/a", "offset": 2 })).await;
+    assert_eq!(out.content.text, "beta");
+
+    let out = call("write", json!({ "path": "@rumu:/notes/b", "content": "x" })).await;
+    assert_eq!(out.content.text, "wrote b for True");
+    let out = call(
+        "edit",
+        json!({ "path": "@rumu:/notes/b", "old_string": "x", "new_string": "yz" }),
+    )
+    .await;
+    assert!(!out.is_error, "{}", out.content.text);
+    assert_eq!(out.content.text, "edited `@rumu:/notes/b` (1 replacement)");
+    let out = call(
+        "write",
+        json!({ "path": "@rumu:/notes/c", "content": "", "from": "@rumu:/notes/b" }),
+    )
+    .await;
+    assert_eq!(out.content.text, "wrote c for True");
+    let out = call("search", json!({ "query": "yz", "scope": "@rumu:/notes" })).await;
+    assert_eq!(out.content.text, "c");
+
+    // Its actions are listed with their signatures, and run by `invoke`.
+    let out = call("list", json!({ "path": "@rumu:/notes/c" })).await;
+    assert_eq!(
+        out.content.text,
+        "actions:\n  note.upper(times?: integer) — upper-case it"
+    );
+    let out = call(
+        "invoke",
+        json!({ "action": "note.upper", "path": "@rumu:/notes/c" }),
+    )
+    .await;
+    assert_eq!(out.content.text, "done");
+    let out = call("read", json!({ "path": "@rumu:/notes/c" })).await;
+    assert_eq!(out.content.text, "YZ");
+    // The plugin's errors reach the model as they are.
+    let out = call(
+        "invoke",
+        json!({ "action": "note.nope", "path": "@rumu:/notes/c" }),
+    )
+    .await;
+    assert!(out.is_error);
+    assert_eq!(out.content.text, "no action `note.nope` here");
+
+    let out = call("delete", json!({ "path": "@rumu:/notes/c" })).await;
+    assert_eq!(out.content.text, "deleted");
+    let out = call("list", json!({ "path": "@rumu:/elsewhere" })).await;
+    assert!(out.is_error);
+    assert!(
+        out.content.text.ends_with("/workspaces, /notes)"),
+        "{}",
+        out.content.text
+    );
+}

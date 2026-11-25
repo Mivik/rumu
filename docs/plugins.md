@@ -43,10 +43,11 @@ rumu → plugin:
 
 | Method | Params | Result |
 | --- | --- | --- |
-| `initialize` | `{ host: "rumu", version, settings }` | a `Manifest` (`name`, `instructions`, `tools`, `hooks`), and optionally `rumu`, `web`, `settings` (below) |
+| `initialize` | `{ host: "rumu", version, settings }` | a `Manifest` (`name`, `instructions`, `tools`, `hooks`), and optionally `rumu`, `web`, `settings`, `mount` (below) |
 | `tool/call` | `{ name, args, ctx, session, branch, background }` | a `ToolOutput` |
 | `hook` | `{ hook_id, event: Event, ctx }` | a `HookOutput` |
 | `call` | `{ method, params, branch }` — the web side's `ctx.call` | any JSON |
+| `vfs/<op>` | `{ path, ctx, session, branch, … }` — a path under the plugin's mount | see [Mounts](#mounts) |
 | `settings` (notification) | the settings values | |
 | `shutdown` (notification) | | |
 
@@ -59,6 +60,8 @@ rumu → plugin:
 - `settings`: a JSON Schema object; each of its `properties` (`string`,
   `integer`, `number`, `boolean`, with `title`, `default`, `enum`, `minimum`,
   `maximum`) is a row of its form in Settings.
+- `mount`: a `PluginMount` (`{ root, about }`), a top-level directory of
+  `@rumu` the plugin serves (below).
 
 plugin → rumu, any time a request of rumu's is in flight (`ctx` is the token
 that request carried):
@@ -76,6 +79,32 @@ and at any time:
 | --- | --- | --- |
 | `host/post` | `{ branch, effects, wake? }` (a `Post`) | notes on a branch |
 | `host/emit` | `{ event, data?, branch? \| ctx? }` | an event for the plugin's web side, on the pages showing that branch's session (every page without one) |
+
+## Mounts
+
+A plugin with a `mount` serves `@rumu:/<root>`: `list @rumu:/` shows it after
+rumu's own directories (`` <root>/ — <about> (plugin `<name>`) ``), and the
+file tools and `invoke` on paths under it become `vfs/<op>` requests. `path`
+is the path below the root (`/` for the root itself). A root must be one
+segment of letters, digits, `-` and `_`; one rumu uses itself, or one a
+plugin before it (in name order) serves, is left out with a warning.
+
+| Op | Extra params | Result |
+| --- | --- | --- |
+| `vfs/list` | | a `MountListing`: `doc?`, `entries` (`{ name, dir?, about? }`), `actions` (`{ name, about, args? }`, `args` a JSON Schema) |
+| `vfs/read` | | a `ToolOutput` or text; `null` reads as the listing |
+| `vfs/write` | `content`, `from` (a `write` that moves: the source, below the same root) | a `ToolOutput` or text |
+| `vfs/delete` | | a `ToolOutput` or text |
+| `vfs/search` | `query`, `limit` (`search` with `scope: "@rumu:/<root>/…"`) | a `ToolOutput` or text |
+| `vfs/invoke` | `action`, `args` | a `ToolOutput` or text |
+
+rumu lays a listing out like every `@rumu` listing: the doc, the entries, and
+`actions:` with each action's signature. `edit` is a `vfs/read` and a
+`vfs/write`; `offset`/`limit` of a read slice what the plugin returned. A
+JSON-RPC error's message reaches the model as the call's error, so it should
+say what to do instead. These requests have no transport timeout (the tool
+call's own applies), and a plugin's data is its own: a rewind does not
+restore it.
 
 ## Web side
 

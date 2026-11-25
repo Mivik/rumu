@@ -12,16 +12,26 @@
 //! path shows its node's [`Node::doc`], then its entries, then the files
 //! rumu defines under it (`files:`, each with its node's [`Node::about`]),
 //! then its actions (`actions:`).
+//!
+//! A path under a top-level directory an external plugin mounts
+//! (`@rumu:/<root>/...`) misses the table and is served by [`PluginNode`]:
+//! every operation is the plugin's `vfs/*` request (rumu-core
+//! [`PluginMount`]), and its listings are laid out like the others.
 
-use std::sync::LazyLock;
+use std::sync::{Arc, LazyLock};
 
 use async_trait::async_trait;
 use matchit::{Params, Router};
-use rumu_core::{Cx, PathState, RUMU_WORKSPACE, ToolError, ToolOutput, ToolResult, Utf8UnixPath};
+use rumu_core::{
+    Cx, MountListing, PathState, PluginMount, RUMU_WORKSPACE, ToolError, ToolOutput, ToolResult,
+    Utf8UnixPath,
+};
 use schemars::JsonSchema;
 use serde::Deserialize;
 use serde::de::DeserializeOwned;
-use serde_json::Value;
+use serde_json::{Value, json};
+
+use crate::{StdioError, StdioPlugin};
 
 use super::WorkspacePlugin;
 use super::cards::{Card, CardsDir};
@@ -31,7 +41,7 @@ use super::session::{
     AssistantSessions, BranchNode, Branches, ByAssistant, Session, SessionPart, Sessions,
 };
 use super::task::{Task, TaskOutput, Tasks};
-use super::tools::slice_lines;
+use super::tools::{replace_occurrences, slice_lines};
 
 /// What a node operation returns.
 pub(super) type Out = ToolResult<ToolOutput>;
@@ -323,6 +333,19 @@ fn unknown_action(action: &str, here: &str) -> ToolError {
     ))
 }
 
+/// rumu's own top-level directories (a plugin may not mount one).
+pub(crate) fn builtin_roots() -> &'static [&'static str] {
+    &ROOTS
+}
+
+/// What a path under a plugin's mount matches: its root, and the rest.
+static MOUNTED: LazyLock<Router<()>> = LazyLock::new(|| {
+    let mut router = Router::new();
+    router.insert("/{root}", ()).expect("valid route");
+    router.insert("/{root}/{*rest}", ()).expect("valid route");
+    router
+});
+
 /// The top-level directories, in table order.
 static ROOTS: LazyLock<Vec<&'static str>> = LazyLock::new(|| {
     let mut roots: Vec<&str> = Vec::new();
@@ -344,6 +367,8 @@ pub(super) struct At<'a> {
     params: Params<'static, 'a>,
     pub state: &'a PathState,
     pub cx: &'a Cx,
+    /// The mount and its plugin, for a path under a plugin's mount.
+    mount: Option<(PluginMount, Arc<StdioPlugin>)>,
 }
 
 impl At<'_> {
@@ -480,13 +505,9 @@ impl WorkspacePlugin {
         state: &'a PathState,
         cx: &'a Cx,
     ) -> ToolResult<(&'static dyn Node, At<'a>)> {
-        let matched = ROUTER.at(abs.as_str()).map_err(|_| {
-            let roots: Vec<String> = ROOTS.iter().map(|r| format!("/{r}")).collect();
-            ToolError::model(format!(
-                "unknown path `{RUMU_WORKSPACE}:{abs}` (roots: {})",
-                roots.join(", ")
-            ))
-        })?;
+        let Ok(matched) = ROUTER.at(abs.as_str()) else {
+            return self.route_mounted(abs, state, cx);
+        };
         let params = matched.params;
         let (pattern, node) = *matched.value;
         Ok((
@@ -498,6 +519,42 @@ impl WorkspacePlugin {
                 params,
                 state,
                 cx,
+                mount: None,
+            },
+        ))
+    }
+
+    /// A path no rumu route serves: one under a plugin's mount, or unknown.
+    fn route_mounted<'a>(
+        &'a self,
+        abs: &'a Utf8UnixPath,
+        state: &'a PathState,
+        cx: &'a Cx,
+    ) -> ToolResult<(&'static dyn Node, At<'a>)> {
+        let mounts = self.mounts();
+        let unknown = || {
+            let mut roots: Vec<String> = ROOTS.iter().map(|r| format!("/{r}")).collect();
+            roots.extend(mounts.iter().map(|(m, _)| format!("/{}", m.root)));
+            ToolError::model(format!(
+                "unknown path `{RUMU_WORKSPACE}:{abs}` (roots: {})",
+                roots.join(", ")
+            ))
+        };
+        let matched = MOUNTED.at(abs.as_str()).map_err(|_| unknown())?;
+        let root = matched.params.get("root").unwrap_or_default();
+        let Some(mount) = mounts.iter().find(|(m, _)| m.root == root).cloned() else {
+            return Err(unknown());
+        };
+        Ok((
+            &PluginNode,
+            At {
+                p: self,
+                abs,
+                pattern: "/{root}/{*rest}",
+                params: matched.params,
+                state,
+                cx,
+                mount: Some(mount),
             },
         ))
     }
@@ -527,12 +584,196 @@ impl Node for Root {
          full name, `path` the object)."
     }
 
-    async fn list(&self, _at: &At<'_>) -> Out {
-        let lines: Vec<String> = files_of("/")
+    async fn list(&self, at: &At<'_>) -> Out {
+        let mut lines: Vec<String> = files_of("/")
             .into_iter()
             .map(|(name, about)| format!("{name} — {about}"))
             .collect();
+        let mounts = at.p.mounts();
+        lines.extend(mounts.iter().map(|(m, p)| {
+            use rumu_core::Plugin;
+            let plugin = p.manifest().name;
+            format!("{}/ — {} (plugin `{plugin}`)", m.root, m.about)
+        }));
         Ok(lines.join("\n").into())
+    }
+}
+
+/// `/<root>[/<path>]` under a plugin's mount: each operation is the
+/// plugin's `vfs/*` request with the path below the root. `edit` is a read
+/// and a write; a `read` the plugin answers with `null` reads as the
+/// listing, as everywhere in `@rumu`.
+struct PluginNode;
+
+impl PluginNode {
+    /// The path below the mount's root (`/` for the root itself).
+    fn below(at: &At<'_>) -> String {
+        format!("/{}", at.param("rest"))
+    }
+
+    /// Ask the plugin `vfs/<op>` with `params` (an object) and the path.
+    async fn ask(at: &At<'_>, op: &str, mut params: Value) -> ToolResult<Value> {
+        let (mount, plugin) = at.mount.as_ref().expect("a mounted path has its plugin");
+        params["path"] = json!(Self::below(at));
+        plugin.vfs(op, params, at.cx).await.map_err(|e| match e {
+            StdioError::Remote { message, .. } => ToolError::model(message),
+            e => ToolError::model(format!("`{RUMU_WORKSPACE}:/{}`: {e}", mount.root)),
+        })
+    }
+
+    /// A plugin's answer as a tool output: a `ToolOutput`, or bare text.
+    fn output(at: &At<'_>, value: Value) -> Out {
+        if let Value::String(text) = value {
+            return Ok(ToolOutput::ok(text));
+        }
+        serde_json::from_value(value).map_err(|e| {
+            ToolError::model(format!(
+                "`{RUMU_WORKSPACE}:{}`: the plugin answered no tool output: {e}",
+                at.abs
+            ))
+        })
+    }
+
+    /// `from` (a `write` that moves) as a path below the same root.
+    fn from_below(at: &At<'_>, from: &str) -> ToolResult<String> {
+        let (mount, _) = at.mount.as_ref().expect("a mounted path has its plugin");
+        let path = from
+            .strip_prefix(RUMU_WORKSPACE)
+            .and_then(|p| p.strip_prefix(':'))
+            .unwrap_or(from);
+        let root = format!("/{}", mount.root);
+        match path.strip_prefix(&root) {
+            Some("") => Ok("/".into()),
+            Some(rest) if rest.starts_with('/') => Ok(rest.to_owned()),
+            _ => Err(ToolError::model(format!(
+                "`from` must be a path under `{RUMU_WORKSPACE}:{root}`"
+            ))),
+        }
+    }
+
+    /// The text a read gave, for an edit.
+    async fn text_of(at: &At<'_>) -> ToolResult<String> {
+        let read = Self::ask(at, "read", json!({})).await?;
+        if read.is_null() {
+            return Err(ToolError::model(format!(
+                "`{RUMU_WORKSPACE}:{}` is a directory; edit a file under it",
+                at.abs
+            )));
+        }
+        let out = Self::output(at, read)?;
+        if out.is_error {
+            return Err(ToolError::model(out.content.text));
+        }
+        if !out.content.attachments.is_empty() {
+            return Err(ToolError::model(format!(
+                "`{RUMU_WORKSPACE}:{}` is not text",
+                at.abs
+            )));
+        }
+        Ok(out.content.text)
+    }
+}
+
+/// `invoke` of `action` on a path under a plugin's mount (the plugin says
+/// which actions it has).
+pub(super) async fn invoke_mounted(at: &At<'_>, action: &str, args: Value) -> Option<Out> {
+    at.mount.as_ref()?;
+    let answer = PluginNode::ask(at, "invoke", json!({ "action": action, "args": args })).await;
+    Some(answer.and_then(|v| PluginNode::output(at, v)))
+}
+
+#[async_trait]
+impl Node for PluginNode {
+    fn about(&self) -> &'static str {
+        "a directory a plugin serves"
+    }
+
+    async fn list(&self, at: &At<'_>) -> Out {
+        self.listing(at).await
+    }
+
+    async fn listing(&self, at: &At<'_>) -> Out {
+        let answer = Self::ask(at, "list", json!({})).await?;
+        let listing: MountListing = serde_json::from_value(answer).map_err(|e| {
+            ToolError::model(format!(
+                "`{RUMU_WORKSPACE}:{}`: the plugin answered no listing: {e}",
+                at.abs
+            ))
+        })?;
+        let mut parts: Vec<String> = Vec::new();
+        if let Some(doc) = listing
+            .doc
+            .as_deref()
+            .map(str::trim)
+            .filter(|d| !d.is_empty())
+        {
+            parts.push(doc.to_owned());
+        }
+        let entries: Vec<String> = listing
+            .entries
+            .iter()
+            .map(|e| {
+                let slash = if e.dir == Some(true) { "/" } else { "" };
+                match e.about.as_deref().filter(|a| !a.is_empty()) {
+                    Some(about) => format!("{}{slash} — {about}", e.name),
+                    None => format!("{}{slash}", e.name),
+                }
+            })
+            .collect();
+        if !entries.is_empty() {
+            parts.push(entries.join("\n"));
+        }
+        if !listing.actions.is_empty() {
+            let none = json!({ "type": "object", "properties": {} });
+            let lines = listing.actions.iter().map(|a| {
+                let args = a.args.as_ref().unwrap_or(&none);
+                (signature(&a.name, args), a.about.clone())
+            });
+            parts.push(actions_section(lines));
+        }
+        Ok(parts.join("\n\n").into())
+    }
+
+    async fn read(&self, at: &At<'_>, offset: Option<u64>, limit: Option<u64>) -> Out {
+        let answer = Self::ask(at, "read", json!({})).await?;
+        let mut out = if answer.is_null() {
+            self.listing(at).await?
+        } else {
+            Self::output(at, answer)?
+        };
+        if offset.is_some() || limit.is_some() {
+            out.content.text = slice_lines(std::mem::take(&mut out.content.text), offset, limit)
+                .map_err(ToolError::model)?;
+        }
+        Ok(out)
+    }
+
+    async fn write(&self, at: &At<'_>, content: &str, from: Option<&str>) -> Out {
+        let from = from.map(|f| Self::from_below(at, f)).transpose()?;
+        let answer = Self::ask(at, "write", json!({ "content": content, "from": from })).await?;
+        Self::output(at, answer)
+    }
+
+    async fn edit(&self, at: &At<'_>, old: &str, new: &str, all: bool) -> Out {
+        let text = Self::text_of(at).await?;
+        let (text, n) = replace_occurrences(&text, old, new, all).map_err(ToolError::model)?;
+        let answer = Self::ask(at, "write", json!({ "content": text, "from": null })).await?;
+        let mut out = Self::output(at, answer)?;
+        if !out.is_error {
+            let s = if n == 1 { "" } else { "s" };
+            out.content.text = format!("edited `{RUMU_WORKSPACE}:{}` ({n} replacement{s})", at.abs);
+        }
+        Ok(out)
+    }
+
+    async fn delete(&self, at: &At<'_>) -> Out {
+        let answer = Self::ask(at, "delete", json!({})).await?;
+        Self::output(at, answer)
+    }
+
+    async fn search(&self, at: &At<'_>, query: &str, limit: Option<usize>) -> Out {
+        let answer = Self::ask(at, "search", json!({ "query": query, "limit": limit })).await?;
+        Self::output(at, answer)
     }
 }
 

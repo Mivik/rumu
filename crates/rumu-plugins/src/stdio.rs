@@ -3,10 +3,11 @@
 //! A child process speaking newline-delimited JSON-RPC 2.0 over stdin/stdout.
 //! Host→plugin requests (`initialize`, `hook`, `tool/call`, and `call` from
 //! the plugin's web side) are correlated via a pending-map of oneshot
-//! channels. They time out after 30s, except `tool/call`, which has no
-//! transport timeout — the kernel cancels it by dropping the request future
-//! (abort / `task.kill`), so a tool may run as long as it needs. The
-//! `settings` notification hands over edited settings values.
+//! channels. They time out after 30s, except `tool/call` and the `vfs/*`
+//! requests, which have no transport timeout — they run inside a tool call,
+//! which the kernel cancels by dropping the request future (abort /
+//! `task.kill`), so a tool may run as long as it needs. The `settings`
+//! notification hands over edited settings values.
 //! Plugin→host requests (`host/path`, `host/state`, `host/index`, `host/post`,
 //! `host/progress`, `host/emit`) arrive on the same stdout stream *while* a
 //! host→plugin request is in flight, so the reader task dispatches them on
@@ -15,7 +16,12 @@
 //! `initialize` carries rumu's `version` and the plugin's settings values;
 //! besides the [`Manifest`], its result may name the rumu versions the plugin
 //! needs (`rumu`, a semver requirement: unmet, the start fails), its web
-//! entry (`web`) and the JSON Schema of its settings (`settings`).
+//! entry (`web`), the JSON Schema of its settings (`settings`) and the
+//! `@rumu` directory it serves (`mount`, a [`PluginMount`]).
+//!
+//! A mount's paths are served by `vfs/list`, `vfs/read`, `vfs/write`,
+//! `vfs/delete`, `vfs/search` and `vfs/invoke` (see [`StdioPlugin::vfs`]),
+//! each with the path below the root (`/` for the root itself).
 //!
 //! Every kernel→plugin request carries a `ctx` token. The plugin echoes that
 //! token in its `host/...` requests; the host serves them from the [`Cx`] kept
@@ -44,7 +50,8 @@ use std::{
 
 use async_trait::async_trait;
 use rumu_core::{
-    Cx, Event, HookOutput, Inbox, IoError, Manifest, Plugin, Post, Progress, ToolOutput,
+    Cx, Event, HookOutput, Inbox, IoError, Manifest, Plugin, PluginMount, Post, Progress,
+    ToolOutput,
 };
 use serde_json::{Value, json};
 use tokio::{
@@ -197,6 +204,8 @@ pub struct Extras {
     pub web: Option<String>,
     #[serde(default)]
     pub settings: Option<Value>,
+    #[serde(default)]
+    pub mount: Option<PluginMount>,
 }
 
 struct Inner {
@@ -356,6 +365,22 @@ impl StdioPlugin {
     ) -> StdioResult<Value> {
         let params = json!({ "method": method, "params": params, "branch": branch });
         request(&self.inner, "call", params).await
+    }
+
+    /// Ask the plugin about a path of its mount: `op` is `list`, `read`,
+    /// `write`, `delete`, `search` or `invoke`, `params` an object with
+    /// the path below the root (`path`) and what the op takes. The request
+    /// carries the calling branch and a `ctx` token, like `tool/call`.
+    pub async fn vfs(&self, op: &str, mut params: Value, cx: &Cx) -> StdioResult<Value> {
+        let ctx = self.begin_ctx(cx);
+        if let Some(obj) = params.as_object_mut() {
+            obj.insert("ctx".into(), json!(ctx.token));
+            obj.insert("session".into(), json!(cx.session));
+            obj.insert("branch".into(), json!(cx.branch));
+        }
+        let result = request(&self.inner, &format!("vfs/{op}"), params).await;
+        drop(ctx);
+        result
     }
 
     /// Hand the plugin its edited settings values.
@@ -600,11 +625,11 @@ async fn request(inner: &Inner, method: &str, params: Value) -> StdioResult<Valu
     }
 }
 
-/// Transport timeout for a host→plugin request. `tool/call` has none: its
-/// deadline is the tool's own, and the kernel cancels it by dropping the
-/// request future.
+/// Transport timeout for a host→plugin request. `tool/call` and `vfs/*`
+/// have none: their deadline is the tool call's own, and the kernel cancels
+/// it by dropping the request future.
 fn request_timeout(method: &str) -> Option<Duration> {
-    (method != "tool/call").then_some(REQUEST_TIMEOUT)
+    (method != "tool/call" && !method.starts_with("vfs/")).then_some(REQUEST_TIMEOUT)
 }
 
 fn id_key(v: &Value) -> String {
