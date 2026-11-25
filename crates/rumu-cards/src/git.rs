@@ -104,6 +104,39 @@ impl Repo {
         Ok(head.id().map(|id| id.to_string()))
     }
 
+    /// [`head`](Self::head) read straight from the ref files when they are
+    /// plain (`HEAD` → a loose or packed branch ref), without opening the
+    /// repository: cheap enough to check on every recall.
+    pub fn head_id(&self) -> Result<Option<String>> {
+        match self.head_from_files() {
+            Some(id) => Ok(Some(id)),
+            None => self.head(),
+        }
+    }
+
+    fn head_from_files(&self) -> Option<String> {
+        let object_id = |s: &str| {
+            (matches!(s.len(), 40 | 64) && s.bytes().all(|b| b.is_ascii_hexdigit()))
+                .then(|| s.to_ascii_lowercase())
+        };
+        let head = std::fs::read_to_string(self.dir.join("HEAD")).ok()?;
+        let Some(name) = head.trim().strip_prefix("ref: ") else {
+            return object_id(head.trim());
+        };
+        let name = name.trim();
+        if !name.starts_with("refs/") || name.split('/').any(|s| s.is_empty() || s == "..") {
+            return None;
+        }
+        if let Ok(id) = std::fs::read_to_string(self.dir.join(name)) {
+            return object_id(id.trim());
+        }
+        let packed = std::fs::read_to_string(self.dir.join("packed-refs")).ok()?;
+        packed.lines().find_map(|line| {
+            let (id, n) = line.split_once(' ')?;
+            (n.trim() == name).then(|| object_id(id)).flatten()
+        })
+    }
+
     /// Every blob in the `HEAD` tree: path → blob id.
     pub fn files(&self) -> Result<BTreeMap<String, String>> {
         let repo = self.open()?;
@@ -118,6 +151,40 @@ impl Repo {
             .tree()
             .map_err(|e| error("head tree", &self.dir, e))?;
         tree_files(&tree).map_err(|e| error("tree walk", &self.dir, e))
+    }
+
+    /// The `HEAD` commit and the blobs of its tree (path → blob id), read
+    /// together so they always agree.
+    pub fn head_files(&self) -> Result<(Option<String>, BTreeMap<String, String>)> {
+        let repo = self.open()?;
+        let mut head = repo.head().map_err(|e| error("head", &self.dir, e))?;
+        let Some(id) = head.id().map(|id| id.to_string()) else {
+            return Ok((None, BTreeMap::new()));
+        };
+        let commit = head
+            .peel_to_commit()
+            .map_err(|e| error("head commit", &self.dir, e))?;
+        let tree = commit
+            .tree()
+            .map_err(|e| error("head tree", &self.dir, e))?;
+        let files = tree_files(&tree).map_err(|e| error("tree walk", &self.dir, e))?;
+        Ok((Some(id), files))
+    }
+
+    /// The text of each blob in `ids`, in order.
+    pub fn blobs(&self, ids: &[&str]) -> Result<Vec<Result<String>>> {
+        let repo = self.open()?;
+        Ok(ids
+            .iter()
+            .map(|id| {
+                let oid = gix::hash::ObjectId::from_hex(id.as_bytes())
+                    .map_err(|e| error("blob id", &self.dir, e))?;
+                let object = repo
+                    .find_object(oid)
+                    .map_err(|e| error("read object", &self.dir, e))?;
+                Ok(String::from_utf8_lossy(&object.data).into_owned())
+            })
+            .collect())
     }
 
     /// The text of `path` in the `HEAD` tree, if it exists there.

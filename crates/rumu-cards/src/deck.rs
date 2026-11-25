@@ -19,6 +19,7 @@ use rumu_core::CardMount;
 use serde::{Deserialize, Serialize};
 use tracing::warn;
 
+use crate::cache::{self, DeckCards};
 use crate::card::{
     Card, card_content, frontmatter_is_broken, new_uuid, parse_card, valid_card_path,
 };
@@ -304,16 +305,19 @@ impl Deck {
     /// pinned: its target's own deck pins it, and a blank card has nothing
     /// to load.
     pub fn pinned(&self) -> Result<Vec<Card>> {
-        let mut out = Vec::new();
-        for path in self.walk()? {
-            if let Some(text) = self.read(&path)? {
-                let card = parse_card(&path, &text);
-                if card.pinned() && card.link().is_none() && !card.body.trim().is_empty() {
-                    out.push(card);
-                }
-            }
-        }
-        Ok(out)
+        Ok(self
+            .cards()?
+            .entries()
+            .iter()
+            .map(|e| &e.card)
+            .filter(|c| c.pinned() && c.link().is_none() && !c.body.trim().is_empty())
+            .map(|c| (**c).clone())
+            .collect())
+    }
+
+    /// Every card of `HEAD`, parsed and indexed (cached by commit).
+    pub fn cards(&self) -> Result<Arc<DeckCards>> {
+        cache::load(self)
     }
 
     /// The `HEAD` commit, if the repository has one.
@@ -652,9 +656,9 @@ impl Decks {
         if !self.link_allowed(from_deck, deck_id) {
             return None;
         }
-        let deck = self.get(deck_id)?;
-        let text = deck.read(path).ok().flatten()?;
-        Some((deck_id.to_owned(), path.to_owned(), parse_card(path, &text)))
+        let cards = self.get(deck_id)?.cards().ok()?;
+        let (_, entry) = cards.find(path)?;
+        Some((deck_id.to_owned(), path.to_owned(), (*entry.card).clone()))
     }
 
     /// The default mounts of `deck_id`'s sessions (its `deck.yaml` list).
@@ -966,6 +970,7 @@ impl Decks {
             std::fs::remove_dir_all(&deck.dir)
                 .map_err(rumu_core::IoError::at("removing", &deck.dir))?;
         }
+        cache::forget(&deck.dir);
         self.inner.write().unwrap().decks.remove(id);
         self.changed();
         Ok(())

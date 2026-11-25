@@ -10,22 +10,23 @@
 //! - [`card`] — the content model (frontmatter, rendering, revisions, the
 //!   editable view);
 //! - [`deck`] — deck identity, loading and git-backed history;
-//! - [`cards`] — the mounted card space (links, dedup, writes);
+//! - [`cards`] — the mounted card space (links, dedup, writes, ranking);
+//! - [`cache`] — each deck's parsed cards and recall index, by `HEAD`;
 //! - [`library`] — the user's view of every deck (the web Library page);
 //! - [`usage`] — card use records derived from a branch path;
 //! - [`usage_index`] — per-deck card use scores (`usage.json`);
-//! - [`recall`] — BM25F over `keywords:`, path, description and body;
+//! - [`recall`] — BM25F over an inverted index (cards: `keywords:`, path,
+//!   description and body);
 //! - [`search_text`] / [`list_text`] — the discovery outputs the workspace
 //!   plugin's `search` / `list` tools render.
 //!
 //! The `search` tool itself, and memory (the catalog, recall, update
 //! notices), live in rumu-plugins' memory and workspace plugins.
 
-use std::collections::BTreeMap;
-
 use rumu_core::{RUMU_WORKSPACE, ToolError, ToolOutput, ToolResult, quote};
 use serde_json::Value;
 
+pub mod cache;
 pub mod card;
 pub mod cards;
 pub mod catalog;
@@ -59,20 +60,18 @@ pub fn search_text(cards: &Cards, query: &str, args: &Value) -> ToolResult<ToolO
         .unwrap_or(10)
         .max(1) as usize;
 
-    let all: BTreeMap<String, Card> = cards
-        .rankable()
-        .map_err(|e| ToolError::Fatal(e.into()))?
-        .into_iter()
-        .filter(|(path, _)| card::under_prefix(path, &prefix))
-        .collect();
-    let hits = recall::search(&all, query, usize::MAX);
+    let hits = cards
+        .rank(query, usize::MAX, false, |_, display| {
+            card::under_prefix(display, &prefix)
+        })
+        .map_err(|e| ToolError::Fatal(e.into()))?;
     if hits.is_empty() {
         return Ok(format!("no cards match `{query}`").into());
     }
     let terms = recall::tokens(query);
     let mut out = Vec::new();
     for hit in hits.iter().take(limit) {
-        let mut block = format!("card {}", card_uri(&hit.card.path));
+        let mut block = format!("card {}", card_uri(&hit.path));
         if let Some(m) = hit.card.summary() {
             block.push_str(&format!("  {}", quote(&m, SUMMARY_CHARS)));
         }

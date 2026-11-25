@@ -791,3 +791,113 @@ fn git_reads_the_objects_a_commit_writes() {
     let card = deck.read("notes/nested").unwrap().unwrap();
     assert!(card.ends_with("two!\n"), "{card}");
 }
+
+#[test]
+fn cached_ranking_matches_one_index_over_the_visible_cards() {
+    use crate::recall::{Doc, rank_docs};
+    let dir = tempfile::tempdir().unwrap();
+    let mut main: Vec<(String, String)> = (0..18)
+        .map(|i| {
+            let body = match i % 3 {
+                0 => format!("deploy notes {i} 代理服务器配置"),
+                1 => format!("release train {i} shared"),
+                _ => format!("其他内容 {i} shared deploy"),
+            };
+            (
+                format!("n/c{i}"),
+                format!("---\nkeywords: [k{i}, shared]\n---\n{body}\n"),
+            )
+        })
+        .collect();
+    main.push((
+        "l/other".into(),
+        "---\nlink: @rumu:/cards/shelf/other/x\n---\n".into(),
+    ));
+    let main_cards: Vec<(&str, &str)> =
+        main.iter().map(|(p, t)| (p.as_str(), t.as_str())).collect();
+    create_deck(dir.path(), "main", &main_cards);
+    create_deck(
+        dir.path(),
+        "other",
+        &[("x", "other deploy x\n"), ("y", "shelf words\n")],
+    );
+    create_deck(
+        dir.path(),
+        "外部 notes",
+        &[("far/z", "---\ndescription: 外部的卡\n---\nnotes deploy\n")],
+    );
+    let decks = Decks::load(dir.path()).unwrap();
+    let id = |name: &str| {
+        decks
+            .list()
+            .into_iter()
+            .find(|d| d.meta.name == name)
+            .unwrap()
+            .id()
+            .to_owned()
+    };
+    let far = id("外部 notes");
+    let cards = Cards::new(
+        &decks,
+        &[
+            CardMount::new(id("main"), "/cards/self", false),
+            CardMount::new(id("other"), "/cards/shelf/other", false),
+        ],
+    );
+    // A link out of the mounted space, and one to nothing.
+    for (path, text) in [
+        ("self/l/far", format!("---\nlink: {far}:far/z\n---\n")),
+        ("self/l/gone", "---\nlink: nowhere:x\n---\n".into()),
+    ] {
+        let main = decks.get(&id("main")).unwrap();
+        main.write_file(path.trim_start_matches("self/"), &text, &Author::user())
+            .unwrap();
+    }
+    let check = |cards: &Cards| {
+        let all = cards.rankable().unwrap();
+        assert!(all.contains_key("外部 notes:far/z"), "{:?}", all.keys());
+        let list: Vec<&Card> = all.values().collect();
+        let docs: Vec<Doc> = list.iter().map(|c| Doc::card(c, &c.path)).collect();
+        for query in [
+            "deploy",
+            "shared",
+            "代理配置",
+            "self",
+            "shelf other",
+            "外部 notes",
+            "k3 release",
+            "x",
+        ] {
+            for recall in [true, false] {
+                let want: Vec<(String, u64)> = rank_docs(&docs, query, 50, recall)
+                    .into_iter()
+                    .map(|(i, s)| (list[i].path.clone(), s.to_bits()))
+                    .collect();
+                let got: Vec<(String, u64)> = cards
+                    .rank(query, 50, recall, |_, _| true)
+                    .unwrap()
+                    .into_iter()
+                    .map(|h| (h.path, h.score.to_bits()))
+                    .collect();
+                assert_eq!(got, want, "{query} recall={recall}");
+            }
+        }
+    };
+    check(&cards);
+    // A new HEAD re-reads only what changed, and ranks the same way.
+    cards
+        .write(
+            "shelf/other/y",
+            "deploy deploy 代理\n",
+            None,
+            None,
+            &Author::user(),
+        )
+        .unwrap();
+    check(&cards);
+    assert_eq!(cards.rank("代理", 50, false, |_, _| true).unwrap().len(), 7);
+    let main = decks.get(&id("main")).unwrap();
+    main.remove_file("n/c3", &Author::user()).unwrap();
+    check(&cards);
+    assert_eq!(cards.rank("代理", 50, false, |_, _| true).unwrap().len(), 6);
+}

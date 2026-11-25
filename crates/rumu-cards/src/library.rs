@@ -209,31 +209,17 @@ pub fn search(decks: &Decks, query: &str, deck: Option<&Deck>) -> Result<Vec<Lib
         return Err(not_found("missing `query`".to_owned()));
     }
     let cards = library_cards(decks);
-    let loaded = cards.all()?;
-    let selected = |public: &str| match deck {
+    let selected = |public: &str, _: &str| match deck {
         Some(deck) => public.starts_with(&format!("{}/", deck.id())),
         None => true,
     };
-    let rankable: BTreeMap<String, Card> = loaded
-        .iter()
-        .filter(|(public, l)| selected(public) && l.dangling.is_none())
-        .map(|(_, l)| (l.card.path.clone(), l.card.clone()))
-        .collect();
-    let address: BTreeMap<&str, &str> = loaded
-        .iter()
-        .filter(|(public, _)| selected(public))
-        .map(|(public, l)| (l.card.path.as_str(), public.as_str()))
-        .collect();
     let terms = recall::tokens(query);
     let mut out = Vec::new();
-    for hit in recall::search(&rankable, query, 50) {
-        let Some(public) = address.get(hit.card.path.as_str()) else {
+    for hit in cards.rank(query, 50, false, selected)? {
+        let Some((mounted, path)) = cards.mount_of(&hit.public) else {
             continue;
         };
-        let Some((mounted, path)) = cards.mount_of(public) else {
-            continue;
-        };
-        let Some(raw) = cards.raw(public)? else {
+        let Some(raw) = cards.raw(&hit.public)? else {
             continue;
         };
         let mut row = card_row(decks, &mounted.deck, path, &raw)?;

@@ -7,14 +7,15 @@
 //! once. A card is identified by its deck id and its path within that deck;
 //! links store that pair.
 
-use std::collections::BTreeMap;
+use std::collections::{BTreeMap, HashMap};
+use std::sync::Arc;
 
 use rumu_core::CardMount;
 
-use tracing::warn;
-
+use crate::cache::DeckCards;
 use crate::card::{self, Card, card_content, parse_card, valid_card_path};
 use crate::deck::{Author, Deck, Decks};
+use crate::recall::{PATH_FIELD, Segment, Shared, rank_segments};
 use crate::{Error, Result};
 
 /// The virtual root of every card address.
@@ -132,6 +133,49 @@ pub struct Loaded {
     pub link: Option<String>,
     /// A link whose target no longer exists (its stored target).
     pub dangling: Option<String>,
+}
+
+/// A card of [`Cards::all`], its content still in its deck's cache.
+struct Resolved {
+    public: String,
+    /// The path it is shown by: `public`, or the target's for a link.
+    display: String,
+    deck: String,
+    content_path: String,
+    link: Option<String>,
+    dangling: Option<String>,
+    /// The content's deck cache (the link's own for a dangling link) and
+    /// its entry there.
+    source: Arc<DeckCards>,
+    entry: usize,
+}
+
+impl Resolved {
+    fn card(&self) -> &Arc<Card> {
+        &self.source.entries()[self.entry].card
+    }
+}
+
+/// One card [`Cards::rank`] found.
+#[derive(Debug)]
+pub struct Hit {
+    /// The public path of the address it was found through.
+    pub public: String,
+    /// The path it is shown by (see [`Cards::display_path`]).
+    pub path: String,
+    /// Its content; `card.path` is the deck-local path.
+    pub card: Arc<Card>,
+    /// The deck that owns the content, and its path there.
+    pub deck: String,
+    pub content_path: String,
+    pub score: f64,
+}
+
+impl Hit {
+    /// The card as the model reads it, under its display path.
+    pub fn render(&self) -> String {
+        card::render(&self.path, &self.card.body)
+    }
 }
 
 impl Cards {
@@ -323,85 +367,115 @@ impl Cards {
     /// (deck id + path). A direct card wins over a link to it; a dangling
     /// link is included with its own content and marked.
     pub fn all(&self) -> Result<BTreeMap<String, Loaded>> {
-        let mut by_key: BTreeMap<(String, String), Loaded> = BTreeMap::new();
-        let mut dangling: Vec<Loaded> = Vec::new();
-        for mounted in &self.mounts {
-            for path in mounted.deck.walk()? {
-                let text = match mounted.deck.read(&path) {
-                    Ok(Some(text)) => text,
-                    Ok(None) => continue,
-                    Err(e) => {
-                        warn!(deck = %mounted.deck.meta.name, path = %path, error = %e, "skipping an unreadable card");
-                        continue;
-                    }
+        Ok(self
+            .resolve()?
+            .into_iter()
+            .map(|(public, r)| {
+                let card = Card {
+                    path: r.display.clone(),
+                    ..(**r.card()).clone()
                 };
-                let raw = parse_card(&path, &text);
-                let public = mounted.card_path(&path);
-                match raw.link().map(str::to_owned) {
-                    Some(stored) => {
-                        if let Some((deck_id, target_path, card)) =
-                            self.decks.link_target(mounted.deck.id(), &stored)
-                        {
-                            let display = self.display_path(&deck_id, &target_path);
-                            let loaded = Loaded {
-                                path: public,
-                                card: Card {
-                                    path: display,
-                                    ..card
-                                },
-                                deck: deck_id,
-                                content_path: target_path.clone(),
-                                link: Some(stored),
-                                dangling: None,
-                            };
-                            match by_key.get(&(loaded.deck.clone(), target_path)) {
-                                Some(existing) if existing.link.is_none() => {}
-                                _ => {
-                                    by_key.insert(
-                                        (loaded.deck.clone(), loaded.content_path.clone()),
-                                        loaded,
-                                    );
-                                }
-                            }
-                        } else {
-                            dangling.push(Loaded {
-                                path: public.clone(),
-                                card: Card {
-                                    path: public,
-                                    ..raw
-                                },
-                                deck: mounted.deck.id().to_owned(),
-                                content_path: path.to_owned(),
-                                link: None,
-                                dangling: Some(stored),
-                            });
+                let loaded = Loaded {
+                    path: r.public,
+                    card,
+                    deck: r.deck,
+                    content_path: r.content_path,
+                    link: r.link,
+                    dangling: r.dangling,
+                };
+                (public, loaded)
+            })
+            .collect())
+    }
+
+    /// [`all`](Self::all) over the decks' cached cards, without copying them.
+    fn resolve(&self) -> Result<BTreeMap<String, Resolved>> {
+        // Each deck's cache is looked up once per call (a `HEAD` read).
+        let mut memo: HashMap<String, Arc<DeckCards>> = HashMap::new();
+        let mut by_key: BTreeMap<(String, String), Resolved> = BTreeMap::new();
+        let mut dangling: Vec<Resolved> = Vec::new();
+        for mounted in &self.mounts {
+            let own = mounted.deck.cards()?;
+            memo.insert(mounted.deck.id().to_owned(), own.clone());
+            for (i, e) in own.entries().iter().enumerate() {
+                let public = mounted.card_path(&e.path);
+                let Some(stored) = e.card.link() else {
+                    let resolved = Resolved {
+                        display: public.clone(),
+                        public,
+                        deck: mounted.deck.id().to_owned(),
+                        content_path: e.path.clone(),
+                        link: None,
+                        dangling: None,
+                        source: own.clone(),
+                        entry: i,
+                    };
+                    by_key.insert(
+                        (resolved.deck.clone(), resolved.content_path.clone()),
+                        resolved,
+                    );
+                    continue;
+                };
+                match self.link_source(mounted.deck.id(), stored, &mut memo) {
+                    Some((deck_id, target_path, source, entry)) => {
+                        let key = (deck_id, target_path);
+                        if by_key.get(&key).is_some_and(|r| r.link.is_none()) {
+                            continue;
                         }
-                    }
-                    None => {
-                        let loaded = Loaded {
-                            path: public.clone(),
-                            card: Card {
-                                path: public,
-                                ..raw
-                            },
-                            deck: mounted.deck.id().to_owned(),
-                            content_path: path.to_owned(),
-                            link: None,
+                        let resolved = Resolved {
+                            display: self.display_path(&key.0, &key.1),
+                            public,
+                            deck: key.0.clone(),
+                            content_path: key.1.clone(),
+                            link: Some(stored.to_owned()),
                             dangling: None,
+                            source,
+                            entry,
                         };
-                        by_key.insert((loaded.deck.clone(), loaded.content_path.clone()), loaded);
+                        by_key.insert(key, resolved);
                     }
+                    None => dangling.push(Resolved {
+                        display: public.clone(),
+                        public,
+                        deck: mounted.deck.id().to_owned(),
+                        content_path: e.path.clone(),
+                        link: None,
+                        dangling: Some(stored.to_owned()),
+                        source: own.clone(),
+                        entry: i,
+                    }),
                 }
             }
         }
         let mut out = BTreeMap::new();
-        for loaded in by_key.into_values() {
-            out.insert(loaded.path.clone(), loaded);
-        }
-        for loaded in dangling {
-            out.insert(loaded.path.clone(), loaded);
+        for r in by_key.into_values().chain(dangling) {
+            out.insert(r.public.clone(), r);
         }
         Ok(out)
+    }
+
+    /// [`Decks::link_target`] in the cached cards: the target's deck id,
+    /// path, deck cache and entry.
+    fn link_source(
+        &self,
+        from_deck: &str,
+        stored: &str,
+        memo: &mut HashMap<String, Arc<DeckCards>>,
+    ) -> Option<(String, String, Arc<DeckCards>, usize)> {
+        let (deck_id, path) = stored.split_once(':')?;
+        if !self.decks.link_allowed(from_deck, deck_id) {
+            return None;
+        }
+        let cards = match memo.get(deck_id) {
+            Some(cards) => cards.clone(),
+            None => {
+                let cards = self.decks.get(deck_id)?.cards().ok()?;
+                memo.insert(deck_id.to_owned(), cards.clone());
+                cards
+            }
+        };
+        let (entry, _) = cards.find(path)?;
+        Some((deck_id.to_owned(), path.to_owned(), cards, entry))
     }
 
     /// The cards whose text recall/search ranks: display path → card.
@@ -418,10 +492,76 @@ impl Cards {
     /// same display path [`rankable`](Self::rankable) uses.
     pub fn identities(&self) -> Result<BTreeMap<String, (String, String)>> {
         Ok(self
-            .all()?
+            .resolve()?
             .into_values()
-            .filter(|l| l.dangling.is_none())
-            .map(|l| (l.card.path, (l.deck, l.content_path)))
+            .filter(|r| r.dangling.is_none())
+            .map(|r| (r.display, (r.deck, r.content_path)))
+            .collect())
+    }
+
+    /// Rank the [`rankable`](Self::rankable) cards that `keep(public path,
+    /// display path)` accepts against `query` by BM25F (see [`recall`]),
+    /// best first (ties by display path), at most `limit`. `recall` applies
+    /// the relevance floor; without it any positive score is a hit.
+    ///
+    /// Only the query terms' postings are scored, in each deck's cached
+    /// index; the corpus statistics are summed over the decks taking part.
+    pub fn rank(
+        &self,
+        query: &str,
+        limit: usize,
+        recall: bool,
+        keep: impl Fn(&str, &str) -> bool,
+    ) -> Result<Vec<Hit>> {
+        let resolved = self.resolve()?;
+        // Display path order is the tie order; a later card with the same
+        // display path replaces an earlier one, as in `rankable`.
+        let rankable: BTreeMap<&str, &Resolved> = resolved
+            .values()
+            .filter(|r| r.dangling.is_none() && keep(&r.public, &r.display))
+            .map(|r| (r.display.as_str(), r))
+            .collect();
+        let rankable: Vec<&Resolved> = rankable.into_values().collect();
+        // One segment per deck cache and path prefix (its mount point, or
+        // `<deck-name>` for an unmounted link target).
+        let mut owners: Vec<(&Arc<DeckCards>, &str)> = Vec::new();
+        let mut segments: Vec<Segment<'_>> = Vec::new();
+        for (key, r) in rankable.iter().enumerate() {
+            let prefix = r
+                .display
+                .strip_suffix(r.content_path.as_str())
+                .and_then(|p| p.strip_suffix(['/', ':']))
+                .expect("a display path ends with its content path");
+            let at = match owners
+                .iter()
+                .position(|(c, p)| Arc::ptr_eq(c, &r.source) && *p == prefix)
+            {
+                Some(at) => at,
+                None => {
+                    owners.push((&r.source, prefix));
+                    segments.push(Segment {
+                        index: r.source.index(),
+                        keys: vec![None; r.source.entries().len()],
+                        shared: Some(Shared::new(PATH_FIELD, prefix)),
+                    });
+                    segments.len() - 1
+                }
+            };
+            segments[at].keys[r.entry] = Some(key as u32);
+        }
+        Ok(rank_segments(&segments, query, limit, recall)
+            .into_iter()
+            .map(|(key, score)| {
+                let r = rankable[key as usize];
+                Hit {
+                    public: r.public.clone(),
+                    path: r.display.clone(),
+                    card: r.card().clone(),
+                    deck: r.deck.clone(),
+                    content_path: r.content_path.clone(),
+                    score,
+                }
+            })
             .collect())
     }
 

@@ -1,5 +1,7 @@
-//! BM25F ranking: [`rank_docs`] ranks weighted documents, and [`rank`] is the
-//! wrapper over the mounted cards used for prompt recall.
+//! BM25F ranking over an inverted [`Index`]: [`rank_segments`] scores the
+//! documents of several indexes as one corpus, and [`rank_docs`] is the
+//! one-off form over a list of [`Doc`]s. Card recall keeps one index per deck
+//! (see [`crate::cache`]) and ranks the mounted decks' together.
 //!
 //! A card's frontmatter `keywords:` (weight 3) outweigh its path (2), its
 //! description (1.5) and its body (1), so a card that names its own trigger
@@ -15,98 +17,258 @@
 //! from [`FLOOR_MIN_CARDS`] cards on, its score must reach [`FLOOR`] times
 //! the IDF of a term appearing in a single card. Below that the corpus is too
 //! small for IDF to be meaningful, so there is no floor. Explicit search
-//! ([`search`]) ranks with `recall = false`: any positive score is a hit, and
-//! a term common to every document still matches.
+//! ranks with `recall = false`: any positive score is a hit, and a term common
+//! to every document still matches.
 
-use std::collections::{BTreeMap, BTreeSet};
+use std::collections::{BTreeMap, BTreeSet, HashMap};
 
 use crate::Card;
 
-/// Per-field card weights: keywords, id, description, body.
-const WEIGHTS: [f64; 4] = [3.0, 2.0, 1.5, 1.0];
+/// The most fields a document has.
+pub const FIELDS: usize = 4;
+/// Per-field card weights: keywords, path, description, body.
+pub const CARD_WEIGHTS: [f64; FIELDS] = [3.0, 2.0, 1.5, 1.0];
+/// The path field of a card document.
+pub const PATH_FIELD: usize = 1;
 /// BM25 term-frequency saturation and length normalization.
 const K1: f64 = 1.2;
 const B: f64 = 0.75;
 /// Below this many cards there is no relevance floor (IDF is too noisy).
-const FLOOR_MIN_CARDS: usize = 16;
+const FLOOR_MIN_CARDS: u64 = 16;
 /// The relevance floor, as a fraction of the IDF of a term that appears in
 /// exactly one card.
 const FLOOR: f64 = 0.7;
 
-/// One document to rank: tokenized, weighted fields plus a score multiplier.
+/// Counts per field.
+type Tf = [u32; FIELDS];
+
+/// One tokenized document: each term's count per field, each field's token
+/// length, and a score multiplier.
+#[derive(Debug, Clone, Default)]
 pub struct Doc {
-    /// Per field: term counts, token length, BM25F weight.
-    fields: Vec<(BTreeMap<String, usize>, f64, f64)>,
+    terms: BTreeMap<String, Tf>,
+    lens: Tf,
+    weights: [f64; FIELDS],
     boost: f64,
 }
 
 impl Doc {
-    /// Tokenize `(text, weight)` fields; `boost` multiplies the final score.
-    /// All documents of one ranking pass list the same fields in one order.
+    /// Tokenize `(text, weight)` fields (at most [`FIELDS`]); `boost`
+    /// multiplies the final score. All documents of one ranking list the
+    /// same fields in one order.
     pub fn new<'t>(fields: impl IntoIterator<Item = (&'t str, f64)>, boost: f64) -> Self {
-        let fields = fields
-            .into_iter()
-            .map(|(text, weight)| {
-                let mut counts = BTreeMap::new();
-                let mut len = 0;
-                for (t, overlap) in scan(text, true) {
-                    *counts.entry(t).or_default() += 1;
-                    if !overlap {
-                        len += 1;
-                    }
+        let mut doc = Self {
+            boost,
+            ..Self::default()
+        };
+        for (f, (text, weight)) in fields.into_iter().enumerate() {
+            assert!(f < FIELDS, "a document has at most {FIELDS} fields");
+            doc.weights[f] = weight;
+            for (t, overlap) in scan(text, true) {
+                doc.terms.entry(t).or_default()[f] += 1;
+                if !overlap {
+                    doc.lens[f] += 1;
                 }
-                (counts, len as f64, weight)
-            })
-            .collect();
-        Self { fields, boost }
+            }
+        }
+        doc
     }
 
-    /// Every distinct term of the document.
-    fn terms(&self) -> BTreeSet<&str> {
-        self.fields
-            .iter()
-            .flat_map(|(counts, ..)| counts.keys().map(String::as_str))
-            .collect()
+    /// A card's document: its keywords, `path`, summary and body.
+    pub fn card(card: &Card, path: &str) -> Self {
+        let kw = card.keywords().join(" ");
+        let desc = card.summary().unwrap_or_default();
+        let fields = [kw.as_str(), path, desc.as_str(), card.body.as_str()];
+        Self::new(fields.into_iter().zip(CARD_WEIGHTS), 1.0)
     }
 }
 
-/// Rank `docs` against `query` by BM25F, best first, at most `limit`, as
-/// `(index into docs, score)`. Equal scores keep the input order, so callers
-/// order `docs` by their own tie key. `recall` applies the relevance floor and
-/// drops terms found in every document.
-pub fn rank_docs(docs: &[Doc], query: &str, limit: usize, recall: bool) -> Vec<(usize, f64)> {
+/// An inverted index over documents with one field layout.
+#[derive(Debug, Default)]
+pub struct Index {
+    weights: [f64; FIELDS],
+    /// Term → the documents that have it, by document, with its counts.
+    postings: HashMap<Box<str>, Box<[(u32, Tf)]>>,
+    lens: Vec<Tf>,
+    boosts: Vec<f64>,
+}
+
+impl Index {
+    /// Index `docs` (document `i` is the `i`th) under per-field `weights`.
+    pub fn new<'d>(weights: [f64; FIELDS], docs: impl IntoIterator<Item = &'d Doc>) -> Self {
+        let docs: Vec<&Doc> = docs.into_iter().collect();
+        let empty = Self {
+            weights,
+            ..Self::default()
+        };
+        empty.update(&[], docs.len(), (0..).zip(docs))
+    }
+
+    /// This index with its documents renumbered by `kept` (old document →
+    /// its new number, `None` when dropped) and the `added` ones (new
+    /// number, document) indexed in: `len` documents in all, each either
+    /// kept or added. Kept documents are not tokenized again.
+    pub fn update<'d>(
+        &self,
+        kept: &[Option<u32>],
+        len: usize,
+        added: impl IntoIterator<Item = (u32, &'d Doc)>,
+    ) -> Self {
+        let mut lens = vec![Tf::default(); len];
+        let mut boosts = vec![1.0; len];
+        for (old, new) in kept.iter().enumerate() {
+            if let Some(new) = *new {
+                lens[new as usize] = self.lens[old];
+                boosts[new as usize] = self.boosts[old];
+            }
+        }
+        let mut postings: HashMap<&str, Vec<(u32, Tf)>> = self
+            .postings
+            .iter()
+            .filter_map(|(t, list)| {
+                let list: Vec<(u32, Tf)> = list
+                    .iter()
+                    .filter_map(|&(d, tf)| Some((kept[d as usize]?, tf)))
+                    .collect();
+                (!list.is_empty()).then_some((&**t, list))
+            })
+            .collect();
+        for (d, doc) in added {
+            lens[d as usize] = doc.lens;
+            boosts[d as usize] = doc.boost;
+            for (t, tf) in &doc.terms {
+                postings.entry(t).or_default().push((d, *tf));
+            }
+        }
+        // Boxed: the index lives on in the cache, without spare capacity.
+        let postings = postings
+            .into_iter()
+            .map(|(t, mut list)| {
+                if !list.is_sorted_by_key(|(d, _)| *d) {
+                    list.sort_unstable_by_key(|(d, _)| *d);
+                }
+                (t.into(), list.into_boxed_slice())
+            })
+            .collect();
+        Self {
+            weights: self.weights,
+            postings,
+            lens,
+            boosts,
+        }
+    }
+
+    /// The number of documents.
+    pub fn len(&self) -> usize {
+        self.lens.len()
+    }
+
+    pub fn is_empty(&self) -> bool {
+        self.lens.is_empty()
+    }
+}
+
+/// Terms every document of a [`Segment`] has besides its own, in one field:
+/// a card's mount point, which is part of its path but differs per session.
+#[derive(Debug)]
+pub struct Shared {
+    field: usize,
+    terms: BTreeMap<String, u32>,
+    len: u32,
+}
+
+impl Shared {
+    /// Tokenize `text` as part of `field`. Tokenizing `a/b` gives the terms
+    /// of `a` then those of `b`, so a shared prefix splits off exactly.
+    pub fn new(field: usize, text: &str) -> Self {
+        let mut terms = BTreeMap::new();
+        let mut len = 0;
+        for (t, overlap) in scan(text, true) {
+            *terms.entry(t).or_default() += 1;
+            if !overlap {
+                len += 1;
+            }
+        }
+        Self { field, terms, len }
+    }
+}
+
+/// The documents of one index that take part in a ranking.
+pub struct Segment<'a> {
+    pub index: &'a Index,
+    /// Per document of `index`: its key in the ranking, or `None` when it
+    /// does not take part. Equal scores rank by key.
+    pub keys: Vec<Option<u32>>,
+    pub shared: Option<Shared>,
+}
+
+impl Segment<'_> {
+    /// How often every document here has `t` besides its own count.
+    fn shared_tf(&self, t: &str) -> u32 {
+        self.shared
+            .as_ref()
+            .and_then(|s| s.terms.get(t))
+            .copied()
+            .unwrap_or(0)
+    }
+}
+
+/// Rank the documents of `segments` against `query` by BM25F as one corpus,
+/// best first (ties by key), at most `limit`, as `(key, score)`. Document
+/// frequencies, the document count and the average field lengths are summed
+/// over the segments, so scores are those of one index over every document
+/// taking part. `recall` applies the relevance floor and drops terms found
+/// in every document.
+pub fn rank_segments(
+    segments: &[Segment<'_>],
+    query: &str,
+    limit: usize,
+    recall: bool,
+) -> Vec<(u32, f64)> {
     // Recall ignores one-char query terms, so a reply like `好` does not
     // recall every card containing the char; explicit search keeps them.
     let query: BTreeSet<String> = tokens(query)
         .into_iter()
         .filter(|t| !recall || t.chars().count() > 1)
         .collect();
-    if query.is_empty() || docs.is_empty() || limit == 0 {
+    let counts: Vec<u64> = segments
+        .iter()
+        .map(|s| s.keys.iter().flatten().count() as u64)
+        .collect();
+    let n: u64 = counts.iter().sum();
+    if query.is_empty() || n == 0 || limit == 0 {
         return Vec::new();
     }
-    let n = docs.len();
 
     // Document frequency: a term counts once per document, whatever its field.
     // A term in every document says nothing about which one is relevant (a
     // single-document corpus is exempt: every term would be in "every" doc).
-    let mut df: BTreeMap<&str, usize> = BTreeMap::new();
-    for doc in docs {
-        for t in doc.terms() {
-            *df.entry(t).or_default() += 1;
-        }
-    }
-    let terms: Vec<&String> = query
+    let df = |t: &str| -> u64 {
+        segments
+            .iter()
+            .zip(&counts)
+            .map(|(s, &count)| {
+                if s.shared_tf(t) > 0 {
+                    return count;
+                }
+                s.index.postings.get(t).map_or(0, |p| {
+                    p.iter()
+                        .filter(|(d, _)| s.keys[*d as usize].is_some())
+                        .count() as u64
+                })
+            })
+            .sum()
+    };
+    let terms: Vec<(&str, u64)> = query
         .iter()
-        .filter(|t| {
-            df.get(t.as_str())
-                .is_some_and(|&d| !recall || d < n || n == 1)
-        })
+        .map(|t| (t.as_str(), df(t)))
+        .filter(|&(_, d)| d > 0 && (!recall || d < n || n == 1))
         .collect();
     if terms.is_empty() {
         return Vec::new();
     }
-    let idf = |t: &str| {
-        let d = df.get(t).copied().unwrap_or(0) as f64;
+    let idf = |d: u64| {
+        let d = d as f64;
         (1.0 + (n as f64 - d + 0.5) / (d + 0.5)).ln()
     };
     // A document must match at least one rare term to be recalled.
@@ -115,90 +277,95 @@ pub fn rank_docs(docs: &[Doc], query: &str, limit: usize, recall: bool) -> Vec<(
     } else {
         0.0
     };
-    let avg: Vec<f64> = (0..docs[0].fields.len())
-        .map(|f| (docs.iter().map(|d| d.fields[f].1).sum::<f64>() / n as f64).max(1.0))
-        .collect();
+    let mut total = [0u64; FIELDS];
+    for (s, &count) in segments.iter().zip(&counts) {
+        for (lens, key) in s.index.lens.iter().zip(&s.keys) {
+            if key.is_some() {
+                for f in 0..FIELDS {
+                    total[f] += u64::from(lens[f]);
+                }
+            }
+        }
+        if let Some(shared) = &s.shared {
+            total[shared.field] += count * u64::from(shared.len);
+        }
+    }
+    let avg = total.map(|t| (t as f64 / n as f64).max(1.0));
 
-    let mut hits: Vec<(usize, f64)> = docs
-        .iter()
-        .enumerate()
-        .filter_map(|(i, doc)| {
-            let score: f64 = terms
-                .iter()
-                .map(|t| {
-                    let field_score: f64 = doc
-                        .fields
-                        .iter()
-                        .zip(&avg)
-                        .map(|((counts, len, weight), avg)| {
-                            let tf = counts.get(t.as_str()).copied().unwrap_or(0) as f64;
-                            if tf == 0.0 {
-                                return 0.0;
-                            }
-                            let norm = K1 * (1.0 - B + B * len / avg);
-                            weight * tf * (K1 + 1.0) / (tf + norm)
-                        })
-                        .sum();
-                    idf(t) * field_score
-                })
-                .sum::<f64>()
-                * doc.boost;
-            (score >= floor && score > 0.0).then_some((i, score))
-        })
+    // Key → (score so far, boost). Only documents with a query term appear.
+    let mut scores: HashMap<u32, (f64, f64)> = HashMap::new();
+    for &(t, d) in &terms {
+        let idf = idf(d);
+        for s in segments {
+            let index = s.index;
+            let shared = s.shared_tf(t);
+            let mut add = |doc: u32, mut tf: Tf| {
+                let Some(key) = s.keys[doc as usize] else {
+                    return;
+                };
+                let mut lens = index.lens[doc as usize];
+                if let Some(sh) = &s.shared {
+                    tf[sh.field] += shared;
+                    lens[sh.field] += sh.len;
+                }
+                let field_score: f64 = (0..FIELDS)
+                    .map(|f| {
+                        let tf = f64::from(tf[f]);
+                        if tf == 0.0 {
+                            return 0.0;
+                        }
+                        let norm = K1 * (1.0 - B + B * f64::from(lens[f]) / avg[f]);
+                        index.weights[f] * tf * (K1 + 1.0) / (tf + norm)
+                    })
+                    .sum();
+                let boost = index.boosts[doc as usize];
+                scores.entry(key).or_insert((0.0, boost)).0 += idf * field_score;
+            };
+            let postings = index.postings.get(t).map_or(&[][..], |p| &p[..]);
+            if shared == 0 {
+                for &(doc, tf) in postings {
+                    add(doc, tf);
+                }
+            } else {
+                // Every document has the term: walk them all.
+                let mut postings = postings.iter().peekable();
+                for doc in 0..index.len() as u32 {
+                    let tf = match postings.next_if(|(d, _)| *d == doc) {
+                        Some(&(_, tf)) => tf,
+                        None => Tf::default(),
+                    };
+                    add(doc, tf);
+                }
+            }
+        }
+    }
+
+    let mut hits: Vec<(u32, f64)> = scores
+        .into_iter()
+        .map(|(key, (score, boost))| (key, score * boost))
+        .filter(|&(_, score)| score >= floor && score > 0.0)
         .collect();
-    // Stable, so equal scores keep the caller's order.
-    hits.sort_by(|a, b| b.1.total_cmp(&a.1));
+    hits.sort_by(|a, b| b.1.total_cmp(&a.1).then(a.0.cmp(&b.0)));
     hits.truncate(limit);
     hits
 }
 
-/// One ranked card.
-#[derive(Debug)]
-pub struct Hit<'a> {
-    pub card: &'a Card,
-    pub score: f64,
-}
-
-/// Rank `cards` against `query` for prompt recall, best first (ties by id),
-/// at most `limit`.
-pub fn rank<'a>(cards: &'a BTreeMap<String, Card>, query: &str, limit: usize) -> Vec<Hit<'a>> {
-    ranked(cards, query, limit, true)
-}
-
-/// Rank `cards` against `query` for an explicit search, best first (ties by
-/// id), at most `limit`. No relevance floor: any positive score is a hit.
-pub fn search<'a>(cards: &'a BTreeMap<String, Card>, query: &str, limit: usize) -> Vec<Hit<'a>> {
-    ranked(cards, query, limit, false)
-}
-
-fn ranked<'a>(
-    cards: &'a BTreeMap<String, Card>,
-    query: &str,
-    limit: usize,
-    recall: bool,
-) -> Vec<Hit<'a>> {
-    // `BTreeMap` order is id order, so stable ties stay ordered by id.
-    let list: Vec<&Card> = cards.values().collect();
-    let docs: Vec<Doc> = list
-        .iter()
-        .map(|card| {
-            let kw = card.keywords().join(" ");
-            let desc = card.summary().unwrap_or_default();
-            let fields = [
-                kw.as_str(),
-                card.path.as_str(),
-                desc.as_str(),
-                card.body.as_str(),
-            ];
-            Doc::new(fields.into_iter().zip(WEIGHTS), 1.0)
-        })
-        .collect();
-    rank_docs(&docs, query, limit, recall)
+/// Rank `docs` against `query` by BM25F, best first, at most `limit`, as
+/// `(index into docs, score)`. Equal scores keep the input order, so callers
+/// order `docs` by their own tie key. Weights are the first document's.
+pub fn rank_docs(docs: &[Doc], query: &str, limit: usize, recall: bool) -> Vec<(usize, f64)> {
+    let Some(first) = docs.first() else {
+        return Vec::new();
+    };
+    let index = Index::new(first.weights, docs);
+    let segment = Segment {
+        index: &index,
+        keys: (0..docs.len() as u32).map(Some).collect(),
+        shared: None,
+    };
+    rank_segments(&[segment], query, limit, recall)
         .into_iter()
-        .map(|(i, score)| Hit {
-            card: list[i],
-            score,
-        })
+        .map(|(key, score)| (key as usize, score))
         .collect()
 }
 
@@ -301,6 +468,37 @@ mod tests {
             .iter()
             .map(|(id, text)| ((*id).to_owned(), parse_card(id, text)))
             .collect()
+    }
+
+    struct Hit<'a> {
+        card: &'a Card,
+        score: f64,
+    }
+
+    /// Rank `cards` as one index, each by its own path, ties by id.
+    fn ranked<'a>(
+        cards: &'a BTreeMap<String, Card>,
+        query: &str,
+        limit: usize,
+        recall: bool,
+    ) -> Vec<Hit<'a>> {
+        let list: Vec<&Card> = cards.values().collect();
+        let docs: Vec<Doc> = list.iter().map(|c| Doc::card(c, &c.path)).collect();
+        rank_docs(&docs, query, limit, recall)
+            .into_iter()
+            .map(|(i, score)| Hit {
+                card: list[i],
+                score,
+            })
+            .collect()
+    }
+
+    fn rank<'a>(cards: &'a BTreeMap<String, Card>, query: &str, limit: usize) -> Vec<Hit<'a>> {
+        ranked(cards, query, limit, true)
+    }
+
+    fn search<'a>(cards: &'a BTreeMap<String, Card>, query: &str, limit: usize) -> Vec<Hit<'a>> {
+        ranked(cards, query, limit, false)
     }
 
     fn ids(hits: Vec<Hit<'_>>) -> Vec<String> {

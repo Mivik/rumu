@@ -21,9 +21,10 @@ use std::collections::BTreeSet;
 
 use crate::Result;
 use async_trait::async_trait;
+use rumu_cards::cards::Hit;
 use rumu_cards::catalog::{self, CatalogNote};
 use rumu_cards::deck::Action;
-use rumu_cards::{Card, Cards, Decks, card, usage};
+use rumu_cards::{Cards, Decks, card, usage};
 use rumu_core::{
     Content, Cx, Decision, Event, HookOutput, HookSpec, Manifest, Plugin, RUMU_WORKSPACE,
     Structured,
@@ -474,24 +475,19 @@ the catalog lists the cards.",
             return Ok(HookOutput::default());
         };
         let cards = self.cards(cx)?;
-        let all = cards.rankable()?;
-        let hits = rumu_cards::recall::rank(&all, text, RECALL_LIMIT);
+        let hits = cards.rank(text, RECALL_LIMIT, true, |_, _| true)?;
         if hits.is_empty() {
             return Ok(HookOutput::default());
         }
         let uses = usage::uses_on_path(&cx.path()?);
-        let identities = cards.identities()?;
         let mut out = HookOutput::default();
         let mut budget = RECALL_BUDGET;
         for hit in hits {
-            let card = hit.card;
-            let Some((deck, path)) = identities.get(&card.path) else {
-                continue;
-            };
+            let (deck, path) = (&hit.deck, &hit.content_path);
             let last = uses
                 .get(&(deck.clone(), path.clone()))
                 .and_then(|u| u.rev.as_deref());
-            let Some(body) = import_body(card, last) else {
+            let Some(body) = import_body(&hit, last) else {
                 continue;
             };
             if body.len() > budget {
@@ -503,7 +499,7 @@ the catalog lists the cards.",
                 &usage::CardImport {
                     deck: deck.clone(),
                     path: path.clone(),
-                    rev: card.revision.clone(),
+                    rev: hit.card.revision.clone(),
                 },
             ));
         }
@@ -514,13 +510,13 @@ the catalog lists the cards.",
 /// The revision-aware body to import: `None` when the branch already saw this
 /// revision (an import or a read — both are usage records); an "Updated card"
 /// prefix when it saw an older one.
-fn import_body(card: &Card, last: Option<&str>) -> Option<String> {
+fn import_body(hit: &Hit, last: Option<&str>) -> Option<String> {
     match last {
-        Some(rev) if rev == card.revision => None,
+        Some(rev) if rev == hit.card.revision => None,
         Some(old) => Some(format!(
             "(Updated card — supersedes rev {old} read earlier on this branch.)\n{}",
-            card.render()
+            hit.render()
         )),
-        None => Some(card.render()),
+        None => Some(hit.render()),
     }
 }
