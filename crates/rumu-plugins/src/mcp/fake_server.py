@@ -87,7 +87,8 @@ for line in sys.stdin:
         continue
     if method == "initialize":
         reply(id, {
-            "protocolVersion": "2025-06-18",
+            # FAKE_MODERN: MCP 2026-07-28, which keeps no state per connection.
+            "protocolVersion": "2026-07-28" if os.environ.get("FAKE_MODERN") else "2025-06-18",
             "capabilities": {"tools": {"listChanged": True}, "resources": {}},
             "serverInfo": {"name": "fake", "version": "1"},
             "instructions": "Echo things.",

@@ -205,6 +205,128 @@ async fn invoke_returns_text_errors_and_structured_content() {
     );
 }
 
+/// `mcp.spawn` opens a session's own connection (a new process), used like
+/// its server, seen only by that session, closed by `delete`.
+#[tokio::test]
+async fn a_session_spawns_and_closes_its_own_instance() {
+    let home = tempfile::tempdir().unwrap();
+    let Some(hub) = hub(home.path()).await else {
+        return;
+    };
+    let decks = assistant_decks(home.path());
+    set_assistant(&decks, all(&["fake"]), &[]);
+    let plugin = invoker(home.path(), hub.clone(), decks);
+    let fake = FakeRuntime::arc();
+    let (cx, other) = (fake.cx_for("s1".into()), fake.cx_for("s2".into()));
+    let starts = || {
+        std::fs::read_to_string(home.path().join("starts"))
+            .unwrap()
+            .lines()
+            .count()
+    };
+    assert_eq!(starts(), 1);
+
+    let spawn = json!({ "action": "mcp.spawn", "path": "@rumu:/mcp/fake" });
+    let out = plugin
+        .call_tool("invoke", spawn.clone(), &cx)
+        .await
+        .unwrap();
+    assert!(!out.is_error, "{}", out.content.text);
+    let name = out.content.text.split('`').nth(1).unwrap().to_owned();
+    assert!(name.starts_with("fake#"), "{name}");
+    assert_eq!(starts(), 2);
+
+    let echo = json!({ "action": format!("{name}/echo"), "args": { "text": "hi" } });
+    let out = plugin.call_tool("invoke", echo.clone(), &cx).await.unwrap();
+    assert_eq!(out.content.text, "hi");
+    let list = json!({ "path": "@rumu:/mcp" });
+    let root = plugin.call_tool("list", list.clone(), &cx).await.unwrap();
+    assert!(
+        root.content
+            .text
+            .contains(&format!("{name}/ — 3 tools, an instance of `fake`")),
+        "{}",
+        root.content.text
+    );
+    // Another session neither sees nor reaches it.
+    let root = plugin.call_tool("list", list, &other).await.unwrap();
+    assert!(!root.content.text.contains(&name));
+    let out = plugin
+        .call_tool("invoke", echo.clone(), &other)
+        .await
+        .unwrap();
+    assert!(out.is_error && out.content.text.contains("has no instance"));
+
+    // Nor an instance of an instance; and a configured server stays.
+    let again = json!({ "action": "mcp.spawn", "path": format!("@rumu:/mcp/{name}") });
+    let out = plugin.call_tool("invoke", again, &cx).await.unwrap();
+    assert!(out.is_error && out.content.text.contains("already an instance"));
+    let out = plugin
+        .call_tool("delete", json!({ "path": "@rumu:/mcp/fake" }), &cx)
+        .await
+        .unwrap();
+    assert!(out.is_error && out.content.text.contains("configured server"));
+
+    let path = json!({ "path": format!("@rumu:/mcp/{name}") });
+    let out = plugin
+        .call_tool("delete", path.clone(), &other)
+        .await
+        .unwrap();
+    assert!(out.is_error, "{}", out.content.text);
+    let out = plugin.call_tool("delete", path, &cx).await.unwrap();
+    assert!(!out.is_error, "{}", out.content.text);
+    let out = plugin.call_tool("invoke", echo, &cx).await.unwrap();
+    assert!(out.is_error && out.content.text.contains("mcp.spawn"));
+
+    // A session opens at most so many.
+    for _ in 0..hub::INSTANCES_PER_SESSION {
+        let out = plugin
+            .call_tool("invoke", spawn.clone(), &cx)
+            .await
+            .unwrap();
+        assert!(!out.is_error, "{}", out.content.text);
+    }
+    let out = plugin.call_tool("invoke", spawn, &cx).await.unwrap();
+    assert!(out.is_error && out.content.text.contains("already has"));
+}
+
+/// A server on MCP 2026-07-28 keeps no state per connection: spawning one
+/// is refused, unless forced for a stdio server.
+#[tokio::test]
+async fn spawning_a_stateless_server_needs_force() {
+    let home = tempfile::tempdir().unwrap();
+    let Some(hub) = hub(home.path()).await else {
+        return;
+    };
+    let mut settings = BTreeMap::new();
+    settings.insert(
+        "modern".to_owned(),
+        McpServerSettings {
+            command: vec![
+                "python3".into(),
+                home.path().join("fake_server.py").display().to_string(),
+            ],
+            env: [("FAKE_MODERN".to_owned(), "1".to_owned())].into(),
+            ..Default::default()
+        },
+    );
+    hub.configure(&settings);
+    let modern = hub.server("modern").unwrap();
+    assert_eq!(modern.ready().await.status, McpStatus::Ready);
+    assert!(modern.stateless());
+
+    let st = one_deck(all(&["modern"]));
+    let session = "s1".into();
+    let err = spawn(&hub, &st, &session, "modern", false)
+        .await
+        .unwrap_err()
+        .to_string();
+    assert!(err.contains("speaks MCP 2026-07-28"), "{err}");
+    assert!(err.contains("`force: true`"), "{err}");
+    let out = text_of(spawn(&hub, &st, &session, "modern", true).await);
+    assert!(out.starts_with("Opened `modern#"), "{out}");
+}
+
 /// An image block is attached and copied into `@scratch:.inbox/attachments/`,
 /// the text naming the file; without a scratch root it is only attached.
 #[tokio::test]
@@ -325,7 +447,7 @@ async fn invoke_reads_a_resource() {
     assert!(
         out.content
             .text
-            .ends_with("\n  mcp.read_resource(uri: string) — read one of its resources (`resources/read`); media land in `@scratch`"),
+            .contains("\n  mcp.read_resource(uri: string) — read one of its resources (`resources/read`); media land in `@scratch`\n  mcp.spawn("),
         "{}",
         out.content.text
     );
@@ -435,7 +557,7 @@ async fn a_project_adds_its_servers_and_tools() {
         ..Default::default()
     };
     let root = |state: &PathState| {
-        let st = servers(&decks, state);
+        let st = servers(&decks, &hub, &Default::default(), state);
         let hub = hub.clone();
         async move { list_servers(&hub, &st).await.content.text }
     };

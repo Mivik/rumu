@@ -136,9 +136,14 @@ impl WorkspacePlugin {
     }
 
     /// The branch's MCP servers (its assistant's and its project's), as
-    /// their decks have them now.
+    /// their decks have them now, and the instances its session opened.
     fn servers(&self, cx: &Cx) -> rumu_core::Result<crate::mcp::Servers> {
-        Ok(crate::mcp::servers(&self.decks, &*cx.state()?))
+        Ok(crate::mcp::servers(
+            &self.decks,
+            &self.mcp(),
+            &cx.session,
+            &*cx.state()?,
+        ))
     }
 
     /// The branch's skill rules (its assistant's and its project's), as

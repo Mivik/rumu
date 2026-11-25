@@ -126,6 +126,34 @@ harnesses' own docs.
 - Servers outside the session's list, and tools its rules leave out, are
   neither listed nor callable; a server's tool count is of the enabled ones.
 
+## Instances
+
+A configured server is one connection every session shares, so a server
+that keeps state (a browser, a REPL) shares it too. The model decides when
+it needs its own:
+
+- `invoke { action: "mcp.spawn", path: "@rumu:/mcp/<server>" }` opens a
+  separate connection for the session: a new process for a stdio server, a
+  new `initialize` (and so a new `Mcp-Session-Id`) for an HTTP one. It is
+  connected before the call returns, which names it `<server>#<id>`; the id
+  is four hex digits, not reused within a run.
+- An instance is used like its server, with its server's rules: its tools
+  are `<server>#<id>/<tool>`, and it is listed under `@rumu:/mcp` (as "an
+  instance of `<server>`"), listable, readable and searchable there. Every
+  branch of the session reaches it, sub-agents included; other sessions do
+  not. The server-list note leaves instances out.
+- `delete @rumu:/mcp/<server>#<id>` closes it. It also closes after 30
+  minutes without a request (one in flight keeps it open), when its server
+  is removed or changed in the settings, and when rumu restarts. A call to a
+  closed one says so and how to spawn another.
+- A session may have 4 open; the 5th spawn is refused. No approval: it is a
+  server the session already has, with the same rules.
+- A server whose connection negotiated MCP 2026-07-28 or later has no
+  per-connection state (state that spans calls lives behind ids the server
+  hands out), so spawning it is refused with that explanation. For a stdio
+  server `force: true` starts a process anyway, for one that keeps state in
+  its process regardless.
+
 ## MCP Apps
 
 rumu implements the `io.modelcontextprotocol/ui` extension (MCP Apps, the

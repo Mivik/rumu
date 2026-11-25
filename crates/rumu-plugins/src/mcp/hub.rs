@@ -5,18 +5,22 @@
 use std::collections::{BTreeMap, HashMap, VecDeque};
 use std::path::{Path, PathBuf};
 use std::process::Stdio;
+use std::sync::atomic::{AtomicBool, AtomicU64, AtomicUsize, Ordering};
 use std::sync::{Arc, Mutex, Weak};
-use std::time::Duration;
+use std::time::{Duration, Instant, SystemTime};
 
 use rmcp::model::{
     CallToolRequestParams, ClientCapabilities, ClientConfig, Implementation, JsonObject,
-    ReadResourceRequestParams, ReadResourceResult, Resource, ResourceTemplate, Tool,
+    ProtocolVersion, ReadResourceRequestParams, ReadResourceResult, Resource, ResourceTemplate,
+    Tool,
 };
 use rmcp::service::{NotificationContext, RunningService};
 use rmcp::transport::streamable_http_client::StreamableHttpClientTransportConfig;
 use rmcp::transport::{StreamableHttpClientTransport, TokioChildProcess};
 use rmcp::{ClientHandler, RoleClient, ServiceError, serve_client};
-use rumu_core::{BranchId, Content, McpServerInfo, McpServerSettings, McpStatus, McpToolInfo};
+use rumu_core::{
+    BranchId, Content, McpServerInfo, McpServerSettings, McpStatus, McpToolInfo, SessionId,
+};
 use serde_json::Value;
 use tokio::io::{AsyncBufReadExt, BufReader};
 use tokio::sync::watch;
@@ -26,13 +30,26 @@ use tracing::{info, warn};
 const CONNECT_TIMEOUT: Duration = Duration::from_secs(30);
 /// Stderr lines of a stdio server kept for its error message.
 const STDERR_TAIL: usize = 20;
+/// How long an instance may go unused before it is closed.
+pub const INSTANCE_IDLE: Duration = Duration::from_secs(30 * 60);
+/// How many instances one session may have open.
+pub const INSTANCES_PER_SESSION: usize = 4;
+/// How often idle instances are looked for.
+const REAP_EVERY: Duration = Duration::from_secs(60);
 
 type Client = RunningService<RoleClient, Handler>;
 
-/// Every configured server, by name.
+/// Every configured server, by name, and the instances sessions opened.
 pub struct McpHub {
     home: PathBuf,
     servers: Mutex<BTreeMap<String, Arc<Server>>>,
+    /// Separate connections to configured servers (`mcp.spawn`), by their
+    /// names (`<server>#<id>`), each owned by one session.
+    instances: Mutex<BTreeMap<String, Instance>>,
+    /// The next instance id; seeded from the clock so a name from before a
+    /// restart is not handed out again.
+    next_instance: AtomicU64,
+    reaping: AtomicBool,
     changed: Arc<watch::Sender<u64>>,
     /// The notes MCP App views' latest `ui/update-model-context` became,
     /// by branch and view, until the branch's next model call takes them.
@@ -44,6 +61,13 @@ impl McpHub {
         Arc::new(Self {
             home: home.to_owned(),
             servers: Mutex::default(),
+            instances: Mutex::default(),
+            next_instance: AtomicU64::new(
+                SystemTime::now()
+                    .duration_since(SystemTime::UNIX_EPOCH)
+                    .map_or(0, |d| d.subsec_nanos().into()),
+            ),
+            reaping: AtomicBool::new(false),
             changed: Arc::new(watch::channel(0).0),
             contexts: Mutex::default(),
         })
@@ -94,7 +118,103 @@ impl McpHub {
                 servers.insert(name.clone(), server);
             }
         }
+        self.instances
+            .lock()
+            .expect("mcp instances lock")
+            .retain(|_, i| settings.get(&i.base) == Some(&i.server.settings));
         notify(&self.changed);
+    }
+
+    /// Open a separate connection to server `base` for `session` (a new
+    /// process for a stdio server, a new protocol session for an HTTP one),
+    /// connected before this returns. Returns its name.
+    pub async fn spawn(
+        self: &Arc<Self>,
+        session: &SessionId,
+        base: &str,
+    ) -> Result<String, String> {
+        let settings = self
+            .servers
+            .lock()
+            .expect("mcp servers lock")
+            .get(base)
+            .map(|s| s.settings.clone())
+            .ok_or_else(|| format!("MCP server `{base}` is not configured"))?;
+        if self.instances(session).len() >= INSTANCES_PER_SESSION {
+            return Err(format!(
+                "this session already has {INSTANCES_PER_SESSION} instances open; close one with \
+                 `delete` first"
+            ));
+        }
+        let name = loop {
+            let id = self.next_instance.fetch_add(1, Ordering::Relaxed) & 0xffff;
+            let name = format!("{base}#{id:04x}");
+            if self.server(&name).is_none() {
+                break name;
+            }
+        };
+        let server = Arc::new(Server::new(&name, settings, &self.home, &self.changed));
+        server.clone().connect().await;
+        let snap = server.snapshot();
+        if snap.status != McpStatus::Ready {
+            return Err(snap.error.unwrap_or_else(|| "it did not connect".into()));
+        }
+        self.instances.lock().expect("mcp instances lock").insert(
+            name.clone(),
+            Instance {
+                session: session.clone(),
+                base: base.to_owned(),
+                server,
+            },
+        );
+        self.reap_idle();
+        Ok(name)
+    }
+
+    /// `session`'s instances: their names and the servers they are of.
+    pub fn instances(&self, session: &SessionId) -> Vec<(String, String)> {
+        self.instances
+            .lock()
+            .expect("mcp instances lock")
+            .iter()
+            .filter(|(_, i)| &i.session == session)
+            .map(|(name, i)| (name.clone(), i.base.clone()))
+            .collect()
+    }
+
+    /// Close `session`'s instance `name`; false when it has none of that
+    /// name.
+    pub fn close(&self, session: &SessionId, name: &str) -> bool {
+        let mut instances = self.instances.lock().expect("mcp instances lock");
+        if instances.get(name).is_none_or(|i| &i.session != session) {
+            return false;
+        }
+        instances.remove(name);
+        true
+    }
+
+    /// Start closing the instances left unused for [`INSTANCE_IDLE`], once.
+    fn reap_idle(self: &Arc<Self>) {
+        if self.reaping.swap(true, Ordering::Relaxed) {
+            return;
+        }
+        let hub = Arc::downgrade(self);
+        tokio::spawn(async move {
+            loop {
+                tokio::time::sleep(REAP_EVERY).await;
+                let Some(hub) = hub.upgrade() else { return };
+                hub.instances
+                    .lock()
+                    .expect("mcp instances lock")
+                    .retain(|name, i| {
+                        let keep = !i.server.idle_for(INSTANCE_IDLE);
+                        if !keep {
+                            info!(instance = name, "closing idle mcp instance");
+                        }
+                        keep
+                    });
+            }
+        });
     }
 
     /// Drop server `name`'s connection and connect again.
@@ -104,12 +224,16 @@ impl McpHub {
         }
     }
 
+    /// Configured server `name`, or the instance of that name.
     pub fn server(&self, name: &str) -> Option<Arc<Server>> {
-        self.servers
+        if let Some(s) = self.servers.lock().expect("mcp servers lock").get(name) {
+            return Some(s.clone());
+        }
+        self.instances
             .lock()
-            .expect("mcp servers lock")
+            .expect("mcp instances lock")
             .get(name)
-            .cloned()
+            .map(|i| i.server.clone())
     }
 
     /// The web's view of `settings`, with each server's status.
@@ -176,6 +300,13 @@ struct State {
     client: Option<Arc<Client>>,
 }
 
+/// A separate connection one session opened to a configured server.
+struct Instance {
+    session: SessionId,
+    base: String,
+    server: Arc<Server>,
+}
+
 /// One configured server and its connection.
 pub struct Server {
     name: String,
@@ -186,6 +317,9 @@ pub struct Server {
     connecting: tokio::sync::Mutex<()>,
     stderr: Arc<Mutex<VecDeque<String>>>,
     changed: Arc<watch::Sender<u64>>,
+    /// When a request last started or ended, and how many are running.
+    used: Mutex<Instant>,
+    running: AtomicUsize,
 }
 
 impl Server {
@@ -211,7 +345,28 @@ impl Server {
             connecting: tokio::sync::Mutex::new(()),
             stderr: Arc::default(),
             changed: changed.clone(),
+            used: Mutex::new(Instant::now()),
+            running: AtomicUsize::new(0),
         }
+    }
+
+    /// No request has run for `idle`.
+    fn idle_for(&self, idle: Duration) -> bool {
+        self.running.load(Ordering::Relaxed) == 0
+            && self.used.lock().expect("mcp used lock").elapsed() >= idle
+    }
+
+    /// Whether its connection speaks MCP 2026-07-28 or later, which keeps
+    /// no state per connection.
+    pub fn stateless(&self) -> bool {
+        self.live()
+            .and_then(|c| c.peer_info())
+            .is_some_and(|i| i.protocol_version >= ProtocolVersion::V_2026_07_28)
+    }
+
+    /// Whether it runs as a child process.
+    pub fn is_stdio(&self) -> bool {
+        !self.settings.command.is_empty()
     }
 
     pub fn snapshot(&self) -> Snapshot {
@@ -423,6 +578,7 @@ impl Server {
     where
         F: Future<Output = Result<T, ServiceError>>,
     {
+        let _use = Use::new(self);
         let client = self.client().await?;
         let result = f(client.clone()).await;
         if let Err(ServiceError::TransportClosed | ServiceError::TransportSend(_)) = &result {
@@ -443,6 +599,24 @@ impl Server {
             Ok(tools) => self.set(|s| s.snap.tools = tools.into()),
             Err(e) => warn!(server = self.name, error = %e, "listing mcp tools failed"),
         }
+    }
+}
+
+/// A request in flight on a server, for its idle time.
+struct Use<'a>(&'a Server);
+
+impl<'a> Use<'a> {
+    fn new(server: &'a Server) -> Self {
+        server.running.fetch_add(1, Ordering::Relaxed);
+        *server.used.lock().expect("mcp used lock") = Instant::now();
+        Self(server)
+    }
+}
+
+impl Drop for Use<'_> {
+    fn drop(&mut self) {
+        *self.0.used.lock().expect("mcp used lock") = Instant::now();
+        self.0.running.fetch_sub(1, Ordering::Relaxed);
     }
 }
 

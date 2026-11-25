@@ -549,7 +549,9 @@ impl Node for Mcp {
         "This session's MCP servers. A server's tools are its actions: `invoke` one with \
          `action: \"<server>/<tool>\"` and no `path`. `list @rumu:/mcp/<server>` shows them and \
          the server's resources; `read` it for its instructions and each tool's input schema. \
-         `search` with this scope (or a server's) finds tools."
+         `search` with this scope (or a server's) finds tools. Each server is one connection \
+         every session shares: `invoke` `mcp.spawn` on a server for one of this session's own \
+         (an instance, `<server>#<id>`, used like its server); `delete` an instance to close it."
     }
 
     async fn list(&self, at: &At<'_>) -> Out {
@@ -567,6 +569,16 @@ impl Node for Mcp {
 /// read by its own action; `read` gives its instructions and the tools'
 /// input schemas.
 struct McpServer;
+
+/// The arguments of `mcp.spawn`.
+#[derive(Deserialize, JsonSchema)]
+#[serde(deny_unknown_fields)]
+struct SpawnArgs {
+    /// Start a new process even though the server speaks MCP 2026-07-28 and
+    /// so keeps no state per connection (stdio servers only).
+    #[serde(default)]
+    force: bool,
+}
 
 /// The arguments of `mcp.read_resource`.
 #[derive(Deserialize, JsonSchema)]
@@ -603,22 +615,41 @@ impl Node for McpServer {
 
     async fn search(&self, at: &At<'_>, query: &str, limit: Option<usize>) -> Out {
         let limit = limit.unwrap_or(crate::mcp::SEARCH_LIMIT);
-        let servers = crate::mcp::servers(at.p.decks(), at.state);
-        crate::mcp::search(&at.p.mcp(), &servers, at.opt("server"), query, limit).await
+        let (hub, servers) = (at.p.mcp(), at.p.servers(at.cx)?);
+        crate::mcp::search(&hub, &servers, at.opt("server"), query, limit).await
     }
 
     fn actions(&self) -> &'static [ActionSpec] {
-        &[ActionSpec {
-            name: "mcp.read_resource",
-            about: "read one of its resources (`resources/read`); media land in `@scratch`",
-            args: rumu_core::tool_schema::<ReadResourceArgs>,
-            approval: Approval::Never,
-        }]
+        &[
+            ActionSpec {
+                name: "mcp.read_resource",
+                about: "read one of its resources (`resources/read`); media land in `@scratch`",
+                args: rumu_core::tool_schema::<ReadResourceArgs>,
+                approval: Approval::Never,
+            },
+            ActionSpec {
+                name: "mcp.spawn",
+                about: "open a connection of this session's own to it (a new process for a \
+                        stdio server), for a server that keeps state; returns the instance's name",
+                args: rumu_core::tool_schema::<SpawnArgs>,
+                approval: Approval::Never,
+            },
+        ]
+    }
+
+    /// Close an instance.
+    async fn delete(&self, at: &At<'_>) -> Out {
+        crate::mcp::close(&at.p.mcp(), &at.cx.session, at.param("server"))
     }
 
     async fn invoke(&self, at: &At<'_>, spec: &ActionSpec, args: Value) -> Out {
-        let ReadResourceArgs { uri } = spec.parse(args)?;
         let (hub, servers) = (at.p.mcp(), at.p.servers(at.cx)?);
+        if spec.name == "mcp.spawn" {
+            let SpawnArgs { force } = spec.parse(args)?;
+            let name = at.param("server");
+            return crate::mcp::spawn(&hub, &servers, &at.cx.session, name, force).await;
+        }
+        let ReadResourceArgs { uri } = spec.parse(args)?;
         let blobs = || at.p.blobs();
         crate::mcp::read_resource(&hub, &servers, at.state, blobs, at.param("server"), &uri).await
     }

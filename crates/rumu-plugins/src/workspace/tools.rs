@@ -1090,7 +1090,7 @@ impl WorkspacePlugin {
                     args.action
                 )));
             }
-            let mcp = crate::mcp::servers(&self.decks, state);
+            let mcp = crate::mcp::servers(&self.decks, &self.mcp(), &cx.session, state);
             let blobs = || self.blobs();
             return crate::mcp::call(&self.mcp(), &mcp, state, blobs, server, tool, params).await;
         }

@@ -22,8 +22,8 @@ use rumu_cards::Decks;
 use rumu_cards::recall::{Doc, rank_docs};
 use rumu_core::{
     BranchId, Content, Cx, Decision, Event, HookOutput, HookSpec, Manifest, McpApp, McpAppContext,
-    McpAppCsp, McpStatus, PathState, Plugin, RUMU_WORKSPACE, SCRATCH_WORKSPACE, Structured,
-    ToolError, ToolOutput, ToolResult, any_rules_enable,
+    McpAppCsp, McpStatus, PathState, Plugin, RUMU_WORKSPACE, SCRATCH_WORKSPACE, SessionId,
+    Structured, ToolError, ToolOutput, ToolResult, any_rules_enable,
 };
 use serde::{Deserialize, Serialize};
 use serde_json::{Value, json};
@@ -128,8 +128,8 @@ impl McpPlugin {
     /// The server-list note, when the list changed since the last one.
     async fn servers_note(&self, cx: &Cx) -> rumu_core::Result<Option<Content>> {
         let state = cx.state()?;
-        let mcp = servers(&self.decks, &state);
-        let servers: Vec<String> = mcp.keys().cloned().collect();
+        let mcp = servers(&self.decks, &self.hub, &cx.session, &state);
+        let servers: Vec<String> = mcp.keys().filter(|n| !is_instance(n)).cloned().collect();
         let last = cx.index()?.all::<McpIntro>().pop().map(|e| e.value.servers);
         if last.as_ref().unwrap_or(&Vec::new()) == &servers {
             return Ok(None);
@@ -566,15 +566,94 @@ async fn media(
 pub type Servers = BTreeMap<String, Vec<Vec<String>>>;
 
 /// The servers of the session's assistant and of its project, with the
-/// rules enabling their tools, from their decks as they are now.
-pub fn servers(decks: &Decks, state: &PathState) -> Servers {
+/// rules enabling their tools, from their decks as they are now; then the
+/// instances `session` opened of them, each with its server's rules.
+pub fn servers(decks: &Decks, hub: &McpHub, session: &SessionId, state: &PathState) -> Servers {
     let mut servers = Servers::new();
     for meta in crate::decks::binding(decks, state) {
         for (name, rules) in meta.mcp {
             servers.entry(name).or_default().push(rules);
         }
     }
+    for (name, base) in hub.instances(session) {
+        if let Some(rules) = servers.get(&base) {
+            servers.insert(name, rules.clone());
+        }
+    }
     servers
+}
+
+/// Whether `name` is an instance's (`<server>#<id>`), not a configured
+/// server's.
+fn is_instance(name: &str) -> bool {
+    name.contains('#')
+}
+
+/// `mcp.spawn` on `@rumu:/mcp/<name>`: open a separate connection to it for
+/// `session`. A server on MCP 2026-07-28 keeps no state per connection, so
+/// that is refused, unless `force` and it is a process of its own.
+pub async fn spawn(
+    hub: &Arc<McpHub>,
+    mcp: &Servers,
+    session: &SessionId,
+    name: &str,
+    force: bool,
+) -> ToolResult<ToolOutput> {
+    if let Some((base, _)) = name.split_once('#') {
+        return Err(ToolError::model(format!(
+            "`{name}` is already an instance; spawn from `{RUMU_WORKSPACE}:/mcp/{base}`"
+        )));
+    }
+    let (server, _) = bound(hub, mcp, name).await?;
+    if server.stateless() && !(force && server.is_stdio()) {
+        let mut why = format!(
+            "`{name}` speaks MCP 2026-07-28, which has no per-connection state: a server that \
+             keeps state across calls hands out its own ids (a browser, a page, a session) in \
+             tool results, to be passed back as arguments. Ask it for another one with its tools \
+             instead; a new connection would change nothing."
+        );
+        if server.is_stdio() {
+            why.push_str(
+                " If you know its process holds state of its own anyway, pass `force: true` \
+                 for a new process.",
+            );
+        }
+        return Err(ToolError::model(why));
+    }
+    let instance = hub.spawn(session, name).await.map_err(|e| {
+        ToolError::model(format!(
+            "could not open another connection to `{name}`: {e}"
+        ))
+    })?;
+    let idle = hub::INSTANCE_IDLE.as_secs() / 60;
+    Ok(format!(
+        "Opened `{instance}`: a connection of its own to `{name}`{}, for this session (its \
+         sub-agents included). Its tools are `{name}`'s: run them as `{instance}/<tool>`. \
+         It closes after {idle} minutes unused or when rumu restarts; \
+         `delete {RUMU_WORKSPACE}:/mcp/{instance}` closes it now.",
+        if server.is_stdio() {
+            " (a new process)"
+        } else {
+            ""
+        },
+    )
+    .into())
+}
+
+/// `delete @rumu:/mcp/<name>`: close one of `session`'s instances.
+pub fn close(hub: &McpHub, session: &SessionId, name: &str) -> ToolResult<ToolOutput> {
+    if !is_instance(name) {
+        return Err(ToolError::model(format!(
+            "`{name}` is a configured server, which the user's settings manage; only instances \
+             (`<server>#<id>`, from `mcp.spawn`) can be closed"
+        )));
+    }
+    if !hub.close(session, name) {
+        return Err(ToolError::model(format!(
+            "this session has no instance `{name}`"
+        )));
+    }
+    Ok(format!("Closed `{name}`.").into())
 }
 
 /// The server-list note: the session's servers, their status and
@@ -586,9 +665,10 @@ async fn intro(hub: &McpHub, mcp: &Servers) -> (String, BTreeMap<String, McpIntr
 of `{RUMU_WORKSPACE}:/mcp/<server>` — find them with `search` (scope `{RUMU_WORKSPACE}:/mcp`) or \
 `list {RUMU_WORKSPACE}:/mcp/<server>`, and run one with `invoke` (`action: \"<server>/<tool>\"`, \
 no `path`). That `list` also shows a server's resources; read one with `invoke` \
-`mcp.read_resource` on its path."
+`mcp.read_resource` on its path. Each server is one connection every session shares; when one \
+keeps state (a browser, a REPL) and you need your own, `invoke` `mcp.spawn` on its path."
     );
-    for (name, rules) in mcp {
+    for (name, rules) in mcp.iter().filter(|(name, _)| !is_instance(name)) {
         let _ = write!(text, "\n- `{name}`: ");
         match hub.server(name) {
             None => text.push_str("not configured"),
@@ -660,6 +740,14 @@ fn enabled(mut snap: Snapshot, rules: &[Vec<String>]) -> Snapshot {
 /// Server `name`, when the session has it, with the tools it enables.
 async fn bound(hub: &McpHub, mcp: &Servers, name: &str) -> ToolResult<(Arc<Server>, Snapshot)> {
     let Some(rules) = mcp.get(name) else {
+        if let Some((base, _)) = name.split_once('#') {
+            return Err(ToolError::model(format!(
+                "this session has no instance `{name}`: instances close after {} minutes \
+                 unused and when rumu restarts; `invoke` `mcp.spawn` on \
+                 `{RUMU_WORKSPACE}:/mcp/{base}` for a new one",
+                hub::INSTANCE_IDLE.as_secs() / 60
+            )));
+        }
         return Err(ToolError::model(format!(
             "no MCP server `{name}` in this session{}",
             if mcp.is_empty() {
@@ -725,7 +813,11 @@ pub async fn list_servers(hub: &McpHub, mcp: &Servers) -> ToolOutput {
             Some(s) => status_line(&enabled(s.ready().await, rules)),
             None => "not configured".into(),
         };
-        let _ = writeln!(out, "{name}/ — {status}");
+        let of = match name.split_once('#') {
+            Some((base, _)) => format!(", an instance of `{base}`"),
+            None => String::new(),
+        };
+        let _ = writeln!(out, "{name}/ — {status}{of}");
     }
     out.into()
 }

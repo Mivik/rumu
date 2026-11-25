@@ -1282,7 +1282,9 @@ which you can read, edit and `show`.",
         "mcp.app_call" | "mcp.app_read" => {
             let branch: BranchId = str_param(p, "branch")?.into();
             let (_, path_state) = kernel.branch_path(&branch)?;
-            let servers = rumu_plugins::mcp::servers(&state.decks, &path_state);
+            let session = kernel.session_of(&branch)?;
+            let servers =
+                rumu_plugins::mcp::servers(&state.decks, &state.mcp, &session, &path_state);
             let server = str_param(p, "server")?;
             let result = if method == "mcp.app_call" {
                 let args = match p.get("arguments") {
