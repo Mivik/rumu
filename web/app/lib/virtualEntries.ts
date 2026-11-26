@@ -101,6 +101,9 @@ export function useVirtualEntries(opts: {
   const quiet = shallowRef(new Set<string>())
   /** Shown entries whose earlier part just loaded in above what is read. */
   const growing = new Set<string>()
+  /** What sat in the middle of the view as they started growing, and where:
+   *  it is what must hold still. */
+  let reading: { el: Element; top: number } | null = null
 
   const ro =
     typeof ResizeObserver === 'undefined'
@@ -110,10 +113,12 @@ export function useVirtualEntries(opts: {
           // A shown turn that grew at its top (`hushNow`) and the history
           // above it settling their heights in one go: the browser does not
           // anchor the scroll across a change to the reader's own entry's
-          // height, so it is done here.
+          // height (or anchors to an entry below it, missing the growth), so
+          // it is done here: what was read before the growth holds still.
           const grew = records.map((r) => bodies.get(r.target)).find((k) => k !== undefined && growing.has(k))
-          const anchor = grew === undefined ? null : wraps.get(grew)
-          const y0 = anchor?.getBoundingClientRect().top ?? 0
+          const read = grew !== undefined && reading?.el.isConnected ? reading : null
+          const anchor = read ? read.el : grew === undefined ? null : wraps.get(grew)
+          const y0 = read ? read.top : (anchor?.getBoundingClientRect().top ?? 0)
           for (const r of records) {
             const key = bodies.get(r.target)
             if (key === undefined) continue
@@ -130,6 +135,7 @@ export function useVirtualEntries(opts: {
           }
           if (anchor && grew !== undefined) {
             growing.delete(grew)
+            reading = null
             const sc = opts.scrollEl.value
             const dy = anchor.getBoundingClientRect().top - y0
             if (sc && Math.abs(dy) >= 0.5) sc.scrollTop += dy
@@ -168,8 +174,21 @@ export function useVirtualEntries(opts: {
    *  the flush it mounts in. */
   function hushNow(keys: string[]): void {
     for (const k of keys) growing.add(k)
+    // before the growth renders: nothing has moved yet. Something inside an
+    // entry (the column itself, hit in a gap, moves with nothing).
+    const box = opts.scrollEl.value?.getBoundingClientRect()
+    const col = opts.columnEl.value
+    reading = null
+    for (const f of [0.5, 0.4, 0.6, 0.3, 0.7]) {
+      const el = box && document.elementFromPoint(box.left + box.width / 2, box.top + box.height * f)
+      if (el && el !== col && col?.contains(el) && el.closest('[data-entry]')) {
+        reading = { el, top: el.getBoundingClientRect().top }
+        break
+      }
+    }
     setTimeout(() => {
       for (const k of keys) growing.delete(k)
+      reading = null
     }, 500)
     quiet.value = new Set([...quiet.value, ...keys])
     requestAnimationFrame(() => {

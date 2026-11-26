@@ -156,6 +156,10 @@ function loadMore(background: boolean): void {
 const nearBottom = ref(true)
 /** Where the page ended (scrollHeight) at the last layoutTail. */
 let laidEnd = 0
+/** Where the page ended (scrollHeight) and the view was, at the last scroll
+ *  event. */
+let scrolledHeight = 0
+let scrolledTop = 0
 
 /** The rail reads the scroller / column through getters: a template ref
  *  passed straight through a prop (or read as one) trips vue-tsc's
@@ -180,8 +184,18 @@ function onScroll(): void {
   // layoutTail runs again (the scroll event of our own pin can fire after it)
   // is not you scrolling away from the end.
   const end = laidEnd ? Math.min(el.scrollHeight, laidEnd) : el.scrollHeight
+  // Nor does a scroll the content made take you to the end: a stretch
+  // landing above moves the view by its height (scroll anchoring), and a
+  // shrink below clamps it to the bottom — a leap with the page's height
+  // changed is not yours. (A swipe moves a frame's worth at a time, and a
+  // reply streaming in grows the page a little.)
+  const moved =
+    el.scrollHeight !== scrolledHeight && Math.abs(el.scrollTop - scrolledTop) > el.clientHeight / 2
+  scrolledHeight = el.scrollHeight
+  scrolledTop = el.scrollTop
   // short of the line's end, the bottom of what is loaded does not pin
-  nearBottom.value = end - el.scrollTop - el.clientHeight < 90 && (view.sub || !hasLater.value)
+  const atEnd = end - el.scrollTop - el.clientHeight < 90 && (view.sub || !hasLater.value)
+  if (nearBottom.value || !moved) nearBottom.value = atEnd
   // nearing the top of what is loaded: load what came before; nearing its
   // bottom short of the line's end, what comes after
   if (el.scrollTop < el.clientHeight * EARLIER_SCREENS) loadMore(false)
