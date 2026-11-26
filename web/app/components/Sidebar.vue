@@ -347,8 +347,8 @@ function groupName(group: Group): string {
 }
 
 /** Rows of a group outside its project's group carry the project's chip. */
-function detached(group: Group): boolean {
-  return group.kind === 'time' || group.kind === 'attention'
+function chipped(group: Group, s: SessionInfo): boolean {
+  return (group.kind === 'time' || group.kind === 'attention') && !!s.project
 }
 
 function collapsed(group: Group): boolean {
@@ -384,10 +384,6 @@ const ROW_CHIP =
 const MENU_ITEM =
   'flex w-full items-center gap-2 rounded-control px-2.5 py-1.5 text-left text-secondary text-ink-2 transition-colors duration-150 hover:bg-surface-2 hover:text-ink focus-visible:bg-surface-2 focus-visible:text-ink'
 
-function assistantOf(id: string) {
-  return assistantCat(state.assistants.find((a) => a.id === id) ?? { id })
-}
-
 function toggleMore(group: Group): void {
   const set = unfolded.value
   if (!set.delete(group.key)) set.add(group.key)
@@ -410,9 +406,6 @@ onUpdated(() => (moveClass.value = 'no-slide'))
 const now = ref(Date.now())
 const clock = setInterval(() => (now.value = Date.now()), 30_000)
 onUnmounted(() => clearInterval(clock))
-
-/** The default assistant's sessions carry no assistant label. */
-const defaultAssistant = computed(() => state.assistants.find((a) => a.default)?.id ?? '')
 
 function assistantName(id: string): string {
   return state.assistants.find((a) => a.id === id)?.name ?? id.slice(0, 8)
@@ -845,37 +838,27 @@ const otherLocale = computed<Locale>(
                   />
                 </span>
                 <span class="min-w-0 flex-1 truncate">{{ row.s.title || t('common.untitled') }}</span>
-                <span
-                  v-if="group.kind === 'project' && row.s.assistant !== defaultAssistant"
-                  class="max-w-[6.5rem] flex-none truncate text-micro font-normal text-ink-3"
-                  >{{ assistantName(row.s.assistant) }}</span
-                >
                 <!-- the menu takes this place on hover -->
                 <span
                   class="flex-none text-micro font-normal text-ink-3 tabular-nums transition-opacity duration-150 pointer-fine:group-hover:opacity-0 pointer-fine:group-has-[:focus-visible]:opacity-0 pointer-fine:group-has-[[aria-expanded=true]]:opacity-0"
                   >{{ row.ago }}</span
                 >
               </span>
-              <!-- away from its group, a row's second line says where it belongs:
-                   its project's chip (its assistant's in none) -->
+              <!-- away from its group, a row's second line names its project -->
               <span
-                v-if="detached(group)"
+                v-if="chipped(group, row.s)"
                 class="mt-1 flex min-w-0 items-center gap-1.5 pl-3.5 text-micro font-normal text-ink-3"
               >
-                <span v-if="row.s.project" :class="ROW_CHIP">
+                <span :class="ROW_CHIP">
                   <ProjectSeal v-if="projectOf(row.s)" :project="projectOf(row.s)!" :size="12" />
                   <Icon v-else name="mount" :size="11" class="flex-none text-tool" />
-                  <span class="truncate">{{ projectOf(row.s)?.name ?? row.s.project.slice(0, 8) }}</span>
-                </span>
-                <span v-if="!row.s.project || row.s.assistant !== defaultAssistant" :class="ROW_CHIP">
-                  <AssistantAvatar :id="row.s.assistant" :cat="assistantOf(row.s.assistant)" :size="12" />
-                  <span class="truncate">{{ assistantName(row.s.assistant) }}</span>
+                  <span class="truncate">{{ projectOf(row.s)?.name ?? row.s.project!.slice(0, 8) }}</span>
                 </span>
               </span>
             </button>
             <span
               class="absolute right-1.5 flex items-center"
-              :class="detached(group) ? 'top-2' : 'inset-y-0'"
+              :class="chipped(group, row.s) ? 'top-2' : 'inset-y-0'"
             >
               <Popover
                 :label="pendingDelete === row.s.id ? t('chat.sidebar.delete') : t('chat.sidebar.actions')"
