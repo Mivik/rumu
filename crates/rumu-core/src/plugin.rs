@@ -614,6 +614,10 @@ pub trait Runtime: History {
     async fn send(&self, _target: &BranchId, _content: Content) -> Result<()> {
         Err(Error::msg("this host cannot message branches"))
     }
+    /// Wait on the task `id` if `branch` owns it (see [`Cx::wait_task`]).
+    async fn wait_task(&self, _branch: &BranchId, _id: &TaskId) -> Result<Option<TaskInfo>> {
+        Err(Error::msg("this host has no tasks"))
+    }
     /// Cancel the task `id` if `branch` owns it (see [`Cx::kill_task`]).
     async fn kill_task(&self, _branch: &BranchId, _id: &TaskId) -> Result<TaskInfo> {
         Err(Error::msg("this host has no tasks"))
@@ -808,6 +812,14 @@ impl Cx {
     /// storm guard. Who may message whom is the caller's to check.
     pub async fn send(&self, target: &BranchId, content: Content) -> Result<()> {
         self.runtime.send(target, content).await
+    }
+
+    /// Wait until the background task `id` (this branch's or one of its
+    /// sub-agents') has ended and its completion note is on its way, and
+    /// return its final status; `None` when the user messages this branch
+    /// first.
+    pub async fn wait_task(&self, id: &TaskId) -> Result<Option<TaskInfo>> {
+        self.runtime.wait_task(&self.branch, id).await
     }
 
     /// Cancel the background task `id` and return its final status. Only a

@@ -3,7 +3,8 @@
 //!
 //! - `list /tasks` — every task of the current session;
 //! - `read /tasks/<id>` — one task's summary: its status, the end of its
-//!   output, and its result once it ended; `task.kill` cancels it;
+//!   output, and its result once it ended; `task.kill` cancels it,
+//!   `task.wait` blocks the turn until it ends;
 //! - `read /tasks/<id>/output` — its whole buffered output (then its result),
 //!   pageable with `offset` / `limit`; watch events number their lines in it.
 //!
@@ -16,6 +17,8 @@ use rumu_core::{
     Cx, OUTPUT_LIMIT, RUMU_WORKSPACE, TaskId, TaskInfo, TaskKind, Timestamp, ToolError, ToolOutput,
     now,
 };
+use schemars::JsonSchema;
+use serde::Deserialize;
 use serde_json::Value;
 
 use super::time::iso_local;
@@ -30,6 +33,15 @@ const SUMMARY_LINES: usize = 20;
 
 /// Characters of the result a summary shows.
 const SUMMARY_RESULT: usize = 2_000;
+
+/// `task.wait` arguments.
+#[derive(Deserialize, JsonSchema)]
+#[serde(deny_unknown_fields)]
+struct WaitArgs {
+    #[allow(dead_code)]
+    /// what you are waiting for, a few words; shown to the user while it waits
+    status: Option<String>,
+}
 
 /// `/tasks`: every task of the current session.
 pub(super) struct Tasks;
@@ -158,24 +170,41 @@ impl Node for Task {
     }
 
     fn actions(&self) -> &'static [ActionSpec] {
-        &[ActionSpec {
-            name: "task.kill",
-            about: "cancel it (a command's whole process tree) and report how it ended",
-            args: rumu_core::tool_schema::<NoArgs>,
-            approval: Approval::Never,
-        }]
+        &[
+            ActionSpec {
+                name: "task.kill",
+                about: "cancel it (a command's whole process tree) and report how it ended",
+                args: rumu_core::tool_schema::<NoArgs>,
+                approval: Approval::Never,
+            },
+            ActionSpec {
+                name: "task.wait",
+                about: "block until it ends, when you cannot go on without it; its note follows \
+                        right after. A message from the user ends the wait",
+                args: rumu_core::tool_schema::<WaitArgs>,
+                approval: Approval::Never,
+            },
+        ]
     }
 
     /// `task.kill`: the kernel cancels it if this branch or one of its
     /// sub-agents owns it — the same cancellation as the web's `task.kill`.
+    /// `task.wait`: the call holds the turn until the task ends (no
+    /// foreground limit moves it to the background).
     async fn invoke(&self, at: &At<'_>, spec: &ActionSpec, args: Value) -> Out {
-        let NoArgs {} = spec.parse(args)?;
         let id = TaskId::from(at.param("id"));
-        let info = at
-            .cx
-            .kill_task(&id)
-            .await
-            .map_err(|e| ToolError::model(e.to_string()))?;
+        let failed = |e: rumu_core::Error| ToolError::model(e.to_string());
+        if spec.name == "task.wait" {
+            // `status` is for the user: the web shows it on the call's row.
+            let _: WaitArgs = spec.parse(args)?;
+            return Ok(match at.cx.wait_task(&id).await.map_err(failed)? {
+                Some(info) => format!("task {id} finished: {}", info.status.label()),
+                None => "the user sent a message; stopped waiting".to_owned(),
+            }
+            .into());
+        }
+        let NoArgs {} = spec.parse(args)?;
+        let info = at.cx.kill_task(&id).await.map_err(failed)?;
         Ok(format!("task {id}: {}", info.status.label()).into())
     }
 }

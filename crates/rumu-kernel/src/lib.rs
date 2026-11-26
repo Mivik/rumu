@@ -1118,6 +1118,8 @@ impl Kernel {
             user,
             counted,
         );
+        // A `task.wait` on the branch rechecks on it.
+        self.signal_tasks();
         self.schedule_wake(branch);
     }
 

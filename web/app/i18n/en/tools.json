@@ -16,6 +16,7 @@
     "search": "searched",
     "workspaceUse": "switched to",
     "kill": "stopped",
+    "wait": "waited for",
     "mount": "mounted",
     "unmount": "unmounted",
     "other": "called",

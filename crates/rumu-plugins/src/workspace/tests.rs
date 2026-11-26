@@ -3941,7 +3941,9 @@ async fn task_read_renders_status_and_output() {
         listed.content.text.ends_with(
             "\n\nfiles:\n  output — its whole buffered output (then its result); page with \
              `offset`/`limit`\n\nactions:\n  task.kill() — cancel it (a command's whole process \
-             tree) and report how it ended"
+             tree) and report how it ended\n  task.wait(status?: string) — block until it ends, when \
+             you cannot go on without it; its note follows right after. A message from the user \
+             ends the wait"
         ),
         "{}",
         listed.content.text
@@ -4112,10 +4114,11 @@ async fn invoke_runs_declared_actions_and_explains_the_rest() {
         invoke(json!({ "action": "task.pause", "path": "@rumu:/tasks/t1" }))
             .await
             .unwrap(),
-        "no action `task.pause`; `@rumu:/tasks/t1` has `task.kill`; rumu's actions: \
+        "no action `task.pause`; `@rumu:/tasks/t1` has `task.kill`, `task.wait`; rumu's actions: \
          `deck.mount` on `@rumu:/decks/<name>`, `deck.unmount` on `@rumu:/decks/<name>`, \
          `session.create` on `@rumu:/sessions`, `session.wait` on `@rumu:/sessions/<sid>`, \
-         `branch.send` on `@rumu:/sessions/<sid>/branches/<bid>`, `task.kill` on `@rumu:/tasks/<id>`",
+         `branch.send` on `@rumu:/sessions/<sid>/branches/<bid>`, `task.kill` on `@rumu:/tasks/<id>`, \
+         `task.wait` on `@rumu:/tasks/<id>`",
     );
     // Arguments the action does not take come back with its schema.
     refused(

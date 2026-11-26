@@ -19,6 +19,7 @@ const ICONS: Record<string, string> = {
   invoke: 'mcp',
   // `invoke` rows stand for their action (`displayCall`).
   'task.kill': 'stop',
+  'task.wait': 'timer',
   'workspace.use': 'switch',
   'deck.mount': 'deck',
   'deck.unmount': 'deck',

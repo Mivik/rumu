@@ -938,6 +938,44 @@ impl Kernel {
             .is_ok_and(|set| set.contains(owner))
     }
 
+    /// `task.wait` from a call on `branch` (`Cx::wait_task`): wait until the
+    /// task `id` (the branch's own or a sub-agent's) has ended and its note
+    /// is queued, or until the user messages `branch`, which gives `None`.
+    pub(crate) async fn wait_task_from(
+        &self,
+        branch: &BranchId,
+        id: &TaskId,
+    ) -> Result<Option<TaskInfo>> {
+        let Some((_, info)) = self.task_token(id) else {
+            return Err(Error::TaskNotFound { id: id.clone() });
+        };
+        if !self.owns_task(branch, &info.branch) {
+            return Err(Error::TaskNotOwned { id: id.clone() });
+        }
+        let mut changed = self.task_changed.subscribe();
+        loop {
+            {
+                let inner = self.inner.lock().unwrap();
+                if inner
+                    .wake_pending
+                    .get(branch)
+                    .is_some_and(|p| p.active && p.user)
+                {
+                    return Ok(None);
+                }
+                match inner.tasks.get(id) {
+                    None => return Err(Error::TaskNotFound { id: id.clone() }),
+                    Some(e) if !e.info.status.is_running() && e.post_done => {
+                        return Ok(Some(e.info.clone()));
+                    }
+                    Some(_) => {}
+                }
+            }
+            // The sender lives as long as the kernel.
+            let _ = changed.changed().await;
+        }
+    }
+
     /// `task.kill` from a call on `branch` (`Cx::kill_task`): the same
     /// cancellation as [`Kernel::kill_task`], for the branch's own tasks and
     /// its sub-agents' only.

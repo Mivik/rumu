@@ -872,7 +872,9 @@ impl Kernel {
                                 // script's stops there, when the tool takes a
                                 // `timeout` (else the script's own bounds it).
                                 let model = matches!(caller, Caller::Model);
-                                let limit = background_tool
+                                // `task.wait` holds the turn on purpose.
+                                let waits = name == "invoke" && args["action"] == "task.wait";
+                                let limit = (background_tool && !waits)
                                     .then(|| {
                                         foreground_limit(&args, model || self.takes_timeout(&name))
                                     })

@@ -97,6 +97,10 @@ impl Runtime for KernelRuntime {
         Ok(self.0.send(target, content).await?)
     }
 
+    async fn wait_task(&self, branch: &BranchId, id: &TaskId) -> Result<Option<TaskInfo>> {
+        Ok(self.0.wait_task_from(branch, id).await?)
+    }
+
     async fn kill_task(&self, branch: &BranchId, id: &TaskId) -> Result<TaskInfo> {
         Ok(self.0.kill_task_from(branch, id).await?)
     }

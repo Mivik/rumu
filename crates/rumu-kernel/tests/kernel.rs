@@ -343,6 +343,16 @@ impl Plugin for TestPlugin {
                     data: Some(Tagged { tag, v: 1, data }),
                 }));
             }
+            "wait_task" => {
+                // `task.wait` as the workspace plugin runs it, on the
+                // session's first task.
+                let id = cx.history().tasks(&cx.session)?[0].id.clone();
+                return Ok(match cx.wait_task(&id).await {
+                    Ok(Some(info)) => ToolOutput::ok(format!("finished: {}", info.status.label())),
+                    Ok(None) => ToolOutput::ok("user"),
+                    Err(e) => ToolOutput::err(e.to_string()),
+                });
+            }
             "kill" => {
                 // `task.kill` as the workspace plugin runs it.
                 let id = rumu_core::TaskId::from(args["id"].as_str().unwrap_or_default());
@@ -6573,4 +6583,50 @@ async fn a_held_decision_waits_for_the_answer() {
     let (done, _) = collect_turn(&mut rx, &branch.0).await;
     assert_eq!(done["method"], "turn.done", "{done}");
     assert_eq!(tool_result(&kernel, &branch), "answered \"yes\"");
+}
+
+/// `task.wait` holds the turn until the task's note is queued: the note lands
+/// before the next model call of the same turn, and no wake turn follows.
+#[tokio::test]
+async fn waiting_on_a_task_holds_the_turn_until_its_note() {
+    let plugin = Arc::new(background_plugin(
+        "bg",
+        &["bgwork", "wait_task"],
+        vec![],
+        noop_hooks(),
+        noop_tools(),
+    ));
+    let (kernel, _llm, _session, branch) = setup(
+        vec![plugin],
+        vec![
+            LlmResponse::calls(vec![
+                ToolCall::new(
+                    "c1",
+                    "bgwork",
+                    json!({ "ms": 100, "out": "all done", "background": true }),
+                ),
+                ToolCall::new("c2", "wait_task", json!({})),
+            ]),
+            LlmResponse::text("got it"),
+        ],
+    )
+    .await;
+    kernel.set_wake_debounce(Duration::from_millis(10));
+
+    let (_, nodes, _) = run_turn(&kernel, &branch, "go").await;
+    let (text, err) = result_text(&nodes, "c2");
+    assert!(!err, "{text}");
+    assert_eq!(text, "finished: ok");
+    let at = |pred: &dyn Fn(&NodeBody) -> bool| nodes.iter().position(|n| pred(&n.body)).unwrap();
+    let note = at(&|b| {
+        matches!(b, NodeBody::Note { content, .. }
+        if content.decode::<TaskDone>().is_some())
+    });
+    let reply =
+        at(&|b| matches!(b, NodeBody::Assistant { content, .. } if content.text == "got it"));
+    assert!(note < reply);
+
+    tokio::time::sleep(Duration::from_millis(100)).await;
+    assert_eq!(task_note_count(&kernel.branch_path(&branch).unwrap().0), 1);
+    assert!(kernel.is_idle(&branch).unwrap());
 }

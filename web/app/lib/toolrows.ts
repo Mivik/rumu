@@ -168,6 +168,8 @@ function callFull(name: string, call: Call, ws: string | null): string {
       return preview(str('code'), 200)
     case 'agent':
       return str('task')
+    case 'task.wait':
+      return str('status') || baseName(str('path'))
     default:
       return isAction(name) ? str('path') : argSummary(call)
   }
@@ -208,6 +210,8 @@ function callShort(name: string, call: Call): string {
     }
     case 'agent':
       return preview(str('task'), 40)
+    case 'task.wait':
+      return preview(str('status') || baseName(str('path')), 40)
     default:
       // An action's object: the last part of its path (`t-1a2b` for a task).
       return isAction(name) ? baseName(str('path')) : preview(argSummary(call), 40)
@@ -452,6 +456,7 @@ const VERB_KEYS: Record<string, string> = {
   search: 'search',
   show: 'show',
   'task.kill': 'kill',
+  'task.wait': 'wait',
   'workspace.use': 'workspaceUse',
   'deck.mount': 'mount',
   'deck.unmount': 'unmount',
