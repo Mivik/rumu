@@ -69,6 +69,7 @@ import type { Attachment, Content, Node as TreeNode } from '../../lib/types'
 import { kindOf, sniffFile, typedText, uploadBlob, withLeadingAnchors } from '../../lib/attachments'
 import { composerFocus, editTarget as mainEdit, openLightbox, toast } from '../../lib/state/ui'
 import { askSide, openSide, quoteBlock } from '../../lib/state/side'
+import { enterBreaks } from '../../lib/util'
 import { dragging, setDropSink } from '../../lib/state/drops'
 import { runCommand } from '../../lib/plugins'
 import { useCommands, type Command } from '../../lib/state/commands'
@@ -510,8 +511,10 @@ function onKeydown(e: KeyboardEvent): void {
     }
   }
   if (e.key !== 'Enter' || e.isComposing) return
-  // Only a bare Enter sends; Shift and Alt break the line instead.
-  if (!e.shiftKey && !e.altKey) {
+  // Only a bare Enter sends; Shift and Alt break the line instead. A touch
+  // keyboard's Enter breaks the line (the send key is a tap away), and
+  // Ctrl/Cmd+Enter sends from an attached keyboard.
+  if (enterBreaks() ? e.ctrlKey || e.metaKey : !e.shiftKey && !e.altKey) {
     e.preventDefault()
     submit()
   } else if (e.altKey) {

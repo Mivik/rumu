@@ -3,6 +3,12 @@ import { onScopeDispose, shallowRef, watch, type Ref } from 'vue'
 import { SCRATCH_WORKSPACE, type Content } from './types'
 import { locale, t } from '../i18n'
 
+/** A bare Enter in a message field breaks the line instead of sending: on
+ *  a touch screen, whose keyboard has no Shift+Enter to reach for. */
+export function enterBreaks(): boolean {
+  return matchMedia('(pointer: coarse)').matches
+}
+
 /** Compact relative time: "just now", "5m", "3h", "2d", or a date. */
 export function relTime(ms: number, now = Date.now()): string {
   const diff = now - ms
