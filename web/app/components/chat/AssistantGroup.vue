@@ -23,6 +23,7 @@ import type { CatState } from '../../lib/cat'
 import { fileEditsOf } from '../../lib/toolrows'
 import { contentText, copyText } from '../../lib/util'
 import { toast } from '../../lib/state/ui'
+import { linkSide } from '../../lib/state/side'
 import { vEnter } from '../../lib/motion'
 import Icon from '../ui/Icon.vue'
 import RumuCat from '../brand/RumuCat.vue'
@@ -126,6 +127,11 @@ async function onRegenerate(): Promise<void> {
   } finally {
     regenerating.value = false
   }
+}
+
+/** Link the side question into the conversation it was asked off. */
+function onBringBack(): void {
+  if (view.side && view.branch.value) linkSide(view.side, view.branch.value)
 }
 
 async function onCopy(): Promise<void> {
@@ -255,6 +261,13 @@ const bare = computed(() => !items.value.length && !props.group.assistants.lengt
         <span v-if="changed.removed" class="flex-none font-medium text-danger">−{{ changed.removed }}</span>
       </span>
       <span class="flex-1" />
+      <button
+        v-if="!live && view.side"
+        class="inline-flex items-center gap-1 rounded-control px-1.5 py-0.5 text-meta text-ink-3 transition-colors hover:bg-surface-2 hover:text-ink"
+        @click="onBringBack"
+      >
+        <Icon name="unside" :size="13" />{{ t('chat.side.bringBack') }}
+      </button>
       <span
         v-if="!live && !view.sub"
         class="flex items-center gap-0.5 opacity-100 transition duration-200 ease-soft sm:opacity-0 sm:group-hover/agroup:opacity-100 sm:group-focus-within/agroup:opacity-100 sm:has-aria-expanded:opacity-100"

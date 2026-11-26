@@ -219,14 +219,17 @@ type CallsOnPath = typeof callsOnPath.value
 /** The nodes a conversation shows of branch `b` (`path` its path): all
  *  of it, or of a sub-agent its own part from its goal prompt on, the prompt
  *  showing the task as it was given (the kernel's sub-agent framing is the
- *  model's, not the reader's; what was seeded before it is the parent's). */
+ *  model's, not the reader's; what was seeded before it is the parent's).
+ *  A side question shows its own part from its question on (the framing
+ *  note before it is the model's too). */
 export function shownOf(b: Branch | null, path: Node[]): Node[] {
-  if (b?.kind.type !== 'agent') return path
-  const task = b.kind.task
+  if (b?.kind.type !== 'agent' && b?.kind.type !== 'side') return path
   const own = path.slice(path.findIndex((n) => n.id === b.forked_from) + 1)
   const at = own.findIndex((n) => n.body.type === 'user')
   const prompt = own[at]
   if (!prompt || prompt.body.type !== 'user') return own
+  if (b.kind.type === 'side') return own.slice(at)
+  const task = b.kind.task
   const shown: Node = { ...prompt, body: { ...prompt.body, content: { ...prompt.body.content, text: task } } }
   return [shown, ...own.slice(at + 1)]
 }

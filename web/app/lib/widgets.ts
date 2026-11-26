@@ -163,8 +163,11 @@ export function sandboxedPage(html: string): string {
   )
 }
 
-/** The branch whose reply `el` is in: a sub-agent's, in its panel. */
+/** The branch whose reply `el` is in: a side question's, in its card; a
+ *  sub-agent's, in its panel. */
 export function branchOf(el: Element): string | null {
+  const side = el.closest<HTMLElement>('[data-branch]')?.dataset.branch
+  if (side) return side
   return el.closest('[data-agent-panel]') ? state.agentView : state.mainBranch
 }
 

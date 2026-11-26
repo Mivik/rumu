@@ -38,11 +38,16 @@ function composerRoot(): HTMLElement | null {
     <slot :composer-of="composerRoot">
       <ConversationView :composer-of="composerRoot" />
     </slot>
-    <SidePop v-if="view.sub || state.view === 'chat'" :root="rootOf" />
+    <SidePop v-if="!view.side && (view.sub || state.view === 'chat')" :root="rootOf" />
 
     <!-- min-h-0: a tall decision panel shrinks into the room left above the
          sheet's foot instead of pushing the send row past its edge -->
-    <div ref="composerEl" class="relative flex min-h-0 flex-col px-3 pt-1 pb-3 sm:px-6 sm:pb-5">
+    <!-- in a side question's card the sheet sits close to the card's edges -->
+    <div
+      ref="composerEl"
+      class="relative flex min-h-0 flex-col"
+      :class="view.side ? 'px-2 pt-1 pb-2' : 'px-3 pt-1 pb-3 sm:px-6 sm:pb-5'"
+    >
       <!-- a selection's keys float over the conversation's foot -->
       <div
         class="pointer-events-none absolute inset-x-3 bottom-full z-10 flex justify-center pb-1 sm:inset-x-6 [&>*]:pointer-events-auto"

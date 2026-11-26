@@ -290,7 +290,7 @@
     "close": "Close",
     "placeholder": "Ask…",
     "followUp": "Follow up…",
-    "bringBack": "Quote in chat",
+    "bringBack": "Link in chat",
     "failed": "Aside failed to send"
   },
   "command": {

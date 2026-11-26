@@ -1611,41 +1611,7 @@ which you can read, edit and `show`.",
 
         "prompt" => {
             let branch: BranchId = str_param(p, "branch")?.into();
-            // `attachments` (optional): stored-blob references, resolved
-            // server-side into full attachments — the wire is trusted for the
-            // hash and display name only. An unknown hash is a request error.
-            // Text may be empty when images ride along.
-            let mut attachments = Vec::new();
-            for a in p
-                .get("attachments")
-                .and_then(Value::as_array)
-                .into_iter()
-                .flatten()
-            {
-                let hash = a
-                    .get("hash")
-                    .and_then(Value::as_str)
-                    .ok_or_else(|| ServerError::MissingParam("attachments[].hash".into()))?;
-                let name = a.get("name").and_then(Value::as_str).map(str::to_owned);
-                attachments.push(state.blobs.describe(hash, name)?);
-            }
-            let text = p.get("text").and_then(Value::as_str).unwrap_or_default();
-            if text.is_empty() && attachments.is_empty() {
-                return Err(ServerError::MissingParam("text".into()));
-            }
-            // Each image also becomes a file in the session's `@scratch`, the
-            // path its projected label names, so tools can work on it.
-            if !attachments.is_empty() {
-                let session = kernel.session_of(&branch)?;
-                let root = state.workspaces.scratch(&session).root;
-                let scratch = std::path::Path::new(root.as_str());
-                for a in &attachments {
-                    state
-                        .blobs
-                        .copy_to(&a.hash, &scratch.join(a.scratch_path()))?;
-                }
-            }
-            let content = Content::text(text).with_attachments(attachments);
+            let content = prompt_content(state, &branch, p)?;
             // `model` (optional): the composer's pick, recorded where it
             // changes the branch.
             kernel.apply_choice(&branch, parse_params(p)?).await?;
@@ -1716,16 +1682,19 @@ which you can read, edit and `show`.",
             Ok(json!({ "branch": branch }))
         }
 
-        // A side question off the main line `branch`; `quote` (optional) is
-        // the passage `{ node, text }` it is about.
+        // A side question off `branch` (the main line or a sub-agent);
+        // `quote` (optional) is the passage `{ node, text }` it is about.
         "branch.side" => {
+            // `text`, `attachments` and `model` as `prompt` takes them.
             let branch: BranchId = str_param(p, "branch")?.into();
-            let text = str_param(p, "text")?;
+            let content = prompt_content(state, &branch, p)?;
             let quote = match p.get("quote") {
                 Some(q) if !q.is_null() => Some(parse_params(q)?),
                 _ => None,
             };
-            let side = kernel.side(&branch, quote, Content::text(text)).await?;
+            let side = kernel
+                .side(&branch, quote, parse_params(p)?, content)
+                .await?;
             Ok(json!({ "branch": side }))
         }
 
@@ -2081,6 +2050,44 @@ fn card_info(cards: &Cards, loaded: rumu_cards::cards::Loaded) -> rumu_cards::Ca
         link,
         meta: loaded.card.meta,
     }
+}
+
+/// A prompt's content from `prompt`'s params: `text` and `attachments`
+/// (optional stored-blob references, resolved server-side into full
+/// attachments — the wire is trusted for the hash and display name only; an
+/// unknown hash is a request error). Text may be empty when images ride
+/// along. Each image also becomes a file in the session's `@scratch`, the
+/// path its projected label names, so tools can work on it.
+fn prompt_content(state: &AppState, branch: &BranchId, p: &Value) -> Result<Content> {
+    let mut attachments = Vec::new();
+    for a in p
+        .get("attachments")
+        .and_then(Value::as_array)
+        .into_iter()
+        .flatten()
+    {
+        let hash = a
+            .get("hash")
+            .and_then(Value::as_str)
+            .ok_or_else(|| ServerError::MissingParam("attachments[].hash".into()))?;
+        let name = a.get("name").and_then(Value::as_str).map(str::to_owned);
+        attachments.push(state.blobs.describe(hash, name)?);
+    }
+    let text = p.get("text").and_then(Value::as_str).unwrap_or_default();
+    if text.is_empty() && attachments.is_empty() {
+        return Err(ServerError::MissingParam("text".into()));
+    }
+    if !attachments.is_empty() {
+        let session = state.kernel.session_of(branch)?;
+        let root = state.workspaces.scratch(&session).root;
+        let scratch = std::path::Path::new(root.as_str());
+        for a in &attachments {
+            state
+                .blobs
+                .copy_to(&a.hash, &scratch.join(a.scratch_path()))?;
+        }
+    }
+    Ok(Content::text(text).with_attachments(attachments))
 }
 
 fn str_param<'a>(p: &'a Value, key: &str) -> Result<&'a str> {

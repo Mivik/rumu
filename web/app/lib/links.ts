@@ -16,11 +16,15 @@ import {
   openDrawer,
   openLibrary,
   openLibraryAtDeck,
+  openAgentView,
   openSession,
+  showView,
   openTaskDetail,
   state,
 } from './store'
 import { focusTarget, toast } from './state/ui'
+import { asideOf, openSide } from './state/side'
+import { nextTick } from 'vue'
 import type { Page } from './router'
 import type { Artifact, LibraryRef } from './types'
 import { copyText } from './util'
@@ -88,6 +92,9 @@ function openAddress(abs: string): boolean {
         )
       }
       if (!sid) return false
+      // `/sessions/<s>/branches/<b>` in the open session: a side question
+      // opens in its card, a sub-agent beside the chat.
+      if (segs[1] === 'branches' && segs[2] && state.sessionId === sid && openBranch(segs[2])) return true
       closeDrawer()
       // `/sessions/<s>/<node>` or `<a>..<b>`: open at the (first) node.
       const node = segs[1]?.split('..')[0]
@@ -126,6 +133,32 @@ function openAddress(abs: string): boolean {
       return go('settings', 'mcp')
   }
   return false
+}
+
+/** Open branch `id` (or a unique prefix of it) of the open session where
+ *  it shows; false when none does. */
+function openBranch(id: string): boolean {
+  const all = Object.values(state.branches).filter((b) => b.id.startsWith(id))
+  const b = all.length === 1 ? all[0]! : state.branches[id]
+  if (!b) return false
+  if (b.kind.type === 'agent') {
+    closeDrawer()
+    closePage()
+    openAgentView(b.id)
+    return true
+  }
+  if (b.kind.type !== 'side') return false
+  const parent = b.kind.parent_branch
+  if (parent === state.mainBranch) showView('chat')
+  else if (state.agentView !== parent) openAgentView(parent)
+  closeDrawer()
+  closePage()
+  // a sub-agent's panel mounts its aside on the next render
+  void nextTick(() => {
+    const a = asideOf(parent)
+    if (a) openSide(a, b.id)
+  })
+  return true
 }
 
 /** Open a page at `item` when it names one, else the page's list. */

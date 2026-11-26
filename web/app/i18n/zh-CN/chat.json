@@ -290,7 +290,7 @@
     "close": "关闭",
     "placeholder": "提问…",
     "followUp": "追问…",
-    "bringBack": "引用到正文",
+    "bringBack": "链接到正文",
     "failed": "题外话发送失败"
   },
   "command": {

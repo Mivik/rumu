@@ -57,6 +57,9 @@ const view: BranchView = {
     computed(() => []),
   ),
   sub: true,
+  side: null,
+  key: 'preview',
+  holds: () => false,
 }
 provideBranchView(view)
 

@@ -123,7 +123,7 @@ const canSend = computed(
       quotes.value.length > 0 ||
       attachments.value.some((a) => a.status === 'done')),
 )
-const { matching, leading } = useCommands(computed(() => !!editTarget.value))
+const { matching, leading } = useCommands(computed(() => !!editTarget.value || !!view.side))
 /** The command the draft opens with, marked behind the writing. */
 const command = computed(() => (attachments.value.length ? null : leading(draft.value)))
 /** An input method is composing: its text is in the writing but not yet
@@ -383,6 +383,26 @@ async function submit(): Promise<void> {
   const target = editTarget.value
   const origin = current.value
   const landing = !state.sessionId
+  // A side question's composer asks it: the first question opens it off
+  // the conversation's card (`askSide`), the rest follow up on its branch.
+  if (view.side) {
+    const quoted = quotes.value
+    const body = [...quoted.map(quoteBlock), text].filter(Boolean).join('\n\n')
+    draft.value = ''
+    quotes.value = []
+    attachments.value = []
+    const ok = await askSide(view.side, withLeadingAnchors(body, sentAttachments), {
+      attachments: sent,
+      model: view.model.value,
+    })
+    if (ok) for (const item of items) releaseAttachment(item)
+    else {
+      draft.value = text
+      quotes.value = quoted
+      attachments.value = items
+    }
+    return
+  }
   // `/compact [focus]` compacts the shown branch instead.
   const compact = /^\/compact(?:\s+([\s\S]*))?$/.exec(text)
   if (compact && !target && !items.length && state.sessionId) {
@@ -557,8 +577,9 @@ if (!view.sub) {
   )
   watch(composerFocus, () => void nextTick(focusComposer))
 }
-// a quote just went into this composer
+// a quote or a link just went into this composer
 watch(view.aside.focus, () => void nextTick(focusComposer))
+view.aside.draft = () => current.value
 
 /** Whom the message goes to: the sub-agent shown, the session's assistant,
  * or the one picked on the landing page. */
@@ -569,6 +590,7 @@ const recipient = computed(() => {
 })
 
 const placeholder = computed(() => {
+  if (view.side) return view.branch.value ? t('chat.side.followUp') : t('chat.side.placeholder')
   const name = recipient.value
   return isBusy.value
     ? t('chat.composer.steerPlaceholder', { name })
@@ -589,7 +611,7 @@ const sendLabel = computed(() =>
   <div
     ref="rootEl"
     class="composer relative mx-auto flex w-full max-w-[var(--col-max)] min-h-0 flex-col rounded-sheet"
-    :class="{ 'is-drag': dragging, 'is-btw': btw }"
+    :class="{ 'is-drag': dragging, 'is-btw': btw || !!view.side }"
     @pointerdown="onPress"
     @click.capture="onClickCapture"
     @focusin="engaged = true"

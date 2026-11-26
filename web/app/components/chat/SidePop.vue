@@ -5,15 +5,18 @@
 // asked about keep a dotted underline in the conversation, and a click on
 // one opens its question again. A bare `/btw` lists them.
 //
-// A side branch has no tools, so a turn is just text: the card renders its
-// prompts and replies plainly rather than through the timeline's groups.
-import { computed, nextTick, onBeforeUnmount, onMounted, ref, watch } from 'vue'
+// Inside, the side question is a conversation like any other: the same
+// timeline and composer as the chat's (BranchChat), on the side branch
+// (`sideView`). Before its first answer the card is the list or the passage
+// asked about, over that composer; sending asks it (`askSide`).
+import { computed, nextTick, onBeforeUnmount, onMounted, watch } from 'vue'
 import { t } from '../../i18n'
-import { pathOf, state, useBranchView } from '../../lib/store'
-import type { BranchId, Node, Quote } from '../../lib/types'
-import { renderMarkdown } from '../../lib/markdown'
-import { addQuote, askSide, closeSide as close, openSide as open, paintQuotes } from '../../lib/state/side'
+import { pathOf, provideBranchView, sideView, state, useBranchView } from '../../lib/store'
+import type { BranchId, Quote } from '../../lib/types'
+import { closeSide as close, openSide as open, paintQuotes } from '../../lib/state/side'
 import { revealNode, timelineRendered } from '../../lib/virtualEntries'
+import BranchChat from './BranchChat.vue'
+import ConversationView from './ConversationView.vue'
 import Icon from '../ui/Icon.vue'
 
 /** The conversation it sits on (BranchChat's root): what it looks for
@@ -27,6 +30,10 @@ const sideBranches = aside.branches
 const openSide = (id: BranchId | null) => open(aside, id)
 const closeSide = () => close(aside)
 
+/** What the card's timeline and composer show: the open side question. */
+const inner = sideView(view)
+provideBranchView(inner)
+
 const quoteOf = (id: BranchId | null): Quote | null => {
   const b = id ? state.branches[id] : null
   return b?.kind.type === 'side' ? (b.kind.quote ?? null) : null
@@ -35,74 +42,21 @@ const quote = computed(() => (side.branch ? quoteOf(side.branch) : side.quote))
 const listing = computed(() => !side.branch && !side.quote && sideBranches.value.length > 0)
 const busy = computed(() => !!side.branch && !!state.busy[side.branch])
 
-/** A side branch's own turns: its prompts and replies, from the first
- *  prompt on (the framing note before it is the model's). */
-function turnsOf(id: BranchId): Node[] {
-  const b = state.branches[id]
-  const own = pathOf(b, b?.forked_from)
-  const at = own.findIndex((n) => n.body.type === 'user')
-  return at < 0 ? [] : own.slice(at).filter((n) => n.body.type === 'user' || textOf(n))
-}
-
-function textOf(n: Node): string {
-  return n.body.type === 'user' || n.body.type === 'assistant' ? n.body.content.text.trim() : ''
-}
-
-const turns = computed(() => (side.branch ? turnsOf(side.branch) : []))
-const streaming = computed(() => (side.branch && busy.value ? (state.deltas[side.branch]?.text ?? '') : ''))
-const hasBody = computed(() => listing.value || !!quote.value || turns.value.length > 0 || busy.value)
-
+/** A side question's question: its first prompt (the framing note before
+ *  it is the model's). */
 function question(id: BranchId): string {
-  const first = turnsOf(id)[0]
-  return first ? textOf(first) : ''
+  const b = state.branches[id]
+  const first = pathOf(b, b?.forked_from).find((n) => n.body.type === 'user')
+  return first?.body.type === 'user' ? first.body.content.text.trim() : ''
 }
 
-// ---- writing ----
-
-const draft = ref('')
-const sending = ref(false)
-const inputEl = ref<HTMLTextAreaElement>()
-
-async function send(): Promise<void> {
-  const text = draft.value.trim()
-  if (!text || sending.value) return
-  sending.value = true
-  draft.value = ''
-  if (!(await askSide(aside, text))) draft.value = text
-  sending.value = false
-}
-
-function onKeydown(e: KeyboardEvent): void {
-  if (e.key === 'Enter' && !e.shiftKey && !e.isComposing) {
-    e.preventDefault()
-    void send()
-  }
-}
-
-/** Quote a reply into the composer: what a side question turned up joins
- *  the main line only this way. */
-function bringBack(n: Node): void {
-  addQuote(aside, { node: n.id, text: textOf(n) })
-}
-
-// Opening (or switching) puts the caret in the card; the touch keyboard
-// waits for a tap, as the composer's does.
+// Opening (or switching) puts the caret in the card's composer.
 watch(
   () => [side.open, side.branch, side.quote] as const,
   ([open]) => {
-    if (!open || side.folded || matchMedia('(pointer: coarse)').matches) return
-    void nextTick(() => inputEl.value?.focus())
+    if (open && !side.folded) inner.aside.focus.value++
   },
 )
-
-// Follow the reply as it grows.
-const scrollEl = ref<HTMLElement>()
-watch([turns, streaming], () => {
-  void nextTick(() => {
-    const el = scrollEl.value
-    if (el) el.scrollTop = el.scrollHeight
-  })
-})
 
 /** Scroll the conversation to a quoted passage's message. */
 async function locate(q: Quote): Promise<void> {
@@ -165,7 +119,7 @@ watch(
 function onClick(e: MouseEvent): void {
   if (!marked.size || !getSelection()?.isCollapsed) return
   const target = e.target as Element | null
-  if (!target?.closest?.('.tl-col') || !props.root()?.contains(target)) return
+  if (!target?.closest?.('.tl-col') || !props.root()?.contains(target) || !view.holds(target)) return
   const pos = document.caretPositionFromPoint?.(e.clientX, e.clientY)
   if (!pos) return
   for (const [r, id] of marked) {
@@ -193,6 +147,8 @@ onBeforeUnmount(() => {
   >
     <section
       v-if="side.open"
+      :data-view="inner.key"
+      :data-branch="side.branch"
       class="absolute top-2 right-2 left-2 z-20 flex max-h-[min(64%,560px)] origin-top-right flex-col overflow-hidden rounded-card border border-line bg-surface shadow-pop transition-[width] duration-300 ease-soft [interpolate-size:allow-keywords] sm:right-4 sm:left-auto"
       :class="side.folded ? 'sm:w-fit' : 'sm:w-[400px]'"
       @keydown.esc="closeSide()"
@@ -249,8 +205,8 @@ onBeforeUnmount(() => {
         :inert="side.folded"
       >
         <div class="flex min-h-0 flex-col overflow-hidden border-t border-line-soft">
-          <div v-if="hasBody" ref="scrollEl" class="min-h-0 flex-1 overflow-y-auto px-4 py-3">
-            <div v-if="listing" class="-mx-2 flex flex-col">
+          <BranchChat v-slot="{ composerOf }">
+            <div v-if="listing" class="flex min-h-0 flex-col overflow-y-auto px-2 py-2">
               <button
                 v-for="b in sideBranches"
                 :key="b.id"
@@ -269,56 +225,14 @@ onBeforeUnmount(() => {
             <template v-else>
               <button
                 v-if="quote"
-                class="mb-3 line-clamp-3 w-full border-l-[3px] border-agent pl-2.5 text-left text-meta text-ink-2"
+                class="mx-4 mt-3 line-clamp-3 flex-none border-l-[3px] border-agent pl-2.5 text-left text-meta text-ink-2 sm:mx-6"
                 @click="locate(quote)"
               >
                 {{ quote.text }}
               </button>
-              <div class="flex flex-col gap-3">
-                <template v-for="n in turns" :key="n.id">
-                  <p
-                    v-if="n.body.type === 'user'"
-                    class="ml-auto max-w-[85%] rounded-card bg-agent-soft px-3 py-1.5 text-secondary whitespace-pre-wrap"
-                  >
-                    {{ textOf(n) }}
-                  </p>
-                  <div v-else class="flex flex-col items-start gap-0.5">
-                    <div class="md text-secondary" v-html="renderMarkdown(textOf(n))" />
-                    <button
-                      class="-ml-1.5 inline-flex items-center gap-1 rounded-control px-1.5 py-0.5 text-meta text-ink-3 transition-colors hover:bg-surface-2 hover:text-ink"
-                      @click="bringBack(n)"
-                    >
-                      <Icon name="unside" :size="13" />{{ t('chat.side.bringBack') }}
-                    </button>
-                  </div>
-                </template>
-                <div
-                  v-if="busy"
-                  class="md streaming-caret text-secondary"
-                  v-html="renderMarkdown(streaming)"
-                />
-              </div>
+              <ConversationView v-if="side.branch" :composer-of="composerOf" />
             </template>
-          </div>
-          <div class="flex flex-none items-end gap-1.5 p-2" :class="{ 'border-t border-line-soft': hasBody }">
-            <textarea
-              ref="inputEl"
-              v-model="draft"
-              rows="1"
-              class="max-h-[120px] min-h-0 flex-1 resize-none border-0 bg-transparent px-2 py-1 text-secondary [field-sizing:content] focus:shadow-none"
-              :placeholder="side.branch ? t('chat.side.followUp') : t('chat.side.placeholder')"
-              @keydown="onKeydown"
-            />
-            <button
-              class="composer-send is-side size-7"
-              :disabled="!draft.trim() || sending"
-              :title="t('chat.composer.send')"
-              :aria-label="t('chat.composer.send')"
-              @click="send"
-            >
-              <Icon name="send" :size="14" />
-            </button>
-          </div>
+          </BranchChat>
         </div>
       </div>
     </section>

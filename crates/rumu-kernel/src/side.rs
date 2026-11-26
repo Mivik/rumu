@@ -11,19 +11,21 @@ use std::sync::Arc;
 use rumu_core::{Branch, BranchId, BranchKind, Content, Node, NodeBody, Quote, SYSTEM_SOURCE};
 use serde_json::json;
 
-use crate::{Error, Kernel, Result};
+use crate::{Choice, Error, Kernel, Result};
 
 /// The result of a tool call made on a side branch.
 pub(crate) const SIDE_NO_TOOLS: &str = "side questions have no tools; answer from the conversation";
 
 impl Kernel {
     /// `branch.side` WS method: a side question off `from` (the main line or
-    /// a sub-agent), optionally about `quote`. Follow-ups are plain prompts
-    /// on the branch.
+    /// a sub-agent), optionally about `quote`, run on `choice`'s model where
+    /// it picks one (else the one `from` runs on). Follow-ups are plain
+    /// prompts on the branch.
     pub async fn side(
         self: &Arc<Self>,
         from: &BranchId,
         quote: Option<Quote>,
+        choice: Choice,
         content: Content,
     ) -> Result<Branch> {
         let parent = self
@@ -51,6 +53,7 @@ impl Kernel {
             content: Content::text(side_note(quote.as_ref())),
         };
         self.append_body(&b.id, note, None).await?;
+        self.apply_choice(&b.id, choice).await?;
         self.prompt(&b.id, content).await?;
         Ok(b)
     }

@@ -6382,7 +6382,10 @@ async fn ask_side(
     text: &str,
 ) -> (rumu_core::Branch, Vec<Node>) {
     let mut rx = kernel.tap_pushes();
-    let side = kernel.side(main, quote, Content::text(text)).await.unwrap();
+    let side = kernel
+        .side(main, quote, Default::default(), Content::text(text))
+        .await
+        .unwrap();
     wait_turn(&mut rx, Some(side.id.0.as_str())).await;
     let (nodes, _) = kernel.branch_path(&side.id).unwrap();
     (side, nodes)
@@ -6439,7 +6442,9 @@ async fn side_question_forks_at_the_head_and_leaves_the_main_line_alone() {
         Err(rumu_kernel::Error::NotMainLine(_))
     ));
     assert!(matches!(
-        kernel.side(&side.id, None, Content::text("again")).await,
+        kernel
+            .side(&side.id, None, Default::default(), Content::text("again"))
+            .await,
         Err(rumu_kernel::Error::NotMainLine(_))
     ));
 }

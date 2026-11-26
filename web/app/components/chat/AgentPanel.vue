@@ -27,6 +27,7 @@ const parent = computed(() => {
   <section
     v-if="branch && kind"
     data-agent-panel
+    data-view="agent"
     class="sheet flex min-h-0 min-w-0 flex-col overflow-hidden rounded-sheet bg-surface"
   >
     <header class="flex min-h-14 flex-none items-center gap-2 border-b border-line-soft px-4">

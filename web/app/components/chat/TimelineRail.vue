@@ -1085,9 +1085,9 @@ function onKeydown(e: KeyboardEvent): void {
   }
   if (!e.altKey || (e.key !== 'ArrowUp' && e.key !== 'ArrowDown')) return
   const t = e.target
-  // With a sub-agent open beside the chat, its rail takes the keys pressed
-  // in its panel and the chat's rail the rest.
-  if ((t instanceof Element && !!t.closest('[data-agent-panel]')) !== view.sub) return
+  // With a sub-agent or a side question open over the chat, its rail takes
+  // the keys pressed in it and the chat's rail the rest.
+  if (!view.holds(t instanceof Element ? t : document.body)) return
   if (t instanceof HTMLElement) {
     if (t.tagName === 'INPUT' || t.tagName === 'TEXTAREA') {
       if ((t as HTMLInputElement).value !== '') return

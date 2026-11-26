@@ -31,7 +31,7 @@ function read(): Quote | null {
   const at = reply(r.startContainer)
   const node = at?.getAttribute('data-path-node')
   if (!at || !node || at !== reply(r.endContainer)) return null
-  if (!!at.closest('[data-agent-panel]') !== view.sub) return null
+  if (!view.holds(at)) return null
   return { node, text }
 }
 
@@ -104,8 +104,12 @@ onBeforeUnmount(() => {
       <button class="quote-key text-brand-strong hover:bg-brand-soft" @click="take(quote)">
         <Icon name="quote" :size="15" />{{ t('chat.side.quote') }}
       </button>
-      <span class="h-4 w-px flex-none bg-line" />
-      <button class="quote-key text-agent hover:bg-agent-soft" @click="take((q) => openSide(aside, null, q))">
+      <span v-if="!view.side" class="h-4 w-px flex-none bg-line" />
+      <button
+        v-if="!view.side"
+        class="quote-key text-agent hover:bg-agent-soft"
+        @click="take((q) => openSide(aside, null, q))"
+      >
         <Icon name="side" :size="15" />{{ t('chat.side.title') }}
       </button>
     </div>
