@@ -60,3 +60,18 @@ async function page(req) {
     throw err
   }
 }
+
+// A notification (lib/notify.ts) clicked: its session opens in an open page,
+// else in a new one.
+self.addEventListener('notificationclick', (event) => {
+  event.notification.close()
+  const session = event.notification.data?.session
+  event.waitUntil(
+    self.clients.matchAll({ type: 'window', includeUncontrolled: true }).then((pages) => {
+      const page = pages[0]
+      if (!page) return session ? self.clients.openWindow(`/s/${session}`) : undefined
+      if (session) page.postMessage({ type: 'notification.click', session })
+      return page.focus()
+    }),
+  )
+})

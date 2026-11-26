@@ -154,5 +154,13 @@
   "installSkills": "Install",
   "updateSkills": "Update",
   "skillsFound": "Found ({n})",
-  "skillShadowed": "shadowed"
+  "skillShadowed": "shadowed",
+  "notify": "Notifications",
+  "notifyEnabled": "System notifications",
+  "notifyDenied": "Blocked by the browser",
+  "notifyUnsupported": "Unavailable here",
+  "notifyEvents": "Notify when",
+  "notify_waiting": "Waiting for you",
+  "notify_done": "Reply finished",
+  "notify_failed": "Reply failed"
 }

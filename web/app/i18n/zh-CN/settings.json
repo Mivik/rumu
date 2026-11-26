@@ -154,5 +154,13 @@
   "installSkills": "安装",
   "updateSkills": "更新",
   "skillsFound": "已发现（{n}）",
-  "skillShadowed": "被同名覆盖"
+  "skillShadowed": "被同名覆盖",
+  "notify": "通知",
+  "notifyEnabled": "系统通知",
+  "notifyDenied": "浏览器已拒绝",
+  "notifyUnsupported": "当前连接不支持",
+  "notifyEvents": "通知事件",
+  "notify_waiting": "待确认",
+  "notify_done": "回复完成",
+  "notify_failed": "回复出错"
 }

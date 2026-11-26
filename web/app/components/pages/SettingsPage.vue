@@ -15,6 +15,7 @@ import { connected, state } from '../../lib/store'
 import AppearanceSettings from '../settings/AppearanceSettings.vue'
 import DefaultsSettings from '../settings/DefaultsSettings.vue'
 import McpSettings from '../settings/McpSettings.vue'
+import NotifySettings from '../settings/NotifySettings.vue'
 import PluginsSettings from '../settings/PluginsSettings.vue'
 import ProvidersSettings from '../settings/ProvidersSettings.vue'
 import SkillsSettings from '../settings/SkillsSettings.vue'
@@ -25,6 +26,7 @@ defineProps<{ modal?: boolean }>()
 
 const SECTIONS = [
   { key: 'appearance', icon: 'palette' },
+  { key: 'notify', icon: 'bell' },
   { key: 'defaults', icon: 'model' },
   { key: 'providers', icon: 'link' },
   { key: 'mcp', icon: 'mcp' },
@@ -135,6 +137,7 @@ watch(connected, (up) => up && void refreshSettings(), { immediate: true })
     </template>
 
     <AppearanceSettings v-if="section === 'appearance'" />
+    <NotifySettings v-else-if="section === 'notify'" />
     <DefaultsSettings v-else-if="section === 'defaults'" />
     <ProvidersSettings v-else-if="section === 'providers'" />
     <McpSettings v-else-if="section === 'mcp'" />

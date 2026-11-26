@@ -52,6 +52,7 @@ import { loadHead, loadPath } from './tree'
 import { toast } from './ui'
 import { LIVE_CHARS, appendTaskOutput, clipLive, resyncTaskWatch } from './taskOutput'
 import { t } from '../../i18n'
+import { notifyStatus, onNotifyClick } from '../notify'
 
 /** Did this node change the card library on disk? A write/edit records a
  * `card.use`; the memory hook records `card_update` notices for cards that
@@ -221,6 +222,7 @@ function onBranchUpdated(p: BranchUpdatedPush): void {
 function onSessionUpdated(p: SessionUpdatedPush): void {
   const s = p.session
   const i = state.sessions.findIndex((x) => x.id === s.id)
+  notifyStatus(state.sessions[i], s)
   if (i >= 0) state.sessions[i] = s
   else state.sessions.push(s)
   // The model can create a project; learn it when a session names one.
@@ -360,6 +362,11 @@ export function startApp(): void {
 
   // Updates that landed while the tab was hidden are seen once it shows.
   document.addEventListener('visibilitychange', markSeen)
+  onNotifyClick((id) => {
+    state.page = null
+    if (id !== state.sessionId) void openSession(id)
+    else commitRoute('push')
+  })
 
   // Browser back/forward: show the page the address names, or reopen its
   // session (and view), or land. A page keeps the session beneath it.
