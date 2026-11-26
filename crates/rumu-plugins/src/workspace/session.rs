@@ -414,7 +414,9 @@ impl vfs::Node for BranchNode {
 }
 
 /// The branch `at` names, rendered as a range: all of it, or within
-/// `budget` chars ([`SessionView::render_fitting`]).
+/// `budget` chars ([`SessionView::render_fitting`]). A branch that forked
+/// off another starts with where: what came before is that branch's, read
+/// at the node's address.
 fn branch_transcript(at: &At<'_>, budget: Option<usize>) -> ToolResult<String> {
     let (sid, bid) = (at.param("sid"), at.param("bid"));
     let (info, nodes, branches) = match at.cx.history().session_tree(&SessionId::from(sid)) {
@@ -427,10 +429,16 @@ fn branch_transcript(at: &At<'_>, budget: Option<usize>) -> ToolResult<String> {
     let b = find_branch(&branches, bid, sid)?;
     let own = own_nodes(&nodes, b);
     let view = SessionView::new(sid, &nodes);
-    Ok(match budget {
-        Some(budget) => view.render_fitting(&own, budget),
-        None => view.render(&own, true),
-    })
+    let fork = b
+        .forked_from
+        .as_ref()
+        .map(|n| format!("forked from: {WS}:/sessions/{sid}/{}\n", view.short(&n.0)))
+        .unwrap_or_default();
+    Ok(fork
+        + &match budget {
+            Some(budget) => view.render_fitting(&own, budget),
+            None => view.render(&own, true),
+        })
 }
 
 /// The latest few nodes of a sub-agent's branch in this session, for a task

@@ -2201,6 +2201,32 @@ async fn session_listing_and_overview() {
     assert_eq!(lines.len(), 2, "{}", out.content.text);
     assert!(lines[1].contains("/branches/BEXP  task \"find the config file\""));
 
+    // A forked branch's read says where it forked (what came before is the
+    // parent's); the main line has no such line.
+    let read = |path: &'static str| {
+        let (plugin, cx) = (&plugin, &cx);
+        async move {
+            plugin
+                .call_tool("read", json!({ "path": path }), cx)
+                .await
+                .unwrap()
+        }
+    };
+    let out = read("@rumu:/sessions/01STESTSSESSION0000000000000/branches/BEXP").await;
+    assert!(
+        out.content
+            .text
+            .starts_with("forked from: @rumu:/sessions/01STESTSSESSION0000000000000/A1\n"),
+        "{}",
+        out.content.text
+    );
+    let out = read("@rumu:/sessions/01STESTSSESSION0000000000000/branches/BMAIN").await;
+    assert!(
+        !out.content.text.contains("forked from"),
+        "{}",
+        out.content.text
+    );
+
     // Unknown sessions error clearly.
     let out = plugin
         .call_tool("read", json!({ "path": "@rumu:/sessions/nosuch" }), &cx)
