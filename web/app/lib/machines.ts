@@ -242,8 +242,10 @@ export function switchMachine(name: MachineName): Promise<void> {
   machines.current = name
   machines.switching = true
   // Until its own lists come in, the machine's light ones stand in, so its
-  // rows stay put in the sidebar.
-  state.sessions = [...(machineState(name)?.sessions ?? [])]
+  // rows stay put in the sidebar and its groups keep their names.
+  state.sessions = [...(m?.sessions ?? [])]
+  state.projects = [...(m?.projects ?? [])]
+  state.assistants = [...(m?.assistants ?? [])]
   state.decisions = []
   rumu.setBase(base(name))
   const ready = new Promise<void>((resolve) => {

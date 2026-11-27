@@ -422,6 +422,16 @@ function chipped(group: Group, s: SessionInfo): boolean {
   return (group.kind === 'time' || group.kind === 'attention') && (!!s.project || !here(s))
 }
 
+/** Does a project's or assistant's group name its machine: one the page
+ *  does not show. */
+function elsewhereGroup(group: Group): boolean {
+  return (
+    multiMachine.value &&
+    group.machine !== machines.current &&
+    (group.kind === 'project' || group.kind === 'assistant')
+  )
+}
+
 /** Does the row name its machine: one the page does not show. */
 function elsewhere(s: SessionInfo): boolean {
   return multiMachine.value && !here(s)
@@ -817,20 +827,13 @@ const otherLocale = computed<Locale>(
               :size="16"
               class="mr-0.5"
             />
-            <span class="min-w-0 truncate text-meta text-ink-2">{{ groupName(group) }}</span>
-            <span v-if="group.sessions.length" class="text-micro text-ink-3 tabular-nums">{{
-              group.sessions.length
-            }}</span>
-            <span
-              v-if="
-                multiMachine &&
-                group.machine !== machines.current &&
-                (group.kind === 'project' || group.kind === 'assistant')
-              "
-              class="ml-auto flex min-w-0 flex-none items-center gap-1 pr-1 font-normal text-ink-3"
-            >
-              <Icon name="machine" :size="11" />
-              <span class="truncate">{{ machineLabel(group.machine) }}</span>
+            <!-- another machine's group names it on a second line -->
+            <span class="flex min-w-0 flex-col">
+              <span class="truncate text-meta text-ink-2">{{ groupName(group) }}</span>
+              <span v-if="elsewhereGroup(group)" class="mt-1 self-start font-normal" :class="ROW_CHIP">
+                <Icon name="machine" :size="11" class="flex-none" />
+                <span class="truncate">{{ machineLabel(group.machine) }}</span>
+              </span>
             </span>
           </button>
           <div
