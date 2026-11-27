@@ -227,7 +227,7 @@ export function startPlugins(): void {
   watch(
     () =>
       (models.settings?.plugins ?? []).flatMap((p) =>
-        p.status === 'running' && p.web ? [[p.name, p.web]] : [],
+        p.status === 'running' && p.web ? [[p.name, rumu.base + p.web]] : [],
       ),
     (now) => {
       const urls = new Map(now as [string, string][])

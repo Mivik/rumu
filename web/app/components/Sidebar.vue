@@ -33,13 +33,24 @@ import {
   openSession,
   renameSession,
   retitleSession,
-  sortedSessions,
   startSessionIn,
   state,
 } from '../lib/store'
+import {
+  allSessions,
+  compatible,
+  machineLabel,
+  machines,
+  machineState,
+  multiMachine,
+  namesOf,
+  switchMachine,
+  type MachineName,
+  type MachineSession,
+} from '../lib/machines'
 import { assistantCat } from '../lib/assistantFace'
 import { mountedCardCount } from '../lib/cards'
-import type { Project, SessionInfo } from '../lib/types'
+import type { Project } from '../lib/types'
 import { layout } from '../lib/layout'
 import { copyAddress, sessionAddress } from '../lib/links'
 import { openPage, sheetOf, type Page } from '../lib/router'
@@ -98,10 +109,45 @@ function pickSession(id: string): void {
 /** Start the next session in `group`: in its project, or as its assistant
  *  in none. The group unfolds so the unsent session's row is visible where
  *  it will be born. */
-function newIn(group: Group): void {
+async function newIn(group: Group): Promise<void> {
   prefs.collapsedProjects[group.key] = false
-  startSessionIn(group.projectId, group.assistant ?? undefined)
   layout.sidebarOpen = false
+  if (group.machine !== machines.current) await switchMachine(group.machine)
+  startSessionIn(group.projectId, group.assistant ?? undefined)
+}
+
+/** Show another machine: its library, assistants and projects, and new
+ *  sessions start there. One that speaks another protocol opens its own
+ *  page instead. */
+async function showMachine(name: MachineName, close: () => void): Promise<void> {
+  close()
+  const m = machineState(name)
+  if (m && !compatible(m)) {
+    window.open(m.url, '_blank', 'noopener')
+    return
+  }
+  layout.sidebarOpen = false
+  if (name === machines.current) return
+  await switchMachine(name)
+  goHome()
+}
+
+/** A machine's counts in the menu: running, and needing the user. */
+function machineCounts(name: MachineName): { running: number; needs: number } {
+  const list = sortedSessions.value.filter((s) => s.machine === name)
+  return {
+    running: list.filter((s) => sessionStatus(s) === 'running').length,
+    needs: list.filter((s) => s.id !== state.sessionId && needsYou(s)).length,
+  }
+}
+
+/** What the menu says of a machine it cannot show here. */
+function machineNote(name: MachineName): string | null {
+  const m = machineState(name)
+  if (!m || !name) return null
+  if (!m.connected) return t('chat.sidebar.machineOffline')
+  if (m.protocol !== null && !compatible(m)) return t('chat.sidebar.machineMismatch')
+  return null
 }
 
 /** The unsent new session is the landing page's composer: go back to it, or
@@ -121,6 +167,9 @@ function openGroupSettings(group: Group): void {
   if (group.project) projectSettings(group.project)
 }
 
+/** A session row: any machine's (`s.machine`). */
+type SessionInfo = MachineSession
+
 interface SessionRow {
   s: SessionInfo
   /** Compact relative time, shown at the row's end. */
@@ -139,6 +188,8 @@ interface Group {
   project: Project | null
   /** An assistant's group: whose sessions without a project it holds. */
   assistant: string | null
+  /** The machine of a project's or assistant's group. */
+  machine: MachineName
   name: string
   sessions: SessionRow[]
   activity: number
@@ -162,6 +213,20 @@ function lastActive(s: SessionInfo): string {
         minute: '2-digit',
         hourCycle: 'h23',
       })
+}
+
+/** Every machine's sessions, last touched first. */
+const sortedSessions = computed(() => allSessions(state.sessions).sort((a, b) => b.touched_at - a.touched_at))
+
+/** Is the session on the machine the page shows (its menu, dragging). */
+function here(s: SessionInfo): boolean {
+  return s.machine === machines.current
+}
+
+/** A group key for machine `m`'s project or assistant `id`: the serving
+ *  machine's are the bare ids they were before there were machines. */
+function keyOn(m: MachineName, id: string): string {
+  return m ? `${m}/${id}` : id
 }
 
 /** Rows a group shows before "show more": a long project must not push the
@@ -188,7 +253,7 @@ const held = ref<string | null>(null)
 watch(
   () => state.sessionId,
   (id) => {
-    const s = id ? state.sessions.find((x) => x.id === id) : undefined
+    const s = id ? sortedSessions.value.find((x) => x.id === id) : undefined
     held.value = s && needsYou(s) ? s.id : null
   },
   { flush: 'sync', immediate: true },
@@ -201,7 +266,7 @@ const attention = computed(
   () =>
     new Set(
       prefs.attentionFirst
-        ? state.sessions
+        ? sortedSessions.value
             .filter((s) => s.id === held.value || (s.id !== state.sessionId && needsYou(s)))
             .map((s) => s.id)
         : [],
@@ -224,27 +289,31 @@ function byProject(): Group[] {
     }
     return g
   }
-  const projectGroup = (p: Project) =>
-    group(p.id, () => ({
+  const projectGroup = (p: Project, m: MachineName) =>
+    group(keyOn(m, p.id), () => ({
       kind: 'project',
       projectId: p.id,
       project: p,
       assistant: null,
+      machine: m,
       name: p.name,
       peek: PEEK,
     }))
-  const assistantGroup = (id: string) =>
-    group(id, () => ({
+  const assistantGroup = (id: string, m: MachineName) =>
+    group(keyOn(m, id), () => ({
       kind: 'assistant',
       projectId: null,
       project: null,
       assistant: id,
-      name: assistantName(id),
+      machine: m,
+      name: assistantName(id, m),
       peek: PEEK,
     }))
-  for (const p of state.projects) projectGroup(p)
+  // Empty projects show for the shown machine only.
+  for (const p of state.projects) projectGroup(p, machines.current)
   for (const s of sortedSessions.value) {
-    const g = map.get(s.project ?? '') ?? assistantGroup(s.assistant)
+    const p = s.project ? projectOf(s) : null
+    const g = p ? projectGroup(p, s.machine) : assistantGroup(s.assistant, s.machine)
     if (!attention.value.has(s.id)) g.sessions.push(toRow(s))
     g.activity = Math.max(g.activity, s.touched_at)
   }
@@ -252,9 +321,9 @@ function byProject(): Group[] {
   // the group it would be born into.
   if (draftShown()) {
     const into = landingProject.value
-      ? map.get(landingProject.value)
+      ? map.get(keyOn(machines.current, landingProject.value))
       : landingAssistant.value
-        ? assistantGroup(landingAssistant.value)
+        ? assistantGroup(landingAssistant.value, machines.current)
         : undefined
     if (into) into.draft = true
   }
@@ -291,6 +360,7 @@ function byTime(): Group[] {
     projectId: null,
     project: null,
     assistant: null,
+    machine: '',
     name: STRETCH_NAMES[st.key],
     peek: st.peek,
     sessions: [],
@@ -332,6 +402,7 @@ const groups = computed<Group[]>(() => {
     projectId: null,
     project: null,
     assistant: null,
+    machine: '',
     name: 'chat.sidebar.attention',
     peek: Infinity,
     sessions: needing.map(toRow),
@@ -348,7 +419,12 @@ function groupName(group: Group): string {
 
 /** Rows of a group outside its project's group carry the project's chip. */
 function chipped(group: Group, s: SessionInfo): boolean {
-  return (group.kind === 'time' || group.kind === 'attention') && !!s.project
+  return (group.kind === 'time' || group.kind === 'attention') && (!!s.project || !here(s))
+}
+
+/** Does the row name its machine: one the page does not show. */
+function elsewhere(s: SessionInfo): boolean {
+  return multiMachine.value && !here(s)
 }
 
 function collapsed(group: Group): boolean {
@@ -374,7 +450,7 @@ function shown(group: Group): SessionRow[] {
 
 /** The project a session is in, as this client knows it. */
 function projectOf(s: SessionInfo): Project | null {
-  return s.project ? (state.projects.find((p) => p.id === s.project) ?? null) : null
+  return s.project ? (namesOf(s.machine).projects.find((p) => p.id === s.project) ?? null) : null
 }
 
 /** A chip on a row's second line. */
@@ -407,8 +483,14 @@ const now = ref(Date.now())
 const clock = setInterval(() => (now.value = Date.now()), 30_000)
 onUnmounted(() => clearInterval(clock))
 
-function assistantName(id: string): string {
-  return state.assistants.find((a) => a.id === id)?.name ?? id.slice(0, 8)
+function assistantName(id: string, m: MachineName = machines.current): string {
+  return namesOf(m).assistants.find((a) => a.id === id)?.name ?? id.slice(0, 8)
+}
+
+/** An assistant group's face, from its machine's roster. */
+function groupCat(group: Group) {
+  const id = group.assistant!
+  return assistantCat(namesOf(group.machine).assistants.find((a) => a.id === id) ?? { id })
 }
 
 /** Other sessions with a decision waiting on the user (the open one shows
@@ -416,7 +498,7 @@ function assistantName(id: string): string {
 const waiting = computed(
   () =>
     new Set(
-      state.sessions.filter((s) => s.status === 'waiting' && s.id !== state.sessionId).map((s) => s.id),
+      sortedSessions.value.filter((s) => s.status === 'waiting' && s.id !== state.sessionId).map((s) => s.id),
     ),
 )
 
@@ -524,8 +606,8 @@ function startDrag(e: DragEvent, s: SessionInfo): void {
 /** May the dragged session drop on `group`? Another project's group, or its
  *  own assistant's when it is in a project (moving it out). */
 function accepts(group: Group): boolean {
-  const s = state.sessions.find((x) => x.id === dragging.value)
-  if (!s) return false
+  const s = sortedSessions.value.find((x) => x.id === dragging.value)
+  if (!s || group.machine !== s.machine) return false
   if (group.projectId) return group.projectId !== s.project
   return group.assistant === s.assistant && !!s.project
 }
@@ -731,11 +813,7 @@ const otherLocale = computed<Locale>(
             <AssistantAvatar
               v-else-if="group.assistant"
               :id="group.assistant"
-              :cat="
-                assistantCat(
-                  state.assistants.find((a) => a.id === group.assistant) ?? { id: group.assistant },
-                )
-              "
+              :cat="groupCat(group)"
               :size="16"
               class="mr-0.5"
             />
@@ -743,6 +821,17 @@ const otherLocale = computed<Locale>(
             <span v-if="group.sessions.length" class="text-micro text-ink-3 tabular-nums">{{
               group.sessions.length
             }}</span>
+            <span
+              v-if="
+                multiMachine &&
+                group.machine !== machines.current &&
+                (group.kind === 'project' || group.kind === 'assistant')
+              "
+              class="ml-auto flex min-w-0 flex-none items-center gap-1 pr-1 font-normal text-ink-3"
+            >
+              <Icon name="machine" :size="11" />
+              <span class="truncate">{{ machineLabel(group.machine) }}</span>
+            </span>
           </button>
           <div
             class="flex flex-none items-center gap-1 py-1.5 pr-1.5 transition-opacity duration-150 pointer-fine:opacity-0 pointer-fine:group-hover/head:opacity-100 pointer-fine:focus-within:opacity-100"
@@ -797,7 +886,7 @@ const otherLocale = computed<Locale>(
           <div
             v-for="row in shown(group)"
             :key="row.s.id"
-            :draggable="renaming?.id !== row.s.id"
+            :draggable="here(row.s) && renaming?.id !== row.s.id"
             class="group relative flex w-full min-w-0 items-center rounded-control border text-left text-secondary transition-[background-color,border-color,color,box-shadow] duration-200 has-[[aria-expanded=true]]:bg-surface-2/60 has-[:focus-visible]:ring-2 has-[:focus-visible]:ring-brand/25"
             :class="
               row.s.id === state.sessionId && !state.page
@@ -844,12 +933,17 @@ const otherLocale = computed<Locale>(
                   >{{ row.ago }}</span
                 >
               </span>
-              <!-- away from its group, a row's second line names its project -->
+              <!-- away from its group, a row's second line names its machine
+                   (another than the one shown) and its project -->
               <span
                 v-if="chipped(group, row.s)"
                 class="mt-1 flex min-w-0 items-center gap-1.5 pl-3.5 text-micro font-normal text-ink-3"
               >
-                <span :class="ROW_CHIP">
+                <span v-if="elsewhere(row.s)" :class="ROW_CHIP">
+                  <Icon name="machine" :size="11" class="flex-none" />
+                  <span class="truncate">{{ machineLabel(row.s.machine) }}</span>
+                </span>
+                <span v-if="row.s.project" :class="ROW_CHIP">
                   <ProjectSeal v-if="projectOf(row.s)" :project="projectOf(row.s)!" :size="12" />
                   <Icon v-else name="mount" :size="11" class="flex-none text-tool" />
                   <span class="truncate">{{ projectOf(row.s)?.name ?? row.s.project!.slice(0, 8) }}</span>
@@ -857,6 +951,7 @@ const otherLocale = computed<Locale>(
               </span>
             </button>
             <span
+              v-if="here(row.s)"
               class="absolute right-1.5 flex items-center"
               :class="chipped(group, row.s) ? 'top-2' : 'inset-y-0'"
             >
@@ -952,17 +1047,94 @@ const otherLocale = computed<Locale>(
       </section>
     </TransitionGroup>
 
-    <!-- the connection, at the foot -->
+    <!-- the connection, at the foot; with other machines, which one the
+         page shows, and the menu to show another -->
     <div class="flex flex-none items-center gap-2 border-t border-line-soft px-3 py-3 text-meta text-ink-3">
-      <span
-        class="size-2 flex-none rounded-full"
-        :class="[presence.dot, presence.live && 'dot-live dot-run']"
-      />
-      <span
-        class="flex-1 first-letter:uppercase"
-        :class="{ 'font-semibold text-danger': presence.offline }"
-        >{{ presence.title }}</span
+      <Popover
+        v-if="multiMachine"
+        class="min-w-0 flex-1"
+        :label="t('chat.sidebar.machines')"
+        placement="top-start"
+        menu
+        role="menu"
+        block
       >
+        <template #trigger="{ open, toggle }">
+          <button
+            type="button"
+            class="-mx-1.5 -my-1 flex min-w-0 flex-1 items-center gap-2 rounded-control px-1.5 py-1 text-left transition-colors duration-150 hover:bg-surface-2 hover:text-ink"
+            :class="open ? 'bg-surface-2 text-ink' : 'text-ink-2'"
+            :title="presence.title"
+            aria-haspopup="menu"
+            :aria-expanded="open"
+            @click="toggle"
+          >
+            <span
+              class="size-2 flex-none rounded-full"
+              :class="[presence.dot, presence.live && 'dot-live dot-run']"
+            />
+            <Icon name="machine" :size="14" class="flex-none text-ink-3" />
+            <span class="min-w-0 truncate font-semibold" :class="{ 'text-danger': presence.offline }">{{
+              machineLabel(machines.current)
+            }}</span>
+            <Icon name="chev-up" :size="12" class="flex-none text-ink-3" />
+          </button>
+        </template>
+        <template #default="{ close }">
+          <p class="px-2.5 pt-1.5 pb-1 text-micro font-bold text-ink-3">{{ t('chat.sidebar.machines') }}</p>
+          <button
+            v-for="m in machines.all"
+            :key="m.name"
+            type="button"
+            role="menuitemradio"
+            :aria-checked="m.name === machines.current"
+            :class="[MENU_ITEM, { 'opacity-55': !m.connected && !!m.name }]"
+            class="disabled:cursor-default"
+            :disabled="!m.connected && !!m.name"
+            @click="showMachine(m.name, close)"
+          >
+            <Icon name="machine" :size="14" class="flex-none self-start pt-0.5 text-ink-3" />
+            <span class="flex min-w-0 flex-1 flex-col">
+              <span class="wrap-anywhere" :class="{ 'font-semibold': m.name === machines.current }">{{
+                machineLabel(m.name)
+              }}</span>
+              <span v-if="machineNote(m.name)" class="text-micro text-ink-3">{{ machineNote(m.name) }}</span>
+            </span>
+            <span
+              v-if="!machineNote(m.name)"
+              class="flex flex-none items-center gap-2 text-micro tabular-nums text-ink-3"
+            >
+              <span v-if="machineCounts(m.name).running" class="flex items-center gap-1"
+                ><span class="size-1.5 rounded-full bg-pine" />{{ machineCounts(m.name).running }}</span
+              >
+              <span v-if="machineCounts(m.name).needs" class="flex items-center gap-1"
+                ><span class="size-1.5 rounded-full bg-brand" />{{ machineCounts(m.name).needs }}</span
+              >
+            </span>
+            <Icon
+              :name="m.protocol !== null && !compatible(m) ? 'external' : 'ok'"
+              :size="14"
+              class="flex-none"
+              :class="
+                m.name === machines.current || (m.protocol !== null && !compatible(m))
+                  ? 'text-ink'
+                  : 'invisible'
+              "
+            />
+          </button>
+        </template>
+      </Popover>
+      <template v-else>
+        <span
+          class="size-2 flex-none rounded-full"
+          :class="[presence.dot, presence.live && 'dot-live dot-run']"
+        />
+        <span
+          class="flex-1 first-letter:uppercase"
+          :class="{ 'font-semibold text-danger': presence.offline }"
+          >{{ presence.title }}</span
+        >
+      </template>
       <button
         type="button"
         class="icon-btn -my-1 size-7 flex-none"

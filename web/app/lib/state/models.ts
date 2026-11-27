@@ -14,6 +14,7 @@ import type { ModelUse } from '../generated/ModelUse'
 import type { Protocol } from '../generated/Protocol'
 import type { SettingsInfo } from '../generated/SettingsInfo'
 import type { BranchId, Node } from '../types'
+import { followMachines, machines } from '../machines'
 import { prefs } from './prefs'
 import { landingAssistant } from './projects'
 import { state } from './state'
@@ -92,6 +93,7 @@ export function enabledIds(listed: string[], rules: string[]): string[] {
 export async function refreshSettings(): Promise<SettingsInfo | null> {
   try {
     models.settings = await rumu.request<SettingsInfo>('settings.get')
+    followHome(models.settings)
   } catch (err) {
     toast('error', t('settings.loadError'), (err as Error).message)
   }
@@ -100,6 +102,12 @@ export async function refreshSettings(): Promise<SettingsInfo | null> {
 
 export function onSettingsUpdated(p: { settings: SettingsInfo }): void {
   models.settings = p.settings
+  followHome(p.settings)
+}
+
+/** The serving machine's settings list the machines; another's do not. */
+function followHome(s: SettingsInfo | null): void {
+  if (s && !machines.current) followMachines(s.machines ?? [], s.machine ?? '')
 }
 
 /** Every alias or enabled model, by ref. */

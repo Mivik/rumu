@@ -26,6 +26,7 @@ import type { FileRef } from '../generated/FileRef'
 import type { RevertFile } from '../generated/RevertFile'
 import type { RevertPlan } from '../generated/RevertPlan'
 import { activeDraft, dropDraft, landingWritten, pruneDrafts, storedAttachment } from './drafts'
+import { locate, machines, multiMachine, switchMachine } from '../machines'
 import { typedText } from '../attachments'
 import { currentPick, models } from './models'
 import { isUnseen } from './derived'
@@ -59,7 +60,8 @@ export async function refreshLists(): Promise<void> {
     state.workspaces = workspaces
     state.projects = projects
     state.sessions = sessions
-    pruneDrafts(sessions)
+    // Drafts of other machines' sessions are kept: those lists are not here.
+    if (!multiMachine.value) pruneDrafts(sessions)
     state.assistants = assistants
     if (!assistants.some((a) => a.id === state.assistant)) {
       state.assistant = defaultAssistant()
@@ -152,6 +154,16 @@ export function watchSession(id: SessionId | null): void {
 
 export async function openSession(id: SessionId, opts: { history?: OpenHistory } = {}): Promise<boolean> {
   const seq = ++openSeq
+  // On another machine: show that one first (its connection comes up and
+  // the store re-reads its lists), then open the session there.
+  if (multiMachine.value) {
+    const where = await locate(id)
+    if (seq !== openSeq) return false
+    if (where !== null && where !== machines.current) {
+      await switchMachine(where)
+      if (seq !== openSeq) return false
+    }
+  }
   watchSession(id)
   try {
     const tree = await fetchTree(id, takePlace(id)?.node)

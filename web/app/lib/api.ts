@@ -30,10 +30,12 @@ export class RpcError extends Error {
   }
 }
 
-export function defaultWsUrl(): string {
+/** The ws of this server, or (`base` `/m/<name>`) of a machine it
+ *  forwards to. */
+export function defaultWsUrl(base = ''): string {
   if (typeof location !== 'undefined') {
     const proto = location.protocol === 'https:' ? 'wss' : 'ws'
-    return `${proto}://${location.host}/ws`
+    return `${proto}://${location.host}${base}/ws`
   }
   // Non-browser context (node smoke test): fall back to the dev server port.
   return 'ws://localhost:7878/ws'
@@ -54,8 +56,23 @@ export class RumuClient {
   private generation = 0
   private probing = false
 
-  constructor(url: string = defaultWsUrl()) {
+  /** Where HTTP requests of this connection's server go: `''` for this
+   *  server, `/m/<name>` for a machine it forwards to. */
+  base = ''
+
+  /** `signIn`: check the token before each handshake (`authorize`). One
+   *  client does; others ride on the cookie it sets, and retry until then. */
+  constructor(
+    url: string = defaultWsUrl(),
+    private signIn = true,
+  ) {
     this.url = url
+  }
+
+  /** Talk to the server at `base` from now on (`connect` again). */
+  setBase(base: string): void {
+    this.base = base
+    this.url = defaultWsUrl(base)
   }
 
   /** Start connecting; `onReady` runs after every (re)connection. */
@@ -140,7 +157,7 @@ export class RumuClient {
     if (this.stopped) return
     const generation = this.generation
     try {
-      if (typeof window !== 'undefined' && !(await authorize())) return
+      if (this.signIn && typeof window !== 'undefined' && !(await authorize())) return
     } catch {
       if (generation === this.generation) this.scheduleReconnect()
       return

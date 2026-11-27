@@ -33,6 +33,7 @@ import type {
 } from '../types'
 import { state } from './state'
 import { applyDelta } from './stream'
+import { machines } from '../machines'
 import { artifactOf } from '../artifacts'
 import {
   closeSession,
@@ -383,8 +384,21 @@ export function startApp(): void {
   })
 
   rumu.start(async () => {
+    // A machine switch connects here: what opens next is the switch's to
+    // say (openSession), not the address's.
+    const switched = machines.switching
+    machines.switching = false
+    // The settings first on the serving machine: they list the machines, and
+    // the session the address names may be on one of them.
+    const settings = refreshSettings()
+    if (!machines.current) await settings
     await refreshLists()
-    void refreshSettings()
+    if (switched) {
+      if (state.page?.page === 'decks') void refreshLibrary()
+      resyncTaskWatch()
+      state.booting = false
+      return
+    }
     // A reconnect resyncs the open library; boot follows the session URL. A
     // URL naming an unknown session falls back to the landing page.
     if (state.page?.page === 'decks') void refreshLibrary()

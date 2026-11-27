@@ -13,11 +13,12 @@
 // ChatGPT web apps, a message's attachments lead it (`withLeadingAnchors`),
 // and the draft the user types is plain text.
 
+import { rumu } from './api'
 import type { Attachment, AttachmentKind, Content } from './types'
 
 /** Where an attachment's bytes live: the content-addressed blob store. */
 export function blobUrl(hash: string): string {
-  return `/blobs/${hash}`
+  return `${rumu.base}/blobs/${hash}`
 }
 
 /** The short extension of the common kinds — the kernel's table
@@ -250,7 +251,7 @@ export async function sniffFile(file: File): Promise<FileKind | null> {
  * stored blob comes back. A refusal is a 400 carrying `{error}`.
  */
 export async function uploadBlob(file: File, signal?: AbortSignal): Promise<Attachment> {
-  const res = await fetch(`/blobs?name=${encodeURIComponent(file.name)}`, {
+  const res = await fetch(`${rumu.base}/blobs?name=${encodeURIComponent(file.name)}`, {
     method: 'POST',
     headers: { 'Content-Type': file.type || 'application/octet-stream' },
     body: file,
