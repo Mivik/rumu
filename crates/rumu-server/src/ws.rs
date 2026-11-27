@@ -156,7 +156,6 @@ pub fn router(state: AppState, token: crate::auth::Token) -> Router {
         .route("/blobs/{hash}", get(blob_get))
         .route("/files/{session}", get(file_image))
         .route("/plugins/{name}/{*file}", get(plugin_file))
-        .route("/m/{machine}/ws", get(crate::remote::forward_ws))
         .route("/m/{machine}/{*rest}", any(crate::remote::forward));
     crate::auth::protect(routes, token)
         .fallback(static_asset)
@@ -462,6 +461,9 @@ async fn handle_socket(state: AppState, socket: HttpWebSocket) {
     });
 
     let mut feed = Feed::default();
+    // Links to the other machines this client talks to, made on its first
+    // frame for each.
+    let mut uplinks = HashMap::new();
     let mut sub = state.kernel.subscribe();
     'conn: loop {
         let due = feed.due.unwrap_or_else(Instant::now);
@@ -505,6 +507,14 @@ async fn handle_socket(state: AppState, socket: HttpWebSocket) {
                     let Some(Ok(text)) = frame.map(|f| String::from_utf8(f.into_payload().to_vec())) else {
                         break;
                     };
+                    // Another machine's: on to it, in order.
+                    if let Some((machine, out)) = crate::remote::target(&text) {
+                        let up = uplinks.entry(machine.clone()).or_insert_with(|| {
+                            crate::remote::uplink(state.clone(), machine, tx.clone())
+                        });
+                        let _ = up.send(out);
+                        continue;
+                    }
                     // Answered in order, not spawned: the pushes after the
                     // reply, and the requests after it, see the new filter.
                     if let Some(reply) = feed.control(&state.kernel, &text) {

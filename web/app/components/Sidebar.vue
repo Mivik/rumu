@@ -419,22 +419,13 @@ function groupName(group: Group): string {
 
 /** Rows of a group outside its project's group carry the project's chip. */
 function chipped(group: Group, s: SessionInfo): boolean {
-  return (group.kind === 'time' || group.kind === 'attention') && (!!s.project || !here(s))
+  return (group.kind === 'time' || group.kind === 'attention') && (!!s.project || multiMachine.value)
 }
 
-/** Does a project's or assistant's group name its machine: one the page
- *  does not show. */
-function elsewhereGroup(group: Group): boolean {
-  return (
-    multiMachine.value &&
-    group.machine !== machines.current &&
-    (group.kind === 'project' || group.kind === 'assistant')
-  )
-}
-
-/** Does the row name its machine: one the page does not show. */
-function elsewhere(s: SessionInfo): boolean {
-  return multiMachine.value && !here(s)
+/** Does a project's or assistant's group name its machine: every one
+ *  does, once there are several. */
+function namesMachine(group: Group): boolean {
+  return multiMachine.value && (group.kind === 'project' || group.kind === 'assistant')
 }
 
 function collapsed(group: Group): boolean {
@@ -830,7 +821,7 @@ const otherLocale = computed<Locale>(
             <!-- another machine's group names it on a second line -->
             <span class="flex min-w-0 flex-col">
               <span class="truncate text-meta text-ink-2">{{ groupName(group) }}</span>
-              <span v-if="elsewhereGroup(group)" class="mt-1 self-start font-normal" :class="ROW_CHIP">
+              <span v-if="namesMachine(group)" class="mt-1 self-start font-normal" :class="ROW_CHIP">
                 <Icon name="machine" :size="11" class="flex-none" />
                 <span class="truncate">{{ machineLabel(group.machine) }}</span>
               </span>
@@ -937,12 +928,12 @@ const otherLocale = computed<Locale>(
                 >
               </span>
               <!-- away from its group, a row's second line names its machine
-                   (another than the one shown) and its project -->
+                   (when there are several) and its project -->
               <span
                 v-if="chipped(group, row.s)"
                 class="mt-1 flex min-w-0 items-center gap-1.5 pl-3.5 text-micro font-normal text-ink-3"
               >
-                <span v-if="elsewhere(row.s)" :class="ROW_CHIP">
+                <span v-if="multiMachine" :class="ROW_CHIP">
                   <Icon name="machine" :size="11" class="flex-none" />
                   <span class="truncate">{{ machineLabel(row.s.machine) }}</span>
                 </span>
