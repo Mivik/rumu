@@ -73,7 +73,7 @@ pub use error::{Error, Result};
 use std::collections::{BTreeMap, HashMap, HashSet};
 use std::io::Write;
 use std::path::{Path, PathBuf};
-use std::sync::{Arc, Mutex, MutexGuard};
+use std::sync::{Arc, Mutex, MutexGuard, PoisonError};
 
 use rumu_core::{
     Artifact, Branch, BranchId, BranchKind, BranchStatus, IoError, McpApp, Node, NodeBody, NodeId,
@@ -224,9 +224,7 @@ impl Store {
         let stale = store.stale_sessions(&covered);
         for gone in covered.keys().filter(|id| {
             !store
-                .state
                 .lock()
-                .unwrap()
                 .sessions
                 .contains_key(&SessionId::from(id.as_str()))
         }) {
@@ -245,7 +243,7 @@ impl Store {
     /// The readable sessions whose journal length is not the one `covered`
     /// records, with their journals, marked stale in the index.
     fn stale_sessions(&self, covered: &BTreeMap<String, u64>) -> Vec<(SessionId, PathBuf)> {
-        let st = self.state.lock().unwrap();
+        let st = self.lock();
         let mut stale: Vec<(SessionId, PathBuf)> = st
             .sessions
             .iter()
@@ -318,13 +316,20 @@ impl Store {
         Some(self.root.as_ref()?.join(format!("{session}.jsonl")))
     }
 
+    /// Lock the state. A panic while it was held (most often in a caller's
+    /// `with_tree` closure, which only reads) does not take every later
+    /// request down with it.
+    fn lock(&self) -> MutexGuard<'_, StoreState> {
+        self.state.lock().unwrap_or_else(PoisonError::into_inner)
+    }
+
     /// Lock the state with `session`'s nodes in memory, reading them from its
     /// journal first (outside the lock) when they are not. `Ok(None)`: no
     /// such session.
     fn lock_nodes(&self, session: &SessionId) -> Result<Option<MutexGuard<'_, StoreState>>> {
         loop {
             let (path, generation) = {
-                let mut st = self.state.lock().unwrap();
+                let mut st = self.lock();
                 st.clock += 1;
                 let clock = st.clock;
                 match st.sessions.get_mut(session) {
@@ -344,7 +349,7 @@ impl Store {
                 }
             };
             let nodes = read_nodes(session, &path)?;
-            let mut guard = self.state.lock().unwrap();
+            let mut guard = self.lock();
             let st = &mut *guard;
             match st.sessions.get_mut(session) {
                 None => return Ok(None),
@@ -435,7 +440,7 @@ impl Store {
     // ---- sessions ----
 
     pub fn insert_session(&self, s: &SessionInfo) -> Result<()> {
-        let mut st = self.state.lock().unwrap();
+        let mut st = self.lock();
         if st.sessions.contains_key(&s.id) {
             return Err(Error::SessionExists { id: s.id.clone() });
         }
@@ -461,7 +466,7 @@ impl Store {
     }
 
     pub fn get_session(&self, id: &SessionId) -> Result<Option<SessionInfo>> {
-        let st = self.state.lock().unwrap();
+        let st = self.lock();
         Ok(match st.sessions.get(id) {
             Some(Entry::Loaded(s)) => Some(st.info(s)),
             Some(Entry::Corrupt(msg)) => return Err(unreadable(id, msg)),
@@ -472,7 +477,7 @@ impl Store {
     /// All sessions, most recently updated first. Unreadable sessions get a
     /// stderr warning at open and stay out of the list.
     pub fn list_sessions(&self) -> Result<Vec<SessionInfo>> {
-        let st = self.state.lock().unwrap();
+        let st = self.lock();
         let mut infos: Vec<SessionInfo> = st
             .sessions
             .values()
@@ -490,7 +495,7 @@ impl Store {
     }
 
     pub fn update_session(&self, s: &SessionInfo) -> Result<()> {
-        let mut st = self.state.lock().unwrap();
+        let mut st = self.lock();
         if st.loaded(&s.id)?.is_none() {
             return Ok(()); // a no-op on unknown sessions
         }
@@ -508,7 +513,7 @@ impl Store {
     /// Record that the user looked at the session at `at` (a no-op on
     /// unknown sessions).
     pub fn mark_seen(&self, id: &SessionId, at: Timestamp) -> Result<()> {
-        let mut st = self.state.lock().unwrap();
+        let mut st = self.lock();
         if st.loaded(id)?.is_none() {
             return Ok(());
         }
@@ -521,7 +526,7 @@ impl Store {
     /// delete cannot resurrect the file: later appends to an unknown session
     /// are dropped (see the insert methods below).
     pub fn delete_session(&self, id: &SessionId) -> Result<()> {
-        let mut st = self.state.lock().unwrap();
+        let mut st = self.lock();
         if !st.sessions.contains_key(id) {
             return Ok(());
         }
@@ -554,7 +559,7 @@ impl Store {
     /// Record what `id` is doing; true when that changed.
     /// A session that settles may have its nodes dropped now.
     pub fn set_status(&self, id: &SessionId, status: SessionStatus) -> bool {
-        let mut st = self.state.lock().unwrap();
+        let mut st = self.lock();
         let old = if status.is_idle() || !st.sessions.contains_key(id) {
             st.status.remove(id)
         } else {
@@ -569,7 +574,7 @@ impl Store {
     // ---- branches ----
 
     pub fn insert_branch(&self, b: &Branch) -> Result<()> {
-        let mut st = self.state.lock().unwrap();
+        let mut st = self.lock();
         // The session was deleted while this write was in flight: drop it
         // rather than recreate the file.
         if st.loaded(&b.session)?.is_none() {
@@ -582,7 +587,7 @@ impl Store {
     }
 
     pub fn get_branch(&self, id: &BranchId) -> Result<Option<Branch>> {
-        let st = self.state.lock().unwrap();
+        let st = self.lock();
         let Some(sid) = st.branch_owner.get(id) else {
             return Ok(None);
         };
@@ -594,7 +599,7 @@ impl Store {
     }
 
     pub fn set_branch_status(&self, id: &BranchId, status: BranchStatus) -> Result<()> {
-        let mut st = self.state.lock().unwrap();
+        let mut st = self.lock();
         let Some(sid) = st.branch_owner.get(id).cloned() else {
             return Ok(()); // a no-op on unknown branches
         };
@@ -614,7 +619,7 @@ impl Store {
     /// Move a branch's head to `head`, a node already in its session (an
     /// edit, a regenerate, another variant picked).
     pub fn set_branch_head(&self, id: &BranchId, head: &NodeId) -> Result<()> {
-        let mut st = self.state.lock().unwrap();
+        let mut st = self.lock();
         let Some(sid) = st.branch_owner.get(id).cloned() else {
             return Ok(()); // a no-op on unknown branches
         };
@@ -635,7 +640,7 @@ impl Store {
     /// output, which the journal keeps as ordinary notes instead). The latest
     /// record per id wins.
     pub fn append_task(&self, task: &TaskInfo) -> Result<()> {
-        let mut st = self.state.lock().unwrap();
+        let mut st = self.lock();
         if st.loaded(&task.session)?.is_none() {
             return Ok(()); // a no-op on unknown sessions
         }
@@ -651,7 +656,7 @@ impl Store {
 
     /// Every task recorded in `session`'s journal, oldest first.
     pub fn tasks_of(&self, session: &SessionId) -> Result<Vec<TaskInfo>> {
-        let st = self.state.lock().unwrap();
+        let st = self.lock();
         Ok(match st.sessions.get(session) {
             Some(Entry::Loaded(s)) => {
                 let mut v: Vec<TaskInfo> = s.tasks.values().cloned().collect();
@@ -668,7 +673,7 @@ impl Store {
     }
 
     pub fn branches_of_session(&self, session: &SessionId) -> Result<Vec<Branch>> {
-        let st = self.state.lock().unwrap();
+        let st = self.lock();
         Ok(match st.sessions.get(session) {
             Some(Entry::Loaded(s)) => {
                 let mut v: Vec<Branch> = s.branches.values().cloned().collect();
@@ -756,7 +761,7 @@ impl Store {
     /// dropped answers without reading them. `false` for an unknown branch.
     pub fn line_failed(&self, branch: &BranchId) -> Result<bool> {
         let session = {
-            let st = self.state.lock().unwrap();
+            let st = self.lock();
             let Some(sid) = st.branch_owner.get(branch) else {
                 return Ok(false);
             };
@@ -844,7 +849,7 @@ impl Store {
     /// live set the blob store's GC keeps. An unreadable session is an error
     /// (its references are unknowable, so GC must not run past it).
     pub fn referenced_blobs(&self) -> Result<HashSet<String>> {
-        let st = self.state.lock().unwrap();
+        let st = self.lock();
         let mut hashes = HashSet::new();
         for (sid, entry) in &st.sessions {
             match entry {
@@ -1466,7 +1471,7 @@ mod tests {
     }
 
     fn in_memory(store: &Store, id: &SessionId) -> bool {
-        match store.state.lock().unwrap().sessions.get(id) {
+        match store.lock().sessions.get(id) {
             Some(Entry::Loaded(s)) => s.nodes.is_some(),
             _ => false,
         }
