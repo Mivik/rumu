@@ -185,7 +185,7 @@ pub fn window<'a>(
     let mut w = Window {
         nodes: path[start..end].to_vec(),
         ends: HashMap::new(),
-        end: (end < len).then(|| &path[end - 1].id),
+        end: (0 < end && end < len).then(|| &path[end - 1].id),
         first: path.get(start).filter(|_| start < end).map(|n| &n.id),
         turns_before: (0..start).filter(|&i| is_user(i)).count(),
         turns: (0..len).filter(|&i| is_user(i)).count(),
@@ -499,6 +499,14 @@ mod tests {
         assert_eq!(before.end, Some(&"a".into()));
         let v = NodeId::from("v");
         assert!(window(&nodes, &branches, &"c".into(), Span::Before(&v, None)).is_none());
+        // nothing comes before a path's first message
+        let mut one = HashMap::new();
+        one.insert(NodeId::from("u"), user("u", None, 0));
+        let main = [("main".into(), branch("main", "u", None, BranchKind::Main))].into();
+        let u = NodeId::from("u");
+        let none = window(&one, &main, &u, Span::Before(&u, None)).unwrap();
+        assert!(none.nodes.is_empty());
+        assert_eq!(none.end, None);
     }
 
     /// From a reader's place: whole turns, stopping short of the head (and
