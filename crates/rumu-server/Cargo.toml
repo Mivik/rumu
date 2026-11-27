@@ -23,7 +23,9 @@ rumu-store.workspace = true
 anyhow.workspace = true
 axum.workspace = true
 futures-util.workspace = true
-reqwest.workspace = true
+gethostname = "1"
+url = "2"
+reqwest = { workspace = true, features = ["stream"] }
 rust-embed.workspace = true
 serde.workspace = true
 serde-saphyr.workspace = true

@@ -517,6 +517,30 @@ pub struct PresetInfo {
     pub endpoints: BTreeMap<Protocol, String>,
 }
 
+/// Another machine's rumu in `settings.yaml`'s `machines:`, keyed by its
+/// name: where it listens and the token it takes. This one forwards the
+/// web's requests to it (`/m/<name>/…`).
+#[derive(Debug, Clone, Default, PartialEq, Serialize, Deserialize)]
+#[serde(default, deny_unknown_fields)]
+pub struct MachineSettings {
+    /// Its base URL, `http://host:port`.
+    pub url: String,
+    pub token: String,
+}
+
+/// A machine as the web sees it: its token stays here.
+#[derive(Debug, Clone, Serialize, ts_rs::TS)]
+#[ts(export)]
+pub struct MachineInfo {
+    pub name: String,
+    pub url: String,
+}
+
+/// The ws protocol: raised on a change an older web or server cannot take
+/// (a renamed or removed method or field). `ping` answers it, so a web can
+/// tell whether it speaks another machine's.
+pub const PROTOCOL: u32 = 1;
+
 /// `settings.get`.
 #[derive(Debug, Clone, Serialize, ts_rs::TS)]
 #[ts(export)]
@@ -535,6 +559,10 @@ pub struct SettingsInfo {
     pub plugins: Vec<crate::PluginInfo>,
     /// The server's version and the commit it was built from.
     pub version: String,
+    /// The other machines this one forwards to.
+    pub machines: Vec<MachineInfo>,
+    /// This machine's own name (its host name).
+    pub machine: String,
 }
 
 #[cfg(test)]

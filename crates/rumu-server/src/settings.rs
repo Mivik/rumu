@@ -56,9 +56,9 @@ use std::sync::{Arc, Mutex, RwLock};
 use std::time::{Duration, SystemTime};
 
 use rumu_core::{
-    ALIAS_PROVIDER, Appearance, Effort, IoError, McpServerSettings, ModelAlias, ModelConfig,
-    ModelInfo, PluginSettings, PresetInfo, Protocol, ProviderInfo, ProviderSettings, Roles,
-    SettingsInfo, Titles, enabled_models, split_model_ref, valid_mcp_name,
+    ALIAS_PROVIDER, Appearance, Effort, IoError, MachineInfo, MachineSettings, McpServerSettings,
+    ModelAlias, ModelConfig, ModelInfo, PluginSettings, PresetInfo, Protocol, ProviderInfo,
+    ProviderSettings, Roles, SettingsInfo, Titles, enabled_models, split_model_ref, valid_mcp_name,
 };
 use rumu_kernel::LlmError;
 use rumu_llm::{Catalog, GenaiLlm, endpoints, model_info, presets};
@@ -104,6 +104,8 @@ struct File {
     plugins: BTreeMap<String, PluginSettings>,
     #[serde(skip_serializing_if = "Appearance::is_default")]
     appearance: Appearance,
+    #[serde(skip_serializing_if = "BTreeMap::is_empty")]
+    machines: BTreeMap<String, MachineSettings>,
 }
 
 /// A `settings.set_provider` request. The web never sees stored keys, so
@@ -209,6 +211,17 @@ pub struct McpEdit {
     env: BTreeMap<String, Option<String>>,
     #[serde(default)]
     headers: BTreeMap<String, Option<String>>,
+}
+
+/// A `settings.set_machine` request; a blank `token` keeps the stored one
+/// (the web never sees it).
+#[derive(Debug, Deserialize)]
+#[serde(deny_unknown_fields)]
+pub struct MachineEdit {
+    name: String,
+    url: String,
+    #[serde(default)]
+    token: String,
 }
 
 /// A `settings.set_plugin` request; `settings` (the values of the form the
@@ -432,7 +445,63 @@ impl Settings {
             skills,
             plugins: self.plugins.as_ref().map(|p| p.info()).unwrap_or_default(),
             version: crate::VERSION.to_owned(),
+            machines: file
+                .machines
+                .iter()
+                .map(|(name, m)| MachineInfo {
+                    name: name.clone(),
+                    url: m.url.clone(),
+                })
+                .collect(),
+            machine: machine_name(),
         }
+    }
+
+    /// Where machine `name` listens and its token.
+    pub fn machine(&self, name: &str) -> Option<MachineSettings> {
+        self.lock().machines.get(name).cloned()
+    }
+
+    /// Add machine `edit.name`, or replace it.
+    pub fn set_machine(&self, edit: MachineEdit) -> Result<SettingsInfo> {
+        let name = edit.name.trim().to_owned();
+        if !valid_mcp_name(&name) {
+            return Err(SettingsError::Invalid(format!(
+                "machine name `{name}` must be 1–64 letters, digits, `_` or `-`"
+            )));
+        }
+        let url = edit.url.trim().trim_end_matches('/').to_owned();
+        if !(url.starts_with("http://") || url.starts_with("https://")) {
+            return Err(SettingsError::Invalid(format!(
+                "machine URL `{url}` must start with http:// or https://"
+            )));
+        }
+        {
+            let mut file = self.lock();
+            let mut next = file.clone();
+            let token = match edit.token.trim() {
+                "" => next.machines.get(&name).map(|m| m.token.clone()),
+                t => Some(t.to_owned()),
+            };
+            let Some(token) = token else {
+                return Err(SettingsError::Invalid("a machine needs its token".into()));
+            };
+            next.machines.insert(name, MachineSettings { url, token });
+            save(&self.home.join(SETTINGS_FILE), &next)?;
+            *file = next;
+        }
+        Ok(self.info())
+    }
+
+    pub fn remove_machine(&self, name: &str) -> Result<SettingsInfo> {
+        {
+            let mut file = self.lock();
+            let mut next = file.clone();
+            next.machines.remove(name);
+            save(&self.home.join(SETTINGS_FILE), &next)?;
+            *file = next;
+        }
+        Ok(self.info())
     }
 
     pub fn set_provider(&self, edit: ProviderEdit) -> Result<SettingsInfo> {
@@ -832,6 +901,11 @@ impl Settings {
     fn lock(&self) -> std::sync::MutexGuard<'_, File> {
         self.file.lock().expect("settings lock")
     }
+}
+
+/// This machine's name, as the others list it: its host name.
+pub fn machine_name() -> String {
+    gethostname::gethostname().to_string_lossy().into_owned()
 }
 
 fn provider_info(

@@ -4,6 +4,7 @@
 mod acp;
 mod auth;
 mod boot;
+mod remote;
 mod settings;
 mod window;
 mod ws;

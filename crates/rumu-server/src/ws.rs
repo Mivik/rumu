@@ -13,7 +13,7 @@ use axum::http::header::{
 };
 use axum::http::{HeaderValue, StatusCode, Uri};
 use axum::response::{IntoResponse, Response};
-use axum::routing::{get, post};
+use axum::routing::{any, get, post};
 use futures_util::{SinkExt, StreamExt};
 use rumu_blob::Blobs;
 use rumu_cards::cards::default_mount_point;
@@ -37,7 +37,7 @@ use tracing::warn;
 use yawc::{Frame, HttpWebSocket, IncomingUpgrade, OpCode, Options};
 
 /// The largest message a client may send (axum's own ws default).
-const WS_MESSAGE_LIMIT: usize = 64 << 20;
+pub(crate) const WS_MESSAGE_LIMIT: usize = 64 << 20;
 
 /// The upload body limit: the largest ingest accepts, plus headroom for
 /// encoding overhead. Anything larger is axum's own 413.
@@ -133,6 +133,8 @@ pub struct AppState {
     pub blobs: Blobs,
     pub settings: Arc<Settings>,
     pub mcp: Arc<rumu_plugins::McpHub>,
+    /// Forwards requests to other machines (`remote.rs`).
+    pub http: reqwest::Client,
 }
 
 /// The built frontend. Debug builds read `web/dist` from disk, release builds
@@ -153,7 +155,9 @@ pub fn router(state: AppState, token: crate::auth::Token) -> Router {
         )
         .route("/blobs/{hash}", get(blob_get))
         .route("/files/{session}", get(file_image))
-        .route("/plugins/{name}/{*file}", get(plugin_file));
+        .route("/plugins/{name}/{*file}", get(plugin_file))
+        .route("/m/{machine}/ws", get(crate::remote::forward_ws))
+        .route("/m/{machine}/{*rest}", any(crate::remote::forward));
     crate::auth::protect(routes, token)
         .fallback(static_asset)
         .with_state(state)
@@ -842,7 +846,7 @@ async fn dispatch(state: &AppState, method: &str, p: &Value) -> Result<Value> {
     match method {
         // Liveness probe: the web sends it when the page comes back to the
         // foreground, to catch a socket that died while it was suspended.
-        "ping" => Ok(json!({})),
+        "ping" => Ok(json!({ "protocol": rumu_core::PROTOCOL })),
 
         "session.list" => Ok(json!(kernel.list_sessions()?)),
 
@@ -1222,6 +1226,14 @@ async fn dispatch(state: &AppState, method: &str, p: &Value) -> Result<Value> {
         "settings.set_plugin" => {
             let edit = parse_params(p)?;
             settings_edit(state, |s| s.set_plugin(edit))
+        }
+        "settings.set_machine" => {
+            let edit = parse_params(p)?;
+            settings_edit(state, |s| s.set_machine(edit))
+        }
+        "settings.remove_machine" => {
+            let name = str_param(p, "name")?;
+            settings_edit(state, |s| s.remove_machine(name))
         }
         "settings.remove_plugin" => {
             let name = str_param(p, "name")?;

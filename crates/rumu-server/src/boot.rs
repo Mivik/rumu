@@ -123,6 +123,7 @@ pub async fn boot(home: &Path) -> Result<Booted> {
             blobs,
             settings,
             mcp,
+            http: reqwest::Client::new(),
         },
         _lock: lock,
     })
