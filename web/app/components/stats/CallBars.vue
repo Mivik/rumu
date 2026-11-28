@@ -32,19 +32,25 @@ const maxOut = computed(() => Math.max(1, ...props.calls.map((c) => c.output)))
 const gap = computed(() => (props.calls.length > 60 ? 1 : 2))
 
 const cols = computed(() =>
-  props.calls.map((c, i) => {
-    const k = UP.value / maxIn.value
-    return {
-      c,
-      cached: c.cached * k,
-      written: c.written * k,
-      uncached: Math.max(0, c.input - c.cached - c.written) * k,
-      // Under the axis's `pt-px`.
-      out: c.output > 0 ? Math.max(1, ((DOWN.value - 1) * c.output) / maxOut.value) : 0,
-      top: UP.value - c.input * k,
-      apart: i > 0 && props.calls[i - 1]!.reply !== c.reply,
-    }
-  }),
+  // The row is RTL, so the scroll origin sits on the latest call: the chart
+  // opens there and stays put as calls are appended. Data stays
+  // chronological; the reversal is only for the mirrored layout, and
+  // `hovered` is mapped back below.
+  props.calls
+    .map((c, i) => {
+      const k = UP.value / maxIn.value
+      return {
+        c,
+        cached: c.cached * k,
+        written: c.written * k,
+        uncached: Math.max(0, c.input - c.cached - c.written) * k,
+        // Under the axis's `pt-px`.
+        out: c.output > 0 ? Math.max(1, ((DOWN.value - 1) * c.output) / maxOut.value) : 0,
+        top: UP.value - c.input * k,
+        apart: i > 0 && props.calls[i - 1]!.reply !== c.reply,
+      }
+    })
+    .reverse(),
 )
 
 const hovered = ref<number | null>(null)
@@ -72,13 +78,18 @@ const timing = computed(() => {
 
 <template>
   <div>
-    <div class="flex items-stretch overflow-x-auto" :style="{ gap: `${gap}px` }" @mouseleave="hovered = null">
+    <div
+      dir="rtl"
+      class="flex items-stretch overflow-x-auto"
+      :style="{ gap: `${gap}px` }"
+      @mouseleave="hovered = null"
+    >
       <div
         v-for="(col, i) in cols"
         :key="col.c.node.id"
         class="group relative flex min-w-1 flex-1 flex-col rounded-xs transition-colors first:ml-auto last:mr-auto hover:bg-surface-2"
         :class="[size === 'lg' ? 'max-w-10' : 'max-w-6', { 'ml-1.5': col.apart }]"
-        @mouseenter="hovered = i"
+        @mouseenter="hovered = cols.length - 1 - i"
       >
         <div class="relative flex flex-col justify-end" :style="{ height: `${UP}px` }">
           <span
